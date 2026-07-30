@@ -278,3 +278,47 @@ private let fakeBinary = Emitter(name: "fake", ext: ".fake") { doc, _, _ in
     // Python does. Graphemes would put it at column 3, and 3 + 2 == 5 would keep one line.
     #expect(wrapLine([Span(text: text)], width: 5).count == 2)
 }
+
+// MARK: - Gaps the job-011 mutation run found
+
+@Test func machineMarginIgnoresPageOnesOwnLeadingBlanks() {
+    // Survivor from the first mutation run: `pages.dropFirst()` -> `pages`. The chapter-drop
+    // vector cannot see the difference, because there page 1 has MORE leading blanks than
+    // page 2 and the minimum is the same either way. This is the shape that separates them —
+    // page 1 starts higher than the rest, so including it would understate the margin and
+    // leave the machine blanks on every later page.
+    //
+    // Confirmed against the reference: pages of 1, 3 and 4 leading blanks strip to 1, 1 and
+    // 2 lines — machine is 3, the minimum over pages 2+, not the 1 that page 1 would set.
+    func blk(blanks: Int, text: String) -> Block {
+        Block(lines: Array(repeating: Line(), count: blanks) + [Line(spans: [Span(text: text)])])
+    }
+    let doc = Document(blocks: [
+        blk(blanks: 1, text: "first"), Block(kind: .pagebreak),
+        blk(blanks: 3, text: "second"), Block(kind: .pagebreak),
+        blk(blanks: 4, text: "third"),
+    ])
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages.map(\.count) == [1, 1, 2])
+    #expect(pages[0][0].first?.text == "first")
+    #expect(pages[1][0].first?.text == "second")
+    #expect(pages[2][0].isEmpty)                    // the one blank beyond the machine margin
+    #expect(pages[2][1].first?.text == "third")
+}
+
+@Test func aLineOfSpacesCountsAsBlank() {
+    // Survivor from the first mutation run: `isBlank` -> `line.isEmpty`. Python asks whether
+    // any segment has a non-whitespace character (`any(t.strip() ...)`), so a line holding a
+    // single space-only span is blank and gets stripped like an empty one. Every vector
+    // document's blanks are empty lines, so none of them can tell the two apart — but a real
+    // print capture is full of space-padded lines.
+    let doc = Document(blocks: [Block(lines: [
+        Line(spans: [Span(text: "  ")]),
+        Line(spans: [Span(text: "text")]),
+        Line(spans: [Span(text: "   ")]),
+    ])])
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages.count == 1)
+    #expect(pages[0].count == 1)                    // leading AND trailing space-lines gone
+    #expect(pages[0][0].first?.text == "text")
+}
