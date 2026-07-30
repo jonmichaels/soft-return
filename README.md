@@ -90,8 +90,21 @@ is personal and is not distributed.
 
 ## Installing `sr`
 
-Build from source. You need the Xcode Command Line Tools (`xcode-select --install`) and
-nothing else:
+Three ways, in order of least effort:
+
+**Homebrew:**
+
+```
+brew install jonmichaels/tap/sr
+```
+
+**Notarized universal binary** — signed and notarized, runs on both Apple silicon and
+Intel Macs with no Gatekeeper prompt. Download `sr-1.0.0-macos-universal.zip` from the
+[latest release](https://github.com/jonmichaels/soft-return/releases/latest), unzip, and
+put `sr` on your PATH.
+
+**Build from source** — you need the Xcode Command Line Tools
+(`xcode-select --install`) and nothing else:
 
 ```
 git clone https://github.com/jonmichaels/soft-return.git
@@ -105,9 +118,8 @@ with macOS. Tested where it's built: Apple silicon macOS (deployment target macO
 and Ubuntu 24.04 x86_64, with the full test suite and a byte-identical corpus
 comparison against the Python reference on both.
 
-A Homebrew formula and a notarized universal binary are planned but do not exist yet, and
-neither does the app; when the Soft Return app arrives it will offer an *Install
-Command-Line Tool* menu item. Until then, the four lines above are the only install there is.
+When the Soft Return app arrives it will offer an *Install Command-Line Tool* menu item
+as a fourth path.
 
 `sr --help` lists every option. Two notes on the surface: there is no `--encoding` flag,
 because the high-bit bytes in a WordStar file are IBM-PC code page 437 and every other code
