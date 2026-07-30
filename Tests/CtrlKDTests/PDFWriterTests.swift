@@ -152,6 +152,41 @@ import Testing
     #expect(contains(pdf, bytes("<< /Length 0 >>\nstream\n\nendstream")), "an empty sheet")
 }
 
+// MARK: - the 1.1.5 layout fixes: gaps the mutation run found
+
+@Test func headingBoldIsAddedToExistingStyles() {
+    // `styles | {'b'}`, not `= {'b'}`. Every vector heading carries plain spans, so a port
+    // that ASSIGNED bold instead of adding it passed all four layout cases while silently
+    // dropping the italics off an italic heading. Confirmed against Python: ['b', 'i'].
+    let doc = Document(blocks: [
+        Block(lines: [Line(spans: [Span(text: "Chapter", styles: .italic)])], heading: 1),
+    ])
+    let segments = docToPagelines(doc, printed: false).flatMap { $0 }.flatMap { $0 }
+    #expect(segments.first?.styles == [.bold, .italic])
+    // Which is the bold-italic Courier in the bytes — the only route to F4 from a document.
+    #expect(latin1(emitPDF(doc, mode: .modern)).contains("/F4 12 Tf"))
+}
+
+@Test func trailingDoublePageBreakDoesNotLeaveABlankSheet() {
+    // The pop's ONLY reachable case, and no vector or prior test covers it: a `.pa .pa` at
+    // the very end appends a genuinely empty page, which the 1.1.5 loop removes. Nothing
+    // else does — the exact-fill page the fix was written for holds a blank LINE, so it has
+    // a positive count when the pop looks at it and slips past (see
+    // `exactFillStillLeavesABlankSheet`). Without this test the pop can be deleted outright
+    // and the suite stays green.
+    //
+    // Interior `.pa .pa` still costs a sheet: only the last page is popped. That direction
+    // is `consecutivePageBreaksLeaveABlankPage` in the job-011 file.
+    let doc = Document(blocks: [
+        Block(lines: [Line(spans: [Span(text: "text")])]),
+        Block(kind: .pagebreak),
+        Block(kind: .pagebreak),
+    ])
+    #expect(docToPagelines(doc, printed: true).count == 1)
+    #expect(docToPagelines(doc, printed: false).count == 1)
+    #expect(countOccurrences(of: bytes("/Type /Page "), in: emitPDF(doc, mode: .printed)) == 1)
+}
+
 // MARK: - esc gaps
 
 @Test func escEscapesBackslashBeforeParens() {

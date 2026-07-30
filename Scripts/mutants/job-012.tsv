@@ -18,7 +18,6 @@ xref-entries-from-zero	Sources/CtrlKD/PDFWriter.swift	for n in 1..<count {	for n
 xref-padding-nine-wide	Sources/CtrlKD/PDFWriter.swift	zeroPadded(offsets[n]!, width: 10)	zeroPadded(offsets[n]!, width: 9)
 xref-entry-loses-trailing-space	Sources/CtrlKD/PDFWriter.swift	 00000 n \\n".utf8)	 00000 n\\n".utf8)
 xref-free-head-trailing-space	Sources/CtrlKD/PDFWriter.swift	0000000000 65535 f \\n".utf8)	0000000000 65535 f\\n".utf8)
-xref-objects-unsorted	Sources/CtrlKD/PDFWriter.swift	objs.sort { $0.number < $1.number }	_ = 0
 xref-size-off-by-one	Sources/CtrlKD/PDFWriter.swift	trailer\n    << /Size \\(count) /Root 1 0 R >>	trailer\n    << /Size \\(count + 1) /Root 1 0 R >>
 # --- emit_pdf: object graph -------------------------------------------------------------
 pdf-fonts-start-at-two	Sources/CtrlKD/PDFWriter.swift	var nextNum = 3                                   // 1 and 2 are reserved, inserted below	var nextNum = 2
@@ -37,7 +36,7 @@ stream-sub-checked-first	Sources/CtrlKD/PDFWriter.swift	styles.contains(.sup) ? 
 stream-reduced-size-twelve	Sources/CtrlKD/PDFWriter.swift	let size = reduced ? 8 : PDFMetrics.size	let size = PDFMetrics.size
 stream-advance-not-scaled-by-size	Sources/CtrlKD/PDFWriter.swift	let w = span.text.width * size * 6	let w = span.text.width * PDFMetrics.size * 6
 stream-advance-wrong-ratio	Sources/CtrlKD/PDFWriter.swift	let w = span.text.width * size * 6	let w = span.text.width * size * 5
-stream-empty-run-advances	Sources/CtrlKD/PDFWriter.swift	if span.text.isEmpty {\n                continue                       // no operator, and no advance either\n            }	if span.text.isEmpty {\n                x += span.text.width * PDFMetrics.size * 6\n                continue\n            }
+stream-empty-run-emits-an-operator	Sources/CtrlKD/PDFWriter.swift	if span.text.isEmpty {\n                continue                       // no operator, and no advance either\n            }	if false {\n                continue\n            }
 stream-y-not-advanced	Sources/CtrlKD/PDFWriter.swift	y -= PDFMetrics.lead * 10	y -= 0
 stream-x-not-reset-per-line	Sources/CtrlKD/PDFWriter.swift	for line in pagelines {\n        var x = PDFMetrics.margin * 10	var x = PDFMetrics.margin * 10\n    for line in pagelines {
 stream-font-bold-italic-swapped	Sources/CtrlKD/PDFWriter.swift	pdfFonts[(bold ? 1 : 0) + (italic ? 2 : 0)].name	pdfFonts[(bold ? 2 : 0) + (italic ? 1 : 0)].name
@@ -47,9 +46,29 @@ layout-headings-not-bold	Sources/CtrlKD/PDFLayout.swift	let spans = block.headin
 layout-headings-replace-styles	Sources/CtrlKD/PDFLayout.swift	Span(text: $0.text, styles: $0.styles.union(.bold))	Span(text: $0.text, styles: .bold)
 layout-heading-bold-in-printed-only	Sources/CtrlKD/PDFLayout.swift	let spans = block.heading != 0	let spans = block.heading != 0 && printed
 layout-no-trailing-page-pop	Sources/CtrlKD/PDFLayout.swift	while pages.count > 1, pages[pages.count - 1].isEmpty {	while false, pages[pages.count - 1].isEmpty {
-layout-pop-drops-sole-page	Sources/CtrlKD/PDFLayout.swift	while pages.count > 1, pages[pages.count - 1].isEmpty {	while pages.count > 0, pages[pages.count - 1].isEmpty {
 # The fix Athena should ship in 1.1.6, applied here as a mutant: moving the pop AFTER the
 # blank-stripping actually removes the blank sheet. It MUST be caught — the vectors pin
 # 1.1.5's output, so this is the guard that says the port is still faithful rather than
 # quietly improved.
 layout-pop-moved-after-stripping	Sources/CtrlKD/PDFLayout.swift	\n    return pages\n}	\n    while pages.count > 1, pages[pages.count - 1].isEmpty {\n        pages.removeLast()\n    }\n    return pages\n}
+#
+# --- EQUIVALENT MUTANTS: ran, survived, and CANNOT be killed --------------------------
+#
+# Two edits from the first job-012 run survived, and neither is a test gap — each produces
+# an output identical to the original for every possible input, so no test can tell them
+# apart. They are recorded here rather than deleted: the next person to write a mutant for
+# this code will reach for them again, and "we tried, here is the proof" is worth keeping.
+# They are NOT live rows, because a survivor has to mean something for the exit code to.
+#
+# xref-objects-unsorted    objs.sort { $0.number < $1.number }    ->    _ = 0
+#   The list is already in ascending order when the sort runs: fonts appended 3,4,5,6, then
+#   `insert(at: 0)` and `insert(at: 1)` place 1 and 2 in that order, then page/contents pairs
+#   are appended ascending. Sorting a sorted list changes nothing. See the comment at the
+#   call site — the sort is retained for parity and as insurance, not for current behavior.
+#
+# layout-pop-drops-sole-page    pages.count > 1    ->    pages.count > 0
+#   Masked by `if pages.isEmpty { return [[]] }` four lines below. The mutant can empty
+#   `pages` entirely, but only when every page in it was empty, and the fallback then
+#   rebuilds exactly the `[[]]` the original would have kept. Worked through every case:
+#   [x] and [x, []] are untouched by the change, [[]] and [[], []] both end at [[]] either
+#   way. The guard is still correct as written — it just cannot be observed from outside.

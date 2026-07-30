@@ -212,9 +212,15 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         objs.append((contentNums[i], body))
     }
 
-    // Python sorts `(num, bytes)` tuples; the numbers are unique, so this is by number. The
-    // sort matters because the objects were built out of order and the xref table's entries
-    // are positional — entry n must be object n's offset.
+    // Python sorts `(num, bytes)` tuples; the numbers are unique, so this is by number.
+    //
+    // It is a no-op as the list is actually built, and provably so: the fonts go on in
+    // ascending order, the two `insert`s put 1 and 2 at the front in that order, and the
+    // page/contents pairs are appended in ascending order after them. Mutation testing found
+    // this — deleting the sort changes no byte of any output, which is the honest reason it
+    // has no test of its own. Kept because Python keeps it, and because the xref table's
+    // entries are positional: if a later emitter ever appends an object out of order, this is
+    // what stops entry n from pointing at some other object.
     objs.sort { $0.number < $1.number }
 
     var out = Array("%PDF-1.4\n".utf8)
