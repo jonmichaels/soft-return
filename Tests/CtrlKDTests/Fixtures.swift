@@ -24,6 +24,20 @@ func ws4Text(_ s: String) -> [UInt8] {
     return out
 }
 
+func bytes(_ s: String) -> [UInt8] {
+    Array(s.utf8)
+}
+
+/// Two paragraphs; the first wraps twice at a 65 margin (long lines), the second short.
+/// Mirrors `make_prose()` in the Python tests.
+func makeProse() -> [UInt8] {
+    let l1 = bytes(String(repeating: "x", count: 55) + " words")      // 61 chars, wrapped
+    let l2 = bytes(String(repeating: "y", count: 50) + " continuing") // 61 chars, wrapped
+    let l3 = bytes("ends here.")
+    let p2 = bytes("Second paragraph.")
+    return l1 + SOFT + l2 + SOFT + l3 + SOFT + HARD + SOFT + p2 + HARD
+}
+
 /// A WS5+/WS7 1D symmetric block: `\x1d` + little-endian 16-bit body length + body.
 func ws7Block(_ cmd: UInt8, payload: [UInt8] = []) -> [UInt8] {
     var body: [UInt8] = [cmd]

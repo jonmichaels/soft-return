@@ -8,6 +8,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "CtrlKD"),
-        .testTarget(name: "CtrlKDTests", dependencies: ["CtrlKD"]),
+        .testTarget(
+            name: "CtrlKDTests",
+            dependencies: ["CtrlKD"],
+            resources: [.copy("Resources/job-003-vectors.json")]
+        ),
     ]
 )
