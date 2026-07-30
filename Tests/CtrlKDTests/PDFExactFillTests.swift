@@ -41,6 +41,26 @@ import Testing
             == [true, false, true])
 }
 
+@Test func everyTrailingBlankPageIsPoppedNotJustTheLast() {
+    // The pop is a `while`, and the loop matters: three or more trailing `.pa` append more
+    // than one empty page, and an `if` would leave all but the first behind. Found by the
+    // job-013 mutation run — `layout-pop-once-not-while` survived the six new vectors and
+    // every prior test, because nothing in either suite had ever put two empty pages at the
+    // end of a document.
+    //
+    // Ground truth from the reference at 1.1.6: one page for any number of trailing breaks,
+    // checked for n = 1 through 4 in both modes.
+    for n in 1...4 {
+        var data = bytes("Page one.") + HARD
+        for _ in 0..<n {
+            data += bytes(".pa") + HARD
+        }
+        let doc = parseWS(data)
+        #expect(docToPagelines(doc, printed: false).map(\.count) == [1], "\(n) trailing .pa, modern")
+        #expect(docToPagelines(doc, printed: true).map(\.count) == [1], "\(n) trailing .pa, printed")
+    }
+}
+
 // MARK: - the fixture that proved the bug, now proving the fix
 
 @Test func exactFillNoLongerReachesPaper() {
