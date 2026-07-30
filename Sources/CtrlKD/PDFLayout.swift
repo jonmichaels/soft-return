@@ -141,10 +141,17 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
             continue
         }
         for line in block.lines {
+            // The module docstring's "headings bold" promise, unimplemented until Python
+            // 1.1.5 (found by this port, job-011). Bold is added to EVERY span in a heading
+            // block, not substituted: a span already italic stays italic and becomes
+            // bold-italic, which is why this is a union and not an assignment.
+            let spans = block.heading != 0
+                ? line.spans.map { Span(text: $0.text, styles: $0.styles.union(.bold)) }
+                : line.spans
             if printed {
-                items.append(.line(line.spans))               // verbatim, no wrap
+                items.append(.line(spans))                    // verbatim, no wrap
             } else {
-                items.append(contentsOf: wrapLine(line.spans, width: PDFMetrics.maxCols)
+                items.append(contentsOf: wrapLine(spans, width: PDFMetrics.maxCols)
                     .map(LayoutItem.line))
             }
         }
@@ -188,6 +195,21 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
     }
     if !page.isEmpty {
         pages.append(page)
+    }
+    // Content that exactly fills a page pushed an empty page out of the loop above — a blank
+    // sheet. Explicit interior blanks from `.pa .pa` are preserved: only the LAST page is
+    // popped, and only while there is more than one.
+    //
+    // KNOWN INCOMPLETE, and deliberately so — this reproduces Python 1.1.5 (pdf.py:95-96)
+    // including the fact that it does not finish the job. The pop runs HERE, before the
+    // blank-stripping below, but stripping is itself capable of emptying the last page: a
+    // page holding nothing but blank lines survives this loop with a positive count and is
+    // hollowed out afterwards, so the blank sheet comes back. `parse(exact-fill bytes)` in
+    // modern mode still lands a trailing empty page at 1.1.5, and the job-012 vectors pin
+    // that outcome — moving the pop after the stripping loop would fix the bug and fail the
+    // vectors. Parity first; reported to Athena for 1.1.6.
+    while pages.count > 1, pages[pages.count - 1].isEmpty {
+        pages.removeLast()
     }
     if pages.isEmpty {
         return [[]]                                           // Python's `pages or [[]]`
@@ -270,7 +292,12 @@ extension String {
     /// `str` this text was decoded into. Not `count` (grapheme clusters) — the two agree for
     /// everything CP437 can produce, and where they wouldn't, Python's answer is the one the
     /// vectors were generated with.
-    fileprivate var width: Int {
+    ///
+    /// Shared with the writer, which needs the same count for its x-advance (`len(text) *
+    /// size * 0.6`, pdf.py:145). Python uses one `len` for both jobs and so should this —
+    /// a wrapper that counted columns differently from the advance would lay out text to one
+    /// width and paint it at another.
+    var width: Int {
         unicodeScalars.count
     }
 }

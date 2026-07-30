@@ -86,19 +86,22 @@ public struct EmitterRegistry: Sendable {
         self.aliases = aliases
     }
 
-    /// The four built-in formats and Python's seed alias table (emit.py:27, 238-241).
+    /// The five built-in formats and Python's seed alias table (emit.py:27, 238-241, and
+    /// `pdf.py`'s `@emitter('pdf')`).
     ///
-    /// `pdf` is absent: emit.py's siblings are all here, but `pdf.py`'s `@emitter('pdf')` has
-    /// no Swift port yet, so `standard.formats()` returns six names where Python's returns
-    /// seven. That is the ONLY difference in this table — the four extensions below are
-    /// Python's, `.txt`/`.md` included, and note they do not follow the `'.' + name` default
-    /// (`text` saves as `.txt`, `markdown` as `.md`).
+    /// `formats()` over this table returns Python's seven names exactly — five canonical plus
+    /// the two aliases. The extensions are Python's, and note they do not follow the
+    /// `'.' + name` default (`text` saves as `.txt`, `markdown` as `.md`).
+    ///
+    /// `pdf` is the one entry that cannot use the `text:` convenience: it renders to bytes,
+    /// so it returns `.data` and needs the full `Emitter` initializer.
     public static let standard = EmitterRegistry(
         emitters: [
             "text": Emitter(name: "text", ext: ".txt", text: emitText),
             "markdown": Emitter(name: "markdown", ext: ".md", text: emitMarkdown),
             "html": Emitter(name: "html", ext: ".html", text: emitHTML),
             "rtf": Emitter(name: "rtf", ext: ".rtf", text: emitRTF),
+            "pdf": Emitter(name: "pdf", ext: ".pdf") { .data(emitPDF($0, mode: $1, options: $2)) },
         ],
         aliases: ["txt": "text", "md": "markdown"]
     )

@@ -803,3 +803,150 @@ private func assertPageLine(_ got: PageLine, _ want: [SpanVector], label: String
         }
     }
 }
+
+// MARK: - job-012 (PDF writer half: _esc, _page_stream, emit_pdf — plus the 1.1.5 layout fixes)
+
+private struct Job012VectorFile: Decodable {
+    let layoutUpdates: [PagelinesVector]
+    let esc: [EscVector]
+    let pageStream: [PageStreamVector]
+    let emitPDF: [EmitPDFVector]
+
+    enum CodingKeys: String, CodingKey {
+        case layoutUpdates = "layout_updates"
+        case esc
+        case pageStream = "page_stream"
+        case emitPDF = "emit_pdf"
+    }
+}
+
+private struct EscVector: Decodable {
+    let text: String
+    let expectedHex: String
+
+    enum CodingKeys: String, CodingKey {
+        case text
+        case expectedHex = "expected_hex"
+    }
+}
+
+private struct PageStreamVector: Decodable {
+    let name: String
+    /// Lines -> segments. Pre-laid-out: these go straight to `pageStream`, bypassing the
+    /// layout half, which is what lets a case carry styles no real document produces.
+    let pagelines: [[SpanVector]]
+    let top: Int
+    let expectedHex: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, pagelines, top
+        case expectedHex = "expected_hex"
+    }
+}
+
+private struct EmitPDFVector: Decodable {
+    let name: String
+    let inputHex: String
+    let mode: String
+    let expectedHex: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, mode
+        case inputHex = "input_hex"
+        case expectedHex = "expected_hex"
+    }
+}
+
+private func loadJob012Vectors() throws -> Job012VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-012-vectors", withExtension: "json"),
+        "job-012-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job012VectorFile.self, from: Data(contentsOf: url))
+}
+
+@Test func layoutUpdatesMatchPython115Vectors() throws {
+    // The two 1.1.5 layout fixes, generated from the fixed Python: heading blocks render
+    // bold, and a trailing empty page is popped.
+    //
+    // Parsed through `parse()`, matching job-011's harness — and it MATTERS here in a way it
+    // did not there. Both exact-fill documents are plain text with hard returns only, which
+    // `detect()` classifies as `printstream`; `parseWS` on the same bytes produces a
+    // different block structure and neither exact-fill case reproduces. The vectors' own
+    // `printed` flag is still honored as given, so the printstream document gets laid out
+    // both ways.
+    let vectors = try loadJob012Vectors().layoutUpdates
+    #expect(vectors.count == 4)
+    for v in vectors {
+        let doc = try parse(bytesFromHex(v.inputHex))
+        let got = docToPagelines(doc, printed: v.printed)
+        #expect(got.count == v.pages.count, "\(v.name): page count")
+        for (p, wantPage) in v.pages.enumerated() where p < got.count {
+            #expect(got[p].count == wantPage.count, "\(v.name) page \(p): line count")
+            for (l, wantLine) in wantPage.enumerated() where l < got[p].count {
+                assertPageLine(got[p][l], wantLine, label: "\(v.name) page \(p) line \(l)")
+            }
+        }
+    }
+}
+
+@Test func escMatchesPythonVectors() throws {
+    // Six cases: plain, parens, backslash, all three mixed, and two non-Latin-1 inputs that
+    // must degrade to '?' — an em dash and U+0141.
+    let vectors = try loadJob012Vectors().esc
+    #expect(vectors.count == 6)
+    for v in vectors {
+        #expect(hexFromBytes(esc(v.text)) == v.expectedHex, "esc(\(v.text.debugDescription))")
+    }
+}
+
+@Test func pageStreamMatchesPythonVectors() throws {
+    // Six cases: plain two lines, styled runs, the underline's half-point coordinates,
+    // sup/sub rise, strike, and a coalesce that must happen before any operator is emitted.
+    let vectors = try loadJob012Vectors().pageStream
+    #expect(vectors.count == 6)
+    for v in vectors {
+        let page: Page = v.pagelines.map { spans($0) }
+        let got = pageStream(page, top: v.top)
+        #expect(hexFromBytes(got) == v.expectedHex, "page_stream \(v.name)")
+        // On a mismatch the hex is unreadable; show the operators.
+        if hexFromBytes(got) != v.expectedHex {
+            Issue.record("""
+            page_stream \(v.name)
+              got:  \(String(decoding: got))
+              want: \(String(decoding: bytesFromHex(v.expectedHex)))
+            """)
+        }
+    }
+}
+
+@Test func emitPDFMatchesPythonVectorsByteForByte() throws {
+    // Two complete PDFs, byte-identical or bust: a modern ws4 document, and a print stream
+    // with a form feed that becomes two pages. These pin the object numbering, the /Length
+    // of every stream, all ten-digit xref offsets, and startxref — a single byte moved
+    // anywhere earlier in the file shifts every offset after it, so this is the test that
+    // proves the assembly rather than the pieces.
+    let vectors = try loadJob012Vectors().emitPDF
+    #expect(vectors.count == 2)
+    for v in vectors {
+        let mode = try #require(EmitMode(rawValue: v.mode), "\(v.name): unknown mode \(v.mode)")
+        let got = emitPDF(try parse(bytesFromHex(v.inputHex)), mode: mode)
+        let want = bytesFromHex(v.expectedHex)
+        #expect(got.count == want.count, "\(v.name): byte count")
+        #expect(got == want, "\(v.name): bytes")
+        if got != want, let at = zip(got, want).enumerated().first(where: { $0.1.0 != $0.1.1 })?.0 {
+            let from = max(0, at - 40)
+            Issue.record("""
+            \(v.name): first difference at byte \(at)
+              got:  ...\(String(decoding: Array(got[from..<min(got.count, at + 40)])))
+              want: ...\(String(decoding: Array(want[from..<min(want.count, at + 40)])))
+            """)
+        }
+    }
+}
+
+/// Latin-1 back to a `String` for failure messages — the writer's own encoding, reversed, so
+/// a PDF operator prints as itself rather than as hex.
+private func String(decoding bytes: [UInt8]) -> Swift.String {
+    Swift.String(bytes.map { Character(Unicode.Scalar($0)) })
+}
