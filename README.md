@@ -100,8 +100,10 @@ swift build -c release
 cp .build/release/sr /usr/local/bin/     # or anywhere on your PATH
 ```
 
-The built binary runs on any Mac from Mojave forward — the Swift runtime ships with macOS,
-so there is nothing to install alongside it.
+The built binary has no dependencies to install alongside it — the Swift runtime ships
+with macOS. Tested where it's built: Apple silicon macOS (deployment target macOS 15)
+and Ubuntu 24.04 x86_64, with the full test suite and a byte-identical corpus
+comparison against the Python reference on both.
 
 A Homebrew formula and a notarized universal binary are planned but do not exist yet, and
 neither does the app; when the Soft Return app arrives it will offer an *Install
