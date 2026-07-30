@@ -68,3 +68,35 @@ func ws7Note(_ text: [UInt8]) -> [UInt8] {
     let inner = Array(repeating: UInt8(0), count: 17) + [0x1d] + text + [0x2c, 0x00]
     return ws7Block(0x03, payload: inner)
 }
+
+// MARK: - Reading PDF bytes back in assertions
+//
+// Shared here rather than kept private to one file: job-013's exact-fill tests need the same
+// three, and a second copy of `countOccurrences` is a second thing to get wrong.
+
+/// Latin-1 decode — the inverse of `esc`'s encoding, so a PDF reads as text in an assertion.
+/// Every byte maps to the scalar of the same value, so this never fails and never merges
+/// bytes into one Character the way a UTF-8 decode would.
+func latin1(_ bytes: [UInt8]) -> String {
+    String(String.UnicodeScalarView(bytes.map { Unicode.Scalar($0) }))
+}
+
+func contains(_ haystack: [UInt8], _ needle: [UInt8]) -> Bool {
+    countOccurrences(of: needle, in: haystack) > 0
+}
+
+/// Python's `bytes.count` — non-overlapping occurrences.
+func countOccurrences(of needle: [UInt8], in haystack: [UInt8]) -> Int {
+    guard !needle.isEmpty, haystack.count >= needle.count else { return 0 }
+    var count = 0
+    var i = 0
+    while i <= haystack.count - needle.count {
+        if Array(haystack[i..<(i + needle.count)]) == needle {
+            count += 1
+            i += needle.count
+        } else {
+            i += 1
+        }
+    }
+    return count
+}

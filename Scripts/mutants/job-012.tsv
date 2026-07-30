@@ -46,11 +46,17 @@ layout-headings-not-bold	Sources/CtrlKD/PDFLayout.swift	let spans = block.headin
 layout-headings-replace-styles	Sources/CtrlKD/PDFLayout.swift	Span(text: $0.text, styles: $0.styles.union(.bold))	Span(text: $0.text, styles: .bold)
 layout-heading-bold-in-printed-only	Sources/CtrlKD/PDFLayout.swift	let spans = block.heading != 0	let spans = block.heading != 0 && printed
 layout-no-trailing-page-pop	Sources/CtrlKD/PDFLayout.swift	while pages.count > 1, pages[pages.count - 1].isEmpty {	while false, pages[pages.count - 1].isEmpty {
-# The fix Athena should ship in 1.1.6, applied here as a mutant: moving the pop AFTER the
-# blank-stripping actually removes the blank sheet. It MUST be caught — the vectors pin
-# 1.1.5's output, so this is the guard that says the port is still faithful rather than
-# quietly improved.
-layout-pop-moved-after-stripping	Sources/CtrlKD/PDFLayout.swift	\n    return pages\n}	\n    while pages.count > 1, pages[pages.count - 1].isEmpty {\n        pages.removeLast()\n    }\n    return pages\n}
+# RETIRED at job-013, not deleted, because what happened to it is the point.
+#
+# `layout-pop-moved-after-stripping` staged the fix this port recommended for 1.1.6 as a
+# MUTANT, so that applying it to the Swift without re-vectoring would fail the suite — the
+# job-012 vectors pinned 1.1.5's blank sheet, and the row was the guard against quietly
+# improving on the reference. Athena shipped exactly that change in 1.1.6, so the mutation
+# is now the source and the row can no longer be a mutation of it.
+#
+# Its inverse is live in job-013.tsv as `layout-pop-before-stripping`, which puts the pop
+# back where 1.1.5 had it and must be caught. The guard did its job: it was pointing the
+# other way for one job, and then the reference caught up.
 #
 # --- EQUIVALENT MUTANTS: ran, survived, and CANNOT be killed --------------------------
 #

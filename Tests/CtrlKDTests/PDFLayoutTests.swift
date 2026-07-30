@@ -28,12 +28,12 @@ private func linesDoc(_ n: Int) -> Document {
     #expect(pages[1].count == 1)
     #expect(pages[1].first?.first?.text == "line55")
 
-    // And the quirk at exactly 54, confirmed against Python before it was written down:
-    // modern mode ends each block with a blank line, so a full page of content pushes that
-    // blank onto page 2, where the trailing-blank strip empties it again — leaving a real
-    // empty second page rather than one page. `emit_pdf` will put a blank sheet in the file.
-    // Faithful, not desirable; Job B may want to raise it with Athena.
-    #expect(docToPagelines(linesDoc(54), printed: false).map(\.count) == [54, 0])
+    // And exactly 54, which is where the blank-sheet bug lived. Modern mode ends each block
+    // with a blank line, so a full page of content pushes that blank onto page 2, where the
+    // trailing-blank strip empties it — leaving a real empty second page. Python 1.1.5 tried
+    // to pop it and popped too early to see it (job-012); 1.1.6 pops after the stripping and
+    // this is one page, as it always should have been.
+    #expect(docToPagelines(linesDoc(54), printed: false).map(\.count) == [54])
 }
 
 @Test func printedPaginatesAtSixtyLines() {

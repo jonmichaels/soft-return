@@ -96,61 +96,37 @@ import Testing
     #expect(contains(pdf, bytes("(Body text here.)")))
 }
 
-/// Python 1.1.5's `test_pdf_exact_fill_no_blank_sheet` — ported EXACTLY, including the fact
-/// that it does not test what its name says. See `exactFillStillLeavesABlankSheet` below.
+/// Python 1.1.6's `test_pdf_exact_fill_no_blank_sheet` — the rewritten version.
+///
+/// The 1.1.5 original was ported here exactly, including the fact that it could not fail:
+/// it fed `parse_ws` bytes that `detect` calls a print stream, which produce one page by a
+/// different route, so `all(pg for pg in pages)` was trivially true on the unfixed code
+/// (job-012). 1.1.6 replaced the input with real WS4 bytes through `parse()`, which is the
+/// true exact-fill boundary — 54 entries of content on page 1, the final structural blank
+/// spilling to page 2 — and pinned the premise (`variant == ws4`) so the test cannot quietly
+/// stop testing what it says again.
 @Test func pdfExactFillNoBlankSheet() throws {
-    let n = (PDFMetrics.linesModern + 1) / 2      // paragraphs at 1 line + 1 blank each
+    // 26 one-line paragraphs + a final paragraph long enough to wrap once = 54 lines.
+    let n = (PDFMetrics.linesModern - 2) / 2
     var data: [UInt8] = []
     for i in 0..<n {
-        data += bytes("Paragraph \(i) here.") + HARD + HARD
+        data += ws4Text("Paragraph \(i) here today.") + HARD + HARD
     }
-    let pages = docToPagelines(parseWS(data), printed: false)
-    #expect(pages.allSatisfy { !$0.isEmpty }, "page line counts: \(pages.map(\.count))")
+    data += ws4Text("This final paragraph is deliberately long enough that the "
+                    + "wrap test must break it across two physical lines.") + HARD
+
+    let doc = try parse(data)
+    // Python asserts `doc.meta['variant'] == 'ws4'`; `meta` became typed fields in job-004.
+    #expect(doc.detection?.variant == .ws4, "the test's own premise, pinned")
+    let pages = docToPagelines(doc, printed: false)
+    #expect(pages.map(\.count) == [PDFMetrics.linesModern])
 }
 
-// MARK: - what the 1.1.5 exact-fill fix does NOT reach
-
-@Test func exactFillStillLeavesABlankSheet() throws {
-    // THE FIX IS INCOMPLETE AND THIS RECORDS IT. `pdf.py:95-96` pops trailing empty pages,
-    // but it runs BEFORE the per-page blank-stripping, and stripping is what empties the
-    // page: a final page holding nothing but blank lines has a positive line count when the
-    // pop looks at it, and is hollowed out afterwards. The blank sheet comes back.
-    //
-    // Python's own new test misses this twice over. It calls `parse_ws` on bytes that
-    // `detect` classifies as a print stream, which yields a different block structure and
-    // exactly one page — so it passes on 1.1.4 as readily as on 1.1.5, and never had the
-    // power to fail. Verified against both reference versions before this was written.
-    //
-    // Reported to Athena for 1.1.6. Until then parity requires reproducing it, and the
-    // `exact_fill_no_blank_sheet/modern` vector pins the unfixed output.
-    let n = (PDFMetrics.linesModern + 1) / 2
-    var data: [UInt8] = []
-    for i in 0..<n {
-        data += bytes("Paragraph \(i) here.") + HARD + HARD
-    }
-    // Through the front door, where `detect` calls it a print stream — the vectors' path.
-    let pages = docToPagelines(try parse(data), printed: false)
-    #expect(pages.map(\.count) == [53, 0])
-    #expect(pages.last?.isEmpty == true, "the trailing blank page 1.1.5 meant to remove")
-
-    // And it reaches paper. A ws4 document (high bit on every word's last letter, so
-    // `detect` does NOT say printstream) takes the modern path through `emitPDF` and gets a
-    // second /Page object whose content stream is empty: a blank sheet in the file.
-    var ws4: [UInt8] = []
-    for i in 0..<26 {
-        ws4 += ws4Text("Paragraph \(i) here.") + HARD + HARD
-    }
-    ws4 += ws4Text(String(repeating: "W", count: 60) + " " + String(repeating: "X", count: 40))
-        + HARD + HARD
-    let doc = parseWS(ws4)
-    #expect(doc.detection?.variant == .ws4, "fixture must not be detected as a printstream")
-    #expect(!isPrinted(doc), "…so emitPDF takes the modern path")
-    #expect(docToPagelines(doc, printed: false).map(\.count) == [54, 0])
-
-    let pdf = emitPDF(doc, mode: .modern)
-    #expect(countOccurrences(of: bytes("/Type /Page "), in: pdf) == 2)
-    #expect(contains(pdf, bytes("<< /Length 0 >>\nstream\n\nendstream")), "an empty sheet")
-}
+// The 1.1.5 exact-fill fix was incomplete, and `exactFillStillLeavesABlankSheet` lived here
+// recording that: the pop ran before the blank-stripping that empties the page, so the sheet
+// came back. 1.1.6 moved the pop and the test's premise is now false, so it is gone rather
+// than inverted in place — its fixtures live on in `PDFExactFillTests.swift` (job-013), where
+// the same bytes that proved the bug now prove the fix.
 
 // MARK: - the 1.1.5 layout fixes: gaps the mutation run found
 
@@ -168,12 +144,13 @@ import Testing
 }
 
 @Test func trailingDoublePageBreakDoesNotLeaveABlankSheet() {
-    // The pop's ONLY reachable case, and no vector or prior test covers it: a `.pa .pa` at
-    // the very end appends a genuinely empty page, which the 1.1.5 loop removes. Nothing
-    // else does — the exact-fill page the fix was written for holds a blank LINE, so it has
-    // a positive count when the pop looks at it and slips past (see
-    // `exactFillStillLeavesABlankSheet`). Without this test the pop can be deleted outright
-    // and the suite stays green.
+    // A `.pa .pa` at the very end appends a genuinely empty page, which the pop removes.
+    // When this was written it was the pop's ONLY reachable case: at 1.1.5 the exact-fill
+    // page the fix was actually written for held a blank LINE, so it still had a positive
+    // count when the pop looked at it and slipped past. Without this test the pop could be
+    // deleted outright and the suite stayed green. Since 1.1.6 moved the pop after the
+    // stripping, both cases reach it — this one still earns its place as the path that needs
+    // no stripping to be empty.
     //
     // Interior `.pa .pa` still costs a sheet: only the last page is popped. That direction
     // is `consecutivePageBreaksLeaveABlankPage` in the job-011 file.
@@ -381,33 +358,6 @@ import Testing
 }
 
 // MARK: - byte-oriented test helpers
-
-/// Latin-1 decode — the inverse of `esc`'s encoding, so a PDF reads as text in an assertion.
-/// Every byte maps to the scalar of the same value, so this never fails and never merges
-/// bytes into one Character the way a UTF-8 decode would.
-private func latin1(_ bytes: [UInt8]) -> String {
-    String(String.UnicodeScalarView(bytes.map { Unicode.Scalar($0) }))
-}
-
-private func contains(_ haystack: [UInt8], _ needle: [UInt8]) -> Bool {
-    countOccurrences(of: needle, in: haystack) > 0
-}
-
-/// Python's `bytes.count` — non-overlapping occurrences.
-private func countOccurrences(of needle: [UInt8], in haystack: [UInt8]) -> Int {
-    guard !needle.isEmpty, haystack.count >= needle.count else { return 0 }
-    var count = 0
-    var i = 0
-    while i <= haystack.count - needle.count {
-        if Array(haystack[i..<(i + needle.count)]) == needle {
-            count += 1
-            i += needle.count
-        } else {
-            i += 1
-        }
-    }
-    return count
-}
 
 /// The `y` of the first `Td` whose text-showing operator starts with `marker`, in TENTHS of a
 /// point — Python's test parses these as floats; tenths keep the comparison exact.

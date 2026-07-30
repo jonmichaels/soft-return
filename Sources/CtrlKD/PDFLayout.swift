@@ -196,21 +196,6 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
     if !page.isEmpty {
         pages.append(page)
     }
-    // Content that exactly fills a page pushed an empty page out of the loop above — a blank
-    // sheet. Explicit interior blanks from `.pa .pa` are preserved: only the LAST page is
-    // popped, and only while there is more than one.
-    //
-    // KNOWN INCOMPLETE, and deliberately so — this reproduces Python 1.1.5 (pdf.py:95-96)
-    // including the fact that it does not finish the job. The pop runs HERE, before the
-    // blank-stripping below, but stripping is itself capable of emptying the last page: a
-    // page holding nothing but blank lines survives this loop with a positive count and is
-    // hollowed out afterwards, so the blank sheet comes back. `parse(exact-fill bytes)` in
-    // modern mode still lands a trailing empty page at 1.1.5, and the job-012 vectors pin
-    // that outcome — moving the pop after the stripping loop would fix the bug and fail the
-    // vectors. Parity first; reported to Athena for 1.1.6.
-    while pages.count > 1, pages[pages.count - 1].isEmpty {
-        pages.removeLast()
-    }
     if pages.isEmpty {
         return [[]]                                           // Python's `pages or [[]]`
     }
@@ -243,6 +228,22 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
         while let last = pages[i].last, isBlank(last) {
             pages[i].removeLast()
         }
+    }
+
+    // A trailing empty page is a blank sheet. Two things can produce one: content that
+    // exactly fills a page pushes the next page's structural blank out of the loop above, and
+    // a trailing `.pa .pa` appends a page with nothing in it.
+    //
+    // This pop must run AFTER the stripping loop, because stripping is what empties the first
+    // kind: a final page holding nothing but blank lines has a positive line count until the
+    // strip hollows it out, so a pop placed earlier looks at a non-empty page and skips it.
+    // Python 1.1.5 popped before stripping and the blank sheet survived — found by this port
+    // in job-012 and fixed in 1.1.6 (pdf.py:115-120), which is the position reproduced here.
+    //
+    // Explicit interior blanks from `.pa .pa` between content are preserved: only the LAST
+    // page is popped, and only while there is more than one.
+    while pages.count > 1, pages[pages.count - 1].isEmpty {
+        pages.removeLast()
     }
     return pages
 }

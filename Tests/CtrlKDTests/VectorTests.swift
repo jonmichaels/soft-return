@@ -865,7 +865,22 @@ private func loadJob012Vectors() throws -> Job012VectorFile {
     return try JSONDecoder().decode(Job012VectorFile.self, from: Data(contentsOf: url))
 }
 
-@Test func layoutUpdatesMatchPython115Vectors() throws {
+/// The job-012 vector cases whose pinned output was a Python **bug** that 1.1.6 then fixed,
+/// with the transformation from the old ground truth to the new one.
+///
+/// Exactly one case qualifies. `exact_fill_no_blank_sheet/modern` pinned `[53, 0]` — a trailing
+/// empty page, i.e. the blank sheet the vector's own name says should not exist (job-012 called
+/// this out: honest ground truth, misleading label). 1.1.6 pops that page, so the case is now
+/// `[53]`.
+///
+/// The job-012 JSON is left exactly as Athena generated it, because it is a correct record of
+/// what 1.1.5 did and rewriting delivered ground truth to match a later version would destroy
+/// the only evidence that the version changed. Instead the expectation is DERIVED here by the
+/// documented fix — drop trailing empty pages — which keeps the case asserting something: if
+/// the pop breaks, `[53, 0]` comes back and this fails.
+private let job012CasesFixedIn116: Set<String> = ["exact_fill_no_blank_sheet/modern"]
+
+@Test func layoutUpdatesMatchPython116Vectors() throws {
     // The two 1.1.5 layout fixes, generated from the fixed Python: heading blocks render
     // bold, and a trailing empty page is popped.
     //
@@ -875,12 +890,101 @@ private func loadJob012Vectors() throws -> Job012VectorFile {
     // different block structure and neither exact-fill case reproduces. The vectors' own
     // `printed` flag is still honored as given, so the printstream document gets laid out
     // both ways.
+    //
+    // Three of the four cases still hold at 1.1.6 unchanged; the fourth is adjusted by
+    // `job012CasesFixedIn116` above. Verified against the local reference at both versions.
     let vectors = try loadJob012Vectors().layoutUpdates
     #expect(vectors.count == 4)
     for v in vectors {
+        var want = v.pages
+        if job012CasesFixedIn116.contains(v.name) {
+            let before = want.count
+            while want.count > 1, want[want.count - 1].isEmpty {
+                want.removeLast()
+            }
+            #expect(want.count < before,
+                    "\(v.name) is listed as fixed in 1.1.6 but pins no trailing empty page")
+        }
+
         let doc = try parse(bytesFromHex(v.inputHex))
         let got = docToPagelines(doc, printed: v.printed)
-        #expect(got.count == v.pages.count, "\(v.name): page count")
+        #expect(got.count == want.count, "\(v.name): page count")
+        for (p, wantPage) in want.enumerated() where p < got.count {
+            #expect(got[p].count == wantPage.count, "\(v.name) page \(p): line count")
+            for (l, wantLine) in wantPage.enumerated() where l < got[p].count {
+                assertPageLine(got[p][l], wantLine, label: "\(v.name) page \(p) line \(l)")
+            }
+        }
+    }
+}
+
+// MARK: - job-013 (the REAL exact-fill fix: the pop moved after the stripping, Python 1.1.6)
+
+private struct Job013VectorFile: Decodable {
+    let layout116: [Pagelines116Vector]
+
+    enum CodingKeys: String, CodingKey {
+        case layout116 = "layout_116"
+    }
+}
+
+/// job-011's `PagelinesVector` plus the `parser` field, added at job-012's suggestion.
+///
+/// It closes a real ambiguity rather than restating the obvious: `input_hex` + `printed` only
+/// specifies a case if you also know which parser produced the document, and for these inputs
+/// the two disagree — job-012 lost twenty minutes to assuming `parseWS` for bytes that only
+/// reproduce through `parse()`. A case where both parsers agree teaches nothing about which
+/// was meant, which is exactly when the assumption goes unnoticed.
+private struct Pagelines116Vector: Decodable {
+    let name: String
+    let inputHex: String
+    /// `"parse"` (the front door, which runs `detect`) or `"parse_ws"`.
+    let parser: String
+    let printed: Bool
+    let pages: [[[SpanVector]]]
+
+    enum CodingKeys: String, CodingKey {
+        case name, parser, printed, pages
+        case inputHex = "input_hex"
+    }
+}
+
+private func loadJob013Vectors() throws -> Job013VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-013-vectors", withExtension: "json"),
+        "job-013-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job013VectorFile.self, from: Data(contentsOf: url))
+}
+
+@Test func layout116MatchesPythonVectors() throws {
+    // Six cases, three documents x modern/printed:
+    //
+    //   exact_fill_true_boundary       the case 1.1.5's fix was aimed at and missed. This is
+    //                                 the ONE case here with teeth against 1.1.5 — it gives
+    //                                 [54, 0] there and [54] at 1.1.6. Confirmed by running
+    //                                 all six against a local v1.1.5 checkout.
+    //   trailing_double_pa            the pop path that always worked.
+    //   interior_double_pa_preserved  the page the pop must NOT take: [1, 0, 1].
+    //
+    // The last two pass on 1.1.5 as well, which makes them regression guards rather than
+    // proof of the fix — worth saying, because "six new vectors" would otherwise imply six
+    // new bug-detecting cases.
+    let vectors = try loadJob013Vectors().layout116
+    #expect(vectors.count == 6)
+    for v in vectors {
+        let data = bytesFromHex(v.inputHex)
+        let doc: Document
+        switch v.parser {
+        case "parse": doc = try parse(data)
+        case "parse_ws": doc = parseWS(data)
+        default:
+            Issue.record("\(v.name): unknown parser \(v.parser)")
+            continue
+        }
+        let got = docToPagelines(doc, printed: v.printed)
+        #expect(got.count == v.pages.count,
+                "\(v.name): page count (got \(got.map(\.count)))")
         for (p, wantPage) in v.pages.enumerated() where p < got.count {
             #expect(got[p].count == wantPage.count, "\(v.name) page \(p): line count")
             for (l, wantLine) in wantPage.enumerated() where l < got[p].count {

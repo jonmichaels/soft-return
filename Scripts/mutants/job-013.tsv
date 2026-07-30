@@ -1,0 +1,38 @@
+# Mutants for job-013: the exact-fill fix, for real this time.
+#
+# Python 1.1.6 moved the trailing-page pop AFTER the per-page blank-stripping, which is the
+# whole fix — the pop was always there, it just ran too early to see the page it was written
+# for. So the mutants here are almost entirely ABOUT POSITION, and the headline row is the
+# inverse of job-012's: what was staged there as "the fix Athena should ship" is now the
+# source, and 1.1.5's position is now the mutant.
+#
+# Run:  Scripts/mutate.sh Scripts/mutants/job-013.tsv
+#
+# --- the fix's position -----------------------------------------------------------------
+#
+# THE regression mutant: put the pop back where 1.1.5 had it. Expressed as a single-site
+# edit — pop, then strip, then return early — which is exactly 1.1.5's order and leaves the
+# real pop below as dead code. Anchoring the move as one contiguous region would have meant
+# swallowing eleven lines of comment between the two sites; this says the same thing about
+# behavior and stays readable.
+#
+# If this survives, the suite cannot tell 1.1.6 from 1.1.5 and job-013 proved nothing.
+layout-pop-before-stripping	Sources/CtrlKD/PDFLayout.swift	    for i in pages.indices {\n        let blanks = leading(pages[i])\n        pages[i].removeFirst(machine.map { min($0, blanks) } ?? blanks)\n        while let last = pages[i].last, isBlank(last) {\n            pages[i].removeLast()\n        }\n    }	    while pages.count > 1, pages[pages.count - 1].isEmpty {\n        pages.removeLast()\n    }\n    for i in pages.indices {\n        let blanks = leading(pages[i])\n        pages[i].removeFirst(machine.map { min($0, blanks) } ?? blanks)\n        while let last = pages[i].last, isBlank(last) {\n            pages[i].removeLast()\n        }\n    }\n    return pages
+# Delete the pop outright. Also in job-012.tsv (where it was a real survivor until
+# trailingDoublePageBreakDoesNotLeaveABlankSheet was written); kept live here because the
+# 1.1.6 position gives it two reachable cases instead of one, and both should be caught.
+layout-no-trailing-page-pop	Sources/CtrlKD/PDFLayout.swift	while pages.count > 1, pages[pages.count - 1].isEmpty {	while false, pages[pages.count - 1].isEmpty {
+# Pop at most one page, not all trailing empties. Reachable with three trailing .pa.
+layout-pop-once-not-while	Sources/CtrlKD/PDFLayout.swift	while pages.count > 1, pages[pages.count - 1].isEmpty {	if pages.count > 1, pages[pages.count - 1].isEmpty {
+# Strip trailing blank lines but not leading ones, and vice versa — the stripping half of
+# the fix has to keep working for the pop to have anything to find.
+layout-no-trailing-blank-strip	Sources/CtrlKD/PDFLayout.swift	while let last = pages[i].last, isBlank(last) {	while false, let last = pages[i].last, isBlank(last) {
+layout-no-leading-blank-strip	Sources/CtrlKD/PDFLayout.swift	pages[i].removeFirst(machine.map { min($0, blanks) } ?? blanks)	pages[i].removeFirst(0)
+#
+# --- EQUIVALENT MUTANT: carried forward from job-012, still unkillable ------------------
+#
+# layout-pop-drops-sole-page    pages.count > 1    ->    pages.count > 0
+#   Masked by `if pages.isEmpty { return [[]] }` above the stripping loop. Re-checked after
+#   the pop moved: the reasoning is unchanged, because the guard it is masked by did not
+#   move. [x] and [x, []] are untouched; [[]] and [[], []] both end at [[]] either way.
+#   Not a live row — a survivor has to mean something for the exit code to.
