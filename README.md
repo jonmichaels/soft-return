@@ -130,12 +130,16 @@ swift run ctrlkd-demo     # converts synthetic WordStar bytes, prints each stage
 
 ## Roadmap
 
-The library and the CLI are the foundation. Next:
+Major versions are product eras, not API breaks — the CtrlKD API stays stable
+across them.
 
-- **The Soft Return app** — a Mac app: open a file from a 1989 floppy, see it rendered, save
-  it as something a person can read. Possibly a Quick Look extension, so the Finder can
-  preview WordStar files directly.
-- **Distribution** — a Homebrew formula and a signed, notarized universal build of `sr`.
+- **1.0 (now)** — the command line era: `sr` and the CtrlKD library, built from source.
+- **1.x** — same era, easier delivery: a Homebrew formula, then prebuilt universal
+  binaries attached to releases.
+- **2.0** — the Soft Return Mac app: open a file from a 1989 floppy, see it rendered,
+  export it as something a person can read. Quick Look support, so the Finder can
+  preview WordStar files directly, and an *Install Command-Line Tool* menu item.
+- **3.0** — the iOS app: a full Files-app citizen, same engine.
 
 ## Credits
 
