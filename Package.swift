@@ -11,7 +11,11 @@ let package = Package(
         .testTarget(
             name: "CtrlKDTests",
             dependencies: ["CtrlKD"],
-            resources: [.copy("Resources/job-003-vectors.json")]
+            exclude: ["Resources/README.md"],
+            resources: [
+                .copy("Resources/job-003-vectors.json"),
+                .copy("Resources/job-004-vectors.json"),
+            ]
         ),
     ]
 )

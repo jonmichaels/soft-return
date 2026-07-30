@@ -66,12 +66,32 @@ private struct LineVector: Decodable {
     }
 }
 
+private struct Job004VectorFile: Decodable {
+    let cp437ByteToUnicodeCodepoint: [String: Int]
+    let linesPassExtra: [LinesPassVector]
+    let note: String
+
+    enum CodingKeys: String, CodingKey {
+        case cp437ByteToUnicodeCodepoint = "cp437_byte_to_unicode_codepoint"
+        case linesPassExtra = "lines_pass_extra"
+        case note
+    }
+}
+
 private func loadVectors() throws -> VectorFile {
     let url = try #require(
         Bundle.module.url(forResource: "job-003-vectors", withExtension: "json"),
         "job-003-vectors.json missing from the test bundle"
     )
     return try JSONDecoder().decode(VectorFile.self, from: Data(contentsOf: url))
+}
+
+private func loadJob004Vectors() throws -> Job004VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-004-vectors", withExtension: "json"),
+        "job-004-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job004VectorFile.self, from: Data(contentsOf: url))
 }
 
 private func bytesFromHex(_ hex: String) -> [UInt8] {
@@ -116,19 +136,44 @@ private func hexFromBytes(_ bytes: [UInt8]) -> String {
     }
 }
 
+private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
+    let got = linesPass(bytesFromHex(v.inputHex))
+    #expect(got.margin == v.margin, "\(label): margin")
+    #expect(got.lines.count == v.lines.count, "\(label): line count")
+    for (j, expected) in v.lines.enumerated() where j < got.lines.count {
+        let line = got.lines[j]
+        #expect(line.separator.rawValue == expected.sep, "\(label) line \(j): sep")
+        #expect(hexFromBytes(line.text) == expected.textHex, "\(label) line \(j): text")
+    }
+}
+
 @Test func linesPassMatchesPythonVectors() throws {
     let vectors = try loadVectors().linesPass
     #expect(vectors.count == 8)
     for (i, v) in vectors.enumerated() {
-        let got = linesPass(bytesFromHex(v.inputHex))
-        #expect(got.margin == v.margin, "lines_pass vector \(i): margin")
-        #expect(got.lines.count == v.lines.count, "lines_pass vector \(i): line count")
-        for (j, expected) in v.lines.enumerated() where j < got.lines.count {
-            let line = got.lines[j]
-            #expect(line.separator.rawValue == expected.sep,
-                    "lines_pass vector \(i) line \(j): sep")
-            #expect(hexFromBytes(line.text) == expected.textHex,
-                    "lines_pass vector \(i) line \(j): text")
-        }
+        assertLinesPassVector(v, label: "lines_pass vector \(i)")
+    }
+}
+
+@Test func cp437TableMatchesPythonVectors() throws {
+    let table = try loadJob004Vectors().cp437ByteToUnicodeCodepoint
+    #expect(table.count == 256)
+    for byte in 0...255 {
+        let key = String(format: "%02x", byte)
+        let expected = try #require(table[key], "cp437 vector missing byte 0x\(key)")
+        let decoded = decodeCP437([UInt8(byte)])
+        let scalar = try #require(decoded.unicodeScalars.first, "byte 0x\(key) decoded to empty string")
+        #expect(Int(scalar.value) == expected, "cp437 byte 0x\(key)")
+    }
+}
+
+@Test func bareLFClassifiesAsHard() throws {
+    // job-003 flagged a lone 0x0A as unproven by the vector suite: it classifies as
+    // `hard` (brk[0] != 0x8D at core.py:116), which is easy to get backwards. This
+    // vector (job-004-vectors.md's lines_pass_extra) closes that gap.
+    let vectors = try loadJob004Vectors().linesPassExtra
+    #expect(vectors.count == 1)
+    for (i, v) in vectors.enumerated() {
+        assertLinesPassVector(v, label: "lines_pass_extra vector \(i)")
     }
 }
