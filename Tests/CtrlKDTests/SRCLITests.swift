@@ -372,6 +372,74 @@ import Testing
     #expect(recorder.err.first?.contains("/archive/A.md") == true)
 }
 
+// MARK: - Gaps the job-014 mutation run found
+
+/// `diagnose-ws5-dropped`: the parse-evidence keys are for `ws4` OR `ws5+`, and every test
+/// above happened to use a ws4 fixture — so dropping the `ws5+` half of the condition
+/// changed nothing any test could see.
+@Test func diagnoseReportsParseEvidenceForWS5Files() throws {
+    let data = ws7Block(0x00) + bytes("Treaties were made.")
+        + ws7Note(bytes("See the 1868 accords."))
+        + bytes(" More text follows here.") + HARD
+    let value = diagnose(path: "/tmp/ws7", data: data)
+    let fields = try #require(normalize(value).object)
+
+    #expect(fields["variant"] == .string("ws5+"))
+    #expect(fields["margin_estimate"] != nil, "a ws5+ file must carry parse evidence too")
+    #expect(fields["columnar"] == .bool(false))
+    // `diagnose-footnote-count`: nothing above used a file that HAS a footnote, so reporting
+    // a constant zero was invisible.
+    #expect(fields["footnotes"] == .int(1))
+}
+
+/// `diagnose-paragraph-filter`: `paragraphs` counts `.para` blocks, not blocks. Every fixture
+/// above was all-paragraphs, which makes the filter and the plain count the same number.
+@Test func diagnoseCountsParagraphBlocksOnly() throws {
+    let data = ws4Text("Page one text here.") + HARD + bytes(".pa") + HARD
+        + ws4Text("Page two text here.") + HARD
+    let doc = parseWS(data)
+    #expect(doc.blocks.map(\.kind) == [.para, .pagebreak, .para], "the fixture must have a non-para block")
+
+    let fields = try #require(normalize(diagnose(path: "/tmp/pa", data: data)).object)
+    #expect(fields["variant"] == .string("ws4"), "the .pa block only reaches diagnose via a WordStar detection")
+    #expect(fields["paragraphs"] == .int(2))
+    #expect(fields["dot_commands"] == .array([.string(".pa")]))
+}
+
+/// `run-usage-exit-code`: asserting `status == ExitStatus.usage` compares the code to itself,
+/// so changing the constant kept every such test passing. The numbers are the contract a
+/// shell script reads, so pin the numbers.
+@Test func exitStatusesAreTheNumbersAShellScriptExpects() {
+    #expect(ExitStatus.ok == 0)
+    #expect(ExitStatus.fileFailure == 1)
+    #expect(ExitStatus.usage == 2, "argparse exits 2 on a usage error and so does sr")
+
+    let usage = Recorder()
+    #expect(run(["-o", "out.md", "A.WS", "B.WS"], environment: usage.environment) == 2)
+
+    let missing = Recorder()
+    #expect(run(["/nowhere/A.WS"], environment: missing.environment) == 1)
+
+    let fine = Recorder(files: ["/archive/PAPER.WS": makeProse()])
+    #expect(run(["/archive/PAPER.WS"], environment: fine.environment) == 0)
+}
+
+/// `run-text-not-utf8` and `run-data-truncated`: every assertion on written output was a
+/// `contains` or a prefix, so truncating either arm of the `EmitOutput` switch slipped
+/// through. What the CLI writes must be exactly what the library produced — no more, no less.
+@Test func writtenBytesAreExactlyTheLibrarysOutput() throws {
+    let recorder = Recorder(files: ["/archive/PAPER.WS": makeProse()])
+    #expect(run(["-t", "markdown", "-t", "pdf", "-d", "/out", "/archive/PAPER.WS"],
+                environment: recorder.environment) == ExitStatus.ok)
+
+    let markdown = try convert(makeProse(), to: "markdown", options: EmitOptions(title: "PAPER"))
+    #expect(recorder.written["/out/PAPER.md"] == Array(markdown.utf8))
+
+    let pdf = try convertData(makeProse(), to: "pdf", options: EmitOptions(title: "PAPER"))
+    #expect(recorder.written["/out/PAPER.pdf"] == pdf)
+    #expect(pdf.count > 400, "the comparison is only worth something if the PDF has content")
+}
+
 // MARK: - Path handling
 
 @Test func pathHelpersFollowPythonsRules() {
