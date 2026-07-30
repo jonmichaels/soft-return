@@ -45,3 +45,10 @@ func ws7Block(_ cmd: UInt8, payload: [UInt8] = []) -> [UInt8] {
     let length = UInt16(body.count)
     return [0x1d, UInt8(length & 0xFF), UInt8(length >> 8)] + body
 }
+
+/// A footnote/endnote block: 17 zero bytes, an inner `\x1d`, the text, then the
+/// `,\x00` tail `_note_text` trims off. Mirrors the Python fixture of the same name.
+func ws7Note(_ text: [UInt8]) -> [UInt8] {
+    let inner = Array(repeating: UInt8(0), count: 17) + [0x1d] + text + [0x2c, 0x00]
+    return ws7Block(0x03, payload: inner)
+}

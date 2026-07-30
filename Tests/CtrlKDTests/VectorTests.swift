@@ -94,6 +94,36 @@ private func loadJob004Vectors() throws -> Job004VectorFile {
     return try JSONDecoder().decode(Job004VectorFile.self, from: Data(contentsOf: url))
 }
 
+private struct SymmetricBlocksVector: Decodable {
+    let inputHex: String
+    let outputHex: String
+    let footnotes: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case inputHex = "input_hex"
+        case outputHex = "output_hex"
+        case footnotes
+    }
+}
+
+private struct Job005VectorFile: Decodable {
+    let symmetricBlocks: [SymmetricBlocksVector]
+    let note: String
+
+    enum CodingKeys: String, CodingKey {
+        case symmetricBlocks = "symmetric_blocks"
+        case note
+    }
+}
+
+private func loadJob005Vectors() throws -> Job005VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-005-vectors", withExtension: "json"),
+        "job-005-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job005VectorFile.self, from: Data(contentsOf: url))
+}
+
 private func bytesFromHex(_ hex: String) -> [UInt8] {
     let chars = Array(hex)
     precondition(chars.count % 2 == 0, "hex string must have an even length")
@@ -164,6 +194,16 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
         let decoded = decodeCP437([UInt8(byte)])
         let scalar = try #require(decoded.unicodeScalars.first, "byte 0x\(key) decoded to empty string")
         #expect(Int(scalar.value) == expected, "cp437 byte 0x\(key)")
+    }
+}
+
+@Test func symmetricBlocksMatchesPythonVectors() throws {
+    let vectors = try loadJob005Vectors().symmetricBlocks
+    #expect(vectors.count == 7)
+    for (i, v) in vectors.enumerated() {
+        let got = symmetricBlocks(bytesFromHex(v.inputHex))
+        #expect(hexFromBytes(got.bytes) == v.outputHex, "symmetric_blocks vector \(i): bytes")
+        #expect(got.footnotes == v.footnotes, "symmetric_blocks vector \(i): footnotes")
     }
 }
 
