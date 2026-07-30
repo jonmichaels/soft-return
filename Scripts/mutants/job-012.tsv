@@ -1,0 +1,55 @@
+# label	file	anchor	replacement   (\n and \t are escapes; see Scripts/mutate.sh)
+#
+# job-012: the PDF writer. Weighted toward Athena's two hunches from the job spec —
+# the xref offset arithmetic and _esc's ordering — plus the layout fixes 1.1.5 added.
+#
+# --- _esc: the ordering hunch -----------------------------------------------------------
+esc-parens-before-backslash	Sources/CtrlKD/PDFWriter.swift	var out = replacingEach(raw, 0x5C, with: [0x5C, 0x5C])              // \\  -> \\\\\n    out = replacingEach(out, 0x28, with: [0x5C, 0x28])                  // (  -> \\(\n    out = replacingEach(out, 0x29, with: [0x5C, 0x29])                  // )  -> \\)	var out = replacingEach(raw, 0x28, with: [0x5C, 0x28])\n    out = replacingEach(out, 0x29, with: [0x5C, 0x29])\n    out = replacingEach(out, 0x5C, with: [0x5C, 0x5C])
+esc-no-backslash-escape	Sources/CtrlKD/PDFWriter.swift	var out = replacingEach(raw, 0x5C, with: [0x5C, 0x5C])	var out = raw
+esc-no-open-paren-escape	Sources/CtrlKD/PDFWriter.swift	out = replacingEach(out, 0x28, with: [0x5C, 0x28])	out = out
+esc-no-close-paren-escape	Sources/CtrlKD/PDFWriter.swift	out = replacingEach(out, 0x29, with: [0x5C, 0x29])	out = out
+esc-latin1-boundary-off-by-one	Sources/CtrlKD/PDFWriter.swift	scalar.value <= 0xFF	scalar.value <= 0x7F
+esc-replacement-not-question-mark	Sources/CtrlKD/PDFWriter.swift	: 0x3F)   // 0x3F = '?'	: 0x2E)
+# --- emit_pdf: the xref arithmetic hunch ------------------------------------------------
+xref-offset-after-writing	Sources/CtrlKD/PDFWriter.swift	offsets[obj.number] = out.count\n        out += Array("\\(obj.number) 0 obj\\n".utf8)	out += Array("\\(obj.number) 0 obj\\n".utf8)\n        offsets[obj.number] = out.count
+xref-startxref-before-loop	Sources/CtrlKD/PDFWriter.swift	let xrefAt = out.count	let xrefAt = 9
+xref-count-no-plus-one	Sources/CtrlKD/PDFWriter.swift	let count = (offsets.keys.max() ?? 0) + 1	let count = (offsets.keys.max() ?? 0)
+xref-entries-from-zero	Sources/CtrlKD/PDFWriter.swift	for n in 1..<count {	for n in 0..<count {
+xref-padding-nine-wide	Sources/CtrlKD/PDFWriter.swift	zeroPadded(offsets[n]!, width: 10)	zeroPadded(offsets[n]!, width: 9)
+xref-entry-loses-trailing-space	Sources/CtrlKD/PDFWriter.swift	 00000 n \\n".utf8)	 00000 n\\n".utf8)
+xref-free-head-trailing-space	Sources/CtrlKD/PDFWriter.swift	0000000000 65535 f \\n".utf8)	0000000000 65535 f\\n".utf8)
+xref-objects-unsorted	Sources/CtrlKD/PDFWriter.swift	objs.sort { $0.number < $1.number }	_ = 0
+xref-size-off-by-one	Sources/CtrlKD/PDFWriter.swift	trailer\n    << /Size \\(count) /Root 1 0 R >>	trailer\n    << /Size \\(count + 1) /Root 1 0 R >>
+# --- emit_pdf: object graph -------------------------------------------------------------
+pdf-fonts-start-at-two	Sources/CtrlKD/PDFWriter.swift	var nextNum = 3                                   // 1 and 2 are reserved, inserted below	var nextNum = 2
+pdf-length-omits-stream	Sources/CtrlKD/PDFWriter.swift	<< /Length \\(stream.count) >>	<< /Length \\(stream.count + 1) >>
+pdf-page-and-content-nums-swapped	Sources/CtrlKD/PDFWriter.swift	pageNums.append(nextNum); nextNum += 1\n        contentNums.append(nextNum); nextNum += 1	contentNums.append(nextNum); nextNum += 1\n        pageNums.append(nextNum); nextNum += 1
+pdf-printed-mode-ignored	Sources/CtrlKD/PDFWriter.swift	let printed = mode == .printed || isPrinted(doc)	let printed = mode == .printed
+pdf-top-margins-swapped	Sources/CtrlKD/PDFWriter.swift	let top = printed ? PDFMetrics.topPrinted : PDFMetrics.topModern	let top = printed ? PDFMetrics.topModern : PDFMetrics.topPrinted
+# --- _page_stream ----------------------------------------------------------------------
+stream-no-coalesce	Sources/CtrlKD/PDFWriter.swift	for span in coalesce(line) {	for span in line {
+stream-underline-offset-sign	Sources/CtrlKD/PDFWriter.swift	y: y - 15))       // 1.5pt below	y: y + 15))
+stream-underline-whole-point	Sources/CtrlKD/PDFWriter.swift	y: y - 15))       // 1.5pt below	y: y - 10))
+stream-strike-offset	Sources/CtrlKD/PDFWriter.swift	y: y + 30))       // 3pt above	y: y + 20))
+stream-rules-ignore-whitespace-guard	Sources/CtrlKD/PDFWriter.swift	let hasInk = span.text.contains { !$0.isWhitespace }	let hasInk = true
+stream-sup-rise-sign	Sources/CtrlKD/PDFWriter.swift	styles.contains(.sup) ? 3 : (styles.contains(.sub) ? -2 : 0)	styles.contains(.sup) ? -3 : (styles.contains(.sub) ? 2 : 0)
+stream-sub-checked-first	Sources/CtrlKD/PDFWriter.swift	styles.contains(.sup) ? 3 : (styles.contains(.sub) ? -2 : 0)	styles.contains(.sub) ? -2 : (styles.contains(.sup) ? 3 : 0)
+stream-reduced-size-twelve	Sources/CtrlKD/PDFWriter.swift	let size = reduced ? 8 : PDFMetrics.size	let size = PDFMetrics.size
+stream-advance-not-scaled-by-size	Sources/CtrlKD/PDFWriter.swift	let w = span.text.width * size * 6	let w = span.text.width * PDFMetrics.size * 6
+stream-advance-wrong-ratio	Sources/CtrlKD/PDFWriter.swift	let w = span.text.width * size * 6	let w = span.text.width * size * 5
+stream-empty-run-advances	Sources/CtrlKD/PDFWriter.swift	if span.text.isEmpty {\n                continue                       // no operator, and no advance either\n            }	if span.text.isEmpty {\n                x += span.text.width * PDFMetrics.size * 6\n                continue\n            }
+stream-y-not-advanced	Sources/CtrlKD/PDFWriter.swift	y -= PDFMetrics.lead * 10	y -= 0
+stream-x-not-reset-per-line	Sources/CtrlKD/PDFWriter.swift	for line in pagelines {\n        var x = PDFMetrics.margin * 10	var x = PDFMetrics.margin * 10\n    for line in pagelines {
+stream-font-bold-italic-swapped	Sources/CtrlKD/PDFWriter.swift	pdfFonts[(bold ? 1 : 0) + (italic ? 2 : 0)].name	pdfFonts[(bold ? 2 : 0) + (italic ? 1 : 0)].name
+stream-ops-joined-by-space	Sources/CtrlKD/PDFWriter.swift	return joined(ops, separator: 0x0A)	return joined(ops, separator: 0x20)
+# --- the 1.1.5 layout fixes ------------------------------------------------------------
+layout-headings-not-bold	Sources/CtrlKD/PDFLayout.swift	let spans = block.heading != 0	let spans = false
+layout-headings-replace-styles	Sources/CtrlKD/PDFLayout.swift	Span(text: $0.text, styles: $0.styles.union(.bold))	Span(text: $0.text, styles: .bold)
+layout-heading-bold-in-printed-only	Sources/CtrlKD/PDFLayout.swift	let spans = block.heading != 0	let spans = block.heading != 0 && printed
+layout-no-trailing-page-pop	Sources/CtrlKD/PDFLayout.swift	while pages.count > 1, pages[pages.count - 1].isEmpty {	while false, pages[pages.count - 1].isEmpty {
+layout-pop-drops-sole-page	Sources/CtrlKD/PDFLayout.swift	while pages.count > 1, pages[pages.count - 1].isEmpty {	while pages.count > 0, pages[pages.count - 1].isEmpty {
+# The fix Athena should ship in 1.1.6, applied here as a mutant: moving the pop AFTER the
+# blank-stripping actually removes the blank sheet. It MUST be caught — the vectors pin
+# 1.1.5's output, so this is the guard that says the port is still faithful rather than
+# quietly improved.
+layout-pop-moved-after-stripping	Sources/CtrlKD/PDFLayout.swift	\n    return pages\n}	\n    while pages.count > 1, pages[pages.count - 1].isEmpty {\n        pages.removeLast()\n    }\n    return pages\n}

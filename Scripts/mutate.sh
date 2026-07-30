@@ -6,6 +6,10 @@
 #
 # Usage:  Scripts/mutate.sh [mutants-file]        # default: Scripts/mutants/job-011.tsv
 #
+# A mutants file is TSV: label, file, anchor, replacement. In the anchor and replacement,
+# \n and \t are a real newline and tab, and \\ is a literal backslash — which is how a
+# Swift `\(interpolation)` or an escaped `\n` inside a string literal gets anchored.
+#
 # Not part of any package product — SwiftPM ignores Scripts/. It needs a clean git tree
 # (that is how it restores) and it will refuse to start without one.
 #
@@ -63,9 +67,28 @@ while IFS=$'\t' read -r label file anchor replacement; do
     python3 - "$file" "$anchor" "$replacement" <<'PY'
 import sys
 path, anchor, repl = sys.argv[1], sys.argv[2], sys.argv[3]
-# A TSV row cannot hold a real newline or tab, so the file spells them \n and \t.
-anchor = anchor.replace('\\n', '\n').replace('\\t', '\t')
-repl = repl.replace('\\n', '\n').replace('\\t', '\t')
+
+def unescape(s):
+    r"""A TSV row cannot hold a real newline or tab, so the file spells them \n and \t —
+    and \\ for a literal backslash, which Swift source is full of: every `\(x)` string
+    interpolation and every `\n` INSIDE a string literal is one. Without \\ those lines
+    cannot be anchored at all (the xref entries and every interpolated object number),
+    which quietly pushes a mutant set away from exactly the code most worth mutating.
+
+    One left-to-right pass, so the escapes cannot compound: a sequential
+    `.replace('\\n', '\n').replace('\\\\', '\\')` chain turns the two characters \\n
+    into a newline instead of a backslash followed by n."""
+    out, i = [], 0
+    while i < len(s):
+        if s[i] == '\\' and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt == 'n':    out.append('\n');  i += 2; continue
+            if nxt == 't':    out.append('\t');  i += 2; continue
+            if nxt == '\\':   out.append('\\');  i += 2; continue
+        out.append(s[i]); i += 1
+    return ''.join(out)
+
+anchor, repl = unescape(anchor), unescape(repl)
 try:
     src = open(path).read()
 except OSError:
