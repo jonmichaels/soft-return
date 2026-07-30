@@ -271,6 +271,41 @@ private struct Job008VectorFile: Decodable {
     let note: String
 }
 
+// MARK: - job-009 (html + rtf emitters)
+
+/// Same shape as `EmitVector` plus the optional `title`, which only the one title-escaping
+/// vector carries. Python's `emit_html` defaults it to `''`.
+private struct Emit2Vector: Decodable {
+    let name: String
+    let inputHex: String
+    let format: String
+    let mode: String
+    let expected: String
+    let title: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case inputHex = "input_hex"
+        case format
+        case mode
+        case expected
+        case title
+    }
+}
+
+private struct Job009VectorFile: Decodable {
+    let emit2: [Emit2Vector]
+    let note: String
+}
+
+private func loadJob009Vectors() throws -> Job009VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-009-vectors", withExtension: "json"),
+        "job-009-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job009VectorFile.self, from: Data(contentsOf: url))
+}
+
 private func loadJob008Vectors() throws -> Job008VectorFile {
     let url = try #require(
         Bundle.module.url(forResource: "job-008-vectors", withExtension: "json"),
@@ -463,6 +498,24 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
         // Verbatim comparison — trailing whitespace and the final newline are part of the
         // contract, so nothing is trimmed on either side.
         #expect(got == v.expected, "emit vector \(v.name)")
+    }
+}
+
+@Test func htmlAndRTFEmittersMatchPythonVectors() throws {
+    let vectors = try loadJob009Vectors().emit2
+    #expect(vectors.count == 33)
+    for v in vectors {
+        let doc = try parse(bytesFromHex(v.inputHex))
+        let mode = try #require(EmitMode(rawValue: v.mode), "unknown mode \(v.mode)")
+        let got: String
+        switch v.format {
+        case "html": got = emitHTML(doc, mode: mode, title: v.title ?? "")
+        case "rtf": got = emitRTF(doc, mode: mode)
+        default:
+            Issue.record("unknown format \(v.format) in vector \(v.name)")
+            continue
+        }
+        #expect(got == v.expected, "emit2 vector \(v.name)")
     }
 }
 

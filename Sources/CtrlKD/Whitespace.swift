@@ -47,6 +47,19 @@ extension String {
         return String(view)
     }
 
+    /// Equivalent of Python's `str.lstrip()` with no argument — the string with its leading
+    /// whitespace run removed. Pairs with `leadingWhitespace()`, which returns that run.
+    func trimmedLeading() -> String {
+        var view = String.UnicodeScalarView()
+        var seenNonSpace = false
+        for scalar in unicodeScalars {
+            if !seenNonSpace && String.isPythonSpace(scalar) { continue }
+            seenNonSpace = true
+            view.append(scalar)
+        }
+        return String(view)
+    }
+
     /// The trailing run of whitespace — Python's `s[len(s.rstrip()):]`.
     func trailingWhitespace() -> String {
         var trailing: [Unicode.Scalar] = []

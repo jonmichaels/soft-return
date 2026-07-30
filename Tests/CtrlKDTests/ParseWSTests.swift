@@ -93,6 +93,10 @@ let italicOn: [UInt8] = [0x19]
     #expect(headings.first?.heading == 2)
     #expect(headings.first?.lines[0].text().trimmed() == "Chapter One")
     #expect(doc.blocks.contains { $0.kind == .softpage })
+    // The Python test's last two assertions, which this port had to leave out until the
+    // markdown and html emitters existed. Both do now.
+    #expect(emitMarkdown(doc).contains("## Chapter One"))
+    #expect(emitHTML(doc).contains("<h2>Chapter One</h2>"))
 }
 
 @Test func ws7TabBlock() {
