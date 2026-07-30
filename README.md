@@ -121,8 +121,6 @@ swift run ctrlkd-demo     # converts synthetic WordStar bytes, prints each stage
   export it as something a person can read. Quick Look support, so the Finder can
   preview WordStar files directly, and an *Install Command-Line Tool* menu item.
 - **3.0** — the iOS app: a full Files-app citizen, same engine.
-- **Older Macs** — explore a build that supports earlier versions of macOS. This is
-  exactly the kind of utility someone on an old Mac is going to want.
 
 ## Credits
 
