@@ -306,6 +306,61 @@ private func loadJob009Vectors() throws -> Job009VectorFile {
     return try JSONDecoder().decode(Job009VectorFile.self, from: Data(contentsOf: url))
 }
 
+// MARK: - job-010 (convert front door + the form-feed printstream case)
+
+private struct ConvertVector: Decodable {
+    let inputHex: String
+    let to: String
+    let expected: String
+
+    enum CodingKeys: String, CodingKey {
+        case inputHex = "input_hex"
+        case to
+        case expected
+    }
+}
+
+/// The form-feed emit vectors carry no `name`/`input_hex` of their own — they all render the
+/// one document the enclosing vector holds, so only the axis being varied is listed.
+private struct FormfeedEmitVector: Decodable {
+    let format: String
+    let mode: String
+    let expected: String
+}
+
+private struct FormfeedVector: Decodable {
+    let inputHex: String
+    /// Printstream shape (`variant` + `columnar` only), same as job-007's.
+    let document: PrintstreamDocumentVector
+    let emit: [FormfeedEmitVector]
+
+    enum CodingKeys: String, CodingKey {
+        case inputHex = "input_hex"
+        case document
+        case emit
+    }
+}
+
+private struct Job010VectorFile: Decodable {
+    let convert: [ConvertVector]
+    let formfeedPrintstream: FormfeedVector
+    let note: String
+
+    enum CodingKeys: String, CodingKey {
+        case convert
+        case formfeedPrintstream = "formfeed_printstream"
+        case note
+    }
+}
+
+private func loadJob010Vectors() throws -> Job010VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-010-vectors", withExtension: "json"),
+        "job-010-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job010VectorFile.self, from: Data(contentsOf: url))
+}
+
 private func loadJob008Vectors() throws -> Job008VectorFile {
     let url = try #require(
         Bundle.module.url(forResource: "job-008-vectors", withExtension: "json"),
@@ -509,13 +564,60 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
         let mode = try #require(EmitMode(rawValue: v.mode), "unknown mode \(v.mode)")
         let got: String
         switch v.format {
-        case "html": got = emitHTML(doc, mode: mode, title: v.title ?? "")
+        case "html": got = emitHTML(doc, mode: mode, options: EmitOptions(title: v.title ?? ""))
         case "rtf": got = emitRTF(doc, mode: mode)
         default:
             Issue.record("unknown format \(v.format) in vector \(v.name)")
             continue
         }
         #expect(got == v.expected, "emit2 vector \(v.name)")
+    }
+}
+
+@Test func convertMatchesPythonVectors() throws {
+    // One vector per built-in format plus the `md` alias, all through the front door — so
+    // these prove the registry wires each name to the right emitter, not just that the
+    // emitters work (job-008/009's vectors already did that).
+    let vectors = try loadJob010Vectors().convert
+    #expect(vectors.count == 5)
+    for v in vectors {
+        let got = try convert(bytesFromHex(v.inputHex), to: v.to)
+        #expect(got == v.expected, "convert vector to=\(v.to)")
+    }
+}
+
+@Test func formfeedPrintstreamMatchesPythonVectors() throws {
+    // The case the job-009 response asked for: a print capture bracketed AND separated by
+    // form feeds, so the document has empty paragraphs at both edges and between the pages.
+    // That shape exercises every emitter's empty-block guard at once — the guards job-009's
+    // mutation run found were unproven by its own 33 vectors.
+    let v = try loadJob010Vectors().formfeedPrintstream
+    let doc = try parse(bytesFromHex(v.inputHex))
+    let want = v.document
+
+    #expect(doc.detection?.variant.rawValue == want.meta.variant, "formfeed document: variant")
+    #expect(doc.columnar == want.meta.columnar, "formfeed document: columnar")
+    #expect(doc.marginEstimate == nil, "formfeed document: marginEstimate should be nil")
+    #expect(doc.footnotes.map { $0.map(\.text).joined() } == want.footnotes,
+            "formfeed document: footnotes")
+    assertBlocks(doc.blocks, want.blocks, label: "formfeed document")
+
+    // All four emitters, both modes — the emitters called directly, since the convert
+    // vectors above cover the registry path.
+    #expect(v.emit.count == 8)
+    for e in v.emit {
+        let mode = try #require(EmitMode(rawValue: e.mode), "unknown mode \(e.mode)")
+        let got: String
+        switch e.format {
+        case "text": got = emitText(doc, mode: mode)
+        case "markdown": got = emitMarkdown(doc, mode: mode)
+        case "html": got = emitHTML(doc, mode: mode)
+        case "rtf": got = emitRTF(doc, mode: mode)
+        default:
+            Issue.record("unknown format \(e.format) in formfeed vector")
+            continue
+        }
+        #expect(got == e.expected, "formfeed emit \(e.format)/\(e.mode)")
     }
 }
 

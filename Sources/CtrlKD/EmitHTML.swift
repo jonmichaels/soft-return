@@ -69,10 +69,14 @@ func htmlSpan(_ span: Span, keepWS: Bool = false) -> String {
 /// Render a whole standalone page: doctype, head, the CSS above, then one element per
 /// block. emit.py:156-190.
 ///
-/// - Parameter title: goes in `<title>`, escaped. Python defaults it to `''`, which yields
-///   an empty `<title></title>` rather than omitting the tag — kept, because the vectors
-///   pin it.
-public func emitHTML(_ doc: Document, mode: EmitMode = .modern, title: String = "") -> String {
+/// - Parameter options: `options.title` goes in `<title>`, escaped. Python defaults it to
+///   `''`, which yields an empty `<title></title>` rather than omitting the tag — kept,
+///   because the vectors pin it. This is the only built-in emitter that reads an option at
+///   all; the other three take `EmitOptions` and ignore it (emit.py:156 vs 58/108/208).
+@Sendable
+public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
+                     options: EmitOptions = EmitOptions()) -> String {
+    let title = options.title
     let printed = mode == .printed || isPrinted(doc)
     var parts: [String] = []
 

@@ -49,7 +49,10 @@ private func rtfStyleControls(_ styles: Style) -> String {
     return out
 }
 
-public func emitRTF(_ doc: Document, mode: EmitMode = .modern) -> String {
+/// - Parameter options: accepted and ignored, as Python's `**_options` is (emit.py:208).
+@Sendable
+public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
+                    options: EmitOptions = EmitOptions()) -> String {
     let printed = mode == .printed || isPrinted(doc)
     // \f0 Times, \f1 Courier — a printed document's alignment only survives in a
     // fixed-width font (emit.py:210).

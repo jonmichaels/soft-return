@@ -18,7 +18,16 @@ public func isPrinted(_ doc: Document) -> Bool {
     doc.detection?.variant == .printstream || doc.columnar
 }
 
-public func emitText(_ doc: Document, mode: EmitMode = .modern) -> String {
+/// - Parameter options: accepted and ignored, as Python's `**_options` is (emit.py:58).
+///   Present so every emitter has the one signature `Emitter.emit` stores.
+///
+/// `@Sendable` here (and on the other three) is what lets the function be stored directly in
+/// an `Emitter` without a wrapper closure: an emitter is a pure function of its arguments,
+/// holding no state between calls, so it is safe to call from any thread — and the compiler
+/// should be told so rather than have the guarantee laundered through a `{ }`.
+@Sendable
+public func emitText(_ doc: Document, mode: EmitMode = .modern,
+                     options: EmitOptions = EmitOptions()) -> String {
     var out: [String] = []
     for block in doc.blocks {
         if block.kind == .softpage {

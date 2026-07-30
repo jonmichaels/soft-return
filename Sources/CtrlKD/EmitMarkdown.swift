@@ -63,7 +63,10 @@ func markdownSpan(_ span: Span) -> String {
     return lead + core + trail
 }
 
-public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern) -> String {
+/// - Parameter options: accepted and ignored, as Python's `**_options` is (emit.py:108).
+@Sendable
+public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
+                         options: EmitOptions = EmitOptions()) -> String {
     // emit.py:104-107 — for a printed or columnar document the alignment IS the content, so
     // a fenced block is the honest representation. Delegates to emitText rather than
     // reimplementing the line-for-line layout.
