@@ -28,6 +28,22 @@ func bytes(_ s: String) -> [UInt8] {
     Array(s.utf8)
 }
 
+extension String {
+    /// Stand-in for Python's `str.strip()` in test assertions ported from the Python
+    /// suite, which lean on it for leading/trailing whitespace.
+    func trimmed() -> String {
+        var scalars = Array(unicodeScalars)
+        let isSpace: (Unicode.Scalar) -> Bool = {
+            $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" || $0.value == 0x0B || $0.value == 0x0C
+        }
+        while let f = scalars.first, isSpace(f) { scalars.removeFirst() }
+        while let l = scalars.last, isSpace(l) { scalars.removeLast() }
+        var view = String.UnicodeScalarView()
+        view.append(contentsOf: scalars)
+        return String(view)
+    }
+}
+
 /// Two paragraphs; the first wraps twice at a 65 margin (long lines), the second short.
 /// Mirrors `make_prose()` in the Python tests.
 func makeProse() -> [UInt8] {

@@ -124,6 +124,90 @@ private func loadJob005Vectors() throws -> Job005VectorFile {
     return try JSONDecoder().decode(Job005VectorFile.self, from: Data(contentsOf: url))
 }
 
+// MARK: - job-006 (parse_ws end-to-end Documents)
+
+private struct SpanVector: Decodable {
+    let text: String
+    let styles: [String]
+}
+
+private struct BlockVector: Decodable {
+    let kind: String
+    let heading: Int
+    /// Python serializes each line as a bare list of spans, so a line is `[[SpanVector]]`
+    /// nested one deeper than it reads.
+    let lines: [[SpanVector]]
+}
+
+private struct MetaVector: Decodable {
+    let variant: String
+    let marginEstimate: Int
+    let dotCommands: [String]
+    /// Hex-string keyed (`"0x07"`), matching Python's `--diagnose` formatting; converted
+    /// to raw bytes for comparison against `Document.unknownCodes`.
+    let unknownCodes: [String: Int]
+    let columnar: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case variant
+        case marginEstimate = "margin_estimate"
+        case dotCommands = "dot_commands"
+        case unknownCodes = "unknown_codes"
+        case columnar
+    }
+}
+
+private struct DocumentVector: Decodable {
+    let blocks: [BlockVector]
+    let footnotes: [String]
+    let meta: MetaVector
+}
+
+private struct ParseWSVector: Decodable {
+    let inputHex: String
+    let document: DocumentVector
+
+    enum CodingKeys: String, CodingKey {
+        case inputHex = "input_hex"
+        case document
+    }
+}
+
+private struct Job006VectorFile: Decodable {
+    let parseWS: [ParseWSVector]
+    let symmetricBlocksExtra: [SymmetricBlocksVector]
+    let note: String
+
+    enum CodingKeys: String, CodingKey {
+        case parseWS = "parse_ws"
+        case symmetricBlocksExtra = "symmetric_blocks_extra"
+        case note
+    }
+}
+
+private func loadJob006Vectors() throws -> Job006VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-006-vectors", withExtension: "json"),
+        "job-006-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job006VectorFile.self, from: Data(contentsOf: url))
+}
+
+/// `Style` -> the Python style-code strings the vectors use, sorted for comparison.
+/// Lives in the test target: the codes are the Python wire format, and nothing in
+/// `Sources/` needs them until an emitter does.
+private func styleCodes(_ style: Style) -> [String] {
+    var codes: [String] = []
+    if style.contains(.bold) { codes.append("b") }
+    if style.contains(.italic) { codes.append("i") }
+    if style.contains(.underline) { codes.append("u") }
+    if style.contains(.sup) { codes.append("sup") }
+    if style.contains(.sub) { codes.append("sub") }
+    if style.contains(.strike) { codes.append("strike") }
+    if style.contains(.fnref) { codes.append("fnref") }
+    return codes.sorted()
+}
+
 private func bytesFromHex(_ hex: String) -> [UInt8] {
     let chars = Array(hex)
     precondition(chars.count % 2 == 0, "hex string must have an even length")
@@ -204,6 +288,64 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
         let got = symmetricBlocks(bytesFromHex(v.inputHex))
         #expect(hexFromBytes(got.bytes) == v.outputHex, "symmetric_blocks vector \(i): bytes")
         #expect(got.footnotes == v.footnotes, "symmetric_blocks vector \(i): footnotes")
+    }
+}
+
+@Test func parseWSMatchesPythonVectors() throws {
+    let vectors = try loadJob006Vectors().parseWS
+    #expect(vectors.count == 7)
+    for (i, v) in vectors.enumerated() {
+        let doc = parseWS(bytesFromHex(v.inputHex))
+        let want = v.document
+        let label = "parse_ws vector \(i)"
+
+        // meta
+        #expect(doc.detection?.variant.rawValue == want.meta.variant, "\(label): variant")
+        #expect(doc.marginEstimate == want.meta.marginEstimate, "\(label): margin_estimate")
+        #expect(doc.dotCommands == want.meta.dotCommands, "\(label): dot_commands")
+        #expect(doc.columnar == want.meta.columnar, "\(label): columnar")
+        var wantUnknown: [UInt8: Int] = [:]
+        for (key, count) in want.meta.unknownCodes {
+            let hex = key.hasPrefix("0x") ? String(key.dropFirst(2)) : key
+            wantUnknown[UInt8(hex, radix: 16)!] = count
+        }
+        #expect(doc.unknownCodes == wantUnknown, "\(label): unknown_codes")
+
+        // footnotes, compared as the joined span text Python serializes
+        let gotFootnotes = doc.footnotes.map { $0.map(\.text).joined() }
+        #expect(gotFootnotes == want.footnotes, "\(label): footnotes")
+
+        // blocks / lines / spans / styles
+        #expect(doc.blocks.count == want.blocks.count, "\(label): block count")
+        for (b, wantBlock) in want.blocks.enumerated() where b < doc.blocks.count {
+            let gotBlock = doc.blocks[b]
+            #expect(gotBlock.kind.rawValue == wantBlock.kind, "\(label) block \(b): kind")
+            #expect(gotBlock.heading == wantBlock.heading, "\(label) block \(b): heading")
+            #expect(gotBlock.lines.count == wantBlock.lines.count, "\(label) block \(b): line count")
+            for (l, wantLine) in wantBlock.lines.enumerated() where l < gotBlock.lines.count {
+                let gotSpans = gotBlock.lines[l].spans
+                #expect(gotSpans.count == wantLine.count, "\(label) block \(b) line \(l): span count")
+                for (s, wantSpan) in wantLine.enumerated() where s < gotSpans.count {
+                    #expect(gotSpans[s].text == wantSpan.text,
+                            "\(label) block \(b) line \(l) span \(s): text")
+                    #expect(styleCodes(gotSpans[s].styles) == wantSpan.styles.sorted(),
+                            "\(label) block \(b) line \(l) span \(s): styles")
+                }
+            }
+        }
+    }
+}
+
+@Test func symmetricBlocksExtraVectors() throws {
+    // The NBSP note-strip case, folded into the canonical vector set per job-005's
+    // request — this replaces the hand-authored fixture that lived in
+    // SymmetricBlocksTests.swift.
+    let vectors = try loadJob006Vectors().symmetricBlocksExtra
+    #expect(vectors.count == 1)
+    for (i, v) in vectors.enumerated() {
+        let got = symmetricBlocks(bytesFromHex(v.inputHex))
+        #expect(hexFromBytes(got.bytes) == v.outputHex, "symmetric_blocks_extra \(i): bytes")
+        #expect(got.footnotes == v.footnotes, "symmetric_blocks_extra \(i): footnotes")
     }
 }
 
