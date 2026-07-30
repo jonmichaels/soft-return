@@ -245,10 +245,21 @@ import Testing
 }
 
 @Test func pageStreamEmptyRunEmitsNothingAndDoesNotAdvance() {
-    // `if not text: continue` skips the x advance too, because `continue` jumps past it. An
-    // empty span is not something the wrapper makes, but `coalesce` can be handed one.
-    let line: Page = [[Span(text: ""), Span(text: "a")]]
+    // `if not text: continue` — an empty run must produce no operator at all, not an empty
+    // `() Tj`.
+    //
+    // THE STYLES ON THE EMPTY SPAN ARE THE POINT. Written first with two unstyled spans, this
+    // test could not fail: `coalesce` runs before the guard and merges same-style neighbours,
+    // so `"" + "a"` became one `"a"` run and the empty span never reached the branch being
+    // tested. Mutation testing caught that — deleting the guard changed nothing. Giving the
+    // empty run a style of its own is what keeps `coalesce` from hiding it.
+    let line: Page = [[Span(text: "", styles: .bold), Span(text: "a")]]
     #expect(latin1(pageStream(line, top: 72)) == "BT /F1 12 Tf 0 Ts 72.0 708.0 Td (a) Tj ET")
+
+    // And the merge itself, so the reason above stays true: adjacent same-style runs are one
+    // operator, which is what makes the empty-span case unreachable through `coalesce`.
+    let merged: Page = [[Span(text: ""), Span(text: "a")]]
+    #expect(latin1(pageStream(merged, top: 72)) == "BT /F1 12 Tf 0 Ts 72.0 708.0 Td (a) Tj ET")
 }
 
 @Test func pageStreamEmptyPageIsAnEmptyStream() {
