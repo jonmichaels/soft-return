@@ -1,0 +1,47 @@
+# job-014 — the sr CLI: argument parsing, the conversion loop, diagnose output.
+# Format: label<TAB>file<TAB>anchor<TAB>replacement.  \n \t \\ are unescaped (see mutate.sh).
+o-guard-inputs	Sources/SoftReturnCLI/Arguments.swift	options.files.count > 1 || options.formats.count > 1	options.files.count > 2 || options.formats.count > 1
+o-guard-formats	Sources/SoftReturnCLI/Arguments.swift	options.files.count > 1 || options.formats.count > 1	options.files.count > 1
+default-markdown	Sources/SoftReturnCLI/Arguments.swift	if !formats.isEmpty { options.formats = formats }	options.formats = formats
+files-required	Sources/SoftReturnCLI/Arguments.swift	guard !files.isEmpty else {	guard true else {
+variant-binary-allowed	Sources/SoftReturnCLI/Arguments.swift	guard variantChoices.contains(value), let variant = Variant(rawValue: value) else {	guard let variant = Variant(rawValue: value) else {
+encoding-not-refused	Sources/SoftReturnCLI/Arguments.swift	case "--encoding":	case "--encoding-was-here":
+end-of-options	Sources/SoftReturnCLI/Arguments.swift	if optionsEnded || arg == "-" || !arg.hasPrefix("-") {	if arg == "-" || !arg.hasPrefix("-") {
+attached-short-value	Sources/SoftReturnCLI/Arguments.swift	} else if !arg.hasPrefix("--"), arg.count > 2 {	} else if false {
+version-parity-string	Sources/SoftReturnCLI/Arguments.swift	public let ctrlKDParity = "1.1.6"	public let ctrlKDParity = "1.1.5"
+help-lists-formats	Sources/SoftReturnCLI/Arguments.swift	choices: \\(registry.formats().joined(separator: ", "))	choices: (ask)
+diagnose-evidence-gate	Sources/SoftReturnCLI/Diagnose.swift	if detection.size > 0 {	if detection.size >= 0 {
+diagnose-ws5-dropped	Sources/SoftReturnCLI/Diagnose.swift	if detection.variant == .ws4 || detection.variant == .ws5plus {	if detection.variant == .ws4 {
+diagnose-reason-dropped	Sources/SoftReturnCLI/Diagnose.swift	info["reason"] = .string(reason)	info["variant"] = .string(reason)
+diagnose-hex-prefix	Sources/SoftReturnCLI/Diagnose.swift	("0x" + JSONValue.hex2($0.key), JSONValue.int($0.value))	(JSONValue.hex2($0.key), JSONValue.int($0.value))
+diagnose-paragraph-filter	Sources/SoftReturnCLI/Diagnose.swift	doc.blocks.filter { $0.kind == .para }.count	doc.blocks.count
+diagnose-footnote-count	Sources/SoftReturnCLI/Diagnose.swift	info["footnotes"] = .int(doc.footnotes.count)	info["footnotes"] = .int(0)
+diagnose-margin-key	Sources/SoftReturnCLI/Diagnose.swift	info["margin_estimate"] = doc.marginEstimate.map(JSONValue.int) ?? .null	info["margin_estimate"] = .null
+json-sorted-keys	Sources/SoftReturnCLI/JSON.swift	let body = fields.keys.sorted().map { key in	let body = fields.keys.reversed().map { key in
+json-indent-width	Sources/SoftReturnCLI/JSON.swift	let inner = String(repeating: " ", count: indent + 2)	let inner = String(repeating: " ", count: indent + 4)
+json-nested-indent	Sources/SoftReturnCLI/JSON.swift	inner + JSONValue.quote(key) + ": " + fields[key]!.render(indent: indent + 2)	inner + JSONValue.quote(key) + ": " + fields[key]!.render(indent: indent)
+json-empty-object	Sources/SoftReturnCLI/JSON.swift	guard !fields.isEmpty else { return "{}" }	guard !fields.isEmpty else { return "{ }" }
+json-empty-array	Sources/SoftReturnCLI/JSON.swift	guard !items.isEmpty else { return "[]" }	guard !items.isEmpty else { return "[ ]" }
+json-control-escape	Sources/SoftReturnCLI/JSON.swift	if scalar.value < 0x20 {	if scalar.value < 0x00 {
+json-quote-escape	Sources/SoftReturnCLI/JSON.swift	case "\\"": out += "\\\\\\""	case "\\"": out += "\\""
+json-hex2-nibbles	Sources/SoftReturnCLI/JSON.swift	return String([digits[Int(byte >> 4)], digits[Int(byte & 0x0F)]])	return String([digits[Int(byte & 0x0F)], digits[Int(byte >> 4)]])
+run-diagnose-also-converts	Sources/SoftReturnCLI/Run.swift	environment.writeOut(diagnose(path: path, data: data).render())\n            continue	environment.writeOut(diagnose(path: path, data: data).render())
+run-read-failure-status	Sources/SoftReturnCLI/Run.swift	environment.writeErr("sr: \\(path): \\(message(for: error))")\n            status = ExitStatus.fileFailure	environment.writeErr("sr: \\(path): \\(message(for: error))")
+run-parse-failure-status	Sources/SoftReturnCLI/Run.swift	+ "(use --diagnose to inspect, --variant to force)")\n            status = ExitStatus.fileFailure	+ "(use --diagnose to inspect, --variant to force)")
+run-write-failure-status	Sources/SoftReturnCLI/Run.swift	environment.writeErr("sr: \\(destination): \\(message(for: error))")\n                status = ExitStatus.fileFailure	environment.writeErr("sr: \\(destination): \\(message(for: error))")
+run-usage-exit-code	Sources/SoftReturnCLI/Run.swift	public static let usage: Int32 = 2	public static let usage: Int32 = 1
+run-outdir-wins	Sources/SoftReturnCLI/Run.swift	let directory = options.outdir ?? (dirname(path).isEmpty ? "." : dirname(path))	let directory = dirname(path).isEmpty ? "." : dirname(path)
+run-bare-name-dot	Sources/SoftReturnCLI/Run.swift	let directory = options.outdir ?? (dirname(path).isEmpty ? "." : dirname(path))	let directory = options.outdir ?? dirname(path)
+run-output-flag-ignored	Sources/SoftReturnCLI/Run.swift	if let explicit = options.output {	if let explicit = Optional<String>.none {
+run-mode-hardcoded	Sources/SoftReturnCLI/Run.swift	let output = emitter.emit(doc, options.mode, EmitOptions(title: base))	let output = emitter.emit(doc, .modern, EmitOptions(title: base))
+run-title-dropped	Sources/SoftReturnCLI/Run.swift	let output = emitter.emit(doc, options.mode, EmitOptions(title: base))	let output = emitter.emit(doc, options.mode, EmitOptions())
+run-variant-dropped	Sources/SoftReturnCLI/Run.swift	doc = try parse(data, variant: options.variant)	doc = try parse(data, variant: nil)
+run-mkdir-skipped	Sources/SoftReturnCLI/Run.swift	if let outdir = options.outdir {\n                    try environment.createDirectory(outdir)\n                }	if let outdir = options.outdir { _ = outdir }
+run-text-not-utf8	Sources/SoftReturnCLI/Run.swift	case .text(let string): bytes = Array(string.utf8)	case .text(let string): bytes = Array(string.utf8.dropLast())
+run-data-truncated	Sources/SoftReturnCLI/Run.swift	case .data(let raw): bytes = raw	case .data(let raw): bytes = Array(raw.dropLast())
+path-stem-leading-dot	Sources/SoftReturnCLI/Paths.swift	guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return name }	guard let dot = name.lastIndex(of: ".") else { return name }
+path-stem-first-dot	Sources/SoftReturnCLI/Paths.swift	guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return name }	guard let dot = name.firstIndex(of: "."), dot != name.startIndex else { return name }
+path-dirname-root	Sources/SoftReturnCLI/Paths.swift	return head.isEmpty ? "/" : head	return head
+path-join-double-slash	Sources/SoftReturnCLI/Paths.swift	return directory.hasSuffix("/") ? directory + name : directory + "/" + name	return directory + "/" + name
+path-join-empty-dir	Sources/SoftReturnCLI/Paths.swift	if directory.isEmpty { return name }	if directory.isEmpty { return "/" + name }
+path-basename-offset	Sources/SoftReturnCLI/Paths.swift	return String(path[path.index(after: slash)...])	return String(path[slash...])
