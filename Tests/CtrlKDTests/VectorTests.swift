@@ -193,6 +193,83 @@ private func loadJob006Vectors() throws -> Job006VectorFile {
     return try JSONDecoder().decode(Job006VectorFile.self, from: Data(contentsOf: url))
 }
 
+// MARK: - job-007 (parse_printstream + parse front door)
+
+/// Printstream documents carry only `variant` and `columnar` — `parse_printstream` builds
+/// its meta by hand and never runs detection or the wrap test.
+private struct PrintstreamMetaVector: Decodable {
+    let variant: String
+    let columnar: Bool
+}
+
+private struct PrintstreamDocumentVector: Decodable {
+    let blocks: [BlockVector]
+    let footnotes: [String]
+    let meta: PrintstreamMetaVector
+}
+
+private struct PrintstreamVector: Decodable {
+    let inputHex: String
+    let document: PrintstreamDocumentVector
+
+    enum CodingKeys: String, CodingKey {
+        case inputHex = "input_hex"
+        case document
+    }
+}
+
+private struct FrontDoorVector: Decodable {
+    let inputHex: String
+    let routesTo: String
+
+    enum CodingKeys: String, CodingKey {
+        case inputHex = "input_hex"
+        case routesTo = "routes_to"
+    }
+}
+
+private struct Job007VectorFile: Decodable {
+    let parsePrintstream: [PrintstreamVector]
+    let parseFrontDoor: [FrontDoorVector]
+    let note: String
+
+    enum CodingKeys: String, CodingKey {
+        case parsePrintstream = "parse_printstream"
+        case parseFrontDoor = "parse_front_door"
+        case note
+    }
+}
+
+private func loadJob007Vectors() throws -> Job007VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-007-vectors", withExtension: "json"),
+        "job-007-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job007VectorFile.self, from: Data(contentsOf: url))
+}
+
+/// Shared block/line/span/style comparison, used by both the parse_ws and
+/// parse_printstream vector suites.
+private func assertBlocks(_ got: [Block], _ want: [BlockVector], label: String) {
+    #expect(got.count == want.count, "\(label): block count")
+    for (b, wantBlock) in want.enumerated() where b < got.count {
+        let gotBlock = got[b]
+        #expect(gotBlock.kind.rawValue == wantBlock.kind, "\(label) block \(b): kind")
+        #expect(gotBlock.heading == wantBlock.heading, "\(label) block \(b): heading")
+        #expect(gotBlock.lines.count == wantBlock.lines.count, "\(label) block \(b): line count")
+        for (l, wantLine) in wantBlock.lines.enumerated() where l < gotBlock.lines.count {
+            let gotSpans = gotBlock.lines[l].spans
+            #expect(gotSpans.count == wantLine.count, "\(label) block \(b) line \(l): span count")
+            for (s, wantSpan) in wantLine.enumerated() where s < gotSpans.count {
+                #expect(gotSpans[s].text == wantSpan.text,
+                        "\(label) block \(b) line \(l) span \(s): text")
+                #expect(styleCodes(gotSpans[s].styles) == wantSpan.styles.sorted(),
+                        "\(label) block \(b) line \(l) span \(s): styles")
+            }
+        }
+    }
+}
+
 /// `Style` -> the Python style-code strings the vectors use, sorted for comparison.
 /// Lives in the test target: the codes are the Python wire format, and nothing in
 /// `Sources/` needs them until an emitter does.
@@ -316,22 +393,41 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
         #expect(gotFootnotes == want.footnotes, "\(label): footnotes")
 
         // blocks / lines / spans / styles
-        #expect(doc.blocks.count == want.blocks.count, "\(label): block count")
-        for (b, wantBlock) in want.blocks.enumerated() where b < doc.blocks.count {
-            let gotBlock = doc.blocks[b]
-            #expect(gotBlock.kind.rawValue == wantBlock.kind, "\(label) block \(b): kind")
-            #expect(gotBlock.heading == wantBlock.heading, "\(label) block \(b): heading")
-            #expect(gotBlock.lines.count == wantBlock.lines.count, "\(label) block \(b): line count")
-            for (l, wantLine) in wantBlock.lines.enumerated() where l < gotBlock.lines.count {
-                let gotSpans = gotBlock.lines[l].spans
-                #expect(gotSpans.count == wantLine.count, "\(label) block \(b) line \(l): span count")
-                for (s, wantSpan) in wantLine.enumerated() where s < gotSpans.count {
-                    #expect(gotSpans[s].text == wantSpan.text,
-                            "\(label) block \(b) line \(l) span \(s): text")
-                    #expect(styleCodes(gotSpans[s].styles) == wantSpan.styles.sorted(),
-                            "\(label) block \(b) line \(l) span \(s): styles")
-                }
+        assertBlocks(doc.blocks, want.blocks, label: label)
+    }
+}
+
+@Test func parsePrintstreamMatchesPythonVectors() throws {
+    let vectors = try loadJob007Vectors().parsePrintstream
+    #expect(vectors.count == 6)
+    for (i, v) in vectors.enumerated() {
+        let doc = parsePrintstream(bytesFromHex(v.inputHex))
+        let want = v.document
+        let label = "parse_printstream vector \(i)"
+
+        #expect(doc.detection?.variant.rawValue == want.meta.variant, "\(label): variant")
+        #expect(doc.columnar == want.meta.columnar, "\(label): columnar")
+        // Never runs the wrap test, so there is no margin to report.
+        #expect(doc.marginEstimate == nil, "\(label): marginEstimate should be nil")
+        #expect(doc.footnotes.map { $0.map(\.text).joined() } == want.footnotes,
+                "\(label): footnotes")
+        assertBlocks(doc.blocks, want.blocks, label: label)
+    }
+}
+
+@Test func parseFrontDoorRoutesPythonVectors() throws {
+    let vectors = try loadJob007Vectors().parseFrontDoor
+    #expect(vectors.count == 2)
+    for (i, v) in vectors.enumerated() {
+        let data = bytesFromHex(v.inputHex)
+        let label = "parse_front_door vector \(i)"
+        if v.routesTo == "REFUSES" {
+            #expect(throws: ParseError.self, "\(label): expected refusal") {
+                _ = try parse(data)
             }
+        } else {
+            let doc = try parse(data)
+            #expect(doc.detection?.variant.rawValue == v.routesTo, "\(label): routed variant")
         }
     }
 }
