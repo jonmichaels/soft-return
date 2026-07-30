@@ -8,6 +8,9 @@ let package = Package(
     ],
     targets: [
         .target(name: "CtrlKD"),
+        // Proof-of-life demo: `swift run ctrlkd-demo` converts synthetic WS4 bytes
+        // to Markdown. Not part of the library product.
+        .executableTarget(name: "ctrlkd-demo", dependencies: ["CtrlKD"]),
         .testTarget(
             name: "CtrlKDTests",
             dependencies: ["CtrlKD"],
@@ -18,6 +21,7 @@ let package = Package(
                 .copy("Resources/job-005-vectors.json"),
                 .copy("Resources/job-006-vectors.json"),
                 .copy("Resources/job-007-vectors.json"),
+                .copy("Resources/job-008-vectors.json"),
             ]
         ),
     ]

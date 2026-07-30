@@ -248,6 +248,37 @@ private func loadJob007Vectors() throws -> Job007VectorFile {
     return try JSONDecoder().decode(Job007VectorFile.self, from: Data(contentsOf: url))
 }
 
+// MARK: - job-008 (emitters)
+
+private struct EmitVector: Decodable {
+    let name: String
+    let inputHex: String
+    let format: String
+    let mode: String
+    let expected: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case inputHex = "input_hex"
+        case format
+        case mode
+        case expected
+    }
+}
+
+private struct Job008VectorFile: Decodable {
+    let emit: [EmitVector]
+    let note: String
+}
+
+private func loadJob008Vectors() throws -> Job008VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-008-vectors", withExtension: "json"),
+        "job-008-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job008VectorFile.self, from: Data(contentsOf: url))
+}
+
 /// Shared block/line/span/style comparison, used by both the parse_ws and
 /// parse_printstream vector suites.
 private func assertBlocks(_ got: [Block], _ want: [BlockVector], label: String) {
@@ -412,6 +443,26 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
         #expect(doc.footnotes.map { $0.map(\.text).joined() } == want.footnotes,
                 "\(label): footnotes")
         assertBlocks(doc.blocks, want.blocks, label: label)
+    }
+}
+
+@Test func emittersMatchPythonVectors() throws {
+    let vectors = try loadJob008Vectors().emit
+    #expect(vectors.count == 28)
+    for v in vectors {
+        let doc = try parse(bytesFromHex(v.inputHex))
+        let mode = try #require(EmitMode(rawValue: v.mode), "unknown mode \(v.mode)")
+        let got: String
+        switch v.format {
+        case "text": got = emitText(doc, mode: mode)
+        case "markdown": got = emitMarkdown(doc, mode: mode)
+        default:
+            Issue.record("unknown format \(v.format) in vector \(v.name)")
+            continue
+        }
+        // Verbatim comparison — trailing whitespace and the final newline are part of the
+        // contract, so nothing is trimmed on either side.
+        #expect(got == v.expected, "emit vector \(v.name)")
     }
 }
 

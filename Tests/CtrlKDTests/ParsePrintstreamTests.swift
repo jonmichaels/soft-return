@@ -5,10 +5,9 @@ import Testing
 /// branch the vectors don't reach.
 
 @Test func printstreamSuperscriptAndFormFeed() {
-    // Mirrors test_printstream_superscript_and_ff. The Python test also asserts against
-    // emit.emit_text(doc, 'printed') output; no emitter is ported yet (job-008), so the
-    // two text assertions are made against joined span text instead — same intent, one
-    // layer lower. Revisit once emit_text exists.
+    // Mirrors test_printstream_superscript_and_ff. Now asserts against emitText(printed)
+    // exactly as the Python test does — job-007 had to stand these two in against joined
+    // span text because no emitter existed yet; restored per job-008's request.
     var data: [UInt8] = bytes("treaties with Indians.")
     data += [0x18] + bytes("1") + [0x12] + bytes("  More text") + HARD
     data += [0x14] + bytes("page one") + HARD
@@ -19,14 +18,9 @@ import Testing
     #expect(spans.contains { $0.text == "1" && $0.styles.contains(.sup) })
     #expect(doc.blocks.contains { $0.kind == .pagebreak })
 
-    // stood in for emit_text: the superscript joins onto the preceding sentence, and the
-    // 0x14 printer-housekeeping byte never reaches the text.
-    let joined = doc.blocks
-        .flatMap(\.lines)
-        .map { $0.text() }
-        .joined(separator: " ")
-    #expect(joined.contains("treaties with Indians.1"))
-    #expect(!joined.contains("\u{14}"))
+    let txt = emitText(doc, mode: .printed)
+    #expect(txt.replacingAll("\n", with: " ").contains("treaties with Indians.1"))
+    #expect(!txt.contains("\u{14}"))
 }
 
 // MARK: - gap-closing tests (mutation-proven necessary; not covered by the vectors)

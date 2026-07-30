@@ -8,13 +8,14 @@ import Testing
 
 // MARK: - ports of the named Python tests
 
-/// `^B` bold toggle, typed so the long fixture concatenations below stay cheap for the
+/// Inline style toggles, typed so the long fixture concatenations below stay cheap for the
 /// type-checker (a bare `[0x02]` literal in a chain of `+` sends it exponential).
-private let boldToggle: [UInt8] = [0x02]
+let boldOn: [UInt8] = [0x02]
+let italicOn: [UInt8] = [0x19]
 
 @Test func boldAndParagraphs() {
     // Mirrors test_bold_and_paragraphs.
-    var data: [UInt8] = boldToggle + ws4Text("Big Title") + boldToggle
+    var data: [UInt8] = boldOn + ws4Text("Big Title") + boldOn
     data += HARD + HARD
     data += ws4Text("Plain body text follows the heading here.") + HARD
     let doc = parseWS(data)
@@ -125,7 +126,7 @@ private let boldToggle: [UInt8] = [0x02]
     // continuation text is not. Expectation from the real Python parse_ws.
     let longLine = ws4Text(String(repeating: "x", count: 50) +
                            " words continue flowing here toward margin")
-    var data: [UInt8] = boldToggle + longLine + boldToggle
+    var data: [UInt8] = boldOn + longLine + boldOn
     data += SOFT + ws4Text("and wrap onto this line.") + HARD
     let doc = parseWS(data)
     #expect(doc.marginEstimate == 92)
