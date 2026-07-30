@@ -16,6 +16,11 @@ public enum EmitError: Error, Hashable, Sendable {
     /// subscript; `convert` surfaces it as this instead, and carries the name that failed
     /// plus what WAS available so a GUI can say something useful rather than "error".
     case unknownFormat(name: String, known: [String])
+    /// The format renders to bytes, and the caller asked for a `String` — `convert(to: "pdf")`.
+    /// Python has no such error because it has no such check: `emit_pdf` returns `bytes`,
+    /// `convert` passes them through, and the mistake surfaces later as a `TypeError` from
+    /// whatever tried to treat them as text. Use `convertData` instead; it serves both kinds.
+    case binaryFormat(name: String, ext: String)
 }
 
 /// One registered output format: how to render it, and the extension it saves as.
@@ -27,19 +32,31 @@ public struct Emitter: Sendable {
     /// Extension including the dot, e.g. `".md"` — for naming the output file. Python
     /// defaults it to `'.' + name` (emit.py:32); so does `init` below.
     public let ext: String
-    /// The render function: Python's `(doc, mode='modern', **options) -> str`, with the
-    /// defaults dropped because a stored closure can't carry them. Every built-in emitter
-    /// has this shape, which is what makes them interchangeable behind `convert(to:)`.
-    public let emit: @Sendable (Document, EmitMode, EmitOptions) -> String
+    /// The render function: Python's `(doc, mode='modern', **options) -> str | bytes`, with
+    /// the defaults dropped because a stored closure can't carry them, and the union return
+    /// spelled as `EmitOutput`. Every built-in emitter has this shape, which is what makes
+    /// them interchangeable behind `convert(to:)`.
+    public let emit: @Sendable (Document, EmitMode, EmitOptions) -> EmitOutput
 
     public init(
         name: String,
         ext: String? = nil,
-        emit: @escaping @Sendable (Document, EmitMode, EmitOptions) -> String
+        emit: @escaping @Sendable (Document, EmitMode, EmitOptions) -> EmitOutput
     ) {
         self.name = name
         self.ext = ext ?? "." + name
         self.emit = emit
+    }
+
+    /// A text emitter, wrapped. Four of the five built-ins take this path, and so will most
+    /// emitters anyone else writes — `.text(...)` at every `return` in a renderer is noise
+    /// that says nothing the format didn't already say once.
+    public init(
+        name: String,
+        ext: String? = nil,
+        text emit: @escaping @Sendable (Document, EmitMode, EmitOptions) -> String
+    ) {
+        self.init(name: name, ext: ext) { .text(emit($0, $1, $2)) }
     }
 }
 
@@ -78,10 +95,10 @@ public struct EmitterRegistry: Sendable {
     /// (`text` saves as `.txt`, `markdown` as `.md`).
     public static let standard = EmitterRegistry(
         emitters: [
-            "text": Emitter(name: "text", ext: ".txt", emit: emitText),
-            "markdown": Emitter(name: "markdown", ext: ".md", emit: emitMarkdown),
-            "html": Emitter(name: "html", ext: ".html", emit: emitHTML),
-            "rtf": Emitter(name: "rtf", ext: ".rtf", emit: emitRTF),
+            "text": Emitter(name: "text", ext: ".txt", text: emitText),
+            "markdown": Emitter(name: "markdown", ext: ".md", text: emitMarkdown),
+            "html": Emitter(name: "html", ext: ".html", text: emitHTML),
+            "rtf": Emitter(name: "rtf", ext: ".rtf", text: emitRTF),
         ],
         aliases: ["txt": "text", "md": "markdown"]
     )
@@ -97,12 +114,29 @@ public struct EmitterRegistry: Sendable {
         _ name: String,
         ext: String? = nil,
         aliases newAliases: [String] = [],
-        emit: @escaping @Sendable (Document, EmitMode, EmitOptions) -> String
+        emit: @escaping @Sendable (Document, EmitMode, EmitOptions) -> EmitOutput
     ) -> EmitterRegistry {
+        register(Emitter(name: name, ext: ext, emit: emit), aliases: newAliases)
+    }
+
+    /// The same, for an emitter that renders text — see `Emitter.init(name:ext:text:)`.
+    /// Overloaded on the closure's return type rather than given a second verb, so that
+    /// `register("shout") { ... "…" }` reads the same whichever kind of format it is.
+    public func register(
+        _ name: String,
+        ext: String? = nil,
+        aliases newAliases: [String] = [],
+        text emit: @escaping @Sendable (Document, EmitMode, EmitOptions) -> String
+    ) -> EmitterRegistry {
+        register(Emitter(name: name, ext: ext, text: emit), aliases: newAliases)
+    }
+
+    /// The shared half of both overloads: install the emitter and point the aliases at it.
+    public func register(_ emitter: Emitter, aliases newAliases: [String] = []) -> EmitterRegistry {
         var copy = self
-        copy.emitters[name] = Emitter(name: name, ext: ext, emit: emit)
+        copy.emitters[emitter.name] = emitter
         for alias in newAliases {
-            copy.aliases[alias] = name
+            copy.aliases[alias] = emitter.name
         }
         return copy
     }

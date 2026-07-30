@@ -661,3 +661,145 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
         assertLinesPassVector(v, label: "lines_pass_extra vector \(i)")
     }
 }
+
+// MARK: - job-011 (PDF layout half: constants, _wrap_line, _coalesce, _doc_to_pagelines)
+
+private struct Job011VectorFile: Decodable {
+    let constants: [String: Int]
+    let wrapLine: [WrapLineVector]
+    let coalesce: [CoalesceVector]
+    let docToPagelines: [PagelinesVector]
+
+    enum CodingKeys: String, CodingKey {
+        case constants
+        case wrapLine = "wrap_line"
+        case coalesce
+        case docToPagelines = "doc_to_pagelines"
+    }
+}
+
+private struct WrapLineVector: Decodable {
+    let spans: [SpanVector]
+    let width: Int
+    /// Segment-lines: one list of styled segments per wrapped line.
+    let expected: [[SpanVector]]
+}
+
+private struct CoalesceVector: Decodable {
+    let line: [SpanVector]
+    let expected: [SpanVector]
+}
+
+private struct PagelinesVector: Decodable {
+    let name: String
+    let inputHex: String
+    let printed: Bool
+    /// Pages -> lines -> segments.
+    let pages: [[[SpanVector]]]
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case inputHex = "input_hex"
+        case printed
+        case pages
+    }
+}
+
+private func loadJob011Vectors() throws -> Job011VectorFile {
+    let url = try #require(
+        Bundle.module.url(forResource: "job-011-vectors", withExtension: "json"),
+        "job-011-vectors.json missing from the test bundle"
+    )
+    return try JSONDecoder().decode(Job011VectorFile.self, from: Data(contentsOf: url))
+}
+
+/// The vectors' style-code strings -> `Style`. The inverse of `styleCodes`, needed here
+/// because job-011 is the first vector set whose INPUT carries styles.
+private func styleFromCodes(_ codes: [String]) -> Style {
+    var style: Style = []
+    for code in codes {
+        switch code {
+        case "b": style.insert(.bold)
+        case "i": style.insert(.italic)
+        case "u": style.insert(.underline)
+        case "sup": style.insert(.sup)
+        case "sub": style.insert(.sub)
+        case "strike": style.insert(.strike)
+        case "fnref": style.insert(.fnref)
+        default: Issue.record("unknown style code \(code) in a job-011 vector")
+        }
+    }
+    return style
+}
+
+private func spans(_ vectors: [SpanVector]) -> [Span] {
+    vectors.map { Span(text: $0.text, styles: styleFromCodes($0.styles)) }
+}
+
+/// Assert one laid-out line segment by segment, so a failure names the segment.
+private func assertPageLine(_ got: PageLine, _ want: [SpanVector], label: String) {
+    #expect(got.count == want.count, "\(label): segment count")
+    for (i, wantSegment) in want.enumerated() where i < got.count {
+        #expect(got[i].text == wantSegment.text, "\(label) segment \(i): text")
+        #expect(styleCodes(got[i].styles) == wantSegment.styles.sorted(),
+                "\(label) segment \(i): styles")
+    }
+}
+
+@Test func pdfConstantsMatchPython() throws {
+    // Taken from the vectors rather than recomputed — MAX_COLS in particular, whose Python
+    // expression only lands on 65 because `int()` truncates 65.00000000000001.
+    let want = try loadJob011Vectors().constants
+    #expect(want.count == 10)
+    #expect(PDFMetrics.pageWidth == want["PAGE_W"])
+    #expect(PDFMetrics.pageHeight == want["PAGE_H"])
+    #expect(PDFMetrics.margin == want["MARGIN"])
+    #expect(PDFMetrics.size == want["SIZE"])
+    #expect(PDFMetrics.lead == want["LEAD"])
+    #expect(PDFMetrics.topModern == want["TOP_MODERN"])
+    #expect(PDFMetrics.topPrinted == want["TOP_PRINTED"])
+    #expect(PDFMetrics.linesModern == want["LINES_MODERN"])
+    #expect(PDFMetrics.linesPrinted == want["LINES_PRINTED"])
+    #expect(PDFMetrics.maxCols == want["MAX_COLS"])
+}
+
+@Test func wrapLineMatchesPythonVectors() throws {
+    // Four cases: a line that fits, a styled line with a preserved leading indent at a
+    // narrow width, a word longer than the column, and a 30-word wrap at the real 65.
+    let vectors = try loadJob011Vectors().wrapLine
+    #expect(vectors.count == 4)
+    for (i, v) in vectors.enumerated() {
+        let got = wrapLine(spans(v.spans), width: v.width)
+        #expect(got.count == v.expected.count, "wrap_line \(i) (width \(v.width)): line count")
+        for (l, wantLine) in v.expected.enumerated() where l < got.count {
+            assertPageLine(got[l], wantLine, label: "wrap_line \(i) line \(l)")
+        }
+    }
+}
+
+@Test func coalesceMatchesPythonVectors() throws {
+    let vectors = try loadJob011Vectors().coalesce
+    #expect(vectors.count == 1)
+    for (i, v) in vectors.enumerated() {
+        assertPageLine(coalesce(spans(v.line)), v.expected, label: "coalesce \(i)")
+    }
+}
+
+@Test func docToPagelinesMatchesPythonVectors() throws {
+    // Five documents x modern/printed. The subtle one is chapter_drop_print/printed, where
+    // page 1's leading blanks are the author's chapter drop and must survive while the
+    // uniform machine margin on page 2 is stripped from both.
+    let vectors = try loadJob011Vectors().docToPagelines
+    #expect(vectors.count == 10)
+    for v in vectors {
+        let doc = try parse(bytesFromHex(v.inputHex))
+        let got = docToPagelines(doc, printed: v.printed)
+        #expect(got.count == v.pages.count, "\(v.name): page count")
+        for (p, wantPage) in v.pages.enumerated() where p < got.count {
+            #expect(got[p].count == wantPage.count, "\(v.name) page \(p): line count")
+            for (l, wantLine) in wantPage.enumerated() where l < got[p].count {
+                assertPageLine(got[p][l], wantLine, label: "\(v.name) page \(p) line \(l)")
+            }
+        }
+    }
+}

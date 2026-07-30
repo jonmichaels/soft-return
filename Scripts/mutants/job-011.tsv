@@ -1,0 +1,24 @@
+# label	file	anchor	replacement   (\n and \t are escapes; see Scripts/mutate.sh)
+cap-swapped	Sources/CtrlKD/PDFLayout.swift	let cap = printed ? PDFMetrics.linesPrinted : PDFMetrics.linesModern	let cap = printed ? PDFMetrics.linesModern : PDFMetrics.linesPrinted
+cap-off-by-one	Sources/CtrlKD/PDFLayout.swift	if page.count >= cap {	if page.count > cap {
+maxCols-64	Sources/CtrlKD/PDFLayout.swift	public static let maxCols = 65	public static let maxCols = 64
+linesModern-53	Sources/CtrlKD/PDFLayout.swift	public static let linesModern = 54	public static let linesModern = 53
+linesPrinted-59	Sources/CtrlKD/PDFLayout.swift	public static let linesPrinted = 60	public static let linesPrinted = 59
+machine-margin-includes-page-1	Sources/CtrlKD/PDFLayout.swift	? (pages.dropFirst().map(leading).min() ?? leading(pages[0]))	? (pages.map(leading).min() ?? leading(pages[0]))
+machine-margin-fallback-zero	Sources/CtrlKD/PDFLayout.swift	?? leading(pages[0]))	?? 0)
+modern-strips-no-leading-blanks	Sources/CtrlKD/PDFLayout.swift	        : nil\n	        : 0\n
+pagebreak-skips-empty-page	Sources/CtrlKD/PDFLayout.swift	            pages.append(page)\n            page = []\n        case .line(let line):	            if !page.isEmpty { pages.append(page) }\n            page = []\n        case .line(let line):
+softpage-breaks-in-both-modes	Sources/CtrlKD/PDFLayout.swift	(block.kind == .softpage && printed)	(block.kind == .softpage)
+wrap-guard-allows-column-zero	Sources/CtrlKD/PDFLayout.swift	if !isSpaceRun(token.text), col > 0,	if !isSpaceRun(token.text), col >= 0,
+wrap-keeps-trailing-spaces	Sources/CtrlKD/PDFLayout.swift	while let last = line.last, isSpaceRun(last.text) {   // no trailing spaces	while let last = line.last, isSpaceRun(last.text), false {   // no trailing spaces
+wrap-drops-the-empty-line	Sources/CtrlKD/PDFLayout.swift	if !line.isEmpty || lines.isEmpty {	if !line.isEmpty {
+wrap-measures-graphemes	Sources/CtrlKD/PDFLayout.swift	        unicodeScalars.count	        count
+coalesce-inverted	Sources/CtrlKD/PDFLayout.swift	if let last = out.last, last.styles == span.styles {	if let last = out.last, last.styles != span.styles {
+blank-means-no-segments	Sources/CtrlKD/PDFLayout.swift	    !line.contains { $0.text.contains { !$0.isWhitespace } }	    line.isEmpty
+fixed1-drops-the-sign	Sources/CtrlKD/Formatting.swift	return (negative ? "-" : "") + "\(magnitude / 10).\(magnitude % 10)"	return "\(magnitude / 10).\(magnitude % 10)"
+fixed1-wrong-divisor	Sources/CtrlKD/Formatting.swift	"\(magnitude / 10).\(magnitude % 10)"	"\(magnitude / 100).\(magnitude % 100)"
+pad-ignores-the-sign	Sources/CtrlKD/Formatting.swift	let pad = width - digits.count - (negative ? 1 : 0)	let pad = width - digits.count
+pad-unclamped	Sources/CtrlKD/Formatting.swift	String(repeating: "0", count: max(0, pad))	String(repeating: "0", count: pad)
+asText-decodes-binary	Sources/CtrlKD/EmitOutput.swift	        case .data: return nil	        case .data(let d): return String(decoding: d, as: UTF8.self)
+asBytes-drops-text	Sources/CtrlKD/EmitOutput.swift	        case .text(let s): return Array(s.utf8)	        case .text: return []
+text-emitters-registered-as-binary	Sources/CtrlKD/Registry.swift	self.init(name: name, ext: ext) { .text(emit($0, $1, $2)) }	self.init(name: name, ext: ext) { .data(Array(emit($0, $1, $2).utf8)) }

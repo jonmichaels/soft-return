@@ -26,8 +26,38 @@ public func convert(
     options: EmitOptions = EmitOptions(),
     registry: EmitterRegistry = .standard
 ) throws -> String {
+    let emitter = try lookUp(format, in: registry)
+    let output = emitter.emit(try parse(data), mode, options)
+    guard let text = output.asText else {
+        throw EmitError.binaryFormat(name: emitter.name, ext: emitter.ext)
+    }
+    return text
+}
+
+/// The same conversion, as the bytes you would write to a file — for every format.
+///
+/// This is the front door for a caller that is saving rather than displaying, and the only
+/// one that works whatever the format is: a text rendering comes back UTF-8 encoded, a PDF
+/// comes back as itself. `convert` above stays the one that returns a `String`, because a
+/// preview pane and a `--to markdown` pipe both want characters and neither should have to
+/// decode. Ask `registry.getEmitter(format)?.ext` for what to name the file.
+///
+/// - Throws: `EmitError.unknownFormat` if `to` names nothing in `registry`, or
+///   `ParseError.notConvertible` if the bytes aren't a convertible document. Notably NOT
+///   `binaryFormat` — that error exists only where a `String` was promised.
+public func convertData(
+    _ data: [UInt8],
+    to format: String = "markdown",
+    mode: EmitMode = .modern,
+    options: EmitOptions = EmitOptions(),
+    registry: EmitterRegistry = .standard
+) throws -> [UInt8] {
+    try lookUp(format, in: registry).emit(try parse(data), mode, options).asBytes
+}
+
+private func lookUp(_ format: String, in registry: EmitterRegistry) throws -> Emitter {
     guard let emitter = registry.getEmitter(format) else {
         throw EmitError.unknownFormat(name: format, known: registry.formats())
     }
-    return emitter.emit(try parse(data), mode, options)
+    return emitter
 }
