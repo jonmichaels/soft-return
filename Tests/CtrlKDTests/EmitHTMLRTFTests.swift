@@ -147,6 +147,39 @@ import Testing
             + #"{B}\par "# + "\n" + #"\par "# + "\n}\n")
 }
 
+@Test func printedModeKeepsAnEmptyBlockAsABlankParagraph() throws {
+    // `if para.strip() or printed` (emit.py:229): in printed mode an empty block is still a
+    // printed block and emits its `\par `. Found by mutation — dropping `or printed` passes
+    // all 33 vectors, because no vector produces an empty block.
+    //
+    // It is reachable, though, and not exotically: a print capture that ends with a page
+    // eject. `parse_printstream` appends its trailing block unconditionally (core.py:379-380,
+    // unlike parse_ws's `if cur.lines` guard), so the form feed leaves a final block holding
+    // one span-less line. Output verified against the Python reference.
+    let doc = try parse(bytes("Some plain text here today.\r\n\u{0C}"))
+    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
+            + "\n" + #"\f1\fs24 "# + "\n"
+            + #"{Some plain text here today.}\line \par "# + "\n"
+            + #"\page "# + "\n" + #"\par "# + "\n}\n")
+    // HTML's printed branch takes the opposite decision on the same block — no empty <pre>.
+    #expect(emitHTML(doc).contains(
+        "<body>\n<pre>Some plain text here today.\n</pre>\n<hr class=\"pb\">\n</body></html>\n"
+    ))
+}
+
+@Test func breakKindsWinOverAHeadingOnTheSameBlock() {
+    // emit.py checks kind before heading, so a pagebreak block carrying a heading renders as
+    // the break and its lines are dropped. Neither parser can build that shape (both
+    // construct `Block('pagebreak')` with heading 0), but `Document`/`Block` are public, so a
+    // consumer assembling IR by hand can. Pinned against the Python reference rather than
+    // left to whichever branch happens to come first after a later edit.
+    let doc = Document(blocks: [Block(
+        kind: .pagebreak, lines: [Line(spans: [Span(text: "X")])], heading: 2
+    )])
+    #expect(emitHTML(doc).contains("<body>\n<hr class=\"pb\">\n</body></html>\n"))
+    #expect(emitRTF(doc).contains("\n" + #"\page "# + "\n}\n"))
+}
+
 @Test func htmlSkipsAnEmptyBlockEntirely() {
     // Same document, HTML side: the `<p>` is suppressed rather than emitted empty.
     let doc = Document(blocks: [
