@@ -357,6 +357,35 @@ import Testing
     #expect(latin1(emitPDF(stream, mode: .modern)).contains("72.0 744.0 Td"))
 }
 
+@Test func emitPDFMediaBoxMatchesTheDocumentsOwnGeometryInPrintedMode() {
+    // The bug this test proves fixed: `emitPDF` used to hardcode `PDFMetrics.pageHeight`
+    // (792, Letter) into BOTH the MediaBox and the content stream's Y-origin regardless of
+    // the document's own `.pl`-derived geometry -- so a custom-size page paginated at the
+    // right (now-fixed, see PDFLayoutTests.swift) line count but was still drawn on, and
+    // declared as, a Letter-size sheet. Geometry taken from a real short/custom page found
+    // in the corpus gauntlet (`.pl` resolving to height 8.33in): `round(8.33 * 72) = 600`
+    // points, not 792.
+    let custom = PageGeometry(
+        plLines: 49.98, heightIn: 8.33, sizeName: "Custom", sizeSource: .file,
+        mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
+        poCols: 0, poSource: .default
+    )
+    let doc = Document(
+        blocks: [Block(lines: [Line(spans: [Span(text: "line one")])])],
+        page: custom
+    )
+    let text = latin1(emitPDF(doc, mode: .printed))
+    #expect(text.contains("/MediaBox [0 0 612 600]"))
+    #expect(!text.contains("/MediaBox [0 0 612 792]"))
+    // Y-origin: (600 - topPrinted(36) - size(12)) = 552.0, not modern's or Letter's 744.0.
+    #expect(text.contains("72.0 552.0 Td"))
+
+    // Modern mode on the SAME document ignores the file's geometry entirely and stays at
+    // the fixed Letter height -- Printed is the faithfulness mode, Modern's isn't.
+    let modernText = latin1(emitPDF(doc, mode: .modern))
+    #expect(modernText.contains("/MediaBox [0 0 612 792]"))
+}
+
 // MARK: - byte-oriented test helpers
 
 /// The `y` of the first `Td` whose text-showing operator starts with `marker`, in TENTHS of a

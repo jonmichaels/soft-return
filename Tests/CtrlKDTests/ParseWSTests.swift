@@ -106,6 +106,75 @@ let italicOn: [UInt8] = [0x19]
     #expect(doc.blocks[0].lines[0].text().hasPrefix("    "))
 }
 
+// MARK: - extended-character escape: pins the parse layer, guards against a wrong fix
+
+/// A public-archive WordStar document surfaced a control-byte leak into converted
+/// output (two `0x1C` in one file, one `0x1E` in another — both via `-t html`, near a
+/// WS5+ heading built from a paragraph-style symmetric block). Root-cause tracing
+/// (byte-identical `symmetricBlocks` output confirmed against the real Python
+/// reference, then a line-by-line replay of `_decode_spans`/`decodeSpans`) found the
+/// defect is NOT in either parser: both implementations' extended-character escape
+/// (`0x1B` + the following byte, meant to smuggle a HIGH byte past WS4's bit-7
+/// stripping — core.py:186-187) append that following byte completely
+/// unconditionally, low control bytes included, and Python's raw parsed `Document`
+/// carries the exact same leaked byte Swift's does — verified directly against
+/// `ctrl-kd` 1.2.0's own `parse_ws`, not assumed.
+///
+/// Python's CLI output looks clean anyway, but only for SOME formats, and only by
+/// accident: `str.isspace()`/`.strip()`/`.lstrip()` treat 0x1C-0x1F (the ASCII
+/// information separators) as whitespace, so wherever an emit-layer function trims
+/// whitespace at a text/token boundary (`emit.py`'s heading `.strip()`, its "typescript
+/// indent" `.lstrip()`, `pdf.py`'s `_wrap_line` trailing-token pop), it silently
+/// absorbs the leaked byte — while `text`/`rtf` output, which never trims that content
+/// at all, still shows it raw on BOTH sides (confirmed: neither implementation's parse
+/// layer discards it, so there is nothing to fix there for those two formats).
+///
+/// This makes the escape genuinely NOT a bug to close in this file: converting the
+/// escaped byte here (tried, then reverted after it broke `text`/`rtf`/`pdf`, which
+/// matched Python before the attempt) changes the SAME span text for every format at
+/// once, but Python's apparent behavior is format-specific — some of its emit
+/// functions classify 0x1C-0x1F as whitespace and trim them away, some don't. Matching
+/// that from a single shared `Document` requires the trim functions themselves to use
+/// Python's wider whitespace definition, which is `Sources/CtrlKD/Whitespace.swift`'s
+/// `pythonWhitespace` set (`PDFLayout.swift`'s `isSpaceRun` has the same gap for the
+/// PDF wrap path) — both outside this fix's owned files (`SymmetricBlocks.swift`,
+/// `ParseWS.swift`). See the report for the exact two-line/one-set patch verified
+/// (then reverted, since neither file is owned here) to close every remaining
+/// difference between the two archive files across all five formats.
+///
+/// This test pins the CORRECT (already Python-matching) parse-level behavior so a
+/// future change here doesn't "fix" it again by mistake and regress `text`/`rtf`/`pdf`
+/// the way the first attempt did.
+@Test func extendedEscapePassesLowControlBytesThroughUnfilteredLikePython() {
+    for byte: UInt8 in [0x01, 0x1C, 0x1D, 0x1E, 0x1F] {
+        let data = bytes("A") + [0x1B, byte] + bytes("B") + HARD
+        let text = parseWS(data).blocks[0].lines[0].text()
+        let expected = "A" + String(UnicodeScalar(byte)) + "B"
+        #expect(text == expected, "escaped 0x\(String(byte, radix: 16)) must pass through raw, matching Python")
+    }
+}
+
+/// Regression guard for the escape's actual documented purpose — smuggling a HIGH
+/// byte (an extended cp437 character) past WS4's bit-7 stripping — using the same
+/// shape as the real Python vector this project ships (job-006 `parse_ws[5]`,
+/// `input_hex` `...1b8220 6f6b2e...`): `0x1B 0x82` decodes to 'é'. Confirms the escape
+/// path above is untouched for the byte range it actually exists to serve.
+@Test func extendedEscapeStillSmugglesHighByteAsExtendedCharacter() {
+    let data = bytes("here ") + [0x1B, 0x82] + bytes(" ok.") + HARD
+    #expect(parseWS(data).blocks[0].lines[0].text() == "here \u{e9} ok.")
+}
+
+/// Regression guard: bare (non-escaped) 0x1E/0x1F keep their deliberate soft-hyphen
+/// meaning — 0x1E dropped entirely, 0x1F rendered as a literal hyphen — confirming the
+/// investigation above never touched this branch.
+@Test func nonEscapedSoftHyphensKeepTheirDeliberateMeaning() {
+    let inactive = bytes("wave") + [0x1E] + bytes("length") + HARD
+    #expect(parseWS(inactive).blocks[0].lines[0].text() == "wavelength")
+
+    let active = bytes("wave") + [0x1F] + bytes("length") + HARD
+    #expect(parseWS(active).blocks[0].lines[0].text() == "wave-length")
+}
+
 // MARK: - gap-closing tests (mutation-proven necessary; not covered by the vectors)
 
 @Test func ws4StrayGroupSeparatorIsNotBlockSyntax() {
@@ -139,4 +208,17 @@ let italicOn: [UInt8] = [0x19]
     #expect(spans[1].text == " ")
     #expect(spans[1].styles == .bold)      // the join space, inherited from the closed span
     #expect(spans[2].styles == [])         // the continuation, after bold closed
+}
+
+/// A dot command from a damaged file can carry an arbitrarily long numeral, and
+/// `Double("999...9")` returns +infinity rather than failing. That reached the page
+/// geometry and trapped in `Int(x)` during printed-PDF layout — a crash on a file the
+/// parser had accepted. Non-finite values are now rejected so the caller's default wins.
+@Test func absurdlyLongDotCommandNumberIsRejectedNotInfinite() throws {
+    let data = Array(".PL ".utf8) + Array(repeating: UInt8(ascii: "9"), count: 400)
+        + [0x0D, 0x0A] + Array("Body.".utf8) + [0x0D, 0x0A]
+    let doc = parseWS(data)
+    // The absurd value must not have become the page geometry.
+    if let h = doc.page?.heightIn { #expect(h.isFinite, "page height went non-finite") }
+    #expect(doc.page?.sizeSource == .default, "a damaged .pl must fall back to the default")
 }

@@ -49,7 +49,70 @@ private func rtfStyleControls(_ styles: Style) -> String {
     return out
 }
 
-/// - Parameter options: accepted and ignored, as Python's `**_options` is (emit.py:208).
+/// A valid, included reference's INLINE marker. Footnotes and endnotes share the generic
+/// `\chftn` — RTF auto-numbers footnote/endnote marks at render time, so WordStar's own
+/// display number (task item 2) isn't representable here and isn't attempted; only the
+/// destination's `\footnote` vs `\footnote\ftnalt` distinguishes the two kinds. An
+/// annotation has no auto-number to hook, so it carries its literal tag instead.
+private func rtfReferenceMarker(_ note: Note, label: String) -> String {
+    switch note.kind {
+    case .footnote, .endnote: return #"{\chftn}"#
+    case .annotation: return "{\\super " + rtfEscape(label) + "}"
+    case .comment: return ""   // unreached: comments never get an inline sentinel
+    }
+}
+
+/// A valid, included reference's DESTINATION: the `{\*\footnote …}` group `\chftn` (or the
+/// tag) points at. Endnotes and annotations both use `\footnote\ftnalt` — RTF has no
+/// separate endnote-destination construct — differing only in what appears inside the
+/// leading `{\super …}` (the generic `\chftn` mark for an endnote, the literal tag for an
+/// annotation).
+private func rtfDestination(_ note: Note, label: String) -> String {
+    let text = rtfEscape(note.text)
+    switch note.kind {
+    case .footnote:
+        return #"{\*\footnote \pard\plain\fs24 {\super\chftn }"# + text + "}"
+    case .endnote:
+        return #"{\*\footnote\ftnalt \pard\plain\fs24 {\super\chftn }"# + text + "}"
+    case .annotation:
+        return #"{\*\footnote\ftnalt \pard\plain\fs24 {\super "# + rtfEscape(label) + #" }"# + text + "}"
+    case .comment:
+        return ""   // comments render as their own trailing block — see emitRTF below
+    }
+}
+
+/// One span, RTF: an ordinary span keeps today's plain `{styles}{text}` group; a valid,
+/// included `fnref` becomes its marker immediately followed by its destination group; an
+/// excluded kind's reference vanishes (no group at all — not even an empty one, matching
+/// the `no_notes` vectors); an invalid one (task item 3) falls back to the ordinary group,
+/// which already renders a stray sentinel as `{\super 1}` (fnref contributes no control
+/// word of its own, only whatever `sup` it also carries).
+private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions) -> String {
+    guard span.styles.contains(.fnref) else {
+        return "{" + rtfStyleControls(span.styles) + rtfEscape(span.text) + "}"
+    }
+    switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
+    case .note(let note, let label):
+        return rtfReferenceMarker(note, label: label) + rtfDestination(note, label: label)
+    case .excluded:
+        return ""
+    case .invalid:
+        return "{" + rtfStyleControls(span.styles) + rtfEscape(span.text) + "}"
+    }
+}
+
+/// A comment (opt-in only): WordStar's own annotation construct, `\chatn`/`\*\atnid`/
+/// `\*\annotation` — unlike footnote/endnote/annotation these render as their own trailing
+/// block after every paragraph, not inline (comments have no inline reference to attach
+/// to). `ctrl-kd` is the literal author id Python's emitter writes; there's no per-note
+/// identity to carry since a comment has neither a number nor a tag.
+private func rtfComment(_ note: Note) -> String {
+    #"{\chatn}{\*\atnid ctrl-kd}{\*\annotation \pard\plain\fs24 "# + rtfEscape(note.text) + "}"
+}
+
+/// - Parameter options: `options.notes` decides which note kinds get an inline reference
+///   (footnote/endnote/annotation) or a trailing comment block; `options.title` is
+///   ignored, as in Python (emit.py:208).
 @Sendable
 public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> String {
@@ -57,6 +120,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // \f0 Times, \f1 Courier — a printed document's alignment only survives in a
     // fixed-width font (emit.py:210).
     let font = printed ? #"\f1"# : #"\f0"#
+    let refNotes = inlineReferenceNotes(doc)
     var parts: [String] = []
 
     for block in doc.blocks {
@@ -73,7 +137,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         // and no style leaks into the next span (emit.py:222-223).
         var lines = block.lines.map { line in
             line.spans
-                .map { span in "{" + rtfStyleControls(span.styles) + rtfEscape(span.text) + "}" }
+                .map { rtfBodySpan($0, refNotes: refNotes, doc: doc, options: options) }
                 .joined()
         }
         if block.heading != 0 {
@@ -94,6 +158,12 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             // Python, quirk included; the vectors pin both.
             parts.append(#"\par "#)
         }
+    }
+
+    // Comments (opt-in) trail the whole document as their own top-level groups, one per
+    // comment, in document order — never inline, since they have no reference to attach to.
+    if options.notes.contains(.comment) {
+        parts.append(contentsOf: doc.notes.filter { $0.kind == .comment }.map(rtfComment))
     }
 
     let body = parts.joined(separator: "\n")

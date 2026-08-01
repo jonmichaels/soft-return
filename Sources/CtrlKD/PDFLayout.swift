@@ -110,7 +110,11 @@ public func coalesce(_ line: PageLine) -> PageLine {
     return out
 }
 
-/// IR -> pages of laid-out lines. Port of `_doc_to_pagelines` (pdf.py:57-112).
+/// IR -> pages of laid-out lines. Port of `_doc_to_pagelines` (pdf.py:57-112) for Modern
+/// mode; Printed mode is this project's own addition (job — period-authentic footnote
+/// layout), since Python's `pdf.py` never modeled WordStar's real page-bottom footnote
+/// area — it ran the same "collect at the end" logic in both modes. See
+/// `layoutPrintedPages` below for that half.
 ///
 /// - Parameters:
 ///   - doc: the parsed document.
@@ -119,11 +123,18 @@ public func coalesce(_ line: PageLine) -> PageLine {
 ///     so the layout can be tested both ways against one document.
 /// - Returns: at least one page, possibly a single empty one.
 public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
-    /// A line, or the instruction to start a new page. Python threads this through a single
-    /// list using `None` as the page-break marker (pdf.py:59), which works because a page
-    /// line is always a list there. In Swift the same trick would be `[PageLine?]`, where
-    /// "optional line" says nothing about what the `nil` means and every reader has to go
-    /// find the comment. An enum with a named case says it in the type.
+    if printed {
+        return finalizePages(layoutPrintedPages(doc), printed: true)
+    }
+    return finalizePages(layoutModernPages(doc), printed: false)
+}
+
+/// Modern mode: unchanged from the original Python-parity port. Reflows every line to
+/// `maxCols`, ignores WordStar's own pagination (`.softpage`), and collects footnotes at
+/// the very end under one 20-dash rule using the flattened `doc.footnotes` view — the
+/// shape this project shipped before the period-authentic Printed layout existed, and
+/// which Printed mode below no longer shares.
+private func layoutModernPages(_ doc: Document) -> [Page] {
     enum LayoutItem {
         case line(PageLine)
         case pageBreak
@@ -131,14 +142,12 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
 
     var items: [LayoutItem] = []
     for block in doc.blocks {
-        // A soft page is WordStar's own pagination: honored in a facsimile, ignored when
-        // reflowing, where our own line cap repaginates from scratch.
-        if block.kind == .pagebreak || (block.kind == .softpage && printed) {
+        if block.kind == .pagebreak {
             items.append(.pageBreak)
             continue
         }
         if block.kind == .softpage {
-            continue
+            continue                          // WordStar's own pagination: printed-only
         }
         for line in block.lines {
             // The module docstring's "headings bold" promise, unimplemented until Python
@@ -148,21 +157,16 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
             let spans = block.heading != 0
                 ? line.spans.map { Span(text: $0.text, styles: $0.styles.union(.bold)) }
                 : line.spans
-            if printed {
-                items.append(.line(spans))                    // verbatim, no wrap
-            } else {
-                items.append(contentsOf: wrapLine(spans, width: PDFMetrics.maxCols)
-                    .map(LayoutItem.line))
-            }
+            items.append(contentsOf: wrapLine(spans, width: PDFMetrics.maxCols)
+                .map(LayoutItem.line))
         }
-        if !printed, !block.lines.isEmpty {
+        if !block.lines.isEmpty {
             items.append(.line([]))                           // blank line between paragraphs
         }
     }
 
     // Footnotes collect at the end under a 20-dash rule, numbered to match the `fnref`
-    // spans in the text. Wrapped in both modes — a facsimile's footnotes were at the foot
-    // of their own page in 1990, and reproducing that would mean laying out twice.
+    // spans in the text.
     if !doc.footnotes.isEmpty {
         items.append(.line([]))
         items.append(.line([Span(text: String(repeating: "-", count: 20))]))
@@ -174,19 +178,15 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
         }
     }
 
-    let cap = printed ? PDFMetrics.linesPrinted : PDFMetrics.linesModern
     var pages: [Page] = []
     var page: Page = []
     for item in items {
         switch item {
         case .pageBreak:
-            // Unconditional, even for an empty page: two `.pa` commands in a row leave a
-            // blank page, which is what the author asked for. (Python's `if page or l is
-            // None` is that same "or None" clause.)
             pages.append(page)
             page = []
         case .line(let line):
-            if page.count >= cap {
+            if page.count >= PDFMetrics.linesModern {
                 pages.append(page)
                 page = []
             }
@@ -196,15 +196,22 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
     if !page.isEmpty {
         pages.append(page)
     }
+    return pages
+}
+
+/// We supply the paper margins, so WordStar's own margin blanks in a print stream would
+/// double up. But deliberate spacing (a chapter-drop on page 1) must survive: the MACHINE
+/// margin is uniform on every page, so strip only the minimum leading-blank count seen on
+/// pages 2+ — anything beyond it on any page is the author's layout. Trailing blanks are
+/// always machine. Shared by both modes' page-building functions; Modern's own layout never
+/// leaves a leading blank behind (it did the reflow itself), so `machine` is `nil` there and
+/// this reduces to the trailing-blank strip plus the empty-trailing-page pop.
+private func finalizePages(_ rawPages: [Page], printed: Bool) -> [Page] {
+    var pages = rawPages
     if pages.isEmpty {
         return [[]]                                           // Python's `pages or [[]]`
     }
 
-    // We supply the paper margins, so WordStar's own margin blanks in a print stream would
-    // double up. But deliberate spacing (a chapter-drop on page 1) must survive: the MACHINE
-    // margin is uniform on every page, so strip only the minimum leading-blank count seen on
-    // pages 2+ — anything beyond it on any page is the author's layout. Trailing blanks are
-    // always machine.
     func leading(_ page: Page) -> Int {
         var n = 0
         while n < page.count, isBlank(page[n]) {
@@ -213,9 +220,6 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
         return n
     }
 
-    // The machine margin, or `nil` when there is none to protect — in modern mode we did the
-    // layout ourselves, so every leading blank on a page is ours and all of them go.
-    //
     // `min` runs over pages 2+, falling back to page 1's own count when there is no page 2:
     // `min()` of an empty sequence is `nil` on exactly that case, which is Python's
     // `if len(pages) > 1 else` written as one expression.
@@ -248,6 +252,392 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
     return pages
 }
 
+// MARK: - Printed mode: the period-authentic footnote/endnote/annotation layout
+//
+// The WordStar 5 manual, verbatim: "Footnotes are separated from the text by a line of 20
+// dashes. If a footnote doesn't fit at the bottom of the page, the continued text is
+// printed in the footnote area at the bottom of the next page (except after the last page
+// of regular text, where footnotes are printed at the top of the page). A minimum of three
+// lines of regular text are printed on a page regardless of the size of the footnote area
+// except on the last page of the document."
+//
+// Rules this implements, in the same numbering the job brief used:
+// 1. The reference never moves — a `Note` is never reserved-and-pushed; it renders exactly
+//    where `resolvePrintedBody` finds its `fnref` span, and the footer for it appears
+//    whenever the PAGE holding that reference closes.
+// 2. The footer area grows to hold what's due, eating into the page's body allotment.
+// 3. Floor: the first three lines of body on a page are placed unconditionally, before the
+//    footer's size is ever allowed to compete for room.
+// 4. Overflow splits across pages; a continuation chunk is preceded by one literal
+//    `...Continued...` line.
+// 5. On the true last page of body text, the floor no longer matters (there is no next body
+//    page to defer to) and any footer overflow prints at the TOP of a fresh page instead of
+//    the bottom of one.
+//
+// Annotations share the footnote area (their `tag` is the marker); endnotes never appear
+// there at all — they collect at the true end of the document with no heading, per the
+// spec. Comments never print. Footnote/endnote numbering is independent, driven by
+// `doc.footnoteNumberStart`/`endnoteNumberStart` (default 1) plus each `Note.number`
+// (0-based).
+
+/// One body item, printed-mode's own shape: an explicit break, or a verbatim line plus the
+/// footnote/annotation notes whose `fnref` reference falls on it (endnotes are collected
+/// separately below — they never compete for page-bottom room).
+private enum PrintedBodyItem {
+    case pageBreak
+    case line(PageLine, due: [Note])
+}
+
+/// A footnote/annotation waiting in the page-bottom queue. `remaining` shrinks as pages
+/// consume it; `needsContinuedMarker` is set the moment a page takes only part of it, so the
+/// NEXT page that resumes it prepends the literal continuation line first.
+internal struct QueuedNote {   // internal: the progress invariant is unit-tested
+    var remaining: [PageLine]
+    var needsContinuedMarker: Bool
+}
+
+private let footerContinuedLine = "...Continued..."
+
+/// The marker text a `fnref` span (or a footer/endnote entry) displays for one note.
+///
+/// Delegates to `noteLabel` and must keep doing so. This used to reimplement the same
+/// rule and drifted from it: where `noteLabel` falls back to the note's position when
+/// `Note.number` is nil (a real outcome — the tag word's high bit means the file never
+/// resolved a number), this used `?? 0`, so EVERY unnumbered note of a kind rendered with
+/// the SAME marker. Two different footnotes both showed "1", inline and in the footer.
+/// The flat emitters were correct; only this lane was wrong, and no vector caught it
+/// because none exercises a nil number in printed mode.
+private func noteMarker(_ note: Note, doc: Document) -> String {
+    noteLabel(note, doc: doc)
+}
+
+/// The footer entry for one footnote/annotation, wrapped to `width` — factory-default
+/// marks: `1.` (trailing period) for a footnote, the bare tag for an annotation.
+private func footerEntryLines(_ note: Note, doc: Document, width: Int) -> [PageLine] {
+    let text: String
+    switch note.kind {
+    case .footnote: text = "\(noteMarker(note, doc: doc)). \(note.text)"
+    case .annotation: text = "\(noteMarker(note, doc: doc)) \(note.text)"
+    default: text = note.text                 // unreached: endnotes/comments never queue here
+    }
+    return wrapLine([Span(text: text)], width: width)
+}
+
+/// The true-end-of-document entry for one endnote — factory-default mark `(1)`.
+private func endnoteEntryLines(_ note: Note, doc: Document, width: Int) -> [PageLine] {
+    wrapLine([Span(text: "(\(noteMarker(note, doc: doc))) \(note.text)")], width: width)
+}
+
+/// Blocks -> printed body items, fixing up every `fnref` span's displayed text along the
+/// way. The parser numbers EVERY `fnref` sentinel (footnote, endnote, and annotation alike,
+/// in document order — comments never get one) with one shared counter, so a span's raw
+/// text is only a position, not a display value: the n-th `fnref` span corresponds to the
+/// n-th non-comment `Note`, and that correspondence — not the span's own text — is what
+/// decides what actually prints. A `fnref` with no corresponding note (more sentinels than
+/// notes — malformed input, or a stray control byte the parser mistook for one) is left as
+/// found rather than crashing or dropping it; `stray_sentinel` is exactly this case.
+private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
+    let referenced = doc.notes.filter { $0.kind != .comment }
+    var cursor = 0
+    var items: [PrintedBodyItem] = []
+
+    for block in doc.blocks {
+        // Both an explicit `.pa` and WordStar's own soft pagination are honored verbatim in
+        // a facsimile.
+        if block.kind == .pagebreak || block.kind == .softpage {
+            items.append(.pageBreak)
+            continue
+        }
+        for line in block.lines {
+            let baseSpans = block.heading != 0
+                ? line.spans.map { Span(text: $0.text, styles: $0.styles.union(.bold)) }
+                : line.spans
+
+            var outSpans: [Span] = []
+            var due: [Note] = []
+            for span in baseSpans {
+                guard span.styles.contains(.fnref), cursor < referenced.count else {
+                    outSpans.append(span)
+                    continue
+                }
+                let note = referenced[cursor]
+                cursor += 1
+                outSpans.append(Span(text: noteMarker(note, doc: doc), styles: span.styles))
+                if note.kind == .footnote || note.kind == .annotation {
+                    due.append(note)
+                }
+            }
+            items.append(.line(outSpans, due: due))
+        }
+    }
+    return items
+}
+
+/// WordStar's minimum-body-line guarantee (pdf.py's `FOOTNOTE_FLOOR`): "a minimum of three
+/// lines of regular text are printed on a page regardless of the size of the footnote
+/// area." Used here only for the same floor Python applies to the page height and capacity
+/// themselves, before any footnote ever enters the picture — see `_resolved_page_height`/
+/// `_printed_cap` (pdf.py:37-60). The unrelated literal `3` a little further down (the
+/// "first three lines of body are unconditional" rule in `layoutPrintedPages`) is the same
+/// WordStar constant but is left as-is here to keep this fix's diff to the actual bug.
+private let footnoteFloor = 3
+
+/// Port of Python's `round()` (round-half-to-even / banker's rounding), which differs from
+/// Swift's `FloatingPoint.rounded()` default (round-half-away-from-zero) — and `.rounded()`
+/// itself needs libm symbols this Foundation-free Linux build can't link. `x` is always
+/// non-negative here (a resolved page height in points), so `Int(x)` (truncation, which
+/// equals floor for non-negatives) plus plain comparison reproduces `round()` exactly,
+/// including its `.5` tie case, with no floating-point library call at all. Same technique
+/// as `SymmetricBlocks.swift`'s `roundHalfToEven`, which works in pure integer arithmetic;
+/// this one takes a `Double` because a page height in inches isn't always a whole number of
+/// `.pl` lines (custom/converted geometry), unlike that function's HMI fields.
+private func roundHalfToEven(_ x: Double) -> Int {
+    let whole = Int(x)
+    let fraction = x - Double(whole)
+    if fraction < 0.5 { return whole }
+    if fraction > 0.5 { return whole + 1 }
+    return whole % 2 == 0 ? whole : whole + 1
+}
+
+/// Resolved page height, in points, for THIS document — the general form of Python's
+/// `_resolved_page_height(doc, printed)` (pdf.py:42-53). `PDFWriter.swift`'s `emitPDF` needs
+/// this too (the MediaBox and the content stream's Y-origin must agree with the capacity
+/// this same figure drives, or a custom-geometry page paginates correctly but still gets
+/// drawn on/labeled as a Letter-size sheet) so this is `internal`, not `private`.
+///
+/// Modern mode always renders at the fixed US Letter height regardless of file geometry —
+/// Printed is the faithfulness mode; Modern's whole point is a page that's simply pleasant
+/// to read, not a facsimile of the original's paper size.
+func resolvedPageHeight(_ doc: Document, printed: Bool) -> Int {
+    printed ? resolvedPrintedPageHeight(doc) : PDFMetrics.pageHeight
+}
+
+/// Resolved PRINTED-page height, in points. Port of `_resolved_page_height(doc, printed:
+/// True)` (pdf.py:42-53) — the printed-mode branch of `resolvedPageHeight` above.
+///
+/// Honours the file's own `.pl`-derived `heightIn` where the document has one (every
+/// `parseWS` document does, resolved with a default when the file never set `.pl`);
+/// defaults to 11in (`doc.meta.get('page', {}).get('height_in', 11.0)` in Python) for a bare
+/// print-stream capture, which carries no dot commands to resolve page geometry from at
+/// all. Clamped to at least `LEAD * (footnoteFloor + 1)` points so a degenerate tiny/absent
+/// page can never send the capacity below the floor `_printed_cap` itself also enforces.
+private func resolvedPrintedPageHeight(_ doc: Document) -> Int {
+    let heightIn = doc.page?.heightIn ?? 11.0
+    let floorPoints = PDFMetrics.lead * (footnoteFloor + 1)
+    return max(floorPoints, roundHalfToEven(heightIn * 72))
+}
+
+/// Printed-mode page capacity, in lines: derived GEOMETRICALLY from the resolved page
+/// height, exactly as Python's `_printed_cap` does (pdf.py:55-60) — resolved page height in
+/// points, minus the fixed 72pt (36pt top + 36pt bottom) printed-mode margin, divided by the
+/// 12pt lead. This is deliberately NOT the raw declared `.pl` value: `.pl 66`, the Letter
+/// default, resolves to a height of 11in / 792pt, which yields a capacity of 60 lines here —
+/// not 66. (WordStar's own reader gets 55 from `.pl 66 .mt 3 .mb 8`; Python's fixed 72pt
+/// margin predates it parsing `.mt`/`.mb` at all. Neither this file nor Python honours those
+/// commands yet — that's a known, deliberate follow-up for both, not this fix.)
+///
+/// Clamped to at least `footnoteFloor + 1` lines so a degenerate/tiny page can never divide
+/// the page-bottom math by, or loop over, too little room.
+private func printedPageCapacity(_ doc: Document) -> Int {
+    let pageHeight = resolvedPrintedPageHeight(doc)
+    return max(footnoteFloor + 1, (pageHeight - 2 * PDFMetrics.topPrinted) / PDFMetrics.lead)
+}
+
+/// How many lines the WHOLE queue would need if nothing were split — the figure the body
+/// loop checks before it's allowed to stop growing the page past the 3-line floor. Overhead
+/// is 2 lines (a blank, then the 20-dash rule) when something precedes the footer on the
+/// page, or just the rule when the footer opens a page of its own (the top-of-page case).
+private func footerFullSize(_ queue: [QueuedNote], leadingBlank: Bool) -> Int {
+    guard !queue.isEmpty else { return 0 }
+    let overhead = leadingBlank ? 2 : 1
+    return overhead + queue.reduce(0) { $0 + 1 + $1.remaining.count }   // +1 blank per note
+}
+
+/// Fit as much of `queue` as `room` lines allow, mutating it to hold only what's left.
+///
+/// `leadingBlank` is `false` exactly for the top-of-a-fresh-page placement (rule 5): nothing
+/// precedes the footer there, so the "one blank line above the separator" has nothing to
+/// separate FROM and is dropped; every other call passes `true`.
+///
+/// The hang this guards against (see the job brief's "a hang the Python version shipped
+/// with"): splitting a note costs the NEXT page one line for `...Continued...`, so a split
+/// only makes net progress when at least 2 lines fit — at exactly 1, the Python version
+/// admitted one line and immediately owed a `...Continued...` back, forever, on a page small
+/// enough to reach it. The fix: split only when room for the note is >= 2; when it is not
+/// AND the footer area on this page is still completely empty (nothing queued has printed
+/// here yet), force through `min(remaining.count, 2)` lines anyway — the page overflows by a
+/// line or two, which is preferable to a hang or to losing the text outright. Once the area
+/// has printed something, there is no need to force: the page has already made progress, and
+/// the rest gets a fresh, fully-sized attempt on the next page.
+internal func fitFooter(queue: inout [QueuedNote], room: Int, leadingBlank: Bool) -> [PageLine] {
+    guard !queue.isEmpty else { return [] }
+
+    let overhead: [PageLine] = leadingBlank
+        ? [[], [Span(text: String(repeating: "-", count: 20))]]
+        : [[Span(text: String(repeating: "-", count: 20))]]
+
+    // Bottom-of-page: if not even the separator fits, defer the whole queue to the next
+    // page's bottom footer rather than print a headerless orphan. (Never done for the
+    // top-of-page case: there is no "next page's bottom footer" to defer to there without
+    // repeating the same shortfall forever — see the forcing branch below instead.)
+    if leadingBlank, room < overhead.count {
+        return []
+    }
+
+    var out = overhead
+    var budget = room - overhead.count            // may go negative only via the forced path
+
+    while !queue.isEmpty {
+        var chunk: [PageLine] = []
+        if queue[0].needsContinuedMarker {
+            chunk.append([Span(text: footerContinuedLine)])
+        }
+        chunk.append(contentsOf: queue[0].remaining)
+        let needed = 1 + chunk.count               // +1 for the blank line ahead of the note
+
+        if needed <= budget {
+            out.append([])
+            out.append(contentsOf: chunk)
+            budget -= needed
+            queue.removeFirst()
+            continue
+        }
+
+        let avail = budget - 1                     // room for content once that blank is paid
+        let areaStillEmpty = out.count == overhead.count   // nothing queued has printed yet
+
+        let take: Int
+        if avail >= 2 {
+            take = avail
+        } else if areaStillEmpty {
+            take = min(chunk.count, 2)              // the hang fix: force progress
+        } else {
+            break                                   // already made progress; defer the rest
+        }
+
+        out.append([])
+        out.append(contentsOf: chunk.prefix(take))
+        // However many of `take` came from the synthetic `...Continued...` line (at most
+        // one, always first) don't count against the note's own remaining text.
+        let markerTaken = (queue[0].needsContinuedMarker && take > 0) ? 1 : 0
+        queue[0].remaining.removeFirst(min(take - markerTaken, queue[0].remaining.count))
+        if queue[0].remaining.isEmpty {
+            queue.removeFirst()
+        } else {
+            queue[0].needsContinuedMarker = true
+        }
+        break                                        // one split (forced or not) ends the page
+    }
+
+    return out
+}
+
+/// IR -> pages, WordStar's own way: verbatim body lines, a page-bottom footer for footnotes
+/// and annotations that grows to fit (splitting across pages when it can't, per
+/// `fitFooter`), and endnotes collected with no heading at the very end. See the section
+/// comment above for the rule numbering this follows.
+private func layoutPrintedPages(_ doc: Document) -> [Page] {
+    let items = resolvePrintedBody(doc)
+    let width = PDFMetrics.maxCols
+    let capacity = printedPageCapacity(doc)
+
+    var queue: [QueuedNote] = []
+    var pages: [Page] = []
+    var idx = 0
+
+    while idx < items.count {
+        var body: [PageLine] = []
+        bodyLoop: while idx < items.count {
+            switch items[idx] {
+            case .pageBreak:
+                idx += 1
+                break bodyLoop
+            case .line(let line, let due):
+                let additions = due.map {
+                    QueuedNote(remaining: footerEntryLines($0, doc: doc, width: width),
+                               needsContinuedMarker: false)
+                }
+                let projected = queue + additions
+                let footerFull = footerFullSize(projected, leadingBlank: true)
+                // Rule 3: the first three lines of body are unconditional; past that, a
+                // line is only added while it (plus everything the footer would need in
+                // full) still fits the page.
+                if body.count < 3 || body.count + 1 + footerFull <= capacity {
+                    body.append(line)
+                    queue.append(contentsOf: additions)
+                    idx += 1
+                } else {
+                    break bodyLoop
+                }
+            }
+        }
+
+        let remaining = max(0, capacity - body.count)
+        let footer = fitFooter(queue: &queue, room: remaining, leadingBlank: true)
+        pages.append(body + footer)
+    }
+
+    // Rule 5: whatever the last body page's bottom footer couldn't hold prints at the TOP
+    // of its own fresh page(s) instead of waiting for a "next page" that doesn't exist.
+    //
+    // PROGRESS GUARD. This loop's termination used to depend entirely on `fitFooter`
+    // consuming at least one queued line per call, with nothing checking that it did. On
+    // 2026-07-31 a regression in `fitFooter` made it consume nothing at `capacity == 3`;
+    // this loop then appended a page per pass forever, reached 15.7 GB, and stalled the
+    // whole machine for 2h40m -- no crash, no OOM kill, just unbounded growth.
+    //
+    // A layout loop whose exit depends on a helper making progress must verify that the
+    // progress happened. Two invariants, in priority order: no text is ever lost, and the
+    // layout always terminates. So when a pass consumes nothing, flush everything still
+    // queued onto one page and stop -- that page overflows, which is strictly better than
+    // dropping text or hanging.
+    while !queue.isEmpty {
+        let linesBefore = queue.reduce(0) { $0 + $1.remaining.count }
+        let page = fitFooter(queue: &queue, room: capacity, leadingBlank: false)
+        let linesAfter = queue.reduce(0) { $0 + $1.remaining.count }
+
+        if linesAfter >= linesBefore {
+            // No progress. Emit the page we just built, then flush the rest verbatim so
+            // nothing is lost, and leave the loop.
+            if !page.isEmpty { pages.append(page) }
+            var flushed: [PageLine] = []
+            for entry in queue {
+                if !flushed.isEmpty { flushed.append([]) }
+                flushed.append(contentsOf: entry.remaining)
+            }
+            queue.removeAll()
+            if !flushed.isEmpty { pages.append(flushed) }
+            break
+        }
+        pages.append(page)
+    }
+
+    // Endnotes: the true end of the document, no heading, no separator — plain pagination,
+    // one blank line between entries (the same vertical rhythm as the footer area), nothing
+    // before the first.
+    let endnotes = doc.notes.filter { $0.kind == .endnote }
+    if !endnotes.isEmpty {
+        var lines: [PageLine] = []
+        for (i, note) in endnotes.enumerated() {
+            if i > 0 { lines.append([]) }
+            lines.append(contentsOf: endnoteEntryLines(note, doc: doc, width: width))
+        }
+        var page: Page = []
+        for line in lines {
+            if page.count >= capacity {
+                pages.append(page)
+                page = []
+            }
+            page.append(line)
+        }
+        if !page.isEmpty {
+            pages.append(page)
+        }
+    }
+
+    return pages
+}
+
 /// Whether a page line has nothing on it — no segments, or only whitespace.
 private func isBlank(_ line: PageLine) -> Bool {
     !line.contains { $0.text.contains { !$0.isWhitespace } }
@@ -257,7 +647,12 @@ private func isBlank(_ line: PageLine) -> Bool {
 /// the split below, which is spaces only — a lone tab is a token the wrapper treats as
 /// trailing whitespace but never split on. That asymmetry is Python's and is preserved.
 private func isSpaceRun(_ text: String) -> Bool {
-    !text.isEmpty && text.allSatisfy(\.isWhitespace)
+    // Swift's `Character.isWhitespace` follows Unicode White_Space, which EXCLUDES the
+    // ASCII information separators 0x1C-0x1F; Python's `str.isspace()` includes them, and
+    // they can reach a span via the 0x1B extended-character escape. Use the shared
+    // Python-equivalent test so `_wrap_line`'s trailing-token pop trims the same tokens
+    // Python's does.
+    !text.isEmpty && text.isPythonSpaceOnly
 }
 
 /// Split into alternating runs of spaces and non-spaces, keeping both. Python's

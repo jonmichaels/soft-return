@@ -54,19 +54,88 @@ func makeProse() -> [UInt8] {
     return l1 + SOFT + l2 + SOFT + l3 + SOFT + HARD + SOFT + p2 + HARD
 }
 
-/// A WS5+/WS7 1D symmetric block: `\x1d` + little-endian 16-bit body length + body.
+/// A WS5+/WS7 1D symmetric block: `\x1d`, a little-endian 16-bit count, the command
+/// byte, the payload, then the SAME count repeated and a closing `\x1d` — genuinely
+/// symmetric (hence the name), matching Python's `ws7_block` test helper exactly
+/// (count = len(payload) + 4: cmd(1) + payload(len) + count-again(2) + closing 0x1d(1),
+/// i.e. everything the leading count must skip over to reach the next real block).
+///
+/// The previous version of this helper omitted the trailing count+`\x1d` entirely —
+/// harmless for the old (now-replaced) note-text extraction, which never trusted a
+/// block's trailing bytes, but wrong for the real `_parse_note` port in
+/// `SymmetricBlocks.swift`, which slices `block[3..<(count-3)]` assuming that trailing
+/// self-reference genuinely occupies the last 3 bytes. Without it, `parseNote` would
+/// silently truncate the last 3 bytes of real note text.
 func ws7Block(_ cmd: UInt8, payload: [UInt8] = []) -> [UInt8] {
-    var body: [UInt8] = [cmd]
-    body.append(contentsOf: payload)
-    let length = UInt16(body.count)
-    return [0x1d, UInt8(length & 0xFF), UInt8(length >> 8)] + body
+    let count = UInt16(payload.count + 4)
+    let countBytes: [UInt8] = [UInt8(count & 0xFF), UInt8(count >> 8)]
+    return [0x1d] + countBytes + [cmd] + payload + countBytes + [0x1d]
 }
 
-/// A footnote/endnote block: 17 zero bytes, an inner `\x1d`, the text, then the
-/// `,\x00` tail `_note_text` trims off. Mirrors the Python fixture of the same name.
-func ws7Note(_ text: [UInt8]) -> [UInt8] {
-    let inner = Array(repeating: UInt8(0), count: 17) + [0x1d] + text + [0x2c, 0x00]
-    return ws7Block(0x03, payload: inner)
+/// One footnote/endnote/annotation/comment note block (types 3-6), per the WordStar
+/// 7.0 file format spec: line count, note number (embedded directly — tag-word high
+/// bit clear), conversion flag (high nybble = numbering format, low nybble =
+/// convert-to type), then the note text. Direct port of Python's `ws7_note` test
+/// helper (ctrl-kd 1.2.0) — the correct shape `SymmetricBlocks.swift`'s `parseNote`
+/// expects, replacing this file's previous synthetic (and spec-incorrect) 17-zero-byte
+/// approximation of the pre-1.2.0 Python implementation.
+func ws7Note(
+    _ text: [UInt8],
+    cmd: UInt8 = 0x03,
+    number: Int = 1,
+    lineCount: Int = 1,
+    numberFormat: Int = 3,
+    convertTo: Int = 0
+) -> [UInt8] {
+    let convFlag = UInt8(((numberFormat & 0x0F) << 4) | (convertTo & 0x0F))
+    var content: [UInt8] = [
+        UInt8(lineCount & 0xFF), UInt8((lineCount >> 8) & 0xFF),
+        UInt8(number & 0xFF), UInt8((number >> 8) & 0xFF),
+        convFlag,
+    ]
+    content.append(contentsOf: text)
+    return ws7Block(cmd, payload: content)
+}
+
+/// One WordStar annotation (symmetrical-sequence type 5), shaped like a real WS7 one:
+/// its OWN text embeds one or more dot-command lines (a ruler, a `..` comment —
+/// WordStar notes can carry these same as the body can), followed by a nested tag
+/// sequence whose remaining bytes are a display TEXT string (not a number — that's
+/// footnote/endnote-only), followed by the real annotation text. The conversion-flag
+/// byte is documented "not used" for annotations, so it's deliberately junk here to
+/// prove it's ignored rather than misreported. Direct port of Python's
+/// `ws7_annotation_with_tag` test helper (ctrl-kd 1.2.0).
+func ws7AnnotationWithTag(
+    dotLines: [[UInt8]],
+    text: [UInt8],
+    tagText: [UInt8],
+    junkConvFlag: UInt8 = 0x05
+) -> [UInt8] {
+    let tagContent: [UInt8] = [0x00, 0x00, 0x00, 0x00, junkConvFlag] + tagText
+    let tag = ws7Block(0x05, payload: tagContent)
+    var body: [UInt8] = []
+    for (i, line) in dotLines.enumerated() {
+        if i > 0 { body += HARD }
+        body += line
+    }
+    body += HARD + tag + bytes(" ") + text + HARD
+    let content: [UInt8] = [0x01, 0x00, 0x00, 0x80, junkConvFlag] + body
+    return ws7Block(0x05, payload: content)
+}
+
+/// One synthetic WS7 document carrying all four note kinds — footnote, endnote,
+/// annotation, and comment — so a single fixture exercises the real mix a WS7 file has.
+/// Direct port of Python's `four_kind_data()` test helper (ctrl-kd 1.2.0). `number: 0`
+/// for the footnote/endnote: WS7's own storage is a 0-based index (WordStar itself
+/// displays it as 1).
+func fourKindData() -> [UInt8] {
+    ws7Block(0x00)
+        + bytes("one ") + ws7Note(bytes("Footnote text."), cmd: 0x03, number: 0)
+        + bytes(" two ") + ws7Note(bytes("Endnote text."), cmd: 0x04, number: 0)
+        + bytes(" three ") + ws7AnnotationWithTag(
+            dotLines: [bytes(".. remark")], text: bytes("Annotation text"), tagText: bytes("AC1"))
+        + bytes(" four ") + ws7Note(bytes("Comment text."), cmd: 0x06, number: 0)
+        + bytes(" five") + HARD
 }
 
 // MARK: - Reading PDF bytes back in assertions

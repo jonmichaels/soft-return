@@ -23,7 +23,29 @@ public struct EmitOptions: Hashable, Sendable {
     /// exactly as in Python (emit.py:156 takes `title=''`, its three siblings do not).
     public var title: String
 
-    public init(title: String = "") {
+    /// Which of the four WordStar note kinds (footnote/endnote/annotation/comment) a flat
+    /// emitter should render — both the trailing note-list entry AND its inline reference
+    /// marker (ctrl-kd 1.2.0's `notes=` parameter, mirrored here as a `Set` rather than a
+    /// Python-style iterable of strings because `NoteKind` is already the closed, typed
+    /// vocabulary a set naturally expresses).
+    ///
+    /// Excluding a kind removes its inline marker too, not just the trailing entry — a
+    /// caller opting out of comments (the default) never sees a `[^c1]`/`<sup>` for one
+    /// either. `defaultNotes`/`allNotes`/`noNotes` below are the three settings the vectors
+    /// exercise; nothing stops a caller passing any other subset (`[.footnote]` alone, say).
+    public var notes: Set<NoteKind>
+
+    /// Footnotes, endnotes, and annotations — never comments. WordStar itself never
+    /// printed a comment (they're editorial, author-facing), so this is what a plain
+    /// `EmitOptions()` gets.
+    public static let defaultNotes: Set<NoteKind> = [.footnote, .endnote, .annotation]
+    /// All four kinds, comments included — the opt-in.
+    public static let allNotes: Set<NoteKind> = [.footnote, .endnote, .annotation, .comment]
+    /// No notes at all: every inline marker and every trailing entry disappears.
+    public static let noNotes: Set<NoteKind> = []
+
+    public init(title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes) {
         self.title = title
+        self.notes = notes
     }
 }

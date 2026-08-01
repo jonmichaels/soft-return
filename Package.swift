@@ -34,6 +34,7 @@ let package = Package(
                 .copy("Resources/job-012-vectors.json"),
                 .copy("Resources/job-013-vectors.json"),
                 .copy("Resources/job-014-vectors.json"),
+                .copy("Fixtures/notes-vectors-1.2.0.json"),
             ]
         ),
     ]

@@ -93,15 +93,20 @@ private func rule(xFrom: Int, xTo: Int, y: Int) -> [UInt8] {
 ///
 /// - Parameter top: the top margin in points — `topModern` or `topPrinted`. A print stream
 ///   carries its own top-margin blank lines, so it gets the smaller paper margin.
+/// - Parameter pageHeight: the resolved page height in points (`resolvedPageHeight`,
+///   PDFLayout.swift) — `PDFMetrics.pageHeight` (Letter, 792) unless the document is Printed
+///   mode with its own `.pl`-derived geometry. Defaulted so every existing caller that only
+///   ever meant a plain Letter page (every test in this file, and the byte vectors) is
+///   unaffected; `emitPDF` is the only caller that ever passes something else.
 ///
 /// Text is placed absolutely, one `BT`/`ET` block per styled run: PDF's own text-positioning
 /// operators track a line matrix that would have to be reset anyway, and Courier's fixed
 /// advance means the x for every run is known here without asking a font for metrics.
-func pageStream(_ pagelines: Page, top: Int) -> [UInt8] {
+func pageStream(_ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHeight) -> [UInt8] {
     var ops: [[UInt8]] = []
     // The baseline of the first line: down from the top of the paper by the margin, then by
     // one line's height, because `Td` positions a baseline and not a line's top edge.
-    var y = (PDFMetrics.pageHeight - top - PDFMetrics.size) * 10
+    var y = (pageHeight - top - PDFMetrics.size) * 10
     for line in pagelines {
         var x = PDFMetrics.margin * 10
         // Coalesced FIRST (pdf.py:136): the wrapper leaves one segment per word and per
@@ -170,6 +175,12 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     let printed = mode == .printed || isPrinted(doc)
     let pages = docToPagelines(doc, printed: printed)
     let top = printed ? PDFMetrics.topPrinted : PDFMetrics.topModern
+    // The SAME figure `printedPageCapacity` derives the line count from (PDFLayout.swift) —
+    // Python computes it once in `emit_pdf` and uses it for both the MediaBox and the
+    // content stream's Y-origin (pdf.py:449,476-479). A page that paginates at a custom
+    // `.pl`'s resolved capacity but still declares a Letter-size MediaBox would be internally
+    // inconsistent: the right number of lines, drawn on the wrong-size sheet of paper.
+    let pageHeight = resolvedPageHeight(doc, printed: printed)
 
     // (number, body) — the body WITHOUT the `N 0 obj` wrapper, which the writer adds while
     // recording offsets.
@@ -202,10 +213,10 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     for (i, page) in pages.enumerated() {
         objs.append((pageNums[i], Array("""
         << /Type /Page /Parent 2 0 R /MediaBox [0 0 \(PDFMetrics.pageWidth) \
-        \(PDFMetrics.pageHeight)] /Resources << /Font << \(fontDict) >> >> \
+        \(pageHeight)] /Resources << /Font << \(fontDict) >> >> \
         /Contents \(contentNums[i]) 0 R >>
         """.utf8)))
-        let stream = pageStream(page, top: top)
+        let stream = pageStream(page, top: top, pageHeight: pageHeight)
         var body = Array("<< /Length \(stream.count) >>\nstream\n".utf8)
         body += stream
         body += Array("\nendstream".utf8)

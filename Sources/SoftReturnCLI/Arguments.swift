@@ -10,15 +10,16 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract, and it starts at 1.0.0.
-public let srVersion = "1.0.0"
+/// CLI's user-visible contract. 1.1.0 adds the note-selection flags and the expanded
+/// --diagnose fields; 1.0.0 was the first CLI release.
+public let srVersion = "1.1.0"
 
 /// The `ctrl-kd` release this port is verified against. A constant, updated by hand when a
 /// sync job pins the port to a new Python release — it is a claim about which reference the
 /// vectors came from, so it must never be derived or guessed.
-public let ctrlKDParity = "1.1.6"
+public let ctrlKDParity = "1.2.0"
 
-/// `sr 1.0.0 (ctrl-kd parity 1.1.6)`.
+/// `sr 1.1.0 (ctrl-kd parity 1.2.0)`.
 public var versionLine: String { "sr \(srVersion) (ctrl-kd parity \(ctrlKDParity))" }
 
 /// Everything the run needs, after parsing and validation.
@@ -32,6 +33,12 @@ public struct Options: Equatable, Sendable {
     public var mode: EmitMode = .modern
     public var variant: Variant?
     public var diagnose = false
+    /// Which note kinds an emitter should render — both the inline reference marker and
+    /// the trailing note-list entry. Resolved from `--no-notes`/`--comments` at the end of
+    /// parsing (ctrl-kd 1.2.0's `--no-notes`/`--comments`, cli.py:78-81); the default is
+    /// `EmitOptions.defaultNotes` (footnote/endnote/annotation — never comments, since
+    /// WordStar itself never printed one).
+    public var notes: Set<NoteKind> = EmitOptions.defaultNotes
 
     public init() {}
 }
@@ -60,6 +67,11 @@ public func parseArguments(
     var files: [String] = []
     var index = 0
     var optionsEnded = false
+    // Resolved into `options.notes` once parsing is done (cli.py:78-81) — `--no-notes`
+    // wins outright over `--comments` if both are given, exactly as Python's `if
+    // a.no_notes: ... else: ...` never looks at `a.comments` in that branch.
+    var noNotes = false
+    var comments = false
 
     /// The value for an option, from `--to=html` (already split off), `-thtml`, or the next
     /// argument. Returns nil when there is no next argument to take.
@@ -152,6 +164,16 @@ public func parseArguments(
                 return .usageError("argument \(flag): ignored explicit argument '\(attached!)'")
             }
             options.diagnose = true
+        case "--no-notes":
+            if attached != nil {
+                return .usageError("argument \(flag): ignored explicit argument '\(attached!)'")
+            }
+            noNotes = true
+        case "--comments":
+            if attached != nil {
+                return .usageError("argument \(flag): ignored explicit argument '\(attached!)'")
+            }
+            comments = true
         case "--encoding":
             // Dropped, not forgotten — see the help text. Named explicitly so anyone porting a
             // ctrl-kd command line gets an answer instead of "unrecognized option".
@@ -169,6 +191,13 @@ public func parseArguments(
     }
     options.files = files
     if !formats.isEmpty { options.formats = formats }
+    // cli.py:78-81, verbatim: `--no-notes` empties the set outright; otherwise the
+    // default three kinds, plus comments when `--comments` opted them in.
+    if noNotes {
+        options.notes = EmitOptions.noNotes
+    } else if comments {
+        options.notes = EmitOptions.allNotes
+    }
 
     // cli.py:48-49, verbatim in spirit and in message: one output path cannot name the
     // results of several conversions.
@@ -188,7 +217,7 @@ private func quotedList(_ items: [String]) -> String {
 public func helpText(registry: EmitterRegistry = .standard) -> String {
     """
     usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] [--mode MODE]
-              [--variant VARIANT] [--diagnose] FILE [FILE ...]
+              [--variant VARIANT] [--no-notes] [--comments] [--diagnose] FILE [FILE ...]
 
     Convert WordStar 4-7 documents and print-to-disk files to text, Markdown, HTML,
     RTF, or PDF. ^KD: save and done.
@@ -209,8 +238,12 @@ public func helpText(registry: EmitterRegistry = .standard) -> String {
                             printed)
       --variant VARIANT     override detection
                             choices: \(variantChoices.joined(separator: ", "))
+      --no-notes            omit footnotes, endnotes and annotations from the output
+      --comments            include WordStar comments, which it never printed
+                            (author's asides, hidden since the file was written)
       --diagnose            report what the file is (variant, margin, dot commands,
-                            unknown codes) as JSON; no conversion
+                            unknown codes, note counts, page geometry) as JSON;
+                            no conversion
 
     The source encoding is always CP437 and there is no flag to change it: the
     high-bit bytes in a WordStar file are IBM-PC code page 437, and every other
@@ -222,5 +255,7 @@ public func helpText(registry: EmitterRegistry = .standard) -> String {
       sr --mode printed LETTER          # as it came off the printer
       sr --diagnose MYSTERY.FIL         # what IS this file?
       sr -t text -t html -d out/ *.WS   # batch, multiple formats
+      sr --comments MEMO.WS             # include the author's hidden comments
+      sr --no-notes PAPER.WS            # body text only, no notes
     """
 }

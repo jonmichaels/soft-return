@@ -7,17 +7,26 @@
 /// clustering could otherwise merge a combining mark into a neighbour.
 ///
 /// Python's `str.isspace()` is true for a wider set than this (it includes 0x1C-0x1F,
-/// whose bidi class is B/S), but the narrower set below is exact for the text that can
-/// actually reach an emitter: both parsers discard every byte under 0x20 except tab, so a
-/// span's text contains only 0x09, 0x20...0x7E, and cp437-extended codepoints — of which
-/// U+00A0 (byte 0xFF) is the sole whitespace, as established in job-005. The 0x0A/0x0C
-/// entries cover the newlines and form feeds the emitters themselves join with.
+/// whose bidi class is B/S). This set previously omitted 0x1C-0x1F on the stated
+/// assumption that "both parsers discard every byte under 0x20 except tab" — which is
+/// FALSE: the extended-character escape (0x1B) appends the byte after it unconditionally,
+/// in both implementations, so a literal 0x1C-0x1F can and does reach an emitter (real
+/// example: a printer crib-sheet in the public Sawyer archive). Python then absorbs those
+/// bytes wherever it trims, because str.isspace() counts the ASCII information separators
+/// as whitespace; Swift did not, and the byte survived into the output. Widened to match
+/// Python exactly. The 0x0A/0x0C entries cover the newlines and form feeds the emitters
+/// themselves join with; U+00A0 (cp437 0xFF) is the sole whitespace among the extended
+/// codepoints, as established in job-005.
 private let pythonWhitespace: Set<UInt32> = [
     0x09,   // tab
     0x0A,   // newline
     0x0B,   // vertical tab
     0x0C,   // form feed
     0x0D,   // carriage return
+    0x1C,   // file separator      -- str.isspace() is TRUE for 0x1C-0x1F;
+    0x1D,   // group separator         they reach spans via the 0x1B escape
+    0x1E,   // record separator
+    0x1F,   // unit separator
     0x20,   // space
     0xA0,   // no-break space (cp437 0xFF)
 ]
@@ -25,6 +34,12 @@ private let pythonWhitespace: Set<UInt32> = [
 extension String {
     private static func isPythonSpace(_ scalar: Unicode.Scalar) -> Bool {
         pythonWhitespace.contains(scalar.value)
+    }
+
+    /// Python's `str.isspace()`: non-empty and entirely whitespace, using the same
+    /// character set as the trims above so callers cannot drift apart from them.
+    var isPythonSpaceOnly: Bool {
+        !isEmpty && unicodeScalars.allSatisfy(String.isPythonSpace)
     }
 
     /// Equivalent of Python's `str.strip()` with no argument.
