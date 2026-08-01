@@ -65,9 +65,13 @@ private func geometry(
     PageGeometry(
         plLines: pl, heightIn: height, sizeName: size, sizeSource: sizeSource,
         mtLines: mt, mtSource: mtSource, mbLines: mb, mbSource: mbSource,
-        poCols: 0, poSource: .default,
+        // ctrl-kd 2.0.0 defaults -- this helper never varies `.po`/`.cw`, so both stay at
+        // WordStar's own defaults (8 columns, 12/120in) the same way `parseWS` would
+        // resolve them for a file that never sets either.
+        poCols: 8, poSource: .default,
         hmLines: 2, hmSource: .default, fmLines: 2, fmSource: .default,
         lh48: 8, lhSource: .default, ls: 1, lsSource: .default,
+        cw120: 12, cwSource: .default,
         textLines: textLinesPerPage(pl: pl, mt: mt, mb: mb, lh48: 8)
     )
 }

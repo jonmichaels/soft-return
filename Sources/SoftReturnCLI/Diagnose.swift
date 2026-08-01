@@ -118,6 +118,12 @@ public func diagnose(path: String, data: [UInt8]) -> JSONValue {
                 "lh_source": .string(page.lhSource.rawValue),
                 "ls": .double(page.ls),
                 "ls_source": .string(page.lsSource.rawValue),
+                // ctrl-kd 2.0.0: `.cw` (character width, 1/120in units — 12 is 10 CPI, the
+                // default) plus the horizontal-geometry note that `po_cols` now defaults to
+                // 8 (the WS7 manual's ".8 inch"), not 0 — see `ParseWS.swift`'s
+                // `defaultPoCols`.
+                "cw_120": .double(page.cw120),
+                "cw_source": .string(page.cwSource.rawValue),
                 "text_lines": .int(page.textLines),
             ])
         }

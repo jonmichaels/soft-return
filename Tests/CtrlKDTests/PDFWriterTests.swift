@@ -348,7 +348,11 @@ import Testing
     let ws = parseWS(ws4Text("Some words here") + HARD)
     #expect(ws.detection?.variant == .ws4)
     #expect(latin1(emitPDF(ws, mode: .modern)).contains("72.0 708.0 Td"))
-    #expect(latin1(emitPDF(ws, mode: .printed)).contains("72.0 744.0 Td"))
+    // ctrl-kd 2.0.0: printed mode's left margin is now `.po`-derived, not the fixed 72pt
+    // MARGIN this emitter used to guess. `ws` never sets `.po`/`.cw`, so it resolves to
+    // the new defaults (8 columns at 10 CPI) -- 8 * 12 * 0.6 = 57.6pt, the WS7 manual's
+    // ".8 inch" (PDFLayout.swift's `printedLeft`), not the old 72.0.
+    #expect(latin1(emitPDF(ws, mode: .printed)).contains("57.6 744.0 Td"))
 
     // A print stream overrides `modern` — `isPrinted` wins, because reflowing a document
     // whose layout IS its content destroys it.
@@ -368,9 +372,13 @@ import Testing
     let custom = PageGeometry(
         plLines: 49.98, heightIn: 8.33, sizeName: "Custom", sizeSource: .file,
         mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
-        poCols: 0, poSource: .default,
+        // WordStar's own default (WS7 manual, ".8 inch") since ctrl-kd 2.0.0 -- this
+        // fixture never sets `.po`/`.cw` in the file, so a real `parseWS` document would
+        // resolve both to their defaults (8 columns, 12/120in), same as here.
+        poCols: 8, poSource: .default,
         hmLines: 2, hmSource: .default, fmLines: 2, fmSource: .default,
         lh48: 8, lhSource: .default, ls: 1, lsSource: .default,
+        cw120: 12, cwSource: .default,
         textLines: textLinesPerPage(pl: 49.98, mt: 3, mb: 8, lh48: 8)
     )
     let doc = Document(
@@ -384,7 +392,9 @@ import Testing
     // modern's or Letter's 744.0. 36 here is `printedTop(doc)` landing on the same figure
     // the old fixed `topPrinted` constant always used, because `.mt 3` (the default) has
     // always resolved to exactly 36pt — not the constant itself, since ctrl-kd 1.3.0.
-    #expect(text.contains("72.0 552.0 Td"))
+    // Left margin: ctrl-kd 2.0.0's `.po`-derived 57.6pt (8 * 12 * 0.6), not the old fixed
+    // 72.0 this emitter used to guess (see `emitPDFHonoursPrintedModeAndTheDocumentsOwnVerdict`).
+    #expect(text.contains("57.6 552.0 Td"))
 
     // Modern mode on the SAME document ignores the file's geometry entirely and stays at
     // the fixed Letter height -- Printed is the faithfulness mode, Modern's isn't.

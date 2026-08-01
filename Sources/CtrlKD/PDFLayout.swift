@@ -159,7 +159,10 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
         if block.kind == .softpage {
             continue                          // WordStar's own pagination: printed-only
         }
-        for line in block.lines {
+        // Reflowed: logical lines, soft wraps joined back (`mergedLines`, ctrl-kd 2.0.0) —
+        // Modern mode wraps to `maxCols` anyway, so a soft break here is redundant with the
+        // wrapper's own decision, not a break the reader should see twice.
+        for line in mergedLines(block) {
             // The module docstring's "headings bold" promise, unimplemented until Python
             // 1.1.5 (found by this port, job-011). Bold is added to EVERY span in a heading
             // block, not substituted: a span already italic stays italic and becomes
@@ -401,7 +404,10 @@ private let footnoteFloor = 3
 /// as `SymmetricBlocks.swift`'s `roundHalfToEven`, which works in pure integer arithmetic;
 /// this one takes a `Double` because a page height in inches isn't always a whole number of
 /// `.pl` lines (custom/converted geometry), unlike that function's HMI fields.
-private func roundHalfToEven(_ x: Double) -> Int {
+///
+/// Not `private`: `PDFWriter.swift`'s `pageStream` needs the same banker's-rounding (ctrl-kd
+/// 2.0.0's `supSize = round(size * 2 / 3)`, mirroring Python's `round()` exactly).
+func roundHalfToEven(_ x: Double) -> Int {
     let whole = Int(x)
     let fraction = x - Double(whole)
     if fraction < 0.5 { return whole }
@@ -480,6 +486,34 @@ func printedTop(_ doc: Document) -> Int {
 func printedLead(_ doc: Document) -> Double {
     guard let page = doc.page, page.lh48 > 0 else { return Double(PDFMetrics.lead) }
     return page.lh48 * 1.5
+}
+
+/// Type size in points for printed mode, from `.cw`: character width in 1/120in units,
+/// and Courier advances 0.6em, so a pitch of cw/120in per character IS a
+/// `(cw*72/120)/0.6 = cw*1.0` point font. The default `.cw 12` (10 CPI pica) IS the 12pt
+/// this emitter always used; `.cw 10` is 12 CPI elite at 10pt. Rounded to whole points
+/// (the `Tf` operator is written as an integer, as it always has been), floored at 1.
+/// Print streams keep the fixed `SIZE`. Port of Python's `_printed_size` (pdf.py, ctrl-kd
+/// 2.0.0).
+func printedSize(_ doc: Document) -> Int {
+    guard let page = doc.page else { return PDFMetrics.size }
+    let cw = page.cw120
+    return cw > 0 ? max(1, roundHalfToEven(cw)) : PDFMetrics.size
+}
+
+/// Left edge of text in points for printed mode, from `.po`: "the number of print
+/// columns from the left edge of the paper to the left margin of text. The current
+/// setting of character width (.CW) determines the actual amount of indentation" — so
+/// the offset is `po` columns at this document's own advance (0.6em of `size`). The
+/// default `.po 8` (the WS7 manual's ".8 inch" at 10 CPI) lands at 57.6pt — NOT the old
+/// fixed 72pt `MARGIN`, which was this emitter's guess, not WordStar's. Print streams
+/// keep `MARGIN`: their offset spaces, where a driver emitted them, are in-band. Clamped
+/// inside the page for garbage `.po` from misdetected binaries. Port of Python's
+/// `_printed_left` (pdf.py, ctrl-kd 2.0.0).
+func printedLeft(_ doc: Document, size: Int) -> Double {
+    guard let page = doc.page else { return Double(PDFMetrics.margin) }
+    let left = page.poCols * Double(size) * 0.6
+    return max(0.0, min(left, Double(PDFMetrics.pageWidth) - Double(size) * 0.6))
 }
 
 /// How many lines the WHOLE queue would need if nothing were split — the figure the body

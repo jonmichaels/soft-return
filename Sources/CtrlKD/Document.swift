@@ -86,12 +86,14 @@ public enum Provenance: String, Hashable, Sendable {
     case `default`
 }
 
-/// `.pl`/`.po`/`.mt`/`.mb`/`.hm`/`.fm`/`.lh`/`.ls` resolved, with provenance. Direct port
-/// of `parse_ws`'s `doc.meta['page']` dict (core.py, "Page geometry, period-authentic
+/// `.pl`/`.po`/`.mt`/`.mb`/`.hm`/`.fm`/`.lh`/`.ls`/`.cw` resolved, with provenance. Direct
+/// port of `parse_ws`'s `doc.meta['page']` dict (core.py, "Page geometry, period-authentic
 /// footnote layout, and note-aware export"; ctrl-kd 1.3.0 added `.hm`/`.fm`/`.lh`/`.ls`
-/// and the derived `text_lines`). Unit-less dot-command arguments are LINES (columns for
-/// `.po`; 1/48in units for `.lh`), never inches — see `ParseWS.swift`'s page-geometry
-/// section for the full trap writeup and the named-size snap tolerance.
+/// and the derived `text_lines`; 2.0.0 added `.cw` and changed `.po`'s default — see
+/// `cwSource`/`ParseWS.swift`'s `defaultPoCols`). Unit-less dot-command arguments are
+/// LINES (columns for `.po`; 1/48in units for `.lh`; 1/120in units for `.cw`), never
+/// inches — see `ParseWS.swift`'s page-geometry section for the full trap writeup and
+/// the named-size snap tolerance.
 ///
 /// `.hm`/`.fm` (header/footer margin, in lines) and `.ls` (line spacing, a small integer
 /// count) are recorded with provenance for `--diagnose` only — see `ParseWS.swift`'s
@@ -119,6 +121,11 @@ public struct PageGeometry: Hashable, Sendable {
     public var lhSource: Provenance
     public var ls: Double
     public var lsSource: Provenance
+    /// Character width, 1/120in units (ctrl-kd 2.0.0's `.cw`) — 12 is 10 CPI, the
+    /// default. Positions printed text at `poCols * cw120` from the paper edge and sets
+    /// its type size (see `PDFLayout.swift`'s `printedSize`/`printedLeft`).
+    public var cw120: Double
+    public var cwSource: Provenance
     /// Printed text lines per page — derived, not independently settable: `parseWS`
     /// computes this via `textLinesPerPage(pl:mt:mb:lh48:)` from the four fields above and
     /// passes the result in here, matching Python's `doc.meta['page']['text_lines']`
@@ -144,6 +151,8 @@ public struct PageGeometry: Hashable, Sendable {
         lhSource: Provenance,
         ls: Double,
         lsSource: Provenance,
+        cw120: Double,
+        cwSource: Provenance,
         textLines: Int
     ) {
         self.plLines = plLines
@@ -164,6 +173,8 @@ public struct PageGeometry: Hashable, Sendable {
         self.lhSource = lhSource
         self.ls = ls
         self.lsSource = lsSource
+        self.cw120 = cw120
+        self.cwSource = cwSource
         self.textLines = textLines
     }
 }

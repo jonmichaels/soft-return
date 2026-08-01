@@ -42,6 +42,7 @@ private func textSpan(_ span: Span, refNotes: [Note], doc: Document, options: Em
 public func emitText(_ doc: Document, mode: EmitMode = .modern,
                      options: EmitOptions = EmitOptions()) -> String {
     let refNotes = inlineReferenceNotes(doc)
+    let printed = mode == .printed || isPrinted(doc)
     var out: [String] = []
     for block in doc.blocks {
         if block.kind == .softpage {
@@ -53,7 +54,9 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
             out.append(mode == .printed ? "\u{0C}" : "\n" + String(repeating: "-", count: 20) + "\n")
             continue
         }
-        let para = block.lines
+        // printed: PHYSICAL lines (soft returns broke the line on paper); modern:
+        // logical lines, soft runs joined back (`mergedLines`, ctrl-kd 2.0.0).
+        let para = (printed ? block.lines : mergedLines(block))
             .map { line in line.spans.map { textSpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
             .joined(separator: "\n")
         // emit.py:69 — in printed mode an all-whitespace paragraph is still a printed
@@ -65,7 +68,7 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
 
     // emit.py:71-72 — note the modern branch ALSO filters blank entries a second time.
     var text: String
-    if mode == .printed || isPrinted(doc) {
+    if printed {
         text = out.joined(separator: "\n")
     } else {
         text = out.filter { !$0.trimmed().isEmpty }.joined(separator: "\n\n")

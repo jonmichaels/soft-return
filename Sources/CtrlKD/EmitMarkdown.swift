@@ -129,7 +129,9 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
             out.append("---")
             continue
         }
-        let lines = block.lines.map { line in
+        // logical lines: soft wraps joined back (`mergedLines`, ctrl-kd 2.0.0) — Markdown
+        // has no printed mode of its own (that delegates to `emitText` above).
+        let lines = mergedLines(block).map { line in
             line.spans.map { markdownReferenceSpan($0, refNotes: refNotes, doc: doc, options: options) }.joined()
         }
         // emit.py:116 — hard line breaks inside a paragraph become a trailing backslash.

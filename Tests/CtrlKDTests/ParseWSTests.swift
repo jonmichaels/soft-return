@@ -192,18 +192,22 @@ let italicOn: [UInt8] = [0x19]
 }
 
 @Test func wrapJoinSpaceInheritsClosedSpanStyles() {
-    // The vectors' only wrap-join space has empty styles, so swapping `last.styles` for
-    // the live `active` set passes the whole suite. Here bold OPENS and CLOSES on the
-    // first line, so at the wrap point `active` is empty but the last span is still
-    // bold — Python gives the join space the span's styles, so it is bold while the
-    // continuation text is not. Expectation from the real Python parse_ws.
+    // ctrl-kd 2.0.0: `block.lines` is now PHYSICAL, so the join space this test proves is
+    // no longer inserted at parse time — that logic moved to `mergedLines` (Block.swift),
+    // which this test now calls directly, matching Python's own `parse_ws`/
+    // `core.merged_lines` split. The vectors' only wrap-join space has empty styles, so
+    // swapping `last.styles` for the live `active` set passes the whole suite. Here bold
+    // OPENS and CLOSES on the first line, so at the wrap point `active` is empty but the
+    // last span is still bold — Python gives the join space the span's styles, so it is
+    // bold while the continuation text is not. Expectation from the real Python parse_ws.
     let longLine = ws4Text(String(repeating: "x", count: 50) +
                            " words continue flowing here toward margin")
     var data: [UInt8] = boldOn + longLine + boldOn
     data += SOFT + ws4Text("and wrap onto this line.") + HARD
     let doc = parseWS(data)
     #expect(doc.marginEstimate == 92)
-    let spans = doc.blocks[0].lines[0].spans
+    #expect(doc.blocks[0].lines[0].soft == true, "the wrapped physical line must be marked soft")
+    let spans = mergedLines(doc.blocks[0])[0].spans
     #expect(spans.count == 3)
     #expect(spans[1].text == " ")
     #expect(spans[1].styles == .bold)      // the join space, inherited from the closed span

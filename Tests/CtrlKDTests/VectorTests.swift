@@ -409,6 +409,19 @@ private func loadJob008Vectors() throws -> Job008VectorFile {
     return try JSONDecoder().decode(Job008VectorFile.self, from: Data(contentsOf: url))
 }
 
+/// job-006's `parse_ws vector 6` predates ctrl-kd 2.0.0's physical-lines split: its
+/// `input_hex` contains one soft-wrapped line, and the vector recorded the OLD merged IR
+/// shape a pre-2.0.0 `parse_ws` produced — one logical line, three spans, the join space
+/// already inserted at parse time. `Block.lines` now stores PHYSICAL lines instead (two
+/// lines; the join space moved to `mergedLines`, Block.swift) — confirmed correct against
+/// the actual Python 2.0.0 reference by `wrapJoinSpaceInheritsClosedSpanStyles`
+/// (ParseWSTests.swift) and the machine-generated `horizontalLineVectorsMatchPython200`
+/// byte-parity vectors, not assumed. Per this codebase's own precedent for a stale stored
+/// vector (`staleFootnoteVectorNames` above), the file stays as history and only the
+/// now-invalid line/span assertion is skipped for this one vector; block kind/heading and
+/// everything else this vector proves stays in force.
+private let staleWrapVectorNames: Set<String> = ["parse_ws vector 6"]
+
 /// Shared block/line/span/style comparison, used by both the parse_ws and
 /// parse_printstream vector suites.
 private func assertBlocks(_ got: [Block], _ want: [BlockVector], label: String) {
@@ -417,6 +430,7 @@ private func assertBlocks(_ got: [Block], _ want: [BlockVector], label: String) 
         let gotBlock = got[b]
         #expect(gotBlock.kind.rawValue == wantBlock.kind, "\(label) block \(b): kind")
         #expect(gotBlock.heading == wantBlock.heading, "\(label) block \(b): heading")
+        if staleWrapVectorNames.contains(label) { continue }
         #expect(gotBlock.lines.count == wantBlock.lines.count, "\(label) block \(b): line count")
         for (l, wantLine) in wantBlock.lines.enumerated() where l < gotBlock.lines.count {
             let gotSpans = gotBlock.lines[l].spans

@@ -71,7 +71,7 @@ Formats: `text`, `markdown`, `html`, `rtf`, `pdf`, plus `txt` and `md` as aliase
 
 Three ways, in order of least effort:
 
-**Direct download** — **[sr-1.2.0-macos-universal.zip](https://github.com/jonmichaels/soft-return/releases/download/v1.2.0/sr-1.2.0-macos-universal.zip)**
+**Direct download** — **[sr-1.3.0-macos-universal.zip](https://github.com/jonmichaels/soft-return/releases/download/v1.3.0/sr-1.3.0-macos-universal.zip)**
 — **Universal Binary. macOS 15 and above.** Unzip, put `sr` on your PATH, done.
 
 **Homebrew:**

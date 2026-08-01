@@ -93,9 +93,10 @@ private func manyWords(_ n: Int) -> String {
     let page = PageGeometry(
         plLines: 3, heightIn: 0.5, sizeName: "Custom", sizeSource: .file,
         mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
-        poCols: 0, poSource: .default,
+        poCols: 8, poSource: .default,
         hmLines: 2, hmSource: .default, fmLines: 2, fmSource: .default,
         lh48: 8, lhSource: .default, ls: 1, lsSource: .default,
+        cw120: 12, cwSource: .default,
         textLines: textLinesPerPage(pl: 3, mt: 3, mb: 8, lh48: 8)
     )
     let noteText = manyWords(30)

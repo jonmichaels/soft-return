@@ -178,7 +178,9 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
         // AFTER the two break kinds and BEFORE the printed/modern split, so a heading never
         // renders as `<pre>`.
         if block.heading != 0 {
-            let text = block.lines
+            // Merged in BOTH modes: a heading is a logical unit, and joining its logical
+            // lines with a space is what this always rendered (ctrl-kd 2.0.0).
+            let text = mergedLines(block)
                 .map { line in line.spans.map { htmlBodySpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
                 .joined(separator: " ")             // heading lines read as one phrase
                 .trimmed()
@@ -188,6 +190,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             continue
         }
         if printed {
+            // PHYSICAL lines: inside <pre>, a soft return is a real line break.
             let body = block.lines
                 .map { line in line.spans.map { htmlBodySpan($0, keepWS: true, refNotes: refNotes, doc: doc, options: options) }.joined() }
                 .joined(separator: "\n")
@@ -195,7 +198,8 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                 parts.append("<pre>\(body)</pre>")
             }
         } else {
-            let lines = block.lines.map { line in line.spans.map { htmlBodySpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
+            // Logical lines: soft wraps joined back (`mergedLines`, ctrl-kd 2.0.0).
+            let lines = mergedLines(block).map { line in line.spans.map { htmlBodySpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
             // emit.py:180 — the author's own line breaks inside a paragraph, kept as <br>.
             let para = lines.joined(separator: "<br>\n")
             if !para.trimmed().isEmpty {

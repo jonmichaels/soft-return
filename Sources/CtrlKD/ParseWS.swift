@@ -225,12 +225,19 @@ public func parseWS(_ data: [UInt8]) -> Document {
 
         switch physical.separator {
         case .wrap:
-            // core.py:312-315 — the join space inherits the LAST SPAN's styles (not the
-            // current `active` set, which may have moved on), and is skipped when the
-            // line already ends in a space or a hyphen.
-            if let last = curLine.spans.last, !last.text.isEmpty,
-               !last.text.hasSuffix(" "), !last.text.hasSuffix("-") {
-                curLine.spans.append(Span(text: " ", styles: last.styles))
+            // core.py:250-264 (ctrl-kd 2.0.0) — A soft return: a REAL line break on
+            // paper (printed mode renders it), just word wrap for reflow
+            // (`mergedLines` joins it back with the space rule that used to live right
+            // here). 2.0.0: physical lines are stored; merging is the consumer's
+            // choice now.
+            if !curLine.spans.isEmpty {
+                curLine.soft = true
+                closeLine()
+            } else if !cur.lines.isEmpty {
+                cur.lines[cur.lines.count - 1].soft = true   // invisible (toggles-only)
+                                                              // line: its softness binds
+                                                              // the previous printed
+                                                              // line, as the old merge did
             }
         case .line:
             closeLine()
@@ -268,6 +275,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
         lhSource: page.lh48 != nil ? .file : .default,
         ls: page.ls ?? defaultLs,
         lsSource: page.ls != nil ? .file : .default,
+        cw120: page.cw120 ?? defaultCw120,
+        cwSource: page.cw120 != nil ? .file : .default,
         // Placeholder: the real figure needs the rest of the struct assembled first
         // (mirrors Python setting `doc.meta['page']['text_lines']` as a second step,
         // after building the page dict) — overwritten immediately below.
@@ -359,6 +368,7 @@ private struct PageAccumulator {
     var fmLines: Double?
     var lh48: Double?
     var ls: Double?
+    var cw120: Double?
 }
 
 /// Named page sizes at 6 LPI (WordStar 7.0 file format spec: ".PL ... assuming 6
@@ -377,13 +387,18 @@ private let pageSizeSnapIn = 0.25
 private let defaultPlLines = 66.0   // WordStar's own default: 66 lines = 11in = US Letter
 private let defaultMtLines = 3.0    // spec: ".MT ... Default value is 3 lines."
 private let defaultMbLines = 8.0    // spec: ".MB ... The default value is 8 lines."
-private let defaultPoCols = 0.0     // no default is stated in the spec for .po; 0 (flush
-                                    // with the paper edge) is the least presumptuous
-                                    // reading rather than a remembered/guessed figure.
+private let defaultPoCols = 8.0     // WS7 manual, "Page Layout": "The default page offset
+                                    // is .8 inch" -- 8 print columns at the default 10 CPI.
+                                    // (Through ctrl-kd 1.3.0 this was 0, "least
+                                    // presumptuous", from the file-format spec stating
+                                    // none; the manual DOES state one, and 2.0.0 actually
+                                    // renders the offset, so the manual's figure governs.)
 private let defaultHmLines = 2.0    // spec: ".HM ... Default is 2." (header sits INSIDE .mt)
 private let defaultFmLines = 2.0    // spec: ".FM ... Default is 2." (footer sits INSIDE .mb)
 private let defaultLh48 = 8.0       // spec: ".LH ... The default is 8/48 or 6 lines per inch."
 private let defaultLs = 1.0         // single spacing (WS7 manual, "Line Spacing")
+private let defaultCw120 = 12.0     // spec: ".CW ... The default is 12 (12/120ths is 10
+                                    // characters per inch)."
 
 private func isASCIILetter(_ b: UInt8) -> Bool {
     (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
@@ -516,6 +531,16 @@ private func resolveLsArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
     return value
 }
 
+/// `.cw` argument -> character width in 1/120in units. Unit-less IS 120ths (spec: ".CW
+/// ... the width of the characters in 1/120 inch increments. ... The default is 12
+/// (12/120ths is 10 characters per inch)"); an explicit unit suffix converts. A
+/// non-positive width is meaningless: rejected (`nil`), default stands. Direct port of
+/// `_resolve_cw_arg`.
+private func resolveCwArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
+    let resolved = dotArgInches(value, unit).map { $0 * 120.0 } ?? value
+    return resolved > 0 ? resolved : nil
+}
+
 /// Printed text lines per page — WordStar's own vertical model (WS7 manual, "Page
 /// Layout"): "The top and bottom margins define the space between the text and the top
 /// and bottom of the paper. On an 8.5 x 11-inch page, if the top margin is .33 inches
@@ -610,9 +635,10 @@ private func parsePageDot(
     // `nil` so the default stands. `.pl`/`.mt`/`.mb`/`.hm`/`.fm`'s resolver
     // (`resolveLinesArg`) and `.po`'s (`resolveColsArg`, pre-existing) never reject, so a
     // direct assignment is behaviorally identical to Python's "store only if resolved" for
-    // all five — unchanged from before ctrl-kd 1.3.0. `.lh`/`.ls` (new) CAN reject —
-    // `resolveLhArg`/`resolveLsArg` return `nil` for a non-positive height or an
-    // out-of-range spacing — so those two guard the store behind `if let`.
+    // all five — unchanged from before ctrl-kd 1.3.0. `.lh`/`.ls` (1.3.0) and `.cw`
+    // (2.0.0) CAN reject — `resolveLhArg`/`resolveLsArg`/`resolveCwArg` return `nil` for
+    // a non-positive height/width or an out-of-range spacing — so those three guard the
+    // store behind `if let`.
     case "PL":
         guard page.plLines == nil, let (value, unit) = parseDotNumber(arg) else { return }
         page.plLines = resolveLinesArg(value, unit)
@@ -637,6 +663,9 @@ private func parsePageDot(
     case "LS":
         guard page.ls == nil, let (value, unit) = parseDotNumber(arg) else { return }
         if let resolved = resolveLsArg(value, unit) { page.ls = resolved }
+    case "CW":
+        guard page.cw120 == nil, let (value, unit) = parseDotNumber(arg) else { return }
+        if let resolved = resolveCwArg(value, unit) { page.cw120 = resolved }
     case "PT", "PSA", "PSB":
         // WordTsar's own invented dot commands (its source calls them "not a Wordstar
         // command"). A real WordStar file never contains these -- their presence IS

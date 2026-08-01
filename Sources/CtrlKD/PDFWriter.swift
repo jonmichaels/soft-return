@@ -81,12 +81,11 @@ private func replacingEach(_ bytes: [UInt8], _ needle: UInt8, with replacement: 
 }
 
 /// A stroked horizontal rule — the underline and strike-through. `0.6 w` sets the pen width;
-/// `m`/`l`/`S` move, line, and stroke. `x` stays the exact-integer-tenths convention (never
-/// touched by the geometry work); `y` is a real `Double` point value now — see `pageStream`'s
-/// doc comment for why.
-private func rule(xFrom: Int, xTo: Int, y: Double) -> [UInt8] {
-    let x1 = fixedOneDecimal(tenths: xFrom)
-    let x2 = fixedOneDecimal(tenths: xTo)
+/// `m`/`l`/`S` move, line, and stroke. `x` and `y` are both real `Double` point values since
+/// ctrl-kd 2.0.0 — see `pageStream`'s doc comment for why.
+private func rule(xFrom: Double, xTo: Double, y: Double) -> [UInt8] {
+    let x1 = fixedOneDecimalDouble(xFrom)
+    let x2 = fixedOneDecimalDouble(xTo)
     let yy = fixedOneDecimalDouble(y)
     return Array("0.6 w \(x1) \(yy) m \(x2) \(yy) l S".utf8)
 }
@@ -105,29 +104,48 @@ private func rule(xFrom: Int, xTo: Int, y: Double) -> [UInt8] {
 ///   Modern mode and print streams, or `printedLead(doc)` for a Printed-mode WS document
 ///   (PDFLayout.swift; ctrl-kd 1.3.0's `.lh`-derived figure). Defaulted to the fixed lead so
 ///   every pre-1.3.0 caller is unaffected.
+/// - Parameter size: the base type size in points — `PDFMetrics.size` (12) for Modern mode
+///   and print streams, or `printedSize(doc)` for a Printed-mode WS document (PDFLayout.swift;
+///   ctrl-kd 2.0.0's `.cw`-derived figure). Defaulted to the fixed size so every pre-2.0.0
+///   caller is unaffected. The sup/sub size (Python: `max(1, round(size * 2 / 3))`, 8 at the
+///   default 12) is derived from this ONCE, not read from the fixed `8` the writer used
+///   before 2.0.0.
+/// - Parameter left: the left edge of text in points — `PDFMetrics.margin` (72) for Modern
+///   mode and print streams, or `printedLeft(doc, size)` for a Printed-mode WS document
+///   (PDFLayout.swift; ctrl-kd 2.0.0's `.po`-derived figure). Defaulted to the fixed margin
+///   so every pre-2.0.0 caller is unaffected.
 ///
 /// Text is placed absolutely, one `BT`/`ET` block per styled run: PDF's own text-positioning
 /// operators track a line matrix that would have to be reset anyway, and Courier's fixed
 /// advance means the x for every run is known here without asking a font for metrics.
 ///
-/// CRITICAL FLOAT DETAIL (ctrl-kd 1.3.0): `x` stays in the exact-integer-tenths convention
-/// this file has always used — untouched by the geometry work, and still byte-parity-proven.
-/// `y`, though, is now a real `Double` in POINTS (not tenths), because `lead` itself can be
-/// irrational-at-48ths (`.lh 1C` -> `28.346456692913385`pt): Python accumulates `y` as a
-/// float and lets `'%.1f'` round the error away every line, and this does the same rather
-/// than trying to force a non-tenth lead into the tenths convention. The DEFAULT lead (12.0,
-/// accumulated from an integer start) is exact at every step, so every document that never
-/// sets `.lh` still produces byte-identical output to before this change.
+/// CRITICAL FLOAT DETAIL (ctrl-kd 2.0.0): `x` is now a real `Double` in POINTS, same as `y`
+/// below — the tenths-of-a-point convention this file used through 1.3.0 assumed `x` only
+/// ever moved by exact multiples of 0.1 (an integer `size` times 0.6), which broke the moment
+/// the LEFT MARGIN ITSELF could be `.po`-derived (`8 * 12 * 0.6` is exact, but not every
+/// `.po`/`.cw` combination is). So `x` accumulates exactly as Python's `float` does — starting
+/// at `left`, each advance `w = Double(charCount) * Double(sizeHere) * 0.6` — and
+/// `fixedOneDecimalDouble` rounds the accumulated error away per line, same as `'%.1f'` does
+/// on the Python side. Swift's `Double` and Python's `float` are both IEEE binary64, so
+/// identical operation order gives identical bits. `y` was already a real `Double` in points
+/// since 1.3.0 (`lead` can be irrational-at-48ths, e.g. `.lh 1C` -> `28.346456692913385`pt),
+/// unaffected by this change. The DEFAULT left/size (72.0/12, both accumulated from integer
+/// starts) are exact at every step, so every document that never sets `.po`/`.cw` still
+/// produces byte-identical output to before this change.
 func pageStream(
     _ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHeight,
-    lead: Double = Double(PDFMetrics.lead)
+    lead: Double = Double(PDFMetrics.lead), size: Int = PDFMetrics.size,
+    left: Double = Double(PDFMetrics.margin)
 ) -> [UInt8] {
     var ops: [[UInt8]] = []
+    // sup/sub size, derived once — Python: `max(1, round(size * 2 / 3))`. 8 at the
+    // default size 12, same figure the writer hardcoded before ctrl-kd 2.0.0.
+    let supSize = max(1, roundHalfToEven(Double(size * 2) / 3.0))
     // The baseline of the first line: down from the top of the paper by the margin, then by
     // one line's height, because `Td` positions a baseline and not a line's top edge.
-    var y = Double(pageHeight - top - PDFMetrics.size)
+    var y = Double(pageHeight - top - size)
     for line in pagelines {
-        var x = PDFMetrics.margin * 10
+        var x = left
         // Coalesced FIRST (pdf.py:136): the wrapper leaves one segment per word and per
         // space-run, and each segment costs a text-showing operator. Merging runs that share
         // styles changes nothing on paper and divides the stream size by roughly ten.
@@ -140,19 +158,19 @@ func pageStream(
             // covering either, then the rise chooses the direction. `sup` wins if a span
             // somehow carries both, matching Python's nested conditional.
             let reduced = styles.contains(.sup) || styles.contains(.sub)
-            let size = reduced ? 8 : PDFMetrics.size
+            let sizeHere = reduced ? supSize : size
             let rise = styles.contains(.sup) ? 3 : (styles.contains(.sub) ? -2 : 0)
             let font = pdfFont(bold: styles.contains(.bold), italic: styles.contains(.italic))
 
-            var op = Array("BT /\(font) \(size) Tf \(rise) Ts ".utf8)
-            op += Array("\(fixedOneDecimal(tenths: x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+            var op = Array("BT /\(font) \(sizeHere) Tf \(rise) Ts ".utf8)
+            op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
             op += esc(span.text)
             op += Array(") Tj ET".utf8)
             ops.append(op)
 
-            // `len(text) * size * 0.6` in tenths: Courier advances 0.6 em, so 6 tenths per
-            // point of type size per character. Exact in integers; the float version isn't.
-            let w = span.text.width * size * 6
+            // `len(text) * sizeHere * 0.6`, mirroring Python's float arithmetic exactly (see
+            // the CRITICAL FLOAT DETAIL above) rather than the pre-2.0.0 integer-tenths trick.
+            let w = Double(span.text.width) * Double(sizeHere) * 0.6
             // A rule under a run of pure whitespace would be a stray dash, so Python guards
             // both with `text.strip()` — non-empty after stripping, i.e. the run has ink.
             let hasInk = span.text.contains { !$0.isWhitespace }
@@ -200,6 +218,13 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     // fixed margin and lead regardless of what the document's geometry says.
     let top = printed ? printedTop(doc) : PDFMetrics.topModern
     let lead = printed ? printedLead(doc) : Double(PDFMetrics.lead)
+    // ctrl-kd 2.0.0: `.cw`/`.po`-derived for a Printed-mode WS document (PDFLayout.swift's
+    // `printedSize`/`printedLeft`), falling back to the same fixed size/margin a print
+    // stream (no page geometry) always used. Modern mode is untouched: it never
+    // faithfulness-matches the original page, so it keeps the fixed size and margin
+    // regardless of what the document's geometry says.
+    let size = printed ? printedSize(doc) : PDFMetrics.size
+    let left = printed ? printedLeft(doc, size: size) : Double(PDFMetrics.margin)
     // The SAME figure `printedCap` derives the line count from (PDFLayout.swift) — Python
     // computes it once in `emit_pdf` and uses it for both the MediaBox and the content
     // stream's Y-origin (pdf.py:449,476-479). A page that paginates at a custom `.pl`'s
@@ -241,7 +266,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         \(pageHeight)] /Resources << /Font << \(fontDict) >> >> \
         /Contents \(contentNums[i]) 0 R >>
         """.utf8)))
-        let stream = pageStream(page, top: top, pageHeight: pageHeight, lead: lead)
+        let stream = pageStream(page, top: top, pageHeight: pageHeight, lead: lead, size: size, left: left)
         var body = Array("<< /Length \(stream.count) >>\nstream\n".utf8)
         body += stream
         body += Array("\nendstream".utf8)

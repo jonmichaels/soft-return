@@ -329,11 +329,11 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 }
 
 @Test func versionLineNamesBothTheCLIAndTheReference() {
-    #expect(versionLine == "sr 1.2.0 (ctrl-kd parity 1.3.0)")
+    #expect(versionLine == "sr 1.3.0 (ctrl-kd parity 2.0.0)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
-    #expect(recorder.out == ["sr 1.2.0 (ctrl-kd parity 1.3.0)"])
+    #expect(recorder.out == ["sr 1.3.0 (ctrl-kd parity 2.0.0)"])
     #expect(recorder.written.isEmpty)
 }
 

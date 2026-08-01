@@ -135,7 +135,10 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
 
         // Each span becomes its own group, so its control words expire at the closing brace
         // and no style leaks into the next span (emit.py:222-223).
-        var lines = block.lines.map { line in
+        //
+        // printed: physical lines (\line at every printed break, soft or hard); modern:
+        // logical lines only (`mergedLines`, ctrl-kd 2.0.0).
+        var lines = (printed ? block.lines : mergedLines(block)).map { line in
             line.spans
                 .map { rtfBodySpan($0, refNotes: refNotes, doc: doc, options: options) }
                 .joined()
