@@ -13,6 +13,20 @@ import Testing
 /// Process-level spawning of the built binary is deliberately not attempted — `swift run sr`
 /// is exercised by hand and recorded in the job response.
 
+/// job-014's vectors were machine-generated from Python 1.1.6 — before ctrl-kd 1.2.0's
+/// note-model/page-geometry work — so the real reference's `diagnose()` now also emits
+/// `notes` and `page` (and `producer`/`comment_bug` when applicable) that this fixture
+/// never captured. Per the pattern already established for job-005/006/008/009/011's
+/// stale footnote data (see `VectorTests.swift`), these new-in-1.2.0 keys are excluded
+/// from the equivalence check below rather than the fixture being regenerated or the
+/// test dropped: Swift's own `diagnose()` emitting them, and matching the real installed
+/// Python reference's shape and values, is proven directly by the CLI-level tests below
+/// (`diagnoseReportsNoteCountsForAllFourKinds`, `diagnoseReportsPageGeometry`,
+/// `diagnoseReportsProducerWhenWordTsarCommandsAreSeen`,
+/// `diagnoseReportsCommentBugForPrintstreamFiles`).
+private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comment_bug",
+                                              "unknown_blocks", "footnotes"]  // footnotes: REMOVED in 1.2.0; unknown_blocks: added in 1.2.0
+
 // MARK: - Diagnose, against the Python reference
 
 @Test func diagnoseMatchesPythonReferenceVectors() throws {
@@ -27,10 +41,14 @@ import Testing
         // excluded because it is whatever path the generator happened to use.
         let mine = try #require(normalize(got).object, "diagnose must return an object")
         let theirs = try #require(vector.pythonReferenceJSON.object)
+        // `staleDiagnoseKeys` must be filtered from BOTH sides: it covers keys ADDED in
+        // 1.2.0 (absent from these 1.1.6-era vectors) and the flat `footnotes` count
+        // REMOVED in 1.2.0 (present in them, and correctly gone from ours).
+        let skip: (String) -> Bool = { staleDiagnoseKeys.contains($0) || $0 == "file" }
         #expect(
-            mine.keys.sorted().filter { $0 != "file" } == theirs.keys.sorted().filter { $0 != "file" },
+            mine.keys.sorted().filter { !skip($0) } == theirs.keys.sorted().filter { !skip($0) },
             "key set differs for \(vector.name)")
-        for (key, expected) in theirs where key != "file" {
+        for (key, expected) in theirs where !skip(key) {
             #expect(mine[key] == expected, "\(vector.name): \(key)")
         }
     }
@@ -94,6 +112,113 @@ import Testing
                      environment: recorder.environment)
     #expect(status == ExitStatus.ok)
     #expect(recorder.out.first?.contains("\"variant\": \"ws4\"") == true)
+}
+
+// MARK: - Diagnose: ctrl-kd 1.2.0's new fields (notes, page, producer, comment_bug)
+
+/// The trap this whole file's header warns about, aimed squarely at the new fields: go
+/// through `run`, not `diagnose(path:data:)` directly, so a wiring mistake between the
+/// command path and the library (an import error, a forgotten parameter) shows up here
+/// the way it would for an actual user typing `sr --diagnose`.
+@Test func diagnoseCommandPathReportsNoteCountsAndPage() throws {
+    let recorder = Recorder(files: ["/in/SAMPLE.WS": fourKindData()])
+    let status = run(["--diagnose", "/in/SAMPLE.WS"], environment: recorder.environment)
+    #expect(status == ExitStatus.ok)
+    #expect(recorder.err.isEmpty)
+    let output = try #require(recorder.out.first)
+    #expect(output.contains("\"footnote\": 1"))
+    #expect(output.contains("\"endnote\": 1"))
+    #expect(output.contains("\"annotation\": 1"))
+    #expect(output.contains("\"comment\": 1"))
+    #expect(output.contains("\"page\""))
+    #expect(output.contains("\"size_name\": \"Letter\""))
+}
+
+/// Note kinds are reported separately, never flattened — a rescue tool converting a
+/// file to plain text must still be able to say it has hidden comments.
+@Test func diagnoseNotesObjectCountsEachKindSeparately() throws {
+    let value = diagnose(path: "/tmp/four", data: fourKindData())
+    let fields = try #require(normalize(value).object)
+    let notes = try #require(fields["notes"]?.object, "notes must be an object, not flattened")
+    #expect(notes["footnote"] == .int(1))
+    #expect(notes["endnote"] == .int(1))
+    #expect(notes["annotation"] == .int(1))
+    #expect(notes["comment"] == .int(1))
+}
+
+/// A document with no notes at all still gets the `notes` object — every kind present,
+/// zeroed — matching Python's dict comprehension, which never conditions on presence.
+@Test func diagnoseNotesObjectIsAllZeroesWhenThereAreNoNotes() throws {
+    let value = diagnose(path: "/tmp/plain", data: makeProse())
+    let fields = try #require(normalize(value).object)
+    let notes = try #require(fields["notes"]?.object)
+    #expect(notes == ["footnote": .int(0), "endnote": .int(0), "annotation": .int(0), "comment": .int(0)])
+}
+
+@Test func diagnoseReportsResolvedPageGeometryWithProvenance() throws {
+    let data = bytes(".pl 84") + HARD + bytes(".mt 6") + HARD + bytes(".mb 6") + HARD
+        + bytes(".po 8") + HARD + ws7Block(0x00) + bytes("Body text here.") + HARD
+    let value = diagnose(path: "/tmp/legal", data: data)
+    let fields = try #require(normalize(value).object)
+    let page = try #require(fields["page"]?.object)
+    #expect(page["size_name"] == .string("Legal"))
+    #expect(page["size_source"] == .string("file"))
+    #expect(page["pl_lines"] == .double(84.0))
+    #expect(page["height_in"] == .double(14.0))
+    #expect(page["mt_lines"] == .double(6.0))
+    #expect(page["mt_source"] == .string("file"))
+    #expect(page["mb_lines"] == .double(6.0))
+    #expect(page["mb_source"] == .string("file"))
+    #expect(page["po_cols"] == .double(8.0))
+    #expect(page["po_source"] == .string("file"))
+}
+
+/// Nothing in the file sets page geometry, so every figure and source falls back to the
+/// documented defaults (66 lines / US Letter).
+@Test func diagnoseReportsDefaultPageGeometryWhenNothingOverridesIt() throws {
+    let value = diagnose(path: "/tmp/plain", data: fourKindData())
+    let fields = try #require(normalize(value).object)
+    let page = try #require(fields["page"]?.object)
+    #expect(page["size_name"] == .string("Letter"))
+    #expect(page["size_source"] == .string("default"))
+    #expect(page["pl_lines"] == .double(66.0))
+    #expect(page["height_in"] == .double(11.0))
+}
+
+@Test func diagnoseReportsProducerOnlyWhenWordTsarCommandsAreSeen() throws {
+    let withProducer = bytes(".PT 1") + HARD + ws7Block(0x00) + bytes("Body one.") + HARD
+    let value = diagnose(path: "/tmp/wordtsar", data: withProducer)
+    let fields = try #require(normalize(value).object)
+    #expect(fields["producer"] == .string("wordtsar"))
+
+    let without = ws7Block(0x00) + bytes("Body two.") + HARD
+    let value2 = diagnose(path: "/tmp/plain", data: without)
+    let fields2 = try #require(normalize(value2).object)
+    #expect(fields2["producer"] == nil, "producer must be absent, not null, when not detected")
+}
+
+/// COMMENT.BUG is printstream-only: the documented signature (a line ending in a bare
+/// LF instead of CR LF) is 1990s print-time damage, not a parse failure, and it only
+/// ever shows up on the print-to-disk path — a ws4/ws5+ document never carries it.
+@Test func diagnoseReportsCommentBugSignatureForPrintstreamFilesOnly() throws {
+    let buggy = bytes("Line one\r\nLine two\r\nLine three\n")
+    let value = diagnose(path: "/tmp/bug", data: buggy)
+    let fields = try #require(normalize(value).object)
+    #expect(fields["variant"] == .string("printstream"))
+    let bug = try #require(fields["comment_bug"]?.object)
+    #expect(bug["count"] == .int(1))
+    #expect(bug["stray_ctrl_t"] == .bool(false))
+    #expect(bug["first_offset"] != nil)
+
+    // No bare-LF lines: the key must be absent entirely, not present-and-zero.
+    let clean = bytes("Line one\r\nLine two\r\n")
+    let cleanFields = try #require(normalize(diagnose(path: "/tmp/clean", data: clean)).object)
+    #expect(cleanFields["comment_bug"] == nil)
+
+    // A ws5+ document never runs the printstream path, so it never carries the key
+    // either — even one whose text happens to include a bare 0x0A somewhere.
+    let ws5Fields = try #require(normalize(diagnose(path: "/tmp/ws5", data: fourKindData())).object)
+    #expect(ws5Fields["comment_bug"] == nil)
 }
 
 // MARK: - Argument surface
@@ -204,11 +329,11 @@ import Testing
 }
 
 @Test func versionLineNamesBothTheCLIAndTheReference() {
-    #expect(versionLine == "sr 1.0.0 (ctrl-kd parity 1.1.6)")
+    #expect(versionLine == "sr 1.1.0 (ctrl-kd parity 1.2.0)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
-    #expect(recorder.out == ["sr 1.0.0 (ctrl-kd parity 1.1.6)"])
+    #expect(recorder.out == ["sr 1.1.0 (ctrl-kd parity 1.2.0)"])
     #expect(recorder.written.isEmpty)
 }
 
@@ -218,9 +343,97 @@ import Testing
     #expect(!help.contains("--encoding"))
     #expect(help.contains("CP437"))
     #expect(help.contains("--diagnose"))
+    #expect(help.contains("--no-notes"))
+    #expect(help.contains("--comments"))
     for format in EmitterRegistry.standard.formats() {
         #expect(help.contains(format))
     }
+}
+
+// MARK: - Note selection (--no-notes / --comments)
+
+@Test func defaultNotesOmitCommentsOnly() {
+    guard case .run(let options) = parseArguments(["A.WS"]) else {
+        Issue.record("expected a run")
+        return
+    }
+    #expect(options.notes == EmitOptions.defaultNotes)
+    #expect(!options.notes.contains(.comment))
+}
+
+@Test func noNotesFlagEmptiesTheNoteSet() {
+    guard case .run(let options) = parseArguments(["--no-notes", "A.WS"]) else {
+        Issue.record("expected a run")
+        return
+    }
+    #expect(options.notes == EmitOptions.noNotes)
+    #expect(options.notes.isEmpty)
+}
+
+@Test func commentsFlagAddsCommentsWithoutDisplacingTheDefaults() {
+    guard case .run(let options) = parseArguments(["--comments", "A.WS"]) else {
+        Issue.record("expected a run")
+        return
+    }
+    #expect(options.notes == EmitOptions.allNotes)
+    #expect(options.notes.isSuperset(of: EmitOptions.defaultNotes))
+}
+
+/// cli.py:78-81 — `--no-notes` wins outright: its branch never even looks at
+/// `a.comments`. `--comments` alone with no `--no-notes` must not be silently ignored.
+@Test func noNotesWinsOverComments() {
+    guard case .run(let options) = parseArguments(["--no-notes", "--comments", "A.WS"]) else {
+        Issue.record("expected a run")
+        return
+    }
+    #expect(options.notes == EmitOptions.noNotes)
+}
+
+@Test func noNotesAndCommentsRejectAnAttachedValue() {
+    guard case .usageError(let message) = parseArguments(["--no-notes=x", "A.WS"]) else {
+        Issue.record("expected a usage error")
+        return
+    }
+    #expect(message.contains("ignored explicit argument"))
+
+    guard case .usageError(let message2) = parseArguments(["--comments=x", "A.WS"]) else {
+        Issue.record("expected a usage error")
+        return
+    }
+    #expect(message2.contains("ignored explicit argument"))
+}
+
+/// The library work is proven at the API level (`EmitOptions.notes`); what only the CLI
+/// can prove is that the flag actually reaches the emitter through `run`'s conversion
+/// loop, which is exactly the kind of wiring the import-error trap (see the file
+/// header) shows unit tests of the API alone can miss.
+@Test func defaultRunIncludesNotesButNeverComments() throws {
+    let recorder = Recorder(files: ["/in/SAMPLE.WS": fourKindData()])
+    #expect(run(["-t", "text", "/in/SAMPLE.WS"], environment: recorder.environment) == ExitStatus.ok)
+    let text = String(decoding: try #require(recorder.written["/in/SAMPLE.txt"]), as: UTF8.self)
+    #expect(text.contains("Footnote text."))
+    #expect(text.contains("Endnote text."))
+    #expect(text.contains("Annotation text"))
+    #expect(!text.contains("Comment text."), "WordStar itself never printed comments")
+}
+
+@Test func noNotesFlagReachesTheEmitterAndSuppressesAllFourKinds() throws {
+    let recorder = Recorder(files: ["/in/SAMPLE.WS": fourKindData()])
+    #expect(run(["--no-notes", "-t", "text", "/in/SAMPLE.WS"],
+                environment: recorder.environment) == ExitStatus.ok)
+    let text = String(decoding: try #require(recorder.written["/in/SAMPLE.txt"]), as: UTF8.self)
+    for gone in ["Footnote text.", "Endnote text.", "Annotation text", "Comment text."] {
+        #expect(!text.contains(gone), "\(gone) must be gone under --no-notes")
+    }
+}
+
+@Test func commentsFlagReachesTheEmitterWithoutDisplacingTheDefaults() throws {
+    let recorder = Recorder(files: ["/in/SAMPLE.WS": fourKindData()])
+    #expect(run(["--comments", "-t", "text", "/in/SAMPLE.WS"],
+                environment: recorder.environment) == ExitStatus.ok)
+    let text = String(decoding: try #require(recorder.written["/in/SAMPLE.txt"]), as: UTF8.self)
+    #expect(text.contains("Comment text."))
+    #expect(text.contains("Footnote text."))
 }
 
 // MARK: - The conversion loop
@@ -388,8 +601,15 @@ import Testing
     #expect(fields["margin_estimate"] != nil, "a ws5+ file must carry parse evidence too")
     #expect(fields["columnar"] == .bool(false))
     // `diagnose-footnote-count`: nothing above used a file that HAS a footnote, so reporting
-    // a constant zero was invisible.
-    #expect(fields["footnotes"] == .int(1))
+    // a constant zero was invisible. ctrl-kd 1.2.0 dropped the flat `footnotes` count in
+    // favour of the per-kind `notes` object -- a single number could not tell a footnote
+    // from an endnote from an annotation, which is the whole point of the rework.
+    #expect(fields["footnotes"] == nil, "the flat count was removed in 1.2.0")
+    if case .object(let kinds)? = fields["notes"] {
+        #expect(kinds["footnote"] == .int(1))
+    } else {
+        Issue.record("diagnose must report a per-kind notes object")
+    }
 }
 
 /// `diagnose-paragraph-filter`: `paragraphs` counts `.para` blocks, not blocks. Every fixture
@@ -557,6 +777,7 @@ private struct DiagnoseVector: Decodable {
 private enum RefJSON: Decodable, Equatable {
     case string(String)
     case int(Int)
+    case double(Double)
     case bool(Bool)
     case null
     case array([RefJSON])
@@ -570,6 +791,10 @@ private enum RefJSON: Decodable, Equatable {
             // Int before Bool: JSONDecoder is strict about the two, and this order keeps a
             // `1` an integer rather than depending on which attempt runs first.
             self = .int(value)
+        } else if let value = try? container.decode(Double.self) {
+            // Double after Int: an integral JSON number (`66`) must still decode as
+            // `.int` above; this only catches the fractional ones (`66.0`, page geometry).
+            self = .double(value)
         } else if let value = try? container.decode(Bool.self) {
             self = .bool(value)
         } else if let value = try? container.decode(String.self) {
@@ -596,6 +821,7 @@ private func normalize(_ value: JSONValue) -> RefJSON {
     switch value {
     case .string(let s): return .string(s)
     case .int(let i): return .int(i)
+    case .double(let d): return .double(d)
     case .bool(let b): return .bool(b)
     case .null: return .null
     case .array(let items): return .array(items.map(normalize))

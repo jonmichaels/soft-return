@@ -25,9 +25,23 @@ public func isPrinted(_ doc: Document) -> Bool {
 /// an `Emitter` without a wrapper closure: an emitter is a pure function of its arguments,
 /// holding no state between calls, so it is safe to call from any thread — and the compiler
 /// should be told so rather than have the guarantee laundered through a `{ }`.
+/// One span, plain text: an ordinary span passes through unchanged; an `fnref` span
+/// becomes `[label]` when its note is included, vanishes entirely when the note's kind is
+/// opted out, and degrades to its own raw digits when it isn't actually a reference at all
+/// (task item 3 — a stray `0x07` byte has nothing behind it to bracket).
+private func textSpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions) -> String {
+    guard span.styles.contains(.fnref) else { return span.text }
+    switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
+    case .note(_, let label): return "[\(label)]"
+    case .excluded: return ""
+    case .invalid: return span.text
+    }
+}
+
 @Sendable
 public func emitText(_ doc: Document, mode: EmitMode = .modern,
                      options: EmitOptions = EmitOptions()) -> String {
+    let refNotes = inlineReferenceNotes(doc)
     var out: [String] = []
     for block in doc.blocks {
         if block.kind == .softpage {
@@ -39,7 +53,9 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
             out.append(mode == .printed ? "\u{0C}" : "\n" + String(repeating: "-", count: 20) + "\n")
             continue
         }
-        let para = block.lines.map { $0.text() }.joined(separator: "\n")
+        let para = block.lines
+            .map { line in line.spans.map { textSpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
+            .joined(separator: "\n")
         // emit.py:69 — in printed mode an all-whitespace paragraph is still a printed
         // paragraph and is kept.
         if !para.trimmed().isEmpty || mode == .printed {
@@ -55,11 +71,17 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
         text = out.filter { !$0.trimmed().isEmpty }.joined(separator: "\n\n")
     }
 
-    if !doc.footnotes.isEmpty {
-        let notes = doc.footnotes.enumerated().map { i, note in
-            "[\(i + 1)] " + note.map(\.text).joined()
-        }
-        text += "\n\n" + notes.joined(separator: "\n")
+    // One labelled section per included, non-empty kind, in `noteKindOrder` — "Footnotes:"/
+    // "Endnotes:"/"Annotations:"/"Comments:" followed by its "[label] text" lines.
+    let sections = noteKindOrder.compactMap { kind -> String? in
+        guard options.notes.contains(kind) else { return nil }
+        let entries = noteListEntries(doc, kind: kind)
+        guard !entries.isEmpty else { return nil }
+        let lines = entries.map { "[\($0.label)] \($0.note.text)" }
+        return noteSectionTitle(kind) + ":\n" + lines.joined(separator: "\n")
+    }
+    if !sections.isEmpty {
+        text += "\n\n" + sections.joined(separator: "\n\n")
     }
     return text + "\n"
 }

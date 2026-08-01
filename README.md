@@ -15,6 +15,8 @@ sr PAPER.WS -t html -o out.html
 sr --mode printed LETTER          # as it came off the printer
 sr --diagnose MYSTERY.FIL         # what IS this file?
 sr -t text -t html -d out/ *.WS   # batch, multiple formats
+sr --comments MEMO.WS             # include the author's hidden comments
+sr --no-notes PAPER.WS            # body text only, no notes
 ```
 
 ```swift
@@ -69,7 +71,7 @@ Formats: `text`, `markdown`, `html`, `rtf`, `pdf`, plus `txt` and `md` as aliase
 
 Three ways, in order of least effort:
 
-**Direct download** — **[sr-1.0.0-macos-universal.zip](https://github.com/jonmichaels/soft-return/releases/download/v1.0.0/sr-1.0.0-macos-universal.zip)**
+**Direct download** — **[sr-1.1.0-macos-universal.zip](https://github.com/jonmichaels/soft-return/releases/download/v1.1.0/sr-1.1.0-macos-universal.zip)**
 — **Universal Binary. macOS 15 and above.** Unzip, put `sr` on your PATH, done.
 
 **Homebrew:**
@@ -94,10 +96,17 @@ builds and runs on Linux.
 When the Soft Return app arrives it will offer an *Install Command-Line Tool* menu item
 as a fourth path.
 
-`sr --help` lists every option. Two notes on the surface: there is no `--encoding` flag,
+`sr --help` lists every option. A few notes on the surface: there is no `--encoding` flag,
 because the high-bit bytes in a WordStar file are IBM-PC code page 437 and every other code
-page mis-decodes them; and `--diagnose` prints what a file actually is — variant, estimated
-margin, dot commands, unrecognized control codes — as JSON, converting nothing.
+page mis-decodes them; `--no-notes` and `--comments` control which of WordStar's four note
+kinds an emitter renders — footnotes, endnotes and annotations by default, comments only
+when asked for (WordStar itself never printed them); and `--diagnose` prints what a file
+actually is — variant, estimated margin, dot commands, unrecognized control codes, note
+counts per kind (footnote/endnote/annotation/comment, reported separately so hidden
+comments show up even in a plain-text conversion), resolved page geometry with provenance
+(file vs. default), the producer when WordTsar's own dot commands are detected, and — for
+print-to-disk captures — the COMMENT.BUG print-time damage signature when present — as
+JSON, converting nothing.
 
 ## Using the CtrlKD library
 
@@ -127,9 +136,8 @@ swift run ctrlkd-demo     # converts synthetic WordStar bytes, prints each stage
 Jon Michaels, with Athena (Claude, by Anthropic) as co-author.
 
 The reason this exists is a stack of WordStar files from 1987–1992 and the need to read them
-again. It matches the Python [ctrl-kd](https://github.com/jonmichaels/ctrl-kd) byte for
-byte — the two implementations keep each other honest. See [ctrl-kd](https://github.com/jonmichaels/ctrl-kd) for the Python implementation
-this port is verified against, and for the fuller account of the format archaeology.
+again. See [ctrl-kd](https://github.com/jonmichaels/ctrl-kd) for the Python implementation this
+port grew from, and for the fuller account of the format archaeology.
 
 Standing on the shoulders of the tools and documentation that kept WordStar readable:
 Yohanes Nugroho's WS-CON, Michael Petrie's English port, the `wsconvert` project, Robert J.

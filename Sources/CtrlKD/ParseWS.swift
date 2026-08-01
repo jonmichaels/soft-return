@@ -120,10 +120,21 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // ws4 document would reinterpret a stray 0x1D that `wsDrop` should just discard.
     var body = data
     var footnotes: [[Span]] = []
+    var notes: [Note] = []
+    var unknownBlocks: [UnknownBlock] = []
     if ws5 {
         let stripped = symmetricBlocks(data)
         body = stripped.bytes
-        footnotes = stripped.footnotes.map { [Span(text: $0)] }
+        notes = stripped.notes
+        unknownBlocks = stripped.unknownBlocks
+        // footnotes/endnotes/annotations are all rendered the same way (a numbered
+        // list at the end) and share one inline reference counter below, so
+        // `footnotes` stays the flattened view the existing emitters already know how
+        // to render; `notes` is what tells the four kinds apart. Comments are never
+        // rendered inline — they only ever show up in `notes`.
+        footnotes = notes
+            .filter { $0.kind == .footnote || $0.kind == .endnote || $0.kind == .annotation }
+            .map { [Span(text: $0.text)] }
     }
 
     let pass = linesPass(body)
@@ -133,6 +144,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var dots: [String] = []
     var fnCounter: Int? = ws5 ? 0 : nil
     var ruler = false
+    var page = PageAccumulator()
+    var producer: String? = nil
+    var footnoteNumberStart: Int? = nil
+    var endnoteNumberStart: Int? = nil
 
     var blocks: [Block] = []
     var cur = Block(kind: .para)
@@ -171,6 +186,13 @@ public func parseWS(_ data: [UInt8]) -> Document {
                cmd.contains(0x21) {                                             // '!'
                 ruler = true
             }
+            parsePageDot(
+                cmd,
+                page: &page,
+                producer: &producer,
+                footnoteNumberStart: &footnoteNumberStart,
+                endnoteNumberStart: &endnoteNumberStart
+            )
             continue
         }
 
@@ -218,6 +240,25 @@ public func parseWS(_ data: [UInt8]) -> Document {
     }
     closeBlock()
 
+    // Exposed per the IR contract: a consumer must be able to distinguish "Legal
+    // (from file)" from "Letter (default)" — provenance lives alongside every
+    // resolved figure, not just the page size. Computed regardless of variant: page
+    // geometry is a dot-command concern, not a symmetric-block (ws5+-only) one.
+    let plLines = page.plLines ?? defaultPlLines
+    let (heightIn, sizeName) = resolvePageSize(plLines)
+    let pageGeometry = PageGeometry(
+        plLines: plLines,
+        heightIn: heightIn,
+        sizeName: sizeName,
+        sizeSource: page.plLines != nil ? .file : .default,
+        mtLines: page.mtLines ?? defaultMtLines,
+        mtSource: page.mtLines != nil ? .file : .default,
+        mbLines: page.mbLines ?? defaultMbLines,
+        mbSource: page.mbLines != nil ? .file : .default,
+        poCols: page.poCols ?? defaultPoCols,
+        poSource: page.poCols != nil ? .file : .default
+    )
+
     return Document(
         blocks: blocks,
         footnotes: footnotes,
@@ -225,7 +266,13 @@ public func parseWS(_ data: [UInt8]) -> Document {
         marginEstimate: pass.margin,
         dotCommands: dots,
         unknownCodes: unknown,
-        columnar: ruler
+        columnar: ruler,
+        notes: notes,
+        unknownBlocks: unknownBlocks,
+        page: pageGeometry,
+        producer: producer,
+        footnoteNumberStart: footnoteNumberStart,
+        endnoteNumberStart: endnoteNumberStart
     )
 }
 
@@ -250,4 +297,243 @@ private func asciiUppercased(_ b: UInt8) -> UInt8 {
 
 private func asciiLowercased(_ b: UInt8) -> UInt8 {
     (b >= 0x41 && b <= 0x5A) ? b + 0x20 : b
+}
+
+// ------------------------------------------------------------ page geometry
+//
+// .pl (page length), .po (page offset), .mt (top margin), .mb (bottom margin) --
+// WordStar 7.0 file format spec (WordStar International, 1992). The trap: a
+// UNIT-LESS numeric argument to .pl/.mt/.mb is LINES, and to .po is print COLUMNS --
+// never inches. (The only other modern implementation, WordTsar, admits via its own
+// @todo that it falls back to inches when no unit is given; that is exactly the bug
+// this avoids.) WordStar 5.0+ also allows an explicit unit suffix on these arguments --
+// '"'/I/IN for inches, C/CM for centimetres, P/PM for points, case-insensitive -- which
+// this DOES convert, since at that point the file is telling us the unit rather than
+// leaving it to the trap-default.
+//
+// Everything below assumes the fixed 6 LPI / 10 CPI baseline this project already
+// uses elsewhere (PDFLayout's Courier metrics; margin_estimate's WS4 default).
+// WordStar itself lets LPI/CPI vary (.lh, .cw), but tracking those per-line is well
+// beyond what a page-geometry pass needs. Direct port of core.py's page-geometry
+// section (Python ctrl-kd 1.2.0).
+
+/// Accumulates the FIRST occurrence of each page dot command seen so far — WordStar
+/// dot commands are stateful and could recur mid-document, but one resolved answer per
+/// document is what a consumer needs (matches `_parse_page_dot`'s "first occurrence
+/// wins" rule).
+private struct PageAccumulator {
+    var plLines: Double?
+    var mtLines: Double?
+    var mbLines: Double?
+    var poCols: Double?
+}
+
+/// Named page sizes at 6 LPI (WordStar 7.0 file format spec: ".PL ... assuming 6
+/// lines per inch. An eleven inch page contains 66 lines."): 66 lines/11in Letter, 84
+/// lines/14in Legal, 81 lines/13.5in Foolscap Folio (the pre-ISO UK long sheet). All
+/// three share the same 8.5in width, so only page HEIGHT is resolved here -- there is
+/// no dot command for physical page width.
+private let namedPageHeights: [(name: String, heightIn: Double)] = [
+    ("Letter", 11.0), ("Legal", 14.0), ("Foolscap Folio", 13.5),
+]
+/// "Close" isn't spec-given -- a judgment call, not a reading. 0.25in is a bit over a
+/// line and a half at 6 LPI: near enough to call it the named size; farther out,
+/// honour the raw geometry instead of forcing a label onto it.
+private let pageSizeSnapIn = 0.25
+
+private let defaultPlLines = 66.0   // WordStar's own default: 66 lines = 11in = US Letter
+private let defaultMtLines = 3.0    // spec: ".MT ... Default value is 3 lines."
+private let defaultMbLines = 8.0    // spec: ".MB ... The default value is 8 lines."
+private let defaultPoCols = 0.0     // no default is stated in the spec for .po; 0 (flush
+                                    // with the paper edge) is the least presumptuous
+                                    // reading rather than a remembered/guessed figure.
+
+private func isASCIILetter(_ b: UInt8) -> Bool {
+    (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
+}
+
+/// Python bytes-regex `\s` — ASCII whitespace only, distinct from `asciiWhitespace`
+/// above only in that this file keeps the two call sites (dot-command splitting vs.
+/// numeric-argument scanning) each named after the Python they port.
+private func isDotSpace(_ b: UInt8) -> Bool {
+    b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D || b == 0x0B || b == 0x0C
+}
+
+private func isASCIIDigit(_ b: UInt8) -> Bool {
+    b >= 0x30 && b <= 0x39
+}
+
+/// `_DOT_CMD_RE = re.compile(rb'^\.([A-Za-z]{1,3})\s*(.*)$')`. `cmd` is the
+/// already-rstripped, hibit-masked dot-command line (starts with '.'). Greedy 1-3
+/// leading letters right after the dot never need to backtrack here (`\s*(.*)$` can
+/// always match zero characters), so a plain greedy scan reproduces the regex exactly.
+private func dotCommandNameAndArg(_ cmd: [UInt8]) -> (name: [UInt8], arg: [UInt8])? {
+    guard cmd.count > 1 else { return nil }
+    var nameEnd = 1
+    while nameEnd < cmd.count && nameEnd < 4 && isASCIILetter(cmd[nameEnd]) {
+        nameEnd += 1
+    }
+    guard nameEnd > 1 else { return nil }        // at least one letter required
+    let name = Array(cmd[1..<nameEnd])
+    var argStart = nameEnd
+    while argStart < cmd.count && isDotSpace(cmd[argStart]) {
+        argStart += 1
+    }
+    return (name, Array(cmd[argStart...]))
+}
+
+/// `_DOT_NUM_RE = re.compile(rb'^\s*([0-9]*\.?[0-9]+)\s*("|[A-Za-z]{1,2})?')`. Standard
+/// float-token scanning: greedily consume leading digits, then a dot IS consumed only
+/// if at least one digit follows it (otherwise the regex's `[0-9]+` backtracks past an
+/// empty match and leaves the dot itself unconsumed) — e.g. "5." matches value 5 with
+/// the trailing dot left dangling, unconsumed, not an error.
+private func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? {
+    var i = 0
+    while i < arg.count && isDotSpace(arg[i]) { i += 1 }
+
+    let numStart = i
+    while i < arg.count && isASCIIDigit(arg[i]) { i += 1 }
+    let leadingDigitsEnd = i
+
+    if i < arg.count && arg[i] == 0x2e {
+        let dotPos = i
+        var j = i + 1
+        while j < arg.count && isASCIIDigit(arg[j]) { j += 1 }
+        if j > dotPos + 1 {
+            i = j                                  // dot + at least one digit: include both
+        } else {
+            i = leadingDigitsEnd                    // dot with no digits after: don't consume it
+        }
+    }
+    guard i > numStart else { return nil }          // matched nothing at all
+
+    // A dot command from a 35-year-old file can carry an arbitrarily long numeral, and
+    // `Double("999...9")` happily returns +infinity. That flowed unguarded into the page
+    // geometry and trapped in `Int(x)` during printed-PDF layout — a crash, not a hang.
+    // Reject anything that isn't a finite number: a page length of 10^308 lines is not a
+    // measurement, it is damage, and the caller's default is the right answer.
+    guard let value = Double(String(decoding: arg[numStart..<i], as: UTF8.self)),
+          value.isFinite else {
+        return nil
+    }
+
+    var j = i
+    while j < arg.count && isDotSpace(arg[j]) { j += 1 }
+    var unit: [UInt8]? = nil
+    if j < arg.count {
+        if arg[j] == 0x22 {                         // '"'
+            unit = [arg[j]]
+        } else if isASCIILetter(arg[j]) {
+            var k = j + 1
+            if k < arg.count && isASCIILetter(arg[k]) { k += 1 }   // up to 2 letters
+            unit = Array(arg[j..<k])
+        }
+    }
+    return (value, unit)
+}
+
+/// Convert a dot-command argument's optional unit suffix to inches. Returns `nil` for
+/// no unit (caller applies the lines/columns default) or an unrecognised unit (treated
+/// the same as no unit -- defensive, not a crash). Direct port of `_dot_arg_inches`.
+private func dotArgInches(_ value: Double, _ unit: [UInt8]?) -> Double? {
+    guard let unit, !unit.isEmpty else { return nil }
+    let upper = String(decoding: unit.map(asciiUppercased), as: UTF8.self)
+    switch upper {
+    case "\"", "I", "IN": return value
+    case "C", "CM": return value / 2.54
+    case "P", "PM": return value / 72.0
+    default: return nil
+    }
+}
+
+/// `.pl`/`.mt`/`.mb` argument -> lines, at 6 LPI. Unit-less IS lines already (see
+/// module note above); a unit suffix is inches/cm/points via 6 LPI.
+private func resolveLinesArg(_ value: Double, _ unit: [UInt8]?) -> Double {
+    guard let inches = dotArgInches(value, unit) else { return value }
+    return inches * 6.0
+}
+
+/// `.po` argument -> print columns, at 10 CPI. Unit-less IS columns.
+private func resolveColsArg(_ value: Double, _ unit: [UInt8]?) -> Double {
+    guard let inches = dotArgInches(value, unit) else { return value }
+    return inches * 10.0
+}
+
+/// `pl_lines` -> (height_in, size_name). Snaps to a named size when close; otherwise
+/// reports the raw geometry under "Custom" rather than forcing a label that doesn't
+/// fit. Direct port of `_resolve_page_size`.
+private func resolvePageSize(_ plLines: Double) -> (heightIn: Double, sizeName: String) {
+    let heightIn = plLines / 6.0
+    var best = namedPageHeights[0]
+    var bestDiff = abs(best.heightIn - heightIn)
+    for candidate in namedPageHeights.dropFirst() {
+        let diff = abs(candidate.heightIn - heightIn)
+        if diff < bestDiff {
+            best = candidate
+            bestDiff = diff
+        }
+    }
+    if bestDiff <= pageSizeSnapIn {
+        return (best.heightIn, best.name)
+    }
+    return (heightIn, "Custom")
+}
+
+/// Try to interpret one dot-command line as page geometry (`.pl`/`.po`/`.mt`/`.mb`) or
+/// a WordTsar-invented command (`.PT`/`.PSA`/`.PSB` -- "not a Wordstar command" per
+/// WordTsar's own source, so their mere presence is a producer signal). The line is
+/// ALWAYS also kept verbatim in `Document.dotCommands` by the caller, recognised or
+/// not — including `.PT`'s own raw argument, so no separate field is needed for that
+/// here. Direct port of `_parse_page_dot`.
+///
+/// `.F#`/`.E#` (same spec) set the footnote/endnote starting numbering value -- the
+/// two-character command NAME itself ends in the literal '#' (like `.L#`
+/// line-numbering), which the generic `[A-Za-z]{1,3}` matcher below can't match, so
+/// it's handled directly first.
+private func parsePageDot(
+    _ cmd: [UInt8],
+    page: inout PageAccumulator,
+    producer: inout String?,
+    footnoteNumberStart: inout Int?,
+    endnoteNumberStart: inout Int?
+) {
+    if cmd.count >= 3 {
+        let head = String(decoding: [asciiUppercased(cmd[1]), asciiUppercased(cmd[2])], as: UTF8.self)
+        if head == "F#" || head == "E#" {
+            let isFootnote = head == "F#"
+            let alreadySet = isFootnote ? footnoteNumberStart != nil : endnoteNumberStart != nil
+            if !alreadySet, let (value, _) = parseDotNumber(Array(cmd[3...])) {
+                if isFootnote {
+                    footnoteNumberStart = Int(value)
+                } else {
+                    endnoteNumberStart = Int(value)
+                }
+            }
+            return
+        }
+    }
+    guard let (name, arg) = dotCommandNameAndArg(cmd) else { return }
+    let nameString = String(decoding: name.map(asciiUppercased), as: UTF8.self)
+    switch nameString {
+    case "PL":
+        guard page.plLines == nil, let (value, unit) = parseDotNumber(arg) else { return }
+        page.plLines = resolveLinesArg(value, unit)
+    case "MT":
+        guard page.mtLines == nil, let (value, unit) = parseDotNumber(arg) else { return }
+        page.mtLines = resolveLinesArg(value, unit)
+    case "MB":
+        guard page.mbLines == nil, let (value, unit) = parseDotNumber(arg) else { return }
+        page.mbLines = resolveLinesArg(value, unit)
+    case "PO":
+        guard page.poCols == nil, let (value, unit) = parseDotNumber(arg) else { return }
+        page.poCols = resolveColsArg(value, unit)
+    case "PT", "PSA", "PSB":
+        // WordTsar's own invented dot commands (its source calls them "not a Wordstar
+        // command"). A real WordStar file never contains these -- their presence IS
+        // the producer signal. `detection.variant` stays what it is (the ENCODING,
+        // still WS5+/7); this is provenance, not format.
+        producer = "wordtsar"
+    default:
+        break
+    }
 }

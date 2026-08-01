@@ -35,6 +35,36 @@ public let printCodes: [UInt8: PrintCode] = [
     0x1F: PrintCode(style: .bold, on: false),
 ]
 
+/// COMMENT.BUG: a documented WordStar bug (Sawyer, WS archive REF notes, 2013) -- a
+/// document containing `^ONC` comments, printed to disk with the ASCII/ASC256/PRVIEW/
+/// WS4 drivers (NOT XTRACT), has everything after the comment deleted from that line,
+/// may gain a stray `^T` (0x14), and the line ends with a bare LF (0x0A) instead of
+/// CR LF (0x0D 0x0A). This is damage WordStar itself introduced at print time in the
+/// 1990s -- not a parse failure -- so it's reported as a signature, not silently
+/// swallowed or mistaken for something this tool got wrong.
+///
+/// Detection is necessarily a heuristic (a bare-LF line ending is the documented
+/// signature, but a print stream that happens to use plain Unix line endings
+/// throughout would also match); callers should read the flag as "this signature is
+/// present", not "this file definitely hit the bug". Direct port of
+/// `_detect_comment_bug` (Python ctrl-kd 1.2.0, core.py). Runs on the already
+/// ^Z-truncated body, matching the Python call order.
+private func detectCommentBug(_ data: [UInt8]) -> CommentBug? {
+    var count = 0
+    var first: Int? = nil
+    var prev: UInt8? = nil    // Python's `prev = -1` sentinel: never equals 0x0D, so a
+                               // file that begins with a bare 0x0A is also flagged.
+    for (i, b) in data.enumerated() {
+        if b == 0x0A && prev != 0x0D {
+            count += 1
+            if first == nil { first = i }
+        }
+        prev = b
+    }
+    guard count > 0, let firstOffset = first else { return nil }
+    return CommentBug(count: count, firstOffset: firstOffset, strayControlT: data.contains(0x14))
+}
+
 public func parsePrintstream(
     _ data: [UInt8],
     codes: [UInt8: PrintCode] = printCodes
@@ -44,6 +74,7 @@ public func parsePrintstream(
     if let cut = data.firstIndex(of: 0x1a) {
         body = Array(data[..<cut])
     }
+    let commentBug = detectCommentBug(body)
 
     var active: Style = []
     var blocks: [Block] = []
@@ -104,6 +135,7 @@ public func parsePrintstream(
     return Document(
         blocks: blocks,
         detection: Detection(variant: .printstream),
-        columnar: true
+        columnar: true,
+        commentBug: commentBug
     )
 }

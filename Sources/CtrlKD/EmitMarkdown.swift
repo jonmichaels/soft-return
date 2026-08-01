@@ -8,11 +8,17 @@ private let markdownDelimiters: [(style: Style, delimiter: String)] = [
     (.strike, "~~"),
 ]
 
-/// Styles with no Markdown syntax, emitted as inline HTML instead (emit.py:81).
+/// Styles with no Markdown syntax, emitted as inline HTML instead (emit.py:81), in the order
+/// Python's `sorted(s.styles)` yields the style *codes* `sub, sup, u` — alphabetical, same as
+/// `EmitHTML.swift`'s `htmlTags` and `EmitRTF.swift`'s `rtfControlWords`. This was previously
+/// `underline, sup, sub` (the reverse), which put `<sub>` outermost instead of `<u>` for any
+/// span carrying more than one of these three styles — an internal inconsistency with this
+/// port's own HTML/RTF emitters as much as a Python parity bug, since both of those already
+/// sort alphabetically and matched Python already.
 private let markdownHTMLTags: [(style: Style, tag: String)] = [
-    (.underline, "u"),
-    (.sup, "sup"),
     (.sub, "sub"),
+    (.sup, "sup"),
+    (.underline, "u"),
 ]
 
 /// Characters Markdown would otherwise interpret (emit.py:90).
@@ -32,11 +38,13 @@ private let markdownEscapes: [Character] = ["*", "_", "#", "`", "[", "]"]
 /// deliberately the stable one. See the job-008 response: the Python side is the thing
 /// that needs fixing here, not this port.
 func markdownSpan(_ span: Span) -> String {
-    // emit.py:85-86 — footnote references short-circuit BEFORE any styling, which is why
-    // the {fnref, sup} span never reaches the ordering loop above.
-    if span.styles.contains(.fnref) {
-        return "[^\(span.text)]"
-    }
+    // NOTE: this function deliberately does NOT special-case `.fnref` (ctrl-kd 1.2.0 moved
+    // that decision up into `emitMarkdown`'s block loop, alongside note-kind selection and
+    // the out-of-range guard — see `markdownReferenceSpan` below). An `fnref` span that
+    // reaches here is exactly the "not actually a reference" case (task item 3): it falls
+    // straight through to the ordinary styling below, which is what turns a stray sentinel
+    // into `<sup>1</sup>` rather than a bogus `[^1]`.
+    //
     // emit.py:87-88 — whitespace-only spans pass through untouched and unescaped.
     if span.text.trimmed().isEmpty {
         return span.text
@@ -63,18 +71,55 @@ func markdownSpan(_ span: Span) -> String {
     return lead + core + trail
 }
 
-/// - Parameter options: accepted and ignored, as Python's `**_options` is (emit.py:108).
+/// The pandoc/GFM reference key inside `[^…]`: bare for a footnote, `e`-prefixed for an
+/// endnote, `a`-prefixed for an annotation (tag-based, not numeric), `c`-prefixed for a
+/// comment. Shared between the inline marker and the trailing definition, which use the
+/// exact same key — pandoc matches them by string equality.
+///
+/// `label` is run through `noteSlug` (emit.py's `_note_slug`) before the prefix is attached —
+/// footnote/endnote labels are already plain digits so this is a no-op there, but an
+/// annotation's tag can carry punctuation (WordStar puts no such restriction on a tag), and an
+/// unslugged tag containing `[`/`]` breaks the `[^…]` token it would be embedded in.
+private func markdownReferenceKey(_ kind: NoteKind, label: String) -> String {
+    let slug = noteSlug(label)
+    switch kind {
+    case .footnote: return slug
+    case .endnote: return "e" + slug
+    case .annotation: return "a" + slug
+    case .comment: return "c" + slug
+    }
+}
+
+/// One span, Markdown: an ordinary span goes through `markdownSpan`; a valid, included
+/// `fnref` becomes `[^key]` with no styling of its own; an excluded kind's reference
+/// vanishes; an invalid one (task item 3) falls back to `markdownSpan`'s ordinary styling,
+/// which is what turns a stray sentinel into `<sup>1</sup>`.
+private func markdownReferenceSpan(
+    _ span: Span, refNotes: [Note], doc: Document, options: EmitOptions
+) -> String {
+    guard span.styles.contains(.fnref) else { return markdownSpan(span) }
+    switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
+    case .note(let note, let label): return "[^\(markdownReferenceKey(note.kind, label: label))]"
+    case .excluded: return ""
+    case .invalid: return markdownSpan(span)
+    }
+}
+
+/// - Parameter options: read for `options.notes` (which kinds get an inline marker and a
+///   trailing definition); `options.title` is ignored, as in Python (emit.py:108).
 @Sendable
 public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
                          options: EmitOptions = EmitOptions()) -> String {
     // emit.py:104-107 — for a printed or columnar document the alignment IS the content, so
     // a fenced block is the honest representation. Delegates to emitText rather than
-    // reimplementing the line-for-line layout.
+    // reimplementing the line-for-line layout; `options` carries the same note selection
+    // through so a printed/columnar document honors it too.
     if mode == .printed || isPrinted(doc) {
-        let body = emitText(doc, mode: .printed)
+        let body = emitText(doc, mode: .printed, options: options)
         return "```\n" + body.trimmingTrailing("\n") + "\n```\n"
     }
 
+    let refNotes = inlineReferenceNotes(doc)
     var out: [String] = []
     for block in doc.blocks {
         if block.kind == .softpage {
@@ -85,12 +130,20 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
             continue
         }
         let lines = block.lines.map { line in
-            line.spans.map(markdownSpan).joined()
+            line.spans.map { markdownReferenceSpan($0, refNotes: refNotes, doc: doc, options: options) }.joined()
         }
         // emit.py:116 — hard line breaks inside a paragraph become a trailing backslash.
         var para = lines.joined(separator: "\\\n")
+        // emit.py:113-114 — `'#' * b.heading` in Python: for a negative `b.heading` that's an
+        // empty string (Python's string-repeat-by-negative rule), never an error. Swift's
+        // `String(repeating:count:)` traps on a negative count instead, so clamp to match —
+        // `max(0, …)` reproduces Python's "negative repeat is empty" rather than crashing.
+        // A negative heading isn't supposed to occur for real WordStar input, but
+        // `ParseWS.swift`'s `Int(raw[1]) - 0x30` can go negative on a garbage dot-command
+        // byte (e.g. a non-WordStar file `detect()` mistakenly accepted), and a converter
+        // must never crash on bytes its own detection let through.
         if block.heading != 0 && !para.trimmed().isEmpty {
-            para = String(repeating: "#", count: block.heading) + " " + para.trimmed()
+            para = String(repeating: "#", count: max(0, block.heading)) + " " + para.trimmed()
         }
         if !para.trimmed().isEmpty {
             out.append(para)
@@ -98,11 +151,18 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
     }
 
     var md = out.joined(separator: "\n\n")
-    if !doc.footnotes.isEmpty {
-        let notes = doc.footnotes.enumerated().map { i, note in
-            "[^\(i + 1)]: " + note.map(\.text).joined()
+
+    // A flat list of `[^key]: text` definitions, `noteKindOrder`'s kinds each contributing
+    // their notes in document order — no per-kind grouping or header (pandoc needs none),
+    // just one definition per line.
+    var defs: [String] = []
+    for kind in noteKindOrder where options.notes.contains(kind) {
+        for entry in noteListEntries(doc, kind: kind) {
+            defs.append("[^\(markdownReferenceKey(kind, label: entry.label))]: \(entry.note.text)")
         }
-        md += "\n\n" + notes.joined(separator: "\n")
+    }
+    if !defs.isEmpty {
+        md += "\n\n" + defs.joined(separator: "\n")
     }
     return md + "\n"
 }

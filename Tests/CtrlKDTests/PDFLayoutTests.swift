@@ -48,6 +48,68 @@ private func linesDoc(_ n: Int) -> Document {
     #expect(pages[1].first?.first?.text == "line61")
 }
 
+/// `linesDoc` with an explicit `PageGeometry`, exactly as `parseWS` produces for a real
+/// file — nil `.page` (the case the other tests above cover) only happens for a bare
+/// print-stream capture.
+private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
+    Document(
+        blocks: [Block(lines: (1...n).map { Line(spans: [Span(text: "line\($0)")]) })],
+        page: page
+    )
+}
+
+@Test func printedCapacityIsGeometricNotRawPL() {
+    // The bug this test proves fixed: `printedPageCapacity` used to read the file's raw
+    // declared `.pl` value (66 for a default Letter page) straight off as the line-break
+    // threshold. Python's `_printed_cap` (pdf.py:55-60) instead resolves the page height in
+    // POINTS from that geometry and derives lines from a fixed 72pt printed-mode margin --
+    // 60 lines for that same Letter page, not 66. A `.pl 66` file (the common case: every
+    // document that never sets `.pl` resolves to exactly this) must therefore still break
+    // at 60, matching the untyped-geometry case `printedPaginatesAtSixtyLines` already
+    // covers, even though this document's `page.plLines` is explicitly 66.
+    let letter = PageGeometry(
+        plLines: 66, heightIn: 11.0, sizeName: "Letter", sizeSource: .file,
+        mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
+        poCols: 0, poSource: .default
+    )
+    #expect(docToPagelines(linesDoc(60, page: letter), printed: true).count == 1)
+    let pages = docToPagelines(linesDoc(61, page: letter), printed: true)
+    #expect(pages.count == 2)
+    #expect(pages[0].count == 60)
+    #expect(pages[1].count == 1)
+    #expect(pages[1].first?.first?.text == "line61")
+
+    // A second, differently-sized page proves the geometry is actually being READ (not just
+    // hardcoded back to 60): Legal, `.pl 84` -> height 14in -> (1008 - 72) / 12 = 78 lines,
+    // not the raw 84 the pre-fix code would have used.
+    let legal = PageGeometry(
+        plLines: 84, heightIn: 14.0, sizeName: "Legal", sizeSource: .file,
+        mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
+        poCols: 0, poSource: .default
+    )
+    #expect(docToPagelines(linesDoc(78, page: legal), printed: true).count == 1)
+    let legalPages = docToPagelines(linesDoc(79, page: legal), printed: true)
+    #expect(legalPages.count == 2)
+    #expect(legalPages[0].count == 78)
+    #expect(legalPages[1].count == 1)
+}
+
+@Test func printedCapacityFloorsOnDegenerateGeometry() {
+    // A vanishingly small or absent page can never send the capacity below
+    // `footnoteFloor + 1` (4) -- Python's own floor (pdf.py:53,60). Exercised at the
+    // PageGeometry boundary rather than by reaching into the private floor constant.
+    let tiny = PageGeometry(
+        plLines: 1, heightIn: 0.01, sizeName: "Custom", sizeSource: .file,
+        mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
+        poCols: 0, poSource: .default
+    )
+    #expect(docToPagelines(linesDoc(4, page: tiny), printed: true).count == 1)
+    let pages = docToPagelines(linesDoc(5, page: tiny), printed: true)
+    #expect(pages.count == 2)
+    #expect(pages[0].count == 4)
+    #expect(pages[1].count == 1)
+}
+
 // MARK: - Page breaks
 
 @Test func consecutivePageBreaksLeaveABlankPage() {

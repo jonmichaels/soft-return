@@ -180,6 +180,36 @@ import Testing
     #expect(emitRTF(doc).contains("\n" + #"\page "# + "\n}\n"))
 }
 
+@Test func htmlAnnotationTagWithPunctuationIsSluggedInIdsButRawInDisplay() {
+    // Same underlying bug as markdownAnnotationTagWithPunctuationIsSlugged: an unslugged tag
+    // lands unescaped inside an `id`/`href` attribute, where `[`, `]`, `?` are not valid id
+    // characters — HTML-escaping (meant for text content) does nothing to protect an
+    // id/URL-fragment's own syntax. `_html_ids` slugs the label before it becomes part of an
+    // id; the visible link text and `data-note-tag` keep the RAW tag, merely HTML-escaped.
+    // Verified against the Python reference for this exact input: the reference anchor is
+    // `id="anrefHow" href="#anHow"`, its list item is
+    // `id="anHow" data-note-kind="annotation" data-note-tag="[How?]"`, and its backlink is
+    // `href="#anrefHow"` — never `an[How?]`/`anref[How?]` anywhere.
+    let doc = Document(
+        blocks: [Block(lines: [Line(spans: [
+            Span(text: "Ref "),
+            Span(text: "1", styles: .fnref),
+        ])])],
+        notes: [Note(kind: .annotation, text: "Annotation body.", tag: "[How?]")]
+    )
+    let html = emitHTML(doc)
+    #expect(html.contains(
+        "<p>Ref <sup><a id=\"anrefHow\" href=\"#anHow\" role=\"doc-noteref\">[How?]</a></sup></p>"
+    ))
+    #expect(html.contains(
+        "<li id=\"anHow\" data-note-kind=\"annotation\" data-note-tag=\"[How?]\">" +
+        "Annotation body. <a href=\"#anrefHow\" role=\"doc-backlink\">\u{21A9}</a></li>"
+    ))
+    #expect(!html.contains("id=\"an[How?]\""))
+    #expect(!html.contains("id=\"anref[How?]\""))
+    #expect(!html.contains("href=\"#an[How?]\""))
+}
+
 @Test func htmlSkipsAnEmptyBlockEntirely() {
     // Same document, HTML side: the `<p>` is suppressed rather than emitted empty.
     let doc = Document(blocks: [

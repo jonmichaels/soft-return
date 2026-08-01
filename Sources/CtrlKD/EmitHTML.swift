@@ -10,6 +10,8 @@ body{max-width:42rem;margin:2rem auto;padding:0 1rem;
 font:17px/1.6 Georgia,serif;color:#222}p{margin:0 0 1em}
 pre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}
 hr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}
+section[role=doc-endnotes]{margin-top:2rem}
+section[role=doc-endnotes] h2{font-size:1.1rem}
 @media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}
 hr.pb{border-top-color:#444}}
 """
@@ -66,18 +68,100 @@ func htmlSpan(_ span: Span, keepWS: Bool = false) -> String {
     return text
 }
 
+/// The two-character id prefix DPUB-ARIA rendering uses for one kind: `fn`/`en`/`an`/`cm`.
+/// A reference anchor's id is `{prefix}ref{label}`, its note-list destination's id is
+/// `{prefix}{label}`, and the backlink from destination to reference points at the first.
+private func htmlIDPrefix(_ kind: NoteKind) -> String {
+    switch kind {
+    case .footnote: return "fn"
+    case .endnote: return "en"
+    case .annotation: return "an"
+    case .comment: return "cm"
+    }
+}
+
+/// `(ref_id, target_id)` for one note — `"fnref1"`/`"fn1"`, `"enref1"`/`"en1"`,
+/// `"anrefAC1"`/`"anAC1"` — kind-prefixed so a footnote #1 and an endnote #1 (genuinely
+/// different notes) never collide. Direct port of `_html_ids` (emit.py:354-360).
+///
+/// `label` goes through `noteSlug`, NOT `htmlEscape`: an id/URL fragment has its own syntax
+/// that HTML-escaping (meant for text content — `&amp;`, `&lt;`, …) does nothing to protect —
+/// an annotation tag containing `[`, `]`, `?`, or whitespace would otherwise land unescaped
+/// inside `id="…"`/`href="#…"`, which is what actually broke before this fix (not merely a
+/// parity mismatch: a malformed id/fragment either way).
+private func htmlIDs(_ kind: NoteKind, label: String) -> (ref: String, target: String) {
+    let prefix = htmlIDPrefix(kind)
+    let slug = noteSlug(label)
+    return (ref: prefix + "ref" + slug, target: prefix + slug)
+}
+
+/// A valid, included reference: `<sup><a id="…ref…" href="#…" role="doc-noteref">label</a></sup>`.
+/// Per task spec, `doc-noteref`/`doc-backlink` are the DPUB-ARIA roles used throughout —
+/// `doc-footnote`/`doc-endnote` deliberately do not appear (the former is scoped to
+/// in-body notes, the latter deprecated for a listitem role; see `htmlNoteListItem` below).
+///
+/// The id/href use the slugged form (`htmlIDs`); the visible link text stays the raw,
+/// HTML-escaped label — display text and identifier are sanitized for different purposes and
+/// must not share one sanitizer.
+private func htmlReferenceAnchor(_ note: Note, label: String) -> String {
+    let ids = htmlIDs(note.kind, label: label)
+    let escaped = htmlEscape(label)
+    return "<sup><a id=\"\(ids.ref)\" href=\"#\(ids.target)\" role=\"doc-noteref\">\(escaped)</a></sup>"
+}
+
+/// One span, HTML: an ordinary span goes through `htmlSpan` unchanged; a valid, included
+/// `fnref` becomes the anchor above; an excluded kind's reference vanishes entirely; an
+/// invalid one (task item 3 — a stray `0x07` with no note behind it) falls back to
+/// `htmlSpan`'s ordinary styling, which already renders it as bare digits inside whatever
+/// `sup` it carries (see `htmlSpanFnrefContributesNoTag`).
+private func htmlBodySpan(
+    _ span: Span, keepWS: Bool = false, refNotes: [Note], doc: Document, options: EmitOptions
+) -> String {
+    guard span.styles.contains(.fnref) else { return htmlSpan(span, keepWS: keepWS) }
+    switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
+    case .note(let note, let label): return htmlReferenceAnchor(note, label: label)
+    case .excluded: return ""
+    case .invalid: return htmlSpan(span, keepWS: keepWS)
+    }
+}
+
+/// One entry in a kind's `<ol>`: the destination id, `data-note-kind`, `data-note-tag` when
+/// the note actually carries one, the (escaped, plain-text) note body, and — every kind but
+/// comment, which is never referenced inline and so has nothing to link back to — a backlink.
+///
+/// `data-note-tag` mirrors Python's own condition (emit.py:394): present when `note.tag` is
+/// non-nil AND non-empty, not merely "this note's kind is `.annotation`" — the two happen to
+/// coincide for a real annotation with a tag, but matching Python's actual condition (rather
+/// than the kind) is what keeps this right if that ever isn't so. Its value is the RAW tag,
+/// HTML-escaped for display — not the slug used for the id below, which exists only to keep
+/// `id`/`href` syntactically valid and was never meant to be shown.
+private func htmlNoteListItem(_ entry: NoteListEntry) -> String {
+    let kind = entry.note.kind
+    let ids = htmlIDs(kind, label: entry.label)
+    var li = "<li id=\"\(ids.target)\" data-note-kind=\"\(kind.rawValue)\""
+    if let tag = entry.note.tag, !tag.isEmpty {
+        li += " data-note-tag=\"\(htmlEscape(tag))\""
+    }
+    li += ">" + htmlEscape(entry.note.text)
+    if kind != .comment {
+        li += " <a href=\"#\(ids.ref)\" role=\"doc-backlink\">\u{21A9}</a>"
+    }
+    return li + "</li>"
+}
+
 /// Render a whole standalone page: doctype, head, the CSS above, then one element per
 /// block. emit.py:156-190.
 ///
-/// - Parameter options: `options.title` goes in `<title>`, escaped. Python defaults it to
-///   `''`, which yields an empty `<title></title>` rather than omitting the tag — kept,
-///   because the vectors pin it. This is the only built-in emitter that reads an option at
-///   all; the other three take `EmitOptions` and ignore it (emit.py:156 vs 58/108/208).
+/// - Parameter options: `options.title` goes in `<title>`, escaped, as in Python
+///   (emit.py:156 takes `title=''`, its three siblings do not). `options.notes` decides
+///   which note kinds get an inline reference and a trailing `doc-endnotes` section — see
+///   `htmlBodySpan`/`htmlNoteListItem`.
 @Sendable
 public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                      options: EmitOptions = EmitOptions()) -> String {
     let title = options.title
     let printed = mode == .printed || isPrinted(doc)
+    let refNotes = inlineReferenceNotes(doc)
     var parts: [String] = []
 
     for block in doc.blocks {
@@ -95,7 +179,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
         // renders as `<pre>`.
         if block.heading != 0 {
             let text = block.lines
-                .map { line in line.spans.map { htmlSpan($0) }.joined() }
+                .map { line in line.spans.map { htmlBodySpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
                 .joined(separator: " ")             // heading lines read as one phrase
                 .trimmed()
             if !text.isEmpty {
@@ -105,13 +189,13 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
         }
         if printed {
             let body = block.lines
-                .map { line in line.spans.map { htmlSpan($0, keepWS: true) }.joined() }
+                .map { line in line.spans.map { htmlBodySpan($0, keepWS: true, refNotes: refNotes, doc: doc, options: options) }.joined() }
                 .joined(separator: "\n")
             if !body.trimmed().isEmpty {
                 parts.append("<pre>\(body)</pre>")
             }
         } else {
-            let lines = block.lines.map { line in line.spans.map { htmlSpan($0) }.joined() }
+            let lines = block.lines.map { line in line.spans.map { htmlBodySpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
             // emit.py:180 — the author's own line breaks inside a paragraph, kept as <br>.
             let para = lines.joined(separator: "<br>\n")
             if !para.trimmed().isEmpty {
@@ -120,13 +204,20 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
         }
     }
 
-    if !doc.footnotes.isEmpty {
-        // Plain text only — a footnote's spans keep their styles in the IR, but Python
-        // escapes and drops them here (emit.py:184-185).
-        let notes = doc.footnotes
-            .map { note in "<li>" + note.map { htmlEscape($0.text) }.joined() + "</li>" }
-            .joined()
-        parts.append("<hr><ol class=\"footnotes\">\(notes)</ol>")
+    // One `doc-endnotes` section per included, non-empty kind, `noteKindOrder`'s order —
+    // a plain `<hr>` first, only if at least one such section exists.
+    let sections: [String] = noteKindOrder.compactMap { kind in
+        guard options.notes.contains(kind) else { return nil }
+        let entries = noteListEntries(doc, kind: kind)
+        guard !entries.isEmpty else { return nil }
+        let labelID = "\(kind.rawValue)s-label"
+        let items = entries.map(htmlNoteListItem).joined()
+        return "<section role=\"doc-endnotes\" aria-labelledby=\"\(labelID)\">"
+            + "<h2 id=\"\(labelID)\">\(noteSectionTitle(kind))</h2><ol>\(items)</ol></section>"
+    }
+    if !sections.isEmpty {
+        parts.append("<hr>")
+        parts.append(contentsOf: sections)
     }
 
     // Built in steps rather than one `+` chain: long string concatenations are the other

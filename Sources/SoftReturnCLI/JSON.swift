@@ -13,6 +13,14 @@
 public enum JSONValue: Hashable, Sendable {
     case string(String)
     case int(Int)
+    /// Page geometry (ctrl-kd 1.2.0's `--diagnose` "page" field): `.pl`/`.po`/`.mt`/`.mb`
+    /// resolve to `Double` (a unit-suffixed dot-command argument like `.mt 1.5"` converts
+    /// to a fractional line count), so the JSON writer needs a real floating-point case
+    /// rather than truncating everything to `Int`. Swift's default `Double` description
+    /// already prints a trailing `.0` for whole values (`"\(66.0)"` == `"66.0"`), matching
+    /// Python's `repr`/`json.dumps` closely enough for the documented EQUIVALENT-not-
+    /// byte-identical output this type promises elsewhere.
+    case double(Double)
     case bool(Bool)
     case null
     case array([JSONValue])
@@ -38,6 +46,8 @@ public enum JSONValue: Hashable, Sendable {
             return JSONValue.quote(s)
         case .int(let i):
             return String(i)
+        case .double(let d):
+            return String(d)
         case .bool(let b):
             return b ? "true" : "false"
         case .null:
