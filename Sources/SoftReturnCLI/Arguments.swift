@@ -10,16 +10,18 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 1.1.0 adds the note-selection flags and the expanded
-/// --diagnose fields; 1.0.0 was the first CLI release.
-public let srVersion = "1.1.0"
+/// CLI's user-visible contract. 1.2.0 adds WordStar's own page-geometry model (printed
+/// capacity/top/lead from `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose);
+/// 1.1.0 added the note-selection flags and the expanded --diagnose fields; 1.0.0 was the
+/// first CLI release.
+public let srVersion = "1.2.0"
 
 /// The `ctrl-kd` release this port is verified against. A constant, updated by hand when a
 /// sync job pins the port to a new Python release — it is a claim about which reference the
 /// vectors came from, so it must never be derived or guessed.
-public let ctrlKDParity = "1.2.0"
+public let ctrlKDParity = "1.3.0"
 
-/// `sr 1.1.0 (ctrl-kd parity 1.2.0)`.
+/// `sr 1.2.0 (ctrl-kd parity 1.3.0)`.
 public var versionLine: String { "sr \(srVersion) (ctrl-kd parity \(ctrlKDParity))" }
 
 /// Everything the run needs, after parsing and validation.

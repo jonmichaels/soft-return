@@ -823,6 +823,14 @@ private func assertPageLine(_ got: PageLine, _ want: [SpanVector], label: String
 @Test func pdfConstantsMatchPython() throws {
     // Taken from the vectors rather than recomputed — MAX_COLS in particular, whose Python
     // expression only lands on 65 because `int()` truncates 65.00000000000001.
+    //
+    // `want` still carries 10 entries including `LINES_PRINTED` — this file was
+    // machine-generated from Python 1.2.0, before ctrl-kd 1.3.0 deleted that constant
+    // (`pdf.py`'s own `LINES_PRINTED` -- printed capacity is per-document now, from
+    // WordStar's own vertical model; see `PDFLayout.swift`'s `printedCap`). Regenerating
+    // this vector file to drop the now-nonexistent Python constant would erase real
+    // ground truth for the nine that remain, so it stays as captured; the Swift side just
+    // stops asserting on the one entry with no live counterpart to check against.
     let want = try loadJob011Vectors().constants
     #expect(want.count == 10)
     #expect(PDFMetrics.pageWidth == want["PAGE_W"])
@@ -833,7 +841,6 @@ private func assertPageLine(_ got: PageLine, _ want: [SpanVector], label: String
     #expect(PDFMetrics.topModern == want["TOP_MODERN"])
     #expect(PDFMetrics.topPrinted == want["TOP_PRINTED"])
     #expect(PDFMetrics.linesModern == want["LINES_MODERN"])
-    #expect(PDFMetrics.linesPrinted == want["LINES_PRINTED"])
     #expect(PDFMetrics.maxCols == want["MAX_COLS"])
 }
 

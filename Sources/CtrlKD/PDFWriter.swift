@@ -81,32 +81,51 @@ private func replacingEach(_ bytes: [UInt8], _ needle: UInt8, with replacement: 
 }
 
 /// A stroked horizontal rule — the underline and strike-through. `0.6 w` sets the pen width;
-/// `m`/`l`/`S` move, line, and stroke.
-private func rule(xFrom: Int, xTo: Int, y: Int) -> [UInt8] {
+/// `m`/`l`/`S` move, line, and stroke. `x` stays the exact-integer-tenths convention (never
+/// touched by the geometry work); `y` is a real `Double` point value now — see `pageStream`'s
+/// doc comment for why.
+private func rule(xFrom: Int, xTo: Int, y: Double) -> [UInt8] {
     let x1 = fixedOneDecimal(tenths: xFrom)
     let x2 = fixedOneDecimal(tenths: xTo)
-    let yy = fixedOneDecimal(tenths: y)
+    let yy = fixedOneDecimalDouble(y)
     return Array("0.6 w \(x1) \(yy) m \(x2) \(yy) l S".utf8)
 }
 
 /// One page's content stream. Port of `_page_stream` (pdf.py:131-152).
 ///
-/// - Parameter top: the top margin in points — `topModern` or `topPrinted`. A print stream
-///   carries its own top-margin blank lines, so it gets the smaller paper margin.
+/// - Parameter top: the top margin in points — `topModern`, or `printedTop(doc)` for Printed
+///   mode (PDFLayout.swift; a print stream with no page geometry gets the fixed `topPrinted`
+///   from inside that function, same as before ctrl-kd 1.3.0).
 /// - Parameter pageHeight: the resolved page height in points (`resolvedPageHeight`,
 ///   PDFLayout.swift) — `PDFMetrics.pageHeight` (Letter, 792) unless the document is Printed
 ///   mode with its own `.pl`-derived geometry. Defaulted so every existing caller that only
 ///   ever meant a plain Letter page (every test in this file, and the byte vectors) is
 ///   unaffected; `emitPDF` is the only caller that ever passes something else.
+/// - Parameter lead: baseline-to-baseline distance in points — `PDFMetrics.lead` (12) for
+///   Modern mode and print streams, or `printedLead(doc)` for a Printed-mode WS document
+///   (PDFLayout.swift; ctrl-kd 1.3.0's `.lh`-derived figure). Defaulted to the fixed lead so
+///   every pre-1.3.0 caller is unaffected.
 ///
 /// Text is placed absolutely, one `BT`/`ET` block per styled run: PDF's own text-positioning
 /// operators track a line matrix that would have to be reset anyway, and Courier's fixed
 /// advance means the x for every run is known here without asking a font for metrics.
-func pageStream(_ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHeight) -> [UInt8] {
+///
+/// CRITICAL FLOAT DETAIL (ctrl-kd 1.3.0): `x` stays in the exact-integer-tenths convention
+/// this file has always used — untouched by the geometry work, and still byte-parity-proven.
+/// `y`, though, is now a real `Double` in POINTS (not tenths), because `lead` itself can be
+/// irrational-at-48ths (`.lh 1C` -> `28.346456692913385`pt): Python accumulates `y` as a
+/// float and lets `'%.1f'` round the error away every line, and this does the same rather
+/// than trying to force a non-tenth lead into the tenths convention. The DEFAULT lead (12.0,
+/// accumulated from an integer start) is exact at every step, so every document that never
+/// sets `.lh` still produces byte-identical output to before this change.
+func pageStream(
+    _ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHeight,
+    lead: Double = Double(PDFMetrics.lead)
+) -> [UInt8] {
     var ops: [[UInt8]] = []
     // The baseline of the first line: down from the top of the paper by the margin, then by
     // one line's height, because `Td` positions a baseline and not a line's top edge.
-    var y = (pageHeight - top - PDFMetrics.size) * 10
+    var y = Double(pageHeight - top - PDFMetrics.size)
     for line in pagelines {
         var x = PDFMetrics.margin * 10
         // Coalesced FIRST (pdf.py:136): the wrapper leaves one segment per word and per
@@ -126,7 +145,7 @@ func pageStream(_ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHe
             let font = pdfFont(bold: styles.contains(.bold), italic: styles.contains(.italic))
 
             var op = Array("BT /\(font) \(size) Tf \(rise) Ts ".utf8)
-            op += Array("\(fixedOneDecimal(tenths: x)) \(fixedOneDecimal(tenths: y)) Td (".utf8)
+            op += Array("\(fixedOneDecimal(tenths: x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
             op += esc(span.text)
             op += Array(") Tj ET".utf8)
             ops.append(op)
@@ -138,14 +157,14 @@ func pageStream(_ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHe
             // both with `text.strip()` — non-empty after stripping, i.e. the run has ink.
             let hasInk = span.text.contains { !$0.isWhitespace }
             if styles.contains(.underline), hasInk {
-                ops.append(rule(xFrom: x, xTo: x + w, y: y - 15))       // 1.5pt below
+                ops.append(rule(xFrom: x, xTo: x + w, y: y - 1.5))      // 1.5pt below
             }
             if styles.contains(.strike), hasInk {
-                ops.append(rule(xFrom: x, xTo: x + w, y: y + 30))       // 3pt above
+                ops.append(rule(xFrom: x, xTo: x + w, y: y + 3))        // 3pt above
             }
             x += w
         }
-        y -= PDFMetrics.lead * 10
+        y -= lead
     }
     return joined(ops, separator: 0x0A)                                 // Python's b'\n'.join
 }
@@ -174,11 +193,17 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> [UInt8] {
     let printed = mode == .printed || isPrinted(doc)
     let pages = docToPagelines(doc, printed: printed)
-    let top = printed ? PDFMetrics.topPrinted : PDFMetrics.topModern
-    // The SAME figure `printedPageCapacity` derives the line count from (PDFLayout.swift) —
-    // Python computes it once in `emit_pdf` and uses it for both the MediaBox and the
-    // content stream's Y-origin (pdf.py:449,476-479). A page that paginates at a custom
-    // `.pl`'s resolved capacity but still declares a Letter-size MediaBox would be internally
+    // ctrl-kd 1.3.0: both figures are per-document in Printed mode now — `printedTop`/
+    // `printedLead` (PDFLayout.swift) read the file's own `.mt`/`.lh`, falling back to the
+    // same fixed `topPrinted`/`lead` a print stream (no page geometry) always used. Modern
+    // mode is untouched: it never faithfulness-matches the original page, so it keeps the
+    // fixed margin and lead regardless of what the document's geometry says.
+    let top = printed ? printedTop(doc) : PDFMetrics.topModern
+    let lead = printed ? printedLead(doc) : Double(PDFMetrics.lead)
+    // The SAME figure `printedCap` derives the line count from (PDFLayout.swift) — Python
+    // computes it once in `emit_pdf` and uses it for both the MediaBox and the content
+    // stream's Y-origin (pdf.py:449,476-479). A page that paginates at a custom `.pl`'s
+    // resolved capacity but still declares a Letter-size MediaBox would be internally
     // inconsistent: the right number of lines, drawn on the wrong-size sheet of paper.
     let pageHeight = resolvedPageHeight(doc, printed: printed)
 
@@ -216,7 +241,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         \(pageHeight)] /Resources << /Font << \(fontDict) >> >> \
         /Contents \(contentNums[i]) 0 R >>
         """.utf8)))
-        let stream = pageStream(page, top: top, pageHeight: pageHeight)
+        let stream = pageStream(page, top: top, pageHeight: pageHeight, lead: lead)
         var body = Array("<< /Length \(stream.count) >>\nstream\n".utf8)
         body += stream
         body += Array("\nendstream".utf8)

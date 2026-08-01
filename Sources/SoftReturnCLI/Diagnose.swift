@@ -106,6 +106,19 @@ public func diagnose(path: String, data: [UInt8]) -> JSONValue {
                 "mb_source": .string(page.mbSource.rawValue),
                 "po_cols": .double(page.poCols),
                 "po_source": .string(page.poSource.rawValue),
+                // ctrl-kd 1.3.0: WordStar's own vertical model (`.hm`/`.fm` recorded for
+                // diagnosis only, never reserving space; `.lh`/`.ls` per `PageGeometry`'s
+                // doc comment) plus the one derived figure a caller actually needs —
+                // printed text lines per page, from the rest of this same object.
+                "hm_lines": .double(page.hmLines),
+                "hm_source": .string(page.hmSource.rawValue),
+                "fm_lines": .double(page.fmLines),
+                "fm_source": .string(page.fmSource.rawValue),
+                "lh_48": .double(page.lh48),
+                "lh_source": .string(page.lhSource.rawValue),
+                "ls": .double(page.ls),
+                "ls_source": .string(page.lsSource.rawValue),
+                "text_lines": .int(page.textLines),
             ])
         }
 

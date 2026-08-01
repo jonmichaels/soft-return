@@ -246,18 +246,38 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // geometry is a dot-command concern, not a symmetric-block (ws5+-only) one.
     let plLines = page.plLines ?? defaultPlLines
     let (heightIn, sizeName) = resolvePageSize(plLines)
-    let pageGeometry = PageGeometry(
+    let mtLines = page.mtLines ?? defaultMtLines
+    let mbLines = page.mbLines ?? defaultMbLines
+    let lh48 = page.lh48 ?? defaultLh48
+    var pageGeometry = PageGeometry(
         plLines: plLines,
         heightIn: heightIn,
         sizeName: sizeName,
         sizeSource: page.plLines != nil ? .file : .default,
-        mtLines: page.mtLines ?? defaultMtLines,
+        mtLines: mtLines,
         mtSource: page.mtLines != nil ? .file : .default,
-        mbLines: page.mbLines ?? defaultMbLines,
+        mbLines: mbLines,
         mbSource: page.mbLines != nil ? .file : .default,
         poCols: page.poCols ?? defaultPoCols,
-        poSource: page.poCols != nil ? .file : .default
+        poSource: page.poCols != nil ? .file : .default,
+        hmLines: page.hmLines ?? defaultHmLines,
+        hmSource: page.hmLines != nil ? .file : .default,
+        fmLines: page.fmLines ?? defaultFmLines,
+        fmSource: page.fmLines != nil ? .file : .default,
+        lh48: lh48,
+        lhSource: page.lh48 != nil ? .file : .default,
+        ls: page.ls ?? defaultLs,
+        lsSource: page.ls != nil ? .file : .default,
+        // Placeholder: the real figure needs the rest of the struct assembled first
+        // (mirrors Python setting `doc.meta['page']['text_lines']` as a second step,
+        // after building the page dict) — overwritten immediately below.
+        textLines: 1
     )
+    // The one derived figure consumers actually need: printed text lines per page, from
+    // WordStar's own vertical model (see `textLinesPerPage` for the formula and the
+    // deliberate exclusions). Defaults -> 55, NOT the 60 a naive 1in-margin Letter
+    // computation gives.
+    pageGeometry.textLines = textLinesPerPage(pl: plLines, mt: mtLines, mb: mbLines, lh48: lh48)
 
     return Document(
         blocks: blocks,
@@ -301,31 +321,44 @@ private func asciiLowercased(_ b: UInt8) -> UInt8 {
 
 // ------------------------------------------------------------ page geometry
 //
-// .pl (page length), .po (page offset), .mt (top margin), .mb (bottom margin) --
-// WordStar 7.0 file format spec (WordStar International, 1992). The trap: a
-// UNIT-LESS numeric argument to .pl/.mt/.mb is LINES, and to .po is print COLUMNS --
-// never inches. (The only other modern implementation, WordTsar, admits via its own
-// @todo that it falls back to inches when no unit is given; that is exactly the bug
-// this avoids.) WordStar 5.0+ also allows an explicit unit suffix on these arguments --
-// '"'/I/IN for inches, C/CM for centimetres, P/PM for points, case-insensitive -- which
-// this DOES convert, since at that point the file is telling us the unit rather than
-// leaving it to the trap-default.
+// .pl (page length), .po (page offset), .mt (top margin), .mb (bottom margin), .hm
+// (header margin), .fm (footer margin) -- WordStar 7.0 file format spec (WordStar
+// International, 1992). The trap: a UNIT-LESS numeric argument to .pl/.mt/.mb/.hm/.fm
+// is LINES, and to .po is print COLUMNS -- never inches. (The only other modern
+// implementation, WordTsar, admits via its own @todo that it falls back to inches when
+// no unit is given; that is exactly the bug this avoids.) WordStar 5.0+ also allows an
+// explicit unit suffix on these arguments -- '"'/I/IN for inches, C/CM for
+// centimetres, P/PM for points, case-insensitive -- which this DOES convert, since at
+// that point the file is telling us the unit rather than leaving it to the
+// trap-default.
+//
+// .lh (line height) is its OWN unit-less default: 1/48in, not lines -- see
+// `resolveLhArg`. .ls (line spacing) is a small integer count (1-9), never a measure
+// at all -- see `resolveLsArg`.
 //
 // Everything below assumes the fixed 6 LPI / 10 CPI baseline this project already
-// uses elsewhere (PDFLayout's Courier metrics; margin_estimate's WS4 default).
-// WordStar itself lets LPI/CPI vary (.lh, .cw), but tracking those per-line is well
-// beyond what a page-geometry pass needs. Direct port of core.py's page-geometry
-// section (Python ctrl-kd 1.2.0).
+// uses elsewhere (PDFLayout's Courier metrics; margin_estimate's WS4 default) for
+// every command except `.lh` itself, which is what lets a document override that
+// baseline's vertical half (see `textLinesPerPage`). WordStar itself lets CPI vary too
+// (.cw), but tracking that is well beyond what a page-geometry pass needs. Direct port
+// of core.py's page-geometry section (Python ctrl-kd 1.3.0; the vertical model --
+// `.hm`/`.fm`/`.lh`/`.ls` and the derived `text_lines` -- shipped in 1.3.0).
 
 /// Accumulates the FIRST occurrence of each page dot command seen so far — WordStar
 /// dot commands are stateful and could recur mid-document, but one resolved answer per
 /// document is what a consumer needs (matches `_parse_page_dot`'s "first occurrence
-/// wins" rule).
+/// wins" rule). `hmLines`/`fmLines`/`lh48`/`ls` (ctrl-kd 1.3.0) follow the same rule;
+/// a REJECTED argument (see `resolveLhArg`/`resolveLsArg`) leaves its field `nil` here,
+/// exactly as if the dot command had never been seen, so the default stands.
 private struct PageAccumulator {
     var plLines: Double?
     var mtLines: Double?
     var mbLines: Double?
     var poCols: Double?
+    var hmLines: Double?
+    var fmLines: Double?
+    var lh48: Double?
+    var ls: Double?
 }
 
 /// Named page sizes at 6 LPI (WordStar 7.0 file format spec: ".PL ... assuming 6
@@ -347,6 +380,10 @@ private let defaultMbLines = 8.0    // spec: ".MB ... The default value is 8 lin
 private let defaultPoCols = 0.0     // no default is stated in the spec for .po; 0 (flush
                                     // with the paper edge) is the least presumptuous
                                     // reading rather than a remembered/guessed figure.
+private let defaultHmLines = 2.0    // spec: ".HM ... Default is 2." (header sits INSIDE .mt)
+private let defaultFmLines = 2.0    // spec: ".FM ... Default is 2." (footer sits INSIDE .mb)
+private let defaultLh48 = 8.0       // spec: ".LH ... The default is 8/48 or 6 lines per inch."
+private let defaultLs = 1.0         // single spacing (WS7 manual, "Line Spacing")
 
 private func isASCIILetter(_ b: UInt8) -> Bool {
     (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
@@ -459,6 +496,55 @@ private func resolveColsArg(_ value: Double, _ unit: [UInt8]?) -> Double {
     return inches * 10.0
 }
 
+/// `.lh` argument -> line height in 1/48in units. Unit-less IS 48ths (WS7 manual: "You
+/// can also type the dot command in 48ths of an inch. For example, .lh 8 is 8/48 inch,
+/// or the standard 6 lines per inch"); an explicit unit suffix converts. `.lh a`
+/// (auto-leading) never reaches here — the numeric matcher (`parseDotNumber`) won't
+/// match it, so it stays default + verbatim (in `Document.dotCommands`). A non-positive
+/// height is meaningless: rejected (`nil`), default stands. Direct port of
+/// `_resolve_lh_arg`.
+private func resolveLhArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
+    let resolved = dotArgInches(value, unit).map { $0 * 48.0 } ?? value
+    return resolved > 0 ? resolved : nil
+}
+
+/// `.ls` argument -> line spacing. "A line spacing of between 1 and 9" (WS7 file format
+/// spec); anything else is junk, rejected (`nil`). Any unit suffix is likewise junk —
+/// spacing is a count, not a measure. Direct port of `_resolve_ls_arg`.
+private func resolveLsArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
+    guard unit == nil, value >= 1, value <= 9 else { return nil }
+    return value
+}
+
+/// Printed text lines per page — WordStar's own vertical model (WS7 manual, "Page
+/// Layout"): "The top and bottom margins define the space between the text and the top
+/// and bottom of the paper. On an 8.5 x 11-inch page, if the top margin is .33 inches
+/// and the bottom margin is 1.33 inches, the space left for text is 9.33 inches." Lines
+/// available is that text height divided by the line height (`.lh`, 1/48in units):
+/// "Changing the line height affects the number of lines that can be printed on a page."
+/// WordStar's own defaults (`.pl 66 .mt 3 .mb 8 .lh 8`) give 55.
+///
+/// Deliberately NOT in the formula:
+/// - `.hm`/`.fm` — the header prints WITHIN `.mt` and the footer WITHIN `.mb` (".MT ...
+///   The header is printed within this margin"; ".MB ... The footer or page number is
+///   printed within this margin"), so they position header/footer inside space already
+///   subtracted, never reserve more.
+/// - `.ls` — line-spacing blanks are literal lines in the file ("when you use line
+///   spacing, the blank lines become part of the file", WS7 manual, "Line Spacing"), so
+///   the body text already carries them; dividing capacity by `.ls` would double-count.
+///
+/// Unit-less `.mt`/`.mb` are lines at the fixed 6 LPI baseline (the module-note
+/// assumption); `.lh` at parse time is resolved once per document (first occurrence
+/// wins), not tracked per-line. Non-finite inputs (a malformed or absurd dot-command
+/// argument that slipped past the earlier `isFinite` guard some other way) guard to 1
+/// rather than propagating NaN/infinity into pagination. Direct port of
+/// `_text_lines_per_page`.
+func textLinesPerPage(pl: Double, mt: Double, mb: Double, lh48: Double) -> Int {
+    let usable = pl - mt - mb                          // lines at 6 LPI
+    guard usable.isFinite, lh48.isFinite, lh48 > 0 else { return 1 }
+    return max(1, Int(usable * 8.0 / lh48))
+}
+
 /// `pl_lines` -> (height_in, size_name). Snaps to a named size when close; otherwise
 /// reports the raw geometry under "Custom" rather than forcing a label that doesn't
 /// fit. Direct port of `_resolve_page_size`.
@@ -479,9 +565,10 @@ private func resolvePageSize(_ plLines: Double) -> (heightIn: Double, sizeName: 
     return (heightIn, "Custom")
 }
 
-/// Try to interpret one dot-command line as page geometry (`.pl`/`.po`/`.mt`/`.mb`) or
-/// a WordTsar-invented command (`.PT`/`.PSA`/`.PSB` -- "not a Wordstar command" per
-/// WordTsar's own source, so their mere presence is a producer signal). The line is
+/// Try to interpret one dot-command line as page geometry (`.pl`/`.po`/`.mt`/`.mb`/
+/// `.hm`/`.fm`/`.lh`/`.ls`, ctrl-kd 1.3.0 added the last four) or a WordTsar-invented
+/// command (`.PT`/`.PSA`/`.PSB` -- "not a Wordstar command" per WordTsar's own source,
+/// so their mere presence is a producer signal). The line is
 /// ALWAYS also kept verbatim in `Document.dotCommands` by the caller, recognised or
 /// not — including `.PT`'s own raw argument, so no separate field is needed for that
 /// here. Direct port of `_parse_page_dot`.
@@ -515,6 +602,17 @@ private func parsePageDot(
     guard let (name, arg) = dotCommandNameAndArg(cmd) else { return }
     let nameString = String(decoding: name.map(asciiUppercased), as: UTF8.self)
     switch nameString {
+    // Python's dispatch is generic (`_PAGE_DOT_RESOLVERS.get(key, _resolve_lines_arg)`
+    // followed by "store only if the resolver didn't return None") because a Python dict
+    // can hold one resolver function per key; a Swift `switch` over named struct fields
+    // has no equivalent indirection, so the same RULE is applied per case instead: first
+    // occurrence wins (the `== nil` guard), and a rejected value leaves the accumulator
+    // `nil` so the default stands. `.pl`/`.mt`/`.mb`/`.hm`/`.fm`'s resolver
+    // (`resolveLinesArg`) and `.po`'s (`resolveColsArg`, pre-existing) never reject, so a
+    // direct assignment is behaviorally identical to Python's "store only if resolved" for
+    // all five — unchanged from before ctrl-kd 1.3.0. `.lh`/`.ls` (new) CAN reject —
+    // `resolveLhArg`/`resolveLsArg` return `nil` for a non-positive height or an
+    // out-of-range spacing — so those two guard the store behind `if let`.
     case "PL":
         guard page.plLines == nil, let (value, unit) = parseDotNumber(arg) else { return }
         page.plLines = resolveLinesArg(value, unit)
@@ -527,6 +625,18 @@ private func parsePageDot(
     case "PO":
         guard page.poCols == nil, let (value, unit) = parseDotNumber(arg) else { return }
         page.poCols = resolveColsArg(value, unit)
+    case "HM":
+        guard page.hmLines == nil, let (value, unit) = parseDotNumber(arg) else { return }
+        page.hmLines = resolveLinesArg(value, unit)
+    case "FM":
+        guard page.fmLines == nil, let (value, unit) = parseDotNumber(arg) else { return }
+        page.fmLines = resolveLinesArg(value, unit)
+    case "LH":
+        guard page.lh48 == nil, let (value, unit) = parseDotNumber(arg) else { return }
+        if let resolved = resolveLhArg(value, unit) { page.lh48 = resolved }
+    case "LS":
+        guard page.ls == nil, let (value, unit) = parseDotNumber(arg) else { return }
+        if let resolved = resolveLsArg(value, unit) { page.ls = resolved }
     case "PT", "PSA", "PSB":
         // WordTsar's own invented dot commands (its source calls them "not a Wordstar
         // command"). A real WordStar file never contains these -- their presence IS

@@ -368,7 +368,10 @@ import Testing
     let custom = PageGeometry(
         plLines: 49.98, heightIn: 8.33, sizeName: "Custom", sizeSource: .file,
         mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
-        poCols: 0, poSource: .default
+        poCols: 0, poSource: .default,
+        hmLines: 2, hmSource: .default, fmLines: 2, fmSource: .default,
+        lh48: 8, lhSource: .default, ls: 1, lsSource: .default,
+        textLines: textLinesPerPage(pl: 49.98, mt: 3, mb: 8, lh48: 8)
     )
     let doc = Document(
         blocks: [Block(lines: [Line(spans: [Span(text: "line one")])])],
@@ -377,7 +380,10 @@ import Testing
     let text = latin1(emitPDF(doc, mode: .printed))
     #expect(text.contains("/MediaBox [0 0 612 600]"))
     #expect(!text.contains("/MediaBox [0 0 612 792]"))
-    // Y-origin: (600 - topPrinted(36) - size(12)) = 552.0, not modern's or Letter's 744.0.
+    // Y-origin: (600 - printedTop(36, from the default .mt 3) - size(12)) = 552.0, not
+    // modern's or Letter's 744.0. 36 here is `printedTop(doc)` landing on the same figure
+    // the old fixed `topPrinted` constant always used, because `.mt 3` (the default) has
+    // always resolved to exactly 36pt — not the constant itself, since ctrl-kd 1.3.0.
     #expect(text.contains("72.0 552.0 Td"))
 
     // Modern mode on the SAME document ignores the file's geometry entirely and stays at

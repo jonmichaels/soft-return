@@ -36,16 +36,40 @@ private func linesDoc(_ n: Int) -> Document {
     #expect(docToPagelines(linesDoc(54), printed: false).map(\.count) == [54])
 }
 
-@Test func printedPaginatesAtSixtyLines() {
-    // The printed cap is a different constant, and a port that used one for both would pass
-    // every vector.
-    #expect(docToPagelines(linesDoc(60), printed: true).count == 1)
+@Test func printedPaginatesAtSixtySixLinesWithNoPageGeometry() {
+    // ctrl-kd 1.3.0: a document with no page geometry at all (`doc.page == nil` — what a
+    // bare `parsePrintstream` capture produces; `linesDoc` here builds one by hand the same
+    // way) is treated as a print stream, and a print stream's own margin blanks travel
+    // in-band — so its budget is the FULL page, 66 lines on Letter, not a fixed-margin
+    // figure. This used to be 60 (a hardcoded `(792 - 2*36) / 12`); it is 66 now
+    // (`792 / 12`, no margin subtracted at all) because the model changed, not because this
+    // is a different case than before.
+    #expect(docToPagelines(linesDoc(66), printed: true).count == 1)
 
-    let pages = docToPagelines(linesDoc(61), printed: true)
+    let pages = docToPagelines(linesDoc(67), printed: true)
     #expect(pages.count == 2)
-    #expect(pages[0].count == PDFMetrics.linesPrinted)
+    #expect(pages[0].count == 66)
     #expect(pages[1].count == 1)
-    #expect(pages[1].first?.first?.text == "line61")
+    #expect(pages[1].first?.first?.text == "line67")
+}
+
+/// A `PageGeometry` built from just `.pl`/`.mt`/`.mb` (WordStar's own defaults for
+/// everything else — `.hm`/`.fm`/`.lh`/`.ls` never vary in this file), with `textLines`
+/// computed the same way `parseWS` computes it so a hand-built test fixture can't drift
+/// from the real derivation.
+private func geometry(
+    pl: Double, height: Double, size: String, sizeSource: Provenance = .file,
+    mt: Double = 3, mtSource: Provenance = .default,
+    mb: Double = 8, mbSource: Provenance = .default
+) -> PageGeometry {
+    PageGeometry(
+        plLines: pl, heightIn: height, sizeName: size, sizeSource: sizeSource,
+        mtLines: mt, mtSource: mtSource, mbLines: mb, mbSource: mbSource,
+        poCols: 0, poSource: .default,
+        hmLines: 2, hmSource: .default, fmLines: 2, fmSource: .default,
+        lh48: 8, lhSource: .default, ls: 1, lsSource: .default,
+        textLines: textLinesPerPage(pl: pl, mt: mt, mb: mb, lh48: 8)
+    )
 }
 
 /// `linesDoc` with an explicit `PageGeometry`, exactly as `parseWS` produces for a real
@@ -59,38 +83,31 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
 }
 
 @Test func printedCapacityIsGeometricNotRawPL() {
-    // The bug this test proves fixed: `printedPageCapacity` used to read the file's raw
-    // declared `.pl` value (66 for a default Letter page) straight off as the line-break
-    // threshold. Python's `_printed_cap` (pdf.py:55-60) instead resolves the page height in
-    // POINTS from that geometry and derives lines from a fixed 72pt printed-mode margin --
-    // 60 lines for that same Letter page, not 66. A `.pl 66` file (the common case: every
-    // document that never sets `.pl` resolves to exactly this) must therefore still break
-    // at 60, matching the untyped-geometry case `printedPaginatesAtSixtyLines` already
-    // covers, even though this document's `page.plLines` is explicitly 66.
-    let letter = PageGeometry(
-        plLines: 66, heightIn: 11.0, sizeName: "Letter", sizeSource: .file,
-        mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
-        poCols: 0, poSource: .default
-    )
-    #expect(docToPagelines(linesDoc(60, page: letter), printed: true).count == 1)
-    let pages = docToPagelines(linesDoc(61, page: letter), printed: true)
+    // The bug this test proves fixed (job-011): `printedPageCapacity` used to read the
+    // file's raw declared `.pl` value (66 for a default Letter page) straight off as the
+    // line-break threshold. ctrl-kd 1.3.0's `printedCap` (PDFLayout.swift, port of Python's
+    // `_printed_cap`) uses WordStar's OWN vertical model instead — `.pl - .mt - .mb` at the
+    // `.lh` line height, WordStar's own defaults giving 55 for this Letter page, not the
+    // raw 66 `.pl` states OR the 60 an intermediate (pre-1.3.0, fixed-72pt-margin) version
+    // of this fix produced. `.pl 66 .mt 3 .mb 8` (the common case: every document that
+    // never sets any of the three resolves to exactly this) must therefore break at 55.
+    let letter = geometry(pl: 66, height: 11.0, size: "Letter")
+    #expect(docToPagelines(linesDoc(55, page: letter), printed: true).count == 1)
+    let pages = docToPagelines(linesDoc(56, page: letter), printed: true)
     #expect(pages.count == 2)
-    #expect(pages[0].count == 60)
+    #expect(pages[0].count == 55)
     #expect(pages[1].count == 1)
-    #expect(pages[1].first?.first?.text == "line61")
+    #expect(pages[1].first?.first?.text == "line56")
 
     // A second, differently-sized page proves the geometry is actually being READ (not just
-    // hardcoded back to 60): Legal, `.pl 84` -> height 14in -> (1008 - 72) / 12 = 78 lines,
-    // not the raw 84 the pre-fix code would have used.
-    let legal = PageGeometry(
-        plLines: 84, heightIn: 14.0, sizeName: "Legal", sizeSource: .file,
-        mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
-        poCols: 0, poSource: .default
-    )
-    #expect(docToPagelines(linesDoc(78, page: legal), printed: true).count == 1)
-    let legalPages = docToPagelines(linesDoc(79, page: legal), printed: true)
+    // hardcoded back to one number): Legal, `.pl 84 .mt 3 .mb 8` -> 84 - 3 - 8 = 73 lines,
+    // not the raw 84 the very first version of this fix would have used, nor the
+    // fixed-72pt-margin 78 an intermediate version gave.
+    let legal = geometry(pl: 84, height: 14.0, size: "Legal")
+    #expect(docToPagelines(linesDoc(73, page: legal), printed: true).count == 1)
+    let legalPages = docToPagelines(linesDoc(74, page: legal), printed: true)
     #expect(legalPages.count == 2)
-    #expect(legalPages[0].count == 78)
+    #expect(legalPages[0].count == 73)
     #expect(legalPages[1].count == 1)
 }
 
@@ -98,11 +115,9 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // A vanishingly small or absent page can never send the capacity below
     // `footnoteFloor + 1` (4) -- Python's own floor (pdf.py:53,60). Exercised at the
     // PageGeometry boundary rather than by reaching into the private floor constant.
-    let tiny = PageGeometry(
-        plLines: 1, heightIn: 0.01, sizeName: "Custom", sizeSource: .file,
-        mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
-        poCols: 0, poSource: .default
-    )
+    // `.mt 3 .mb 8` against a one-line `.pl` drives `textLinesPerPage` deep negative
+    // (1 - 3 - 8 = -10), which is exactly the degenerate case the floor exists for.
+    let tiny = geometry(pl: 1, height: 0.01, size: "Custom")
     #expect(docToPagelines(linesDoc(4, page: tiny), printed: true).count == 1)
     let pages = docToPagelines(linesDoc(5, page: tiny), printed: true)
     #expect(pages.count == 2)

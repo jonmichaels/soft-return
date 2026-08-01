@@ -11,12 +11,14 @@
 
 /// The page metrics, in PostScript points. Taken verbatim from the Python constants.
 ///
-/// `linesModern`, `linesPrinted` and `maxCols` are DERIVED in Python (pdf.py:23-25) and
-/// literal here, per the job spec. `MAX_COLS` is the reason: it reads
-/// `int((612 - 144) / (12 * 0.6))`, which is `int(468 / 7.199999999999999)` = `int(65.0000…)`
-/// = 65 — the answer survives the float only because the truncation lands on the right side
-/// of it. Recomputing that in Swift would be reproducing an accident, so the accident's
-/// result is written down instead and the vectors pin it.
+/// `linesModern` and `maxCols` are DERIVED in Python (pdf.py:23-25) and literal here, per
+/// the job spec. `MAX_COLS` is the reason: it reads `int((612 - 144) / (12 * 0.6))`, which
+/// is `int(468 / 7.199999999999999)` = `int(65.0000…)` = 65 — the answer survives the float
+/// only because the truncation lands on the right side of it. Recomputing that in Swift
+/// would be reproducing an accident, so the accident's result is written down instead and
+/// the vectors pin it. (Printed mode's own equivalent, `LINES_PRINTED`, existed at Python
+/// 1.2.0 but was deleted in 1.3.0 along with the fixed-margin assumption it was derived
+/// from — see `printedCap` below.)
 public enum PDFMetrics {
     /// US Letter, points.
     public static let pageWidth = 612
@@ -28,11 +30,19 @@ public enum PDFMetrics {
     public static let lead = 12
     /// Top margin. A print stream carries its own top-margin blanks, so it gets the smaller
     /// one and its blanks supply the rest (see the machine-margin rule in `docToPagelines`).
+    /// `topPrinted` is also the FIXED fallback `printedTop(_:)` uses for a document with no
+    /// page geometry (a bare print-stream capture) — a real WS document's printed top comes
+    /// from its own `.mt` instead (default `.mt 3` resolves to exactly this same 36pt).
     public static let topModern = 72
     public static let topPrinted = 36
     /// Lines per page: `(pageHeight - 2 * top) / lead`.
     public static let linesModern = 54
-    public static let linesPrinted = 60
+    // Printed-mode capacity is per-document now (`printedCap`, ctrl-kd 1.3.0): WordStar's
+    // own vertical model, `.pl - .mt - .mb` at the `.lh` line height — 55 for WordStar's own
+    // defaults, not a fixed line count. Python deleted the equivalent `LINES_PRINTED`
+    // constant (pdf.py) for the same reason: a single number can no longer stand in for
+    // every document's printed page, since the model now reads `.mt`/`.mb`/`.lh` from the
+    // file instead of assuming a fixed 72pt printed-mode margin.
     /// Text-column width in characters — WordStar's own margin, arrived at independently.
     public static let maxCols = 65
 }
@@ -427,20 +437,49 @@ private func resolvedPrintedPageHeight(_ doc: Document) -> Int {
     return max(floorPoints, roundHalfToEven(heightIn * 72))
 }
 
-/// Printed-mode page capacity, in lines: derived GEOMETRICALLY from the resolved page
-/// height, exactly as Python's `_printed_cap` does (pdf.py:55-60) — resolved page height in
-/// points, minus the fixed 72pt (36pt top + 36pt bottom) printed-mode margin, divided by the
-/// 12pt lead. This is deliberately NOT the raw declared `.pl` value: `.pl 66`, the Letter
-/// default, resolves to a height of 11in / 792pt, which yields a capacity of 60 lines here —
-/// not 66. (WordStar's own reader gets 55 from `.pl 66 .mt 3 .mb 8`; Python's fixed 72pt
-/// margin predates it parsing `.mt`/`.mb` at all. Neither this file nor Python honours those
-/// commands yet — that's a known, deliberate follow-up for both, not this fix.)
+/// Printed-mode page capacity, in lines. Port of Python's `_printed_cap` (pdf.py, ctrl-kd
+/// 1.3.0) — WordStar's own vertical model, not the fixed-margin arithmetic this used before:
 ///
-/// Clamped to at least `footnoteFloor + 1` lines so a degenerate/tiny page can never divide
-/// the page-bottom math by, or loop over, too little room.
-private func printedPageCapacity(_ doc: Document) -> Int {
+/// WS documents (`doc.page` non-nil) get WordStar's own vertical model
+/// (`textLinesPerPage`/Python's `_text_lines_per_page`: `.pl - .mt - .mb` at the `.lh` line
+/// height — 55 for WordStar's own defaults, NOT the 60 a naive 1in-margin computation gave
+/// before this fix). Print streams (`ParsePrintstream.swift`'s `parsePrintstream` — no `page`
+/// meta at all) have no dot commands to resolve geometry from and ARE the printed page
+/// themselves: their margin blanks travel in-band (see `docToPagelines`'s machine-margin
+/// rule), so their budget is the FULL page height in lines (66 on Letter) — anything smaller
+/// would split a physical page the printer produced whole.
+///
+/// Clamped to at least `footnoteFloor + 1` lines either way, so a degenerate/tiny page can
+/// never divide the page-bottom math by, or loop over, too little room.
+func printedCap(_ doc: Document) -> Int {
+    if let page = doc.page {
+        return max(footnoteFloor + 1, page.textLines)
+    }
     let pageHeight = resolvedPrintedPageHeight(doc)
-    return max(footnoteFloor + 1, (pageHeight - 2 * PDFMetrics.topPrinted) / PDFMetrics.lead)
+    return max(footnoteFloor + 1, pageHeight / PDFMetrics.lead)
+}
+
+/// Top-of-text offset in points for printed mode. Port of Python's `_printed_top` (pdf.py,
+/// ctrl-kd 1.3.0). WS documents start where `.mt` says (lines at 6 LPI -> 12pt each; the
+/// default `.mt 3` is the 36pt this emitter always used, so every existing document's output
+/// is unaffected). Print streams (no `page` meta) keep the fixed 36pt — their own top-margin
+/// blanks are in the data (minus the machine-margin strip in `docToPagelines`). Clamped
+/// inside the page so garbage `.mt` from a misdetected binary degrades to an ugly page,
+/// never an absurd coordinate space. Deliberately measured against the FIXED `PDFMetrics.lead`
+/// (not `printedLead(doc)`) — this is a page-geometry clamp, not a line-spacing one.
+func printedTop(_ doc: Document) -> Int {
+    guard let page = doc.page else { return PDFMetrics.topPrinted }
+    let pageHeight = resolvedPrintedPageHeight(doc)
+    return max(0, min(roundHalfToEven(page.mtLines * 12), pageHeight - PDFMetrics.lead))
+}
+
+/// Baseline-to-baseline distance in points for printed mode. Port of Python's
+/// `_printed_lead` (pdf.py, ctrl-kd 1.3.0): `.lh` is 1/48in units, a point is 1/72in ->
+/// `lh48 * 1.5`. Default `.lh 8` IS the 12pt lead this emitter always used. Print streams
+/// (no `page` meta) keep the fixed lead.
+func printedLead(_ doc: Document) -> Double {
+    guard let page = doc.page, page.lh48 > 0 else { return Double(PDFMetrics.lead) }
+    return page.lh48 * 1.5
 }
 
 /// How many lines the WHOLE queue would need if nothing were split — the figure the body
@@ -539,7 +578,7 @@ internal func fitFooter(queue: inout [QueuedNote], room: Int, leadingBlank: Bool
 private func layoutPrintedPages(_ doc: Document) -> [Page] {
     let items = resolvePrintedBody(doc)
     let width = PDFMetrics.maxCols
-    let capacity = printedPageCapacity(doc)
+    let capacity = printedCap(doc)
 
     var queue: [QueuedNote] = []
     var pages: [Page] = []

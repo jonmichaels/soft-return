@@ -1,4 +1,6 @@
-/// The two number formats the PDF writer needs, hand-rolled — `'%.1f'` and `'%010d'`.
+/// The number formats the PDF writer needs, hand-rolled — `'%.1f'` (both the integer-tenths
+/// convention and, since ctrl-kd 1.3.0's page-geometry work, real fractional `Double`s) and
+/// `'%010d'`.
 ///
 /// Foundation stays out of this library (job-001), which rules out `String(format:)`. That
 /// is the constraint; what follows is better than a workaround for it. A hand-rolled
@@ -29,6 +31,39 @@ func fixedOneDecimal(tenths: Int) -> String {
     let negative = tenths < 0
     let magnitude = negative ? -tenths : tenths
     return (negative ? "-" : "") + "\(magnitude / 10).\(magnitude % 10)"
+}
+
+/// Python's `'%.1f' % value` for a real `Double` — needed once a printed-mode baseline lead
+/// can be irrational-at-48ths (ctrl-kd 1.3.0's `.lh` unit conversions: `.lh 1C` is
+/// `28.346456692913385`pt, not a clean tenth), so the writer's accumulated `y` is no longer
+/// always an exact multiple of 0.1 the way `fixedOneDecimal(tenths:)` above assumes. Still
+/// hand-rolled for the same reason that one is: Foundation's `String(format:)` stays out of
+/// this library (job-001), and `Double.rounded()` needs libm symbols this Foundation-free
+/// Linux build can't link (see `PDFLayout.swift`'s `roundHalfToEven`, the same technique this
+/// borrows: truncate via `Int(_:)`, which is a compiler builtin, then compare the fraction).
+///
+/// Round-half-to-even, same tie-break as Python's own correctly-rounded formatter, computed
+/// on `value * 10` rather than on the exact binary value directly — a second rounding step
+/// that could in principle disagree with a fully correct decimal formatter at a value landing
+/// exactly on a tenth's boundary only after that multiplication. Checked against the reference
+/// for the actual coordinate domain this writer produces (every `.lh` unit conversion this
+/// project's own vectors exercise, accumulated page-length deep, and both rule offsets): no
+/// disagreement found.
+func fixedOneDecimalDouble(_ value: Double) -> String {
+    let negative = value < 0
+    let magnitude = negative ? -value : value
+    let scaled = magnitude * 10.0
+    let whole = Int(scaled)
+    let fraction = scaled - Double(whole)
+    let tenths: Int
+    if fraction < 0.5 {
+        tenths = whole
+    } else if fraction > 0.5 {
+        tenths = whole + 1
+    } else {
+        tenths = whole % 2 == 0 ? whole : whole + 1
+    }
+    return (negative ? "-" : "") + "\(tenths / 10).\(tenths % 10)"
 }
 
 /// Python's `'%0<width>d' % value` — the xref table's `'%010d'`, whose column is fixed

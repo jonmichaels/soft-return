@@ -86,10 +86,17 @@ private func manyWords(_ n: Int) -> String {
     // `.PL 3`: three lines to a page — big enough to hold the 20-dash rule plus exactly one
     // line of note text (room == 1 for the note's own content once the rule is paid for),
     // which is precisely the boundary `fitFooter`'s forcing branch exists for.
+    // `.mt`/`.mb` at WordStar's own defaults against a 3-line `.pl` drive
+    // `textLinesPerPage` to its 1-line floor (3 - 3 - 8 = -8), but `printedCap` clamps
+    // the actual page BUDGET to `footnoteFloor + 1` (4) regardless — matching the fixed
+    // page height (0.5in) this test's height-based capacity used before ctrl-kd 1.3.0.
     let page = PageGeometry(
         plLines: 3, heightIn: 0.5, sizeName: "Custom", sizeSource: .file,
         mtLines: 3, mtSource: .default, mbLines: 8, mbSource: .default,
-        poCols: 0, poSource: .default
+        poCols: 0, poSource: .default,
+        hmLines: 2, hmSource: .default, fmLines: 2, fmSource: .default,
+        lh48: 8, lhSource: .default, ls: 1, lsSource: .default,
+        textLines: textLinesPerPage(pl: 3, mt: 3, mb: 8, lh48: 8)
     )
     let noteText = manyWords(30)
     let doc = Document(

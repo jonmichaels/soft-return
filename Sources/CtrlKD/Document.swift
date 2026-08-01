@@ -86,11 +86,20 @@ public enum Provenance: String, Hashable, Sendable {
     case `default`
 }
 
-/// `.pl`/`.po`/`.mt`/`.mb` resolved, with provenance. Direct port of `parse_ws`'s
-/// `doc.meta['page']` dict (core.py, "Page geometry, period-authentic footnote layout,
-/// and note-aware export"). Unit-less dot-command arguments are LINES (columns for
-/// `.po`), never inches — see `ParseWS.swift`'s page-geometry section for the full trap
-/// writeup and the named-size snap tolerance.
+/// `.pl`/`.po`/`.mt`/`.mb`/`.hm`/`.fm`/`.lh`/`.ls` resolved, with provenance. Direct port
+/// of `parse_ws`'s `doc.meta['page']` dict (core.py, "Page geometry, period-authentic
+/// footnote layout, and note-aware export"; ctrl-kd 1.3.0 added `.hm`/`.fm`/`.lh`/`.ls`
+/// and the derived `text_lines`). Unit-less dot-command arguments are LINES (columns for
+/// `.po`; 1/48in units for `.lh`), never inches — see `ParseWS.swift`'s page-geometry
+/// section for the full trap writeup and the named-size snap tolerance.
+///
+/// `.hm`/`.fm` (header/footer margin, in lines) and `.ls` (line spacing, a small integer
+/// count) are recorded with provenance for `--diagnose` only — see `ParseWS.swift`'s
+/// `textLinesPerPage` for why neither one ever enters the capacity formula. `lh48` is
+/// `.lh`'s argument in 1/48in units (WordStar's own unit for this command); `textLines`
+/// is the one derived figure a caller actually needs: printed text lines per page, from
+/// `pl_lines`/`mt_lines`/`mb_lines`/`lh_48` via WordStar's own vertical model — see
+/// `textLinesPerPage` for the formula and the manual quotations behind it.
 public struct PageGeometry: Hashable, Sendable {
     public var plLines: Double
     public var heightIn: Double
@@ -102,6 +111,19 @@ public struct PageGeometry: Hashable, Sendable {
     public var mbSource: Provenance
     public var poCols: Double
     public var poSource: Provenance
+    public var hmLines: Double
+    public var hmSource: Provenance
+    public var fmLines: Double
+    public var fmSource: Provenance
+    public var lh48: Double
+    public var lhSource: Provenance
+    public var ls: Double
+    public var lsSource: Provenance
+    /// Printed text lines per page — derived, not independently settable: `parseWS`
+    /// computes this via `textLinesPerPage(pl:mt:mb:lh48:)` from the four fields above and
+    /// passes the result in here, matching Python's `doc.meta['page']['text_lines']`
+    /// being set once, after the rest of the page dict is assembled.
+    public var textLines: Int
 
     public init(
         plLines: Double,
@@ -113,7 +135,16 @@ public struct PageGeometry: Hashable, Sendable {
         mbLines: Double,
         mbSource: Provenance,
         poCols: Double,
-        poSource: Provenance
+        poSource: Provenance,
+        hmLines: Double,
+        hmSource: Provenance,
+        fmLines: Double,
+        fmSource: Provenance,
+        lh48: Double,
+        lhSource: Provenance,
+        ls: Double,
+        lsSource: Provenance,
+        textLines: Int
     ) {
         self.plLines = plLines
         self.heightIn = heightIn
@@ -125,6 +156,15 @@ public struct PageGeometry: Hashable, Sendable {
         self.mbSource = mbSource
         self.poCols = poCols
         self.poSource = poSource
+        self.hmLines = hmLines
+        self.hmSource = hmSource
+        self.fmLines = fmLines
+        self.fmSource = fmSource
+        self.lh48 = lh48
+        self.lhSource = lhSource
+        self.ls = ls
+        self.lsSource = lsSource
+        self.textLines = textLines
     }
 }
 
