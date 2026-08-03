@@ -24,7 +24,17 @@ public struct PrintedPageMetrics: Hashable, Sendable {
     public let pageWidth: Double
     /// Paper height, from the file's `.pl` (via `heightIn`), or 11in when it declared none.
     public let pageHeight: Double
-    /// Distance from the TOP of the paper down to the first text baseline, from `.mt`.
+    /// Distance from the TOP of the paper down to the TOP OF THE FIRST LINE, from `.mt`.
+    ///
+    /// ⚠️ NOT the first baseline. `emitPDF` places the first baseline at `top + size`
+    /// (`PDFWriter.swift`: `var y = Double(pageHeight - top - size)`) because PDF's `Td`
+    /// positions a baseline, not a line's top edge. A caller that treats this as a baseline
+    /// puts every line one type-size too high.
+    ///
+    /// Corrected 2026-08-03. The previous wording said "first text baseline" and was wrong;
+    /// Soft Return.app was written from it and placed Printed text a full 12pt line high,
+    /// and the app's own geometry oracle was written from the same sentence, so it AGREED
+    /// with the bug and could not see it. Two independent things wrong from one comment.
     public let top: Double
     /// Baseline-to-baseline distance, from `.lh`.
     public let lead: Double
