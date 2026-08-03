@@ -87,31 +87,31 @@
   },
   {
    "name": "ws5_footnote_heading/html/modern",
-   "input_hex": "1d0100001d0200110243686170746572204f6e650d0a0d0a54726561746965732077657265206d6164652e1d25000300000000000000000000000000000000001d53656520746865206163636f7264732e2c00204d6f726520746578742e0d0a1d01000b4e65787420706167652e0d0a",
+   "input_hex": "1d0500110505001d43686170746572204f6e650d0a54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f726520746578742e0d0a1d04000b04001d4e65787420706167652e0d0a",
    "format": "html",
    "mode": "modern",
-   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{max-width:42rem;margin:2rem auto;padding:0 1rem;\nfont:17px/1.6 Georgia,serif;color:#222}p{margin:0 0 1em}\npre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}}</style></head>\n<body>\n<h2>Chapter One</h2>\n<p>Treaties were made.<sup><a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\">1</a></sup> More text.</p>\n<p>Next page.</p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn1\" data-note-kind=\"footnote\"> <a href=\"#fnref1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n"
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{max-width:42rem;margin:2rem auto;padding:0 1rem;\nfont:17px/1.6 Georgia,serif;color:#222}p{margin:0 0 1em}\npre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}}</style></head>\n<body>\n<h1>Chapter One Treaties were made.<sup><a id=\"fnref2\" href=\"#fn2\" role=\"doc-noteref\">2</a></sup> More text.</h1>\n<p>Next page.</p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn2\" data-note-kind=\"footnote\">See the accords. <a href=\"#fnref2\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n"
   },
   {
    "name": "ws5_footnote_heading/html/printed",
-   "input_hex": "1d0100001d0200110243686170746572204f6e650d0a0d0a54726561746965732077657265206d6164652e1d25000300000000000000000000000000000000001d53656520746865206163636f7264732e2c00204d6f726520746578742e0d0a1d01000b4e65787420706167652e0d0a",
+   "input_hex": "1d0500110505001d43686170746572204f6e650d0a54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f726520746578742e0d0a1d04000b04001d4e65787420706167652e0d0a",
    "format": "html",
    "mode": "printed",
-   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{max-width:42rem;margin:2rem auto;padding:0 1rem;\nfont:17px/1.6 Georgia,serif;color:#222}p{margin:0 0 1em}\npre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}}</style></head>\n<body>\n<h2>Chapter One</h2>\n<pre>Treaties were made.<sup><a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\">1</a></sup> More text.</pre>\n<hr class=\"pb\">\n<pre>Next page.</pre>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn1\" data-note-kind=\"footnote\"> <a href=\"#fnref1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n"
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{max-width:42rem;margin:2rem auto;padding:0 1rem;\nfont:17px/1.6 Georgia,serif;color:#222}p{margin:0 0 1em}\npre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}}</style></head>\n<body>\n<h1>Chapter One Treaties were made.<sup><a id=\"fnref2\" href=\"#fn2\" role=\"doc-noteref\">2</a></sup> More text.</h1>\n<hr class=\"pb\">\n<pre>Next page.</pre>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn2\" data-note-kind=\"footnote\">See the accords. <a href=\"#fnref2\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n"
   },
   {
    "name": "ws5_footnote_heading/rtf/modern",
-   "input_hex": "1d0100001d0200110243686170746572204f6e650d0a0d0a54726561746965732077657265206d6164652e1d25000300000000000000000000000000000000001d53656520746865206163636f7264732e2c00204d6f726520746578742e0d0a1d01000b4e65787420706167652e0d0a",
+   "input_hex": "1d0500110505001d43686170746572204f6e650d0a54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f726520746578742e0d0a1d04000b04001d4e65787420706167652e0d0a",
    "format": "rtf",
    "mode": "modern",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\n\\f0\\fs24 \n{\\b\\fs28 {Chapter One}}\\par \n\\par \n{Treaties were made.}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }}{ More text.}\\par \n\\par \n{Next page.}\\par \n\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\n\\f0\\fs24 \n{\\b\\fs28 {Chapter One}}\\line {\\b\\fs28 {Treaties were made.}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }See the accords.}{ More text.}}\\par \n\\par \n{Next page.}\\par \n\\par \n}\n"
   },
   {
    "name": "ws5_footnote_heading/rtf/printed",
-   "input_hex": "1d0100001d0200110243686170746572204f6e650d0a0d0a54726561746965732077657265206d6164652e1d25000300000000000000000000000000000000001d53656520746865206163636f7264732e2c00204d6f726520746578742e0d0a1d01000b4e65787420706167652e0d0a",
+   "input_hex": "1d0500110505001d43686170746572204f6e650d0a54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f726520746578742e0d0a1d04000b04001d4e65787420706167652e0d0a",
    "format": "rtf",
    "mode": "printed",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\n\\f1\\fs24 \n{\\b\\fs28 {Chapter One}}\\line {\\b\\fs28 }\\par \n{Treaties were made.}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }}{ More text.}\\par \n\\page \n{Next page.}\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\n\\f1\\fs24 \n{\\b\\fs28 {Chapter One}}\\line {\\b\\fs28 {Treaties were made.}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }See the accords.}{ More text.}}\\par \n\\page \n{Next page.}\\par \n}\n"
   },
   {
    "name": "dot_pagebreak/html/modern",
