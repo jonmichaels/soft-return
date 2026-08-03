@@ -168,9 +168,12 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var endnoteNumberStart: Int? = nil
     var headers: [Int: String] = [:]
     var footers: [Int: String] = [:]
+    // Running FORMATTING state, stamped onto each block as it opens. Stateful, unlike
+    // page geometry — see `Formatting2.swift`.
+    var fmt = FormatState()
 
     var blocks: [Block] = []
-    var cur = Block(kind: .para)
+    var cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true)
     var curLine = Line()
 
     // core.py:275-286 — empty lines and empty blocks are never appended.
@@ -185,7 +188,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         if !cur.lines.isEmpty {
             blocks.append(cur)
         }
-        cur = Block(kind: .para)
+        cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true)
     }
 
     for physical in pass.lines {
@@ -215,6 +218,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 ruler = true
             }
             parseHeadFoot(cmd, headers: &headers, footers: &footers)
+            // A formatting change starts a NEW block: `.oc on` mid-paragraph means the
+            // lines after it are centred and the ones before it are not, and a single
+            // block cannot hold both.
+            let beforeFmt = (fmt.alignment, fmt.wrap ?? true)
+            applyFormatDot(cmd, &fmt)
+            if (fmt.alignment, fmt.wrap ?? true) != beforeFmt {
+                closeBlock()
+            }
             parsePageDot(
                 cmd,
                 page: &page,
@@ -355,7 +366,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
         endnoteNumberStart: endnoteNumberStart,
         era: era.name,
         headers: headers,
-        footers: footers
+        footers: footers,
+        formatting: Formatting(
+            underlineBlanks: fmt.underlineBlanks, suppressBlanks: fmt.suppressBlanks,
+            proportional: fmt.proportional, kerning: fmt.kerning,
+            orientation: fmt.orientation, subSuperRoll48: fmt.subSuperRoll48)
     )
 }
 
@@ -475,7 +490,7 @@ private func isASCIIDigit(_ b: UInt8) -> Bool {
 /// already-rstripped, hibit-masked dot-command line (starts with '.'). Greedy 1-3
 /// leading letters right after the dot never need to backtrack here (`\s*(.*)$` can
 /// always match zero characters), so a plain greedy scan reproduces the regex exactly.
-private func dotCommandNameAndArg(_ cmd: [UInt8]) -> (name: [UInt8], arg: [UInt8])? {
+func dotCommandNameAndArg(_ cmd: [UInt8]) -> (name: [UInt8], arg: [UInt8])? {
     guard cmd.count > 1 else { return nil }
     var nameEnd = 1
     while nameEnd < cmd.count && nameEnd < 4 && isASCIILetter(cmd[nameEnd]) {
@@ -495,7 +510,7 @@ private func dotCommandNameAndArg(_ cmd: [UInt8]) -> (name: [UInt8], arg: [UInt8
 /// if at least one digit follows it (otherwise the regex's `[0-9]+` backtracks past an
 /// empty match and leaves the dot itself unconsumed) — e.g. "5." matches value 5 with
 /// the trailing dot left dangling, unconsumed, not an error.
-private func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? {
+func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? {
     var i = 0
     while i < arg.count && isDotSpace(arg[i]) { i += 1 }
 
@@ -543,13 +558,18 @@ private func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? 
 /// Convert a dot-command argument's optional unit suffix to inches. Returns `nil` for
 /// no unit (caller applies the lines/columns default) or an unrecognised unit (treated
 /// the same as no unit -- defensive, not a crash). Direct port of `_dot_arg_inches`.
-private func dotArgInches(_ value: Double, _ unit: [UInt8]?) -> Double? {
+func dotArgInches(_ value: Double, _ unit: [UInt8]?) -> Double? {
     guard let unit, !unit.isEmpty else { return nil }
     let upper = String(decoding: unit.map(asciiUppercased), as: UTF8.self)
     switch upper {
     case "\"", "I", "IN": return value
     case "C", "CM": return value / 2.54
-    case "P", "PM": return value / 72.0
+    case "P", "PM", "PT":
+        // `PT` is not in the file-format spec's list (which gives P and PM), but real
+        // files write it: the WS7 archive uses `.sr 5pt` and `.sr 3pt`. It can only mean
+        // points, and without it those arguments fell through to the unit-less default
+        // and were read as 48ths — silently, and wrong by 1.5x.
+        return value / 72.0
     default: return nil
     }
 }

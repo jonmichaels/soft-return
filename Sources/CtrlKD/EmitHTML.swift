@@ -157,6 +157,16 @@ private func htmlNoteListItem(_ entry: NoteListEntry) -> String {
 ///   which note kinds get an inline reference and a trailing `doc-endnotes` section — see
 ///   `htmlBodySpan`/`htmlNoteListItem`.
 @Sendable
+/// `text-align` for a block, or "" for WordStar's default.
+func htmlAlignAttribute(_ align: Alignment) -> String {
+    switch align {
+    case .left: return ""
+    case .center: return #" style="text-align:center""#
+    case .right: return #" style="text-align:right""#
+    case .justify: return #" style="text-align:justify""#
+    }
+}
+
 public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                      options: EmitOptions = EmitOptions()) -> String {
     let title = options.title
@@ -203,7 +213,11 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             // emit.py:180 — the author's own line breaks inside a paragraph, kept as <br>.
             let para = lines.joined(separator: "<br>\n")
             if !para.trimmed().isEmpty {
-                parts.append("<p>\(para)</p>")
+                // C16/C17: HTML expresses all four alignments, so unlike plain text it
+                // does not collapse justify into left. `left` is WordStar's default and
+                // gets no attribute, so a document that never touches `.oc`/`.oj` emits
+                // byte-identical HTML to before.
+                parts.append("<p\(htmlAlignAttribute(block.align))>\(para)</p>")
             }
         }
     }

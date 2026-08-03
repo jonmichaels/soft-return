@@ -293,6 +293,10 @@ public struct Document: Hashable, Sendable {
     ///
     /// An empty string is a real value, not an absence: an empty argument CLEARS that
     /// line, which is how WordStar turns a running head off part-way through.
+    /// What the file asked for that is neither page geometry nor per-block: `.ul`,
+    /// `.sb`, `.ps`, `.kr`, `.pr`, `.sr`. Only keys the file actually set are non-nil.
+    /// Register C8, C18-C22.
+    public var formatting: Formatting
     public var headers: [Int: String]
     /// Running foot text by line number (1-5). `.fo` is line 1; `.f1`-`.f5` select
     /// their own. See `headers` for the measured geometry.
@@ -319,7 +323,8 @@ public struct Document: Hashable, Sendable {
         commentBug: CommentBug? = nil,
         era: String? = nil,
         headers: [Int: String] = [:],
-        footers: [Int: String] = [:]
+        footers: [Int: String] = [:],
+        formatting: Formatting = Formatting()
     ) {
         self.blocks = blocks
         self.footnotes = footnotes
@@ -338,6 +343,7 @@ public struct Document: Hashable, Sendable {
         self.era = era
         self.headers = headers
         self.footers = footers
+        self.formatting = formatting
     }
 
     public func iterLines() -> [Line] {

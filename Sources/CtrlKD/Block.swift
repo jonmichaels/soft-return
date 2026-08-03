@@ -13,6 +13,16 @@ public enum BlockKind: String, Hashable, Sendable {
     case condpage
 }
 
+/// Horizontal alignment of a block's lines. WordStar's default is `.left`, which every
+/// emitter renders exactly as it did before alignment existed — no attribute, no control
+/// code — so a document that never touches `.oc`/`.oj` is unaffected.
+public enum Alignment: String, Hashable, Sendable {
+    case left
+    case center
+    case right
+    case justify
+}
+
 /// A paragraph-level unit of the document: one kind, an optional heading level,
 /// and the lines it contains.
 ///
@@ -27,11 +37,25 @@ public struct Block: Hashable, Sendable {
     /// instead — Python stores it in the same slot, and a port that invented a second
     /// field here would diverge from the vectors for no behavioural gain.
     public var heading: Int
+    /// Horizontal alignment in force when this block was opened. From `.oc` (centering
+    /// on/off) and `.oj` (justification off/on/c/r), which are STATEFUL — they apply
+    /// from where they appear until changed — so the state is stamped onto each block as
+    /// it opens rather than looked up later. Register C16/C17.
+    public var align: Alignment
+    /// Whether WordStar was word-wrapping when this block was opened (`.aw on|off`).
+    /// Register C23: with wrap off the author is positioning lines by hand, so a
+    /// reflowing consumer must NOT re-wrap them or the layout is destroyed.
+    public var wrap: Bool
 
-    public init(kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0) {
+    public init(
+        kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0,
+        align: Alignment = .left, wrap: Bool = true
+    ) {
         self.kind = kind
         self.lines = lines
         self.heading = heading
+        self.align = align
+        self.wrap = wrap
     }
 }
 

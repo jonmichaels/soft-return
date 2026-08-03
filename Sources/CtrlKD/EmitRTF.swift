@@ -114,6 +114,17 @@ private func rtfComment(_ note: Note) -> String {
 ///   (footnote/endnote/annotation) or a trailing comment block; `options.title` is
 ///   ignored, as in Python (emit.py:208).
 @Sendable
+/// RTF paragraph-alignment control. `\ql` is the default and is emitted only to CLOSE a
+/// previous alignment, since RTF alignment persists across `\par`.
+func rtfAlignControl(_ align: Alignment) -> String {
+    switch align {
+    case .left: return #"\ql "#
+    case .center: return #"\qc "#
+    case .right: return #"\qr "#
+    case .justify: return #"\qj "#
+    }
+}
+
 public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> String {
     let printed = mode == .printed || isPrinted(doc)
@@ -121,6 +132,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // fixed-width font (emit.py:210).
     let font = printed ? #"\f1"# : #"\f0"#
     let refNotes = inlineReferenceNotes(doc)
+    var rtfAlign: Alignment = .left      // RTF alignment persists across \par
     var parts: [String] = []
 
     for block in doc.blocks {
@@ -152,6 +164,15 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         let para = lines.joined(separator: #"\line "#)
 
         if !para.trimmed().isEmpty || printed {
+            // C16/C17. RTF alignment PERSISTS across \par, so a block emits its control
+            // whenever the alignment differs from the one still in force — including
+            // \ql to return to flush left, or the previous block's centring would leak
+            // into this one. Tracking the running value keeps a document that never
+            // aligns anything byte-identical to before.
+            if block.align != rtfAlign {
+                parts.append(rtfAlignControl(block.align))
+                rtfAlign = block.align
+            }
             parts.append(para + #"\par "#)
         }
         if !printed {
