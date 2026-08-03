@@ -203,3 +203,17 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     #expect(text.contains("Treaty of 1868"), "the indexed phrase was dropped: \(text)")
     #expect(doc.unknownBlocks.isEmpty)
 }
+
+@Test func insetGraphicsAreRecordedAndPlaceheld() {
+    // C10. An INSET picture's block content IS its path, and the whole block was being
+    // dropped — so a document with figures rendered as if it had none, with no
+    // indication anything was missing. Six real pictures in the archive vanished this
+    // way. A converter cannot render a 1987 .PIX, but it must not go quiet about one.
+    let block = wsBlock(cmd: 0x10, content: Array(#"C:\PIX\FIGURE1.PIX"#.utf8))
+    let doc = parseWS(bytes("Before. ") + block + bytes(" After.\r\n"))
+    #expect(doc.graphics == [#"C:\PIX\FIGURE1.PIX"#])
+    let text = doc.blocks[0].lines.map { $0.text() }.joined()
+    #expect(text.contains("[image: FIGURE1.PIX]"), "got: \(text)")
+    #expect(text.contains("Before.") && text.contains("After."))
+    #expect(doc.unknownBlocks.isEmpty, "the graphic should no longer be an unknown block")
+}

@@ -296,6 +296,11 @@ public struct Document: Hashable, Sendable {
     /// What the file asked for that is neither page geometry nor per-block: `.ul`,
     /// `.sb`, `.ps`, `.kr`, `.pr`, `.sr`. Only keys the file actually set are non-nil.
     /// Register C8, C18-C22.
+    /// INSET picture paths, in document order — one per `[image: NAME]` placeholder in
+    /// the text. A converter cannot render a 1987 `.PIX`, but recording the path means a
+    /// consumer can find the file, and the placeholder means the reader can see that a
+    /// figure belongs there. Register C10.
+    public var graphics: [String]
     public var formatting: Formatting
     public var headers: [Int: String]
     /// Running foot text by line number (1-5). `.fo` is line 1; `.f1`-`.f5` select
@@ -324,7 +329,8 @@ public struct Document: Hashable, Sendable {
         era: String? = nil,
         headers: [Int: String] = [:],
         footers: [Int: String] = [:],
-        formatting: Formatting = Formatting()
+        formatting: Formatting = Formatting(),
+        graphics: [String] = []
     ) {
         self.blocks = blocks
         self.footnotes = footnotes
@@ -344,6 +350,7 @@ public struct Document: Hashable, Sendable {
         self.headers = headers
         self.footers = footers
         self.formatting = formatting
+        self.graphics = graphics
     }
 
     public func iterLines() -> [Line] {

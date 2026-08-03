@@ -49,11 +49,16 @@ public struct SymmetricBlocksResult: Hashable, Sendable {
     public let bytes: [UInt8]
     public let notes: [Note]
     public let unknownBlocks: [UnknownBlock]
+    /// INSET picture paths, in document order — one per `[image: NAME]` placeholder in
+    /// the rewritten stream. Register C10.
+    public let graphics: [String]
 
-    public init(bytes: [UInt8], notes: [Note], unknownBlocks: [UnknownBlock]) {
+    public init(bytes: [UInt8], notes: [Note], unknownBlocks: [UnknownBlock],
+                graphics: [String] = []) {
         self.bytes = bytes
         self.notes = notes
         self.unknownBlocks = unknownBlocks
+        self.graphics = graphics
     }
 }
 
@@ -61,6 +66,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var out: [UInt8] = []
     var notes: [Note] = []
     var unknownBlocks: [UnknownBlock] = []
+    var graphics: [String] = []
     var i = 0
     while i < data.count {
         // core.py — need the marker plus both length bytes present.
@@ -92,6 +98,22 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 out += blockContent(block)
                     .map { $0 & 0x7F }
                     .filter { $0 >= 0x20 && $0 < 0x7F }
+            } else if cmd == 0x10 {                                // inset graphic
+                // An INSET picture placed in the text. The block's content is the
+                // image's path, and it was falling through to `UnknownBlock` — which
+                // preserves the bytes for diagnostics but drops the text — so a
+                // document with figures rendered as if it had none. Register C10.
+                //
+                // A converter cannot render a 1987 .PIX file, but it must not go quiet
+                // about one: the path is recorded and a visible placeholder goes into
+                // the text where the picture sat.
+                let path = decodeCP437(blockContent(block)
+                    .map { $0 & 0x7F }
+                    .filter { $0 >= 0x20 && $0 < 0x7F })
+                graphics.append(path)
+                let name = path.split(whereSeparator: { $0 == "\\" || $0 == "/" }).last
+                    .map(String.init) ?? path
+                out += Array("[image: \(name)]".utf8)
             } else if cmd == 0x0E {                                // index item
                 // An inline indexed PHRASE. WordStar prints the phrase in the body —
                 // the index ENTRY is the non-printing part — so dropping the block
@@ -117,7 +139,8 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
             i += 1
         }
     }
-    return SymmetricBlocksResult(bytes: out, notes: notes, unknownBlocks: unknownBlocks)
+    return SymmetricBlocksResult(bytes: out, notes: notes, unknownBlocks: unknownBlocks,
+                                 graphics: graphics)
 }
 
 /// `block[3:-3] if len(block) >= 6 else block[3:]` — strips the leading length+cmd

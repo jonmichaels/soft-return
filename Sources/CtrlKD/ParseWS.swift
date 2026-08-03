@@ -140,11 +140,13 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var footnotes: [[Span]] = []
     var notes: [Note] = []
     var unknownBlocks: [UnknownBlock] = []
+    var graphics: [String] = []
     if ws5 {
         let stripped = symmetricBlocks(data)
         body = stripped.bytes
         notes = stripped.notes
         unknownBlocks = stripped.unknownBlocks
+        graphics = stripped.graphics
         // footnotes/endnotes/annotations are all rendered the same way (a numbered
         // list at the end) and share one inline reference counter below, so
         // `footnotes` stays the flattened view the existing emitters already know how
@@ -374,7 +376,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
         formatting: Formatting(
             underlineBlanks: fmt.underlineBlanks, suppressBlanks: fmt.suppressBlanks,
             proportional: fmt.proportional, kerning: fmt.kerning,
-            orientation: fmt.orientation, subSuperRoll48: fmt.subSuperRoll48)
+            orientation: fmt.orientation, subSuperRoll48: fmt.subSuperRoll48),
+        graphics: graphics
     )
 }
 
