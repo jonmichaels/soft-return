@@ -178,3 +178,28 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     #expect(doc.notes[0].text == "Hello there")
     #expect(doc.notes[0].dotCommands == [".rr----!----R"])
 }
+
+// ------------------------------------------- outline numbers and indexed phrases
+
+@Test func paragraphNumbersAreContentNotUnknownBlocks() {
+    // WordStar's AUTOMATIC outline/legal numbering (`.p#`). This used to fall through
+    // to UnknownBlock, which DELETES the computed number from the output entirely —
+    // not unstyled, gone. Outline-numbered essays, wills and structured reports lost
+    // every generated number with no trace.
+    let numbered = wsBlock(cmd: 0x0D, content: Array("2.1.3".utf8))
+    let doc = parseWS(numbered + bytes(" The clause text.\r\n"))
+    let text = doc.blocks[0].lines[0].text()
+    #expect(text.contains("2.1.3"), "the generated number was dropped: \(text)")
+    #expect(doc.unknownBlocks.isEmpty)
+}
+
+@Test func indexedPhrasesKeepTheirVisibleText() {
+    // An inline indexed PHRASE: WordStar prints the phrase in the body, and the index
+    // ENTRY is the non-printing part. Dropping the block loses text outright whenever
+    // the phrase is not duplicated in the visible stream.
+    let indexed = wsBlock(cmd: 0x0E, content: Array("Treaty of 1868".utf8))
+    let doc = parseWS(bytes("See ") + indexed + bytes(" for detail.\r\n"))
+    let text = doc.blocks[0].lines[0].text()
+    #expect(text.contains("Treaty of 1868"), "the indexed phrase was dropped: \(text)")
+    #expect(doc.unknownBlocks.isEmpty)
+}

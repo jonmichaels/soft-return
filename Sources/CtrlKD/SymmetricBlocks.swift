@@ -83,6 +83,23 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 for _ in 0..<cols { out.append(leader) }
             } else if cmd == 0x0B {                                // end of page
                 out.append(SENT_SOFTPAGE)
+            } else if cmd == 0x0D {                                // paragraph number
+                // WordStar's AUTOMATIC outline/legal numbering (`.p#`) — "2.1.3" and
+                // the like. It used to fall through to `UnknownBlock`, which DELETES
+                // the computed number from the output entirely: not unstyled, gone.
+                // Outline-numbered essays, wills and structured reports lost every
+                // generated number with no trace.
+                out += blockContent(block)
+                    .map { $0 & 0x7F }
+                    .filter { $0 >= 0x20 && $0 < 0x7F }
+            } else if cmd == 0x0E {                                // index item
+                // An inline indexed PHRASE. WordStar prints the phrase in the body —
+                // the index ENTRY is the non-printing part — so dropping the block
+                // risks losing text outright when the phrase is not duplicated in the
+                // visible stream.
+                out += blockContent(block)
+                    .map { $0 & 0x7F }
+                    .filter { $0 >= 0x20 && $0 < 0x7F }
             } else if cmd == 0x11 && block.count > 3 {             // paragraph style
                 let level = [0x05: 1, 0x02: 2, 0x03: 3][Int(block[3])] ?? 0
                 if level != 0 {

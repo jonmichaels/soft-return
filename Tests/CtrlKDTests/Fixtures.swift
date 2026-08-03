@@ -169,3 +169,29 @@ func countOccurrences(of needle: [UInt8], in haystack: [UInt8]) -> Int {
     }
     return count
 }
+
+/// One WS5+ symmetric sequence, with REAL framing: `1D <jump:LE16> <cmd> <content>
+/// <jump:LE16> 1D`. The sequence is BRACKETED BY ITS OWN LENGTH — that is what makes it
+/// "symmetric", and it is exactly what hand-built fixtures kept getting wrong before
+/// ctrl-kd's `tools/ws_fixture.py` (whose self-test checks this framing byte-for-byte
+/// against real WordStar output) settled it.
+///
+/// `jump` counts the command byte, the content, and the 3-byte close, so the parser's
+/// `data[i+1 ..< i+3+jump]` slice lands exactly on the closing bracket.
+func wsBlock(cmd: UInt8, content: [UInt8] = []) -> [UInt8] {
+    let jump = content.count + 4
+    let lo = UInt8(jump & 0xFF), hi = UInt8((jump >> 8) & 0xFF)
+    return [0x1D, lo, hi, cmd] + content + [lo, hi, 0x1D]
+}
+
+/// A WS5+ note block (3=footnote, 4=endnote, 5=annotation, 6=comment) carrying `text`.
+/// Content layout per the WordStar 7.0 spec's Notes section: line-count word, number
+/// word, conversion-flag byte (high nybble = numbering format), then the text.
+func wsNote(cmd: UInt8, _ text: String, number: Int = 1, lineCount: Int = 1) -> [UInt8] {
+    let content: [UInt8] = [
+        UInt8(lineCount & 0xFF), UInt8((lineCount >> 8) & 0xFF),
+        UInt8(number & 0xFF), UInt8((number >> 8) & 0xFF),
+        0x30,
+    ] + Array(text.utf8)
+    return wsBlock(cmd: cmd, content: content)
+}
