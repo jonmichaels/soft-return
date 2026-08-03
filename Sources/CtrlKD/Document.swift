@@ -131,6 +131,18 @@ public struct PageGeometry: Hashable, Sendable {
     /// passes the result in here, matching Python's `doc.meta['page']['text_lines']`
     /// being set once, after the rest of the page dict is assembled.
     public var textLines: Int
+    /// `.pn n` — the number of the page it appears on, so a chapter file in a larger
+    /// manuscript can start where the previous one stopped rather than always at 1.
+    /// MEASURED on WordStar 4 (2026-08-03): `.pn 7` numbers the pages 7, 8, 9 in both
+    /// the header's `#` and the footer's. Defaults to 1.
+    public var pnStart: Int
+    public var pnSource: Provenance
+    /// `.pc n` — the column of the AUTOMATIC page number, the one WordStar prints on
+    /// its own. Measured: it does NOT move a `#` placed inside a header or footer,
+    /// which prints where the author put it. Two separate mechanisms, and conflating
+    /// them was the bug this field exists to keep apart. `nil` when unset.
+    public var pcCol: Int?
+    public var pcSource: Provenance
 
     public init(
         plLines: Double,
@@ -153,7 +165,11 @@ public struct PageGeometry: Hashable, Sendable {
         lsSource: Provenance,
         cw120: Double,
         cwSource: Provenance,
-        textLines: Int
+        textLines: Int,
+        pnStart: Int = 1,
+        pnSource: Provenance = .default,
+        pcCol: Int? = nil,
+        pcSource: Provenance = .default
     ) {
         self.plLines = plLines
         self.heightIn = heightIn
@@ -176,6 +192,10 @@ public struct PageGeometry: Hashable, Sendable {
         self.cw120 = cw120
         self.cwSource = cwSource
         self.textLines = textLines
+        self.pnStart = pnStart
+        self.pnSource = pnSource
+        self.pcCol = pcCol
+        self.pcSource = pcSource
     }
 }
 
@@ -251,6 +271,32 @@ public struct Document: Hashable, Sendable {
     /// Set only by `parsePrintstream`, when the COMMENT.BUG signature (a line ending in
     /// a bare `0x0A` instead of `0x0D 0x0A`) is present.
     public var commentBug: CommentBug?
+    /// Running head text by line number (1-5). `.he` is line 1; `.h1`-`.h5` select
+    /// their own, so a document can carry up to five.
+    ///
+    /// Added 2026-08-03: these are fully-documented dot commands that had NO field
+    /// anywhere in the IR, so their text was captured only in the `dotCommands`
+    /// diagnostic and silently discarded by every emitter — the reserved SPACE was
+    /// honoured, the content was not. A running title or a "Page #" line vanished from
+    /// every page with no indication it had ever existed.
+    ///
+    /// Geometry, MEASURED on WordStar 4 (2026-08-03) rather than inferred:
+    ///
+    ///     line 1        header text          (.he / .h1-.h5)
+    ///     .hm lines     blank                (default 2)
+    ///     .pl-.mt-.mb   body                 (55 at the defaults)
+    ///     .fm lines     blank                (default 2)
+    ///     1 line        footer text          (.fo / .f1-.f5)
+    ///     remainder     blank                (to fill .mb)
+    ///
+    /// so `.mt 3` == header + `.hm 2`, and `.mb 8` == `.fm 2` + footer + 5.
+    ///
+    /// An empty string is a real value, not an absence: an empty argument CLEARS that
+    /// line, which is how WordStar turns a running head off part-way through.
+    public var headers: [Int: String]
+    /// Running foot text by line number (1-5). `.fo` is line 1; `.f1`-`.f5` select
+    /// their own. See `headers` for the measured geometry.
+    public var footers: [Int: String]
     /// Name of the `Era` whose rules were applied (`Era.swift`) — so a caller can see
     /// WHICH release's behaviour this document was parsed under, not just which variant
     /// was detected. Mirrors Python's `meta['era']`.
@@ -271,7 +317,9 @@ public struct Document: Hashable, Sendable {
         footnoteNumberStart: Int? = nil,
         endnoteNumberStart: Int? = nil,
         commentBug: CommentBug? = nil,
-        era: String? = nil
+        era: String? = nil,
+        headers: [Int: String] = [:],
+        footers: [Int: String] = [:]
     ) {
         self.blocks = blocks
         self.footnotes = footnotes
@@ -288,6 +336,8 @@ public struct Document: Hashable, Sendable {
         self.endnoteNumberStart = endnoteNumberStart
         self.commentBug = commentBug
         self.era = era
+        self.headers = headers
+        self.footers = footers
     }
 
     public func iterLines() -> [Line] {

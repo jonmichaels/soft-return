@@ -463,3 +463,76 @@ private func pageTexts(_ page: Page) -> [String] {
     #expect(doc.blocks.contains { $0.kind == .condpage && $0.heading == 1 })
     #expect(docToPagelines(doc, printed: true).count == 1)
 }
+
+// -------------------------------------------------- running heads and page numbers
+
+@Test func headersAndFootersAreCaptured() {
+    // These are fully-documented dot commands that had NO field anywhere in the IR, so
+    // their text was captured only in the `dotCommands` diagnostic and silently
+    // discarded by every emitter — the reserved SPACE was honoured, the content was
+    // not. A running title vanished from every page with no indication it existed.
+    let doc = parseWS(bytes(".he My Running Title\r\n.fo Page #\r\nBody text.\r\n"))
+    #expect(doc.headers[1] == "My Running Title")
+    #expect(doc.footers[1] == "Page #")
+}
+
+@Test func numberedHeaderLinesSelectTheirOwnLine() {
+    let doc = parseWS(bytes(".h1 First\r\n.h3 Third\r\n.f2 Foot two\r\nBody.\r\n"))
+    #expect(doc.headers[1] == "First")
+    #expect(doc.headers[3] == "Third")
+    #expect(doc.headers[2] == nil)
+    #expect(doc.footers[2] == "Foot two")
+}
+
+@Test func anEmptyArgumentClearsTheLineRatherThanBeingIgnored() {
+    // How WordStar turns a running head off part-way through. An empty value must be
+    // STORED as "" — skipping it would leave the earlier title running forever.
+    let doc = parseWS(bytes(".he Title\r\nBody.\r\n.he\r\nMore.\r\n"))
+    #expect(doc.headers[1] == "")
+}
+
+@Test func pnSetsTheStartingPageNumber() {
+    // MEASURED on WordStar 4 (2026-08-03): `.pn 7` numbers the pages 7, 8, 9 in both
+    // the header's `#` and the footer's.
+    let doc = parseWS(bytes(".pn 7\r\nBody.\r\n"))
+    #expect(doc.page?.pnStart == 7)
+    #expect(doc.page?.pnSource == .file)
+    #expect(parseWS(bytes("Body.\r\n")).page?.pnStart == 1)
+    #expect(parseWS(bytes("Body.\r\n")).page?.pnSource == .default)
+}
+
+@Test func pcIsRecordedButDoesNotMoveAHeaderHash() {
+    // `.pc` positions the AUTOMATIC page number. Measured: it does NOT move a `#`
+    // placed inside a header or footer, which prints where the author put it. Two
+    // separate mechanisms — conflating them is the bug this keeps apart.
+    let doc = parseWS(bytes(".pc 40\r\n.fo Page #\r\nBody.\r\n"))
+    #expect(doc.page?.pcCol == 40)
+    #expect(doc.footers[1] == "Page #")          // untouched by .pc
+    #expect(parseWS(bytes("Body.\r\n")).page?.pcCol == nil)
+}
+
+@Test func runningHeadsRenderOnlyInPrintedMode() {
+    let doc = parseWS(bytes(".he Title\r\n.fo Page #\r\nBody text.\r\n"))
+    let printed = runningOps(doc, pageNo: 1, pageHeight: PDFMetrics.pageHeight,
+                             lead: Double(PDFMetrics.lead), size: PDFMetrics.size,
+                             left: 72.0, printed: true)
+    #expect(printed.count == 2)                  // one header op, one footer op
+    let modern = runningOps(doc, pageNo: 1, pageHeight: PDFMetrics.pageHeight,
+                            lead: Double(PDFMetrics.lead), size: PDFMetrics.size,
+                            left: 72.0, printed: false)
+    #expect(modern.isEmpty)                      // Modern reflows; no running heads
+}
+
+@Test func hashBecomesThePageNumberAndOPSuppressesIt() {
+    func footerText(_ src: String, page: Int) -> String {
+        let doc = parseWS(bytes(src))
+        let ops = runningOps(doc, pageNo: page, pageHeight: PDFMetrics.pageHeight,
+                             lead: Double(PDFMetrics.lead), size: PDFMetrics.size,
+                             left: 72.0, printed: true)
+        return ops.map { String(decoding: $0, as: UTF8.self) }.joined()
+    }
+    #expect(footerText(".fo Page #\r\nBody.\r\n", page: 3).contains("(Page 3)"))
+    // `.op` — "omit page number ... unless the # has been used in footers or headers".
+    // The token is left OUT, not printed literally.
+    #expect(footerText(".op\r\n.fo Page #\r\nBody.\r\n", page: 3).contains("(Page )"))
+}

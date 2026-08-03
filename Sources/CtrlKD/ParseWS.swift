@@ -166,6 +166,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var producer: String? = nil
     var footnoteNumberStart: Int? = nil
     var endnoteNumberStart: Int? = nil
+    var headers: [Int: String] = [:]
+    var footers: [Int: String] = [:]
 
     var blocks: [Block] = []
     var cur = Block(kind: .para)
@@ -212,6 +214,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
                cmd.contains(0x21) {                                             // '!'
                 ruler = true
             }
+            parseHeadFoot(cmd, headers: &headers, footers: &footers)
             parsePageDot(
                 cmd,
                 page: &page,
@@ -324,7 +327,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
         // Placeholder: the real figure needs the rest of the struct assembled first
         // (mirrors Python setting `doc.meta['page']['text_lines']` as a second step,
         // after building the page dict) — overwritten immediately below.
-        textLines: 1
+        textLines: 1,
+        pnStart: page.pnStart.map { Int($0) } ?? 1,
+        pnSource: page.pnStart != nil ? .file : .default,
+        pcCol: page.pcCol.map { Int($0) },
+        pcSource: page.pcCol != nil ? .file : .default
     )
     // The one derived figure consumers actually need: printed text lines per page, from
     // WordStar's own vertical model (see `textLinesPerPage` for the formula and the
@@ -346,7 +353,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
         producer: producer,
         footnoteNumberStart: footnoteNumberStart,
         endnoteNumberStart: endnoteNumberStart,
-        era: era.name
+        era: era.name,
+        headers: headers,
+        footers: footers
     )
 }
 
@@ -414,6 +423,8 @@ private struct PageAccumulator {
     var lh48: Double?
     var ls: Double?
     var cw120: Double?
+    var pnStart: Double?
+    var pcCol: Double?
 }
 
 /// Named page sizes at 6 LPI (WordStar 7.0 file format spec: ".PL ... assuming 6
@@ -615,6 +626,41 @@ func textLinesPerPage(pl: Double, mt: Double, mb: Double, lh48: Double) -> Int {
     return max(1, Int(usable * 8.0 / lh48))
 }
 
+/// Record `.he`/`.h1`-`.h5` and `.fo`/`.f1`-`.f5` text on the document.
+///
+/// `.HE` and `.FO` are line 1; the numbered forms select their own line, so a document
+/// can carry up to five of each. An empty argument CLEARS that line, which is how
+/// WordStar turns a running head off part-way through — so an empty value is STORED as
+/// `""` and not skipped.
+///
+/// The text is kept verbatim, `#` included: the page-number substitution depends on
+/// which page it lands on and belongs to the emitter, not here. Direct port of
+/// `_parse_head_foot` (Python regex `^\.(H[E1-5]|F[O1-5])\s?(.*)$`, case-insensitive).
+func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout [Int: String]) {
+    guard cmd.count >= 3 else { return }
+    let first = asciiUppercased(cmd[1])
+    let second = asciiUppercased(cmd[2])
+    guard first == 0x48 || first == 0x46 else { return }          // 'H' or 'F'
+    let line: Int
+    if (first == 0x48 && second == 0x45) || (first == 0x46 && second == 0x4F) {
+        line = 1                                                   // .HE / .FO
+    } else if second >= 0x31 && second <= 0x35 {
+        line = Int(second - 0x30)                                  // .H1-.H5 / .F1-.F5
+    } else {
+        return
+    }
+    // Python's `\s?` consumes at most ONE space after the command, so a deliberately
+    // indented running head keeps the rest of its leading spaces.
+    var rest = Array(cmd.dropFirst(3))
+    if rest.first == 0x20 { rest.removeFirst() }
+    let text = decodeCP437(rstrippingASCIIWhitespace(rest))
+    if first == 0x48 {
+        headers[line] = text
+    } else {
+        footers[line] = text
+    }
+}
+
 /// The n of a `.cp n`, defaulting to 1 (a bare `.cp` asks for one line).
 ///
 /// Stored on the block so the paginator can apply the rule measured on WordStar 4 on
@@ -731,6 +777,19 @@ private func parsePageDot(
     case "CW":
         guard page.cw120 == nil, let (value, unit) = parseDotNumber(arg) else { return }
         if let resolved = resolveCwArg(value, unit) { page.cw120 = resolved }
+    case "PN":
+        // `.pn n` sets the number of the page it appears on, so the document does not
+        // have to start at 1 — a chapter file in a larger manuscript starts wherever
+        // the previous one stopped. MEASURED on WordStar 4 (2026-08-03): `.pn 7`
+        // numbers the pages 7, 8, 9 in both the header's `#` and the footer's.
+        guard page.pnStart == nil, let (value, _) = parseDotNumber(arg) else { return }
+        page.pnStart = value
+    case "PC":
+        // `.pc n` is the column of the AUTOMATIC page number — the one WordStar prints
+        // on its own. Measured: it does NOT move a `#` placed inside a header or
+        // footer, which prints where the author put it. Two separate mechanisms.
+        guard page.pcCol == nil, let (value, _) = parseDotNumber(arg) else { return }
+        page.pcCol = value
     case "PT", "PSA", "PSB":
         // WordTsar's own invented dot commands (its source calls them "not a Wordstar
         // command"). A real WordStar file never contains these -- their presence IS

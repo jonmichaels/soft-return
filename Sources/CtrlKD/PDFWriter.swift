@@ -132,12 +132,78 @@ private func rule(xFrom: Double, xTo: Double, y: Double) -> [UInt8] {
 /// unaffected by this change. The DEFAULT left/size (72.0/12, both accumulated from integer
 /// starts) are exact at every step, so every document that never sets `.po`/`.cw` still
 /// produces byte-identical output to before this change.
+/// Header and footer text for one page, as content-stream ops.
+///
+/// Geometry MEASURED on WordStar 4 (2026-08-03), not inferred:
+///
+///     line 0                      header line 1
+///     ...                         header lines 2-5, if used
+///     .hm blank lines
+///     body
+///     .fm blank lines
+///     line pl-.mb+.fm             footer line 1
+///
+/// so the header sits at the very top of the paper and the footer `.fm` lines below the
+/// body's last line. `#` becomes the page number — WordStar's own token, seen rendering
+/// as "PAGE 1 / PAGE 2 / PAGE 3" in the probe.
+///
+/// `.op` ("omit page number ... unless the # has been used in footers or headers")
+/// suppresses the substitution, leaving the token out rather than printing a literal `#`.
+///
+/// Printed mode only: Modern mode reflows and has no running heads.
+func runningOps(
+    _ doc: Document, pageNo: Int, pageHeight: Int, lead: Double, size: Int,
+    left: Double, printed: Bool
+) -> [[UInt8]] {
+    guard printed, !(doc.headers.isEmpty && doc.footers.isEmpty) else { return [] }
+    let omit = doc.dotCommands.contains { cmd in
+        let head = cmd.drop(while: { $0 == "." }).prefix(while: { !$0.isWhitespace })
+        return head.lowercased() == "op"
+    }
+    let pl = Int(doc.page?.plLines ?? defaultPlLines)
+    let mb = Int(doc.page?.mbLines ?? defaultMbLines)
+    let fm = Int(doc.page?.fmLines ?? 2)
+
+    // `#` -> the page number. Written by hand because this module imports nothing —
+    // `replacingOccurrences` is Foundation, which CtrlKD deliberately does without.
+    func render(_ txt: String) -> String {
+        let replacement = omit ? "" : String(pageNo)
+        var out = ""
+        for ch in txt {
+            if ch == "#" { out += replacement } else { out.append(ch) }
+        }
+        return out
+    }
+    func op(_ txt: String, line: Int) -> [UInt8]? {
+        let y = Double(pageHeight) - Double(line) * lead - Double(size)
+        guard y >= 0 else { return nil }
+        var out = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
+        out += Array("\(fixedOneDecimalDouble(left)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+        out += esc(render(txt))
+        out += Array(") Tj ET".utf8)
+        return out
+    }
+
+    var ops: [[UInt8]] = []
+    for n in doc.headers.keys.sorted() {
+        guard let txt = doc.headers[n], !txt.isEmpty else { continue }
+        if let o = op(txt, line: n - 1) { ops.append(o) }
+    }
+    let footLine = pl - mb + fm
+    for n in doc.footers.keys.sorted() {
+        guard let txt = doc.footers[n], !txt.isEmpty else { continue }
+        if let o = op(txt, line: footLine + n - 1) { ops.append(o) }
+    }
+    return ops
+}
+
 func pageStream(
     _ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHeight,
     lead: Double = Double(PDFMetrics.lead), size: Int = PDFMetrics.size,
-    left: Double = Double(PDFMetrics.margin)
+    left: Double = Double(PDFMetrics.margin),
+    running: [[UInt8]] = []
 ) -> [UInt8] {
-    var ops: [[UInt8]] = []
+    var ops: [[UInt8]] = running
     // sup/sub size, derived once — Python: `max(1, round(size * 2 / 3))`. 8 at the
     // default size 12, same figure the writer hardcoded before ctrl-kd 2.0.0.
     let supSize = max(1, roundHalfToEven(Double(size * 2) / 3.0))
@@ -266,7 +332,13 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         \(pageHeight)] /Resources << /Font << \(fontDict) >> >> \
         /Contents \(contentNums[i]) 0 R >>
         """.utf8)))
-        let stream = pageStream(page, top: top, pageHeight: pageHeight, lead: lead, size: size, left: left)
+        // `.pn n` sets the number of the page it appears on, so a chapter file in a
+        // larger manuscript numbers from where the previous one stopped.
+        let startNo = doc.page?.pnStart ?? 1
+        let running = runningOps(doc, pageNo: startNo + i, pageHeight: pageHeight,
+                                 lead: lead, size: size, left: left, printed: printed)
+        let stream = pageStream(page, top: top, pageHeight: pageHeight, lead: lead,
+                                size: size, left: left, running: running)
         var body = Array("<< /Length \(stream.count) >>\nstream\n".utf8)
         body += stream
         body += Array("\nendstream".utf8)
