@@ -109,3 +109,39 @@ import Testing
     #expect(!emitRTF(doc, mode: .modern).contains(#"\qc"#))
     #expect(!emitRTF(doc, mode: .modern).contains(#"\ql"#))
 }
+
+@Test func marginsArePerBlockStateNotFirstOccurrence() {
+    // C9. `.lm`/`.rm`/`.pm` are stateful, and emphatically not first-occurrence the way
+    // page geometry is — one archive file sets `.pm` seven hundred times.
+    let doc = parseWS(bytes(".lm 5\r\n.rm 60\r\nIndented.\r\n.pm 4\r\nPara margin.\r\n"))
+    #expect(doc.blocks.map { [$0.leftMargin, $0.rightMargin, $0.paraMargin] }
+            == [[5.0, 60.0, nil], [5.0, 60.0, 4.0]])
+    // never set -> nil, so a consumer applies its own default rather than a fabricated one
+    let plain = parseWS(bytes("Plain.\r\n")).blocks[0]
+    #expect(plain.leftMargin == nil && plain.rightMargin == nil && plain.paraMargin == nil)
+}
+
+@Test func marginsAcceptColumnsAndInches() {
+    // The archive writes both `.rm 65` and `.rm 6.5"`.
+    #expect(parseWS(bytes(".rm 65\r\nT.\r\n")).blocks[0].rightMargin == 65.0)
+    #expect(parseWS(bytes(".rm 6.5\"\r\nT.\r\n")).blocks[0].rightMargin == 65.0)
+}
+
+@Test func centeringMeasuresAgainstTheDocumentsOwnMargins() {
+    // A centred line sits between `.lm` and `.rm`, not inside a hardcoded width — so
+    // narrowing the margin moves the centre.
+    func indent(_ src: String) -> Int {
+        var doc = parseWS(bytes(src))
+        doc.detection = Detection(variant: .ws4, softReturns: 0, hardReturns: 3,
+                                  highBitBytes: 0, textPct: 100, symmetricBlocks1D: 0,
+                                  size: 40)
+        let line = emitText(doc, mode: .modern).split(separator: "\n")
+            .first { !String($0).trimmed().isEmpty } ?? ""
+        return line.count - String(line).trimmed().count
+    }
+    let narrow = indent(".rm 40\r\n.oc on\r\nCentre me.\r\n")
+    let wide = indent(".rm 70\r\n.oc on\r\nCentre me.\r\n")
+    #expect(narrow < wide)
+    // `.lm` shifts the centre too: WordStar centres BETWEEN the margins
+    #expect(indent(".lm 10\r\n.rm 40\r\n.oc on\r\nCentre me.\r\n") > narrow)
+}

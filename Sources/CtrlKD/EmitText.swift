@@ -39,11 +39,18 @@ private func textSpan(_ span: Span, refNotes: [Note], doc: Document, options: Em
 }
 
 @Sendable
-/// The column text is laid out within, for centring and right-alignment. `.rm` is what
-/// WordStar itself measures against (the archive's common values are 65 and 60); absent
-/// that, the 65 this project already wraps at.
-func textWidth(_ doc: Document) -> Int {
-    PDFMetrics.maxCols
+/// The column this BLOCK's text is laid out within, for centring and right-alignment.
+///
+/// `.rm` is what WordStar itself measures against, and it is per-block because it is
+/// stateful — a quoted passage narrows the margin and the passage after it widens back.
+/// The archive's most common values are 65 and 60. Absent any `.rm`, fall back to the
+/// width the rest of this project already wraps at.
+///
+/// `.lm` is added back on: WordStar centres BETWEEN the two margins, so a block indented
+/// to column 5 with a right margin at 60 centres about column 32, not column 30.
+func textWidth(_ block: Block) -> Int {
+    let rm = (block.rightMargin ?? 0) > 0 ? block.rightMargin! : Double(PDFMetrics.maxCols)
+    return Int(rm + (block.leftMargin ?? 0))
 }
 
 /// Centre or right-align a block's lines within the text width. Register C16/C17.
@@ -52,9 +59,10 @@ func textWidth(_ doc: Document) -> Int {
 /// already has, and a plain-text rendering that padded to a hard column would fabricate
 /// whitespace the author never typed. Left and justify therefore render identically here,
 /// and the distinction survives in the IR for the formats that CAN express it.
-func alignLines(_ lines: [String], _ align: Alignment, _ doc: Document) -> [String] {
+func alignLines(_ lines: [String], _ block: Block) -> [String] {
+    let align = block.align
     guard align == .center || align == .right else { return lines }
-    let width = textWidth(doc)
+    let width = textWidth(block)
     return lines.map { line in
         let stripped = line.trimmed()
         if stripped.isEmpty { return line }
@@ -83,7 +91,7 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
         // logical lines, soft runs joined back (`mergedLines`, ctrl-kd 2.0.0).
         let rendered = (printed ? block.lines : mergedLines(block))
             .map { line in line.spans.map { textSpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
-        let para = alignLines(rendered, block.align, doc).joined(separator: "\n")
+        let para = alignLines(rendered, block).joined(separator: "\n")
         // emit.py:69 — in printed mode an all-whitespace paragraph is still a printed
         // paragraph and is kept.
         if !para.trimmed().isEmpty || mode == .printed {

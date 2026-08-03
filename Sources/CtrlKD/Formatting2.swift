@@ -30,11 +30,35 @@ struct FormatState {
     var orientation: Orientation? = nil     // `.pr`  C18
     var subSuperRoll48: Double? = nil       // `.sr`  C22
 
+    // `.lm` / `.rm` / `.pm` — per-block, not document-wide. C9.
+    var leftMargin: Double? = nil
+    var rightMargin: Double? = nil
+    var paraMargin: Double? = nil
+
+    /// Everything stamped onto a `Block` when it opens. A change to ANY of these has to
+    /// close the current block, because a single block cannot hold two values of it:
+    /// `.oc on` mid-paragraph means the lines after it are centred and the ones before
+    /// are not, and `.lm 5` mid-paragraph means the same about the indent.
+    var blockFormat: BlockFormat {
+        BlockFormat(align: alignment, wrap: wrap ?? true, leftMargin: leftMargin,
+                    rightMargin: rightMargin, paraMargin: paraMargin)
+    }
+
     /// The alignment in force.
     var alignment: Alignment {
         if centering == true { return .center }
         return justify ?? .left
     }
+}
+
+/// The tuple of per-block formatting, compared to decide whether a dot command has to
+/// close the block it interrupts.
+struct BlockFormat: Equatable {
+    var align: Alignment
+    var wrap: Bool
+    var leftMargin: Double?
+    var rightMargin: Double?
+    var paraMargin: Double?
 }
 
 public enum Orientation: String, Hashable, Sendable {
@@ -126,6 +150,16 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         if a.starts(with: Array("or=".utf8)), a.count > 3 {
             if a[3] == 0x6C { state.orientation = .landscape }      // 'l'
             else if a[3] == 0x70 { state.orientation = .portrait }  // 'p'
+        }
+    case "LM", "RM", "PM":
+        // Print columns at 10 CPI, matching `.po`; a unit suffix converts, since the
+        // archive writes both `.rm 65` and `.rm 6.5"`.
+        guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
+        let cols = resolveColsArg(value, unit)
+        switch String(decoding: name.map(asciiUpper), as: UTF8.self) {
+        case "LM": state.leftMargin = cols
+        case "RM": state.rightMargin = cols
+        default: state.paraMargin = cols
         }
     case "SR":
         if let roll = parseSRArg(arg) { state.subSuperRoll48 = roll }

@@ -46,11 +46,25 @@ public struct Block: Hashable, Sendable {
     /// Register C23: with wrap off the author is positioning lines by hand, so a
     /// reflowing consumer must NOT re-wrap them or the layout is destroyed.
     public var wrap: Bool
+    /// `.lm` / `.rm` / `.pm` in force when this block opened, in print COLUMNS (10 CPI,
+    /// the same unit `.po` uses). `nil` means the file never set it, so a consumer
+    /// applies its own default rather than a fabricated one. Register C9.
+    ///
+    /// Stateful like the alignment above, and emphatically NOT first-occurrence: one
+    /// archive file sets `.pm` seven hundred times. `.pm` is the PARAGRAPH margin — the
+    /// first line's own indent — which is why it is separate from `.lm`.
+    public var leftMargin: Double?
+    public var rightMargin: Double?
+    public var paraMargin: Double?
 
     public init(
         kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0,
-        align: Alignment = .left, wrap: Bool = true
+        align: Alignment = .left, wrap: Bool = true,
+        leftMargin: Double? = nil, rightMargin: Double? = nil, paraMargin: Double? = nil
     ) {
+        self.leftMargin = leftMargin
+        self.rightMargin = rightMargin
+        self.paraMargin = paraMargin
         self.kind = kind
         self.lines = lines
         self.heading = heading

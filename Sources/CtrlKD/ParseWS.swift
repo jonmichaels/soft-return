@@ -173,7 +173,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var fmt = FormatState()
 
     var blocks: [Block] = []
-    var cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true)
+    var cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true,
+                      leftMargin: fmt.leftMargin, rightMargin: fmt.rightMargin,
+                      paraMargin: fmt.paraMargin)
     var curLine = Line()
 
     // core.py:275-286 — empty lines and empty blocks are never appended.
@@ -188,7 +190,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
         if !cur.lines.isEmpty {
             blocks.append(cur)
         }
-        cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true)
+        cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true,
+                      leftMargin: fmt.leftMargin, rightMargin: fmt.rightMargin,
+                      paraMargin: fmt.paraMargin)
     }
 
     for physical in pass.lines {
@@ -221,9 +225,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // A formatting change starts a NEW block: `.oc on` mid-paragraph means the
             // lines after it are centred and the ones before it are not, and a single
             // block cannot hold both.
-            let beforeFmt = (fmt.alignment, fmt.wrap ?? true)
+            let beforeFmt = fmt.blockFormat
             applyFormatDot(cmd, &fmt)
-            if (fmt.alignment, fmt.wrap ?? true) != beforeFmt {
+            if fmt.blockFormat != beforeFmt {
                 closeBlock()
             }
             parsePageDot(
@@ -582,7 +586,7 @@ private func resolveLinesArg(_ value: Double, _ unit: [UInt8]?) -> Double {
 }
 
 /// `.po` argument -> print columns, at 10 CPI. Unit-less IS columns.
-private func resolveColsArg(_ value: Double, _ unit: [UInt8]?) -> Double {
+func resolveColsArg(_ value: Double, _ unit: [UInt8]?) -> Double {
     guard let inches = dotArgInches(value, unit) else { return value }
     return inches * 10.0
 }
