@@ -77,6 +77,14 @@
      "sep": "para"
     },
     {
+     "text_hex": "",
+     "sep": "blank-hard"
+    },
+    {
+     "text_hex": "",
+     "sep": "blank-soft"
+    },
+    {
      "text_hex": "5365636f6e64207061726167726170682e",
      "sep": "eof"
     }
@@ -93,6 +101,14 @@
     {
      "text_hex": "2020202020616e6f746865722073686f7274206c696e652e",
      "sep": "para"
+    },
+    {
+     "text_hex": "",
+     "sep": "blank-hard"
+    },
+    {
+     "text_hex": "",
+     "sep": "blank-soft"
     },
     {
      "text_hex": "20202020205365636f6e64207374616e7a61206f70656e732c",
@@ -145,6 +161,14 @@
      "sep": "para"
     },
     {
+     "text_hex": "",
+     "sep": "blank-hard"
+    },
+    {
+     "text_hex": "",
+     "sep": "blank-soft"
+    },
+    {
      "text_hex": "426f647920746578742e",
      "sep": "eof"
     }
@@ -157,6 +181,10 @@
     {
      "text_hex": "7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a2066696c6c6572",
      "sep": "wrap"
+    },
+    {
+     "text_hex": "",
+     "sep": "blank-soft"
     },
     {
      "text_hex": "636f6e74696e756573206f6e2e",
@@ -189,6 +217,10 @@
     {
      "text_hex": "416e6f746865722068617264206c696e65",
      "sep": "para"
+    },
+    {
+     "text_hex": "",
+     "sep": "blank-hard"
     },
     {
      "text_hex": "416674657220626c616e6b2e",

@@ -42,10 +42,30 @@ public func mergedLines(_ block: Block) -> [Line] {
     var out: [Line] = []
     var cur: Line? = nil
     for line in block.lines {
+        if line.spans.isEmpty {
+            // A blank PHYSICAL line (2026-08-03). Printed renders it; reflow does
+            // not — Modern emits its own blank between paragraphs, and a `.ls 2`
+            // filler line is typography, not a logical line of text.
+            continue
+        }
         if cur == nil {
             cur = Line(spans: line.spans)
         } else {
-            cur!.spans.append(contentsOf: line.spans)
+            // A soft-wrapped CONTINUATION carries WordStar's own re-emitted left
+            // indent — a `.lm`/tab the program stamps onto every wrapped line, not
+            // something the author typed. Printed renders it (it really is on the
+            // paper); reflow must not, or the indent lands mid-paragraph.
+            var spans = line.spans
+            while let f = spans.first, f.text.allSatisfy({ $0 == " " }), !f.text.isEmpty {
+                spans.removeFirst()
+            }
+            if let f = spans.first {
+                let stripped = String(f.text.drop(while: { $0 == " " }))
+                if stripped != f.text {
+                    spans[0] = Span(text: stripped, styles: f.styles)
+                }
+            }
+            cur!.spans.append(contentsOf: spans)
         }
         if line.soft {
             let t = cur!.spans.last?.text ?? ""

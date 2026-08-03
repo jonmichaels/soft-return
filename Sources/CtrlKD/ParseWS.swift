@@ -241,6 +241,24 @@ public func parseWS(_ data: [UInt8]) -> Document {
             }
         case .line:
             closeLine()
+        case .blankSoft, .blankHard:
+            // A blank physical line. It is CONTENT in printed mode (it occupied a
+            // line on paper) and it does NOT close the block — the text line before
+            // it already carried `.para` if this run was a paragraph boundary.
+            // `soft` records which kind it was: `.ls` filler versus the author's own
+            // return.
+            closeLine()
+            let blank = Line(spans: [], soft: physical.separator == .blankSoft)
+            if cur.lines.isEmpty, let last = blocks.indices.last,
+               blocks[last].kind == .para {
+                // The text line before this one carried `.para` and already closed
+                // its block, so `cur` is empty. On paper this blank FOLLOWS that
+                // paragraph — attach it there, so a paragraph block still starts
+                // with text and the linear order is unchanged.
+                blocks[last].lines.append(blank)
+            } else {
+                cur.lines.append(blank)
+            }
         case .para, .eof:
             closeBlock()
         }

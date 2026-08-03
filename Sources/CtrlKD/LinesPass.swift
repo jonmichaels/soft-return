@@ -16,6 +16,11 @@ public enum LineSeparator: String, Hashable, Sendable {
     case para
     /// End of input.
     case eof
+    /// A blank physical line whose terminator was SOFT — the filler that a line
+    /// spacing greater than one materialises into the file. Added 2026-08-03.
+    case blankSoft = "blank-soft"
+    /// A blank physical line whose terminator was HARD — the author's own Return.
+    case blankHard = "blank-hard"
 }
 
 /// One physical line and the break that followed it. `text` is the RAW bytes as they
@@ -75,8 +80,22 @@ public func linesPass(_ data: [UInt8]) -> LinesPassResult {
     while i < lines.count {
         let (text, kind) = (lines[i].text, lines[i].kind)
         let vis = visible(text)
-        // core.py:128-130 — blank lines are never emitted; they only feed the break run.
+        // A blank line is CONTENT, not a delimiter (2026-08-03, matching core.py).
+        // It used to be skipped here and counted only to classify the PREVIOUS
+        // line's separator, then discarded — which on a real double-spaced 1992
+        // essay deleted 221 of 448 physical lines, took the author's chapter drop
+        // with it, and changed the page count.
+        //
+        // The RAW bytes are kept, never emptied: a line can be visually blank and
+        // still carry style toggles, and dropping them would unstyle everything
+        // after it. The terminator KIND is carried because WordStar distinguishes
+        // them — soft blanks are `.ls` filler and are suppressed at a page top,
+        // hard blanks are the author's and print.
         if isBlank(vis) {
+            if kind != .eof {
+                out.append(PhysicalLine(text: text,
+                                        separator: kind == .soft ? .blankSoft : .blankHard))
+            }
             i += 1
             continue
         }
@@ -121,6 +140,15 @@ public func linesPass(_ data: [UInt8]) -> LinesPassResult {
             }
         }
         out.append(PhysicalLine(text: text, separator: sep))
+        // The blanks this run consumed, in document order, after the line they
+        // follow. They were counted above to classify `sep` and are now also kept
+        // as content — the counting and the keeping are separate jobs.
+        if i + 1 < j {
+            for b in (i + 1)..<j where lines[b].kind != .eof {
+                out.append(PhysicalLine(text: lines[b].text,
+                                        separator: lines[b].kind == .soft ? .blankSoft : .blankHard))
+            }
+        }
         i = j
     }
     return LinesPassResult(lines: out, margin: margin)

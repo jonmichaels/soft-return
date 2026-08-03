@@ -7,7 +7,13 @@ import Testing
 @Test func wrapJoinsProse() {
     // Mirrors test_wrap_joins_prose.
     let result = linesPass(makeProse())
-    #expect(result.lines.map(\.separator) == [.wrap, .wrap, .para, .eof])
+    // 2026-08-03: blank lines are CONTENT now and are emitted with their own
+    // terminator kind, after the line they follow. The text lines' own
+    // classification is unchanged — assert that separately from the blanks.
+    let seps = result.lines.map(\.separator)
+    #expect(seps.filter { $0 != .blankSoft && $0 != .blankHard }
+            == [.wrap, .wrap, .para, .eof])
+    #expect(seps.filter { $0 == .blankSoft || $0 == .blankHard }.count == 2)
 }
 
 @Test func poemLinesKept() {
@@ -18,7 +24,13 @@ import Testing
                bytes("     another short line.") + SOFT + HARD + SOFT +
                bytes("     Second stanza opens,") + SOFT +
                bytes("     and closes.") + HARD
-    #expect(linesPass(poem).lines.map(\.separator) == [.line, .para, .line, .eof])
+    let seps = linesPass(poem).lines.map(\.separator)
+    #expect(seps.filter { $0 != .blankSoft && $0 != .blankHard }
+            == [.line, .para, .line, .eof])
+    // the stanza gap is SOFT+HARD+SOFT = two real blank lines on paper, and both
+    // survive with their own terminator kinds
+    #expect(seps.filter { $0 == .blankSoft || $0 == .blankHard }
+            == [.blankHard, .blankSoft])
 }
 
 @Test func wrapBoundaryIsStrict() {
@@ -34,7 +46,11 @@ import Testing
     // Mirrors test_single_hard_is_line_break.
     let data = bytes("Jon Michaels") + SOFT + bytes("March 6, 1992") + SOFT + HARD + SOFT +
                bytes("Body text.") + HARD
-    #expect(linesPass(data).lines.map(\.separator) == [.line, .para, .eof])
+    let seps = linesPass(data).lines.map(\.separator)
+    #expect(seps.filter { $0 != .blankSoft && $0 != .blankHard }
+            == [.line, .para, .eof])
+    #expect(seps.filter { $0 == .blankSoft || $0 == .blankHard }
+            == [.blankHard, .blankSoft])
 }
 
 @Test func doubleSpacedWrapCollapses() {
