@@ -112,8 +112,12 @@ private func decodeSpans(
 /// Parse a WordStar document (WS4 or WS5+) into the IR. core.py:255-325.
 public func parseWS(_ data: [UInt8]) -> Document {
     let detection = detect(data)
-    let stripHibit = detection.variant == .ws4
-    let ws5 = detection.variant == .ws5plus
+    // Behaviour comes from the era table, never from a `variant ==` test — see
+    // `Era.swift`. An unknown variant resolves to the WS5+ entry, which does not
+    // strip high bits: the least destructive guess.
+    let era = eraFor(detection.variant)
+    let stripHibit = era.highBitWordwrap
+    let ws5 = era.symmetricBlocks
 
     // core.py:261-264 — the ws5+ gate is CORRECTNESS, not an optimization:
     // `symmetricBlocks` treats every 0x1D as a block-start marker, so running it on a
@@ -319,7 +323,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
         page: pageGeometry,
         producer: producer,
         footnoteNumberStart: footnoteNumberStart,
-        endnoteNumberStart: endnoteNumberStart
+        endnoteNumberStart: endnoteNumberStart,
+        era: era.name
     )
 }
 

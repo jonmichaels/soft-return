@@ -251,6 +251,10 @@ public struct Document: Hashable, Sendable {
     /// Set only by `parsePrintstream`, when the COMMENT.BUG signature (a line ending in
     /// a bare `0x0A` instead of `0x0D 0x0A`) is present.
     public var commentBug: CommentBug?
+    /// Name of the `Era` whose rules were applied (`Era.swift`) — so a caller can see
+    /// WHICH release's behaviour this document was parsed under, not just which variant
+    /// was detected. Mirrors Python's `meta['era']`.
+    public var era: String?
 
     public init(
         blocks: [Block] = [],
@@ -266,7 +270,8 @@ public struct Document: Hashable, Sendable {
         producer: String? = nil,
         footnoteNumberStart: Int? = nil,
         endnoteNumberStart: Int? = nil,
-        commentBug: CommentBug? = nil
+        commentBug: CommentBug? = nil,
+        era: String? = nil
     ) {
         self.blocks = blocks
         self.footnotes = footnotes
@@ -282,6 +287,7 @@ public struct Document: Hashable, Sendable {
         self.footnoteNumberStart = footnoteNumberStart
         self.endnoteNumberStart = endnoteNumberStart
         self.commentBug = commentBug
+        self.era = era
     }
 
     public func iterLines() -> [Line] {
