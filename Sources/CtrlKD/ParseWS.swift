@@ -407,9 +407,9 @@ private let namedPageHeights: [(name: String, heightIn: Double)] = [
 /// honour the raw geometry instead of forcing a label onto it.
 private let pageSizeSnapIn = 0.25
 
-private let defaultPlLines = 66.0   // WordStar's own default: 66 lines = 11in = US Letter
-private let defaultMtLines = 3.0    // spec: ".MT ... Default value is 3 lines."
-private let defaultMbLines = 8.0    // spec: ".MB ... The default value is 8 lines."
+let defaultPlLines = 66.0   // WordStar's own default: 66 lines = 11in = US Letter
+let defaultMtLines = 3.0    // spec: ".MT ... Default value is 3 lines."
+let defaultMbLines = 8.0    // spec: ".MB ... The default value is 8 lines."
 private let defaultPoCols = 8.0     // WS7 manual, "Page Layout": "The default page offset
                                     // is .8 inch" -- 8 print columns at the default 10 CPI.
                                     // (Through ctrl-kd 1.3.0 this was 0, "least
@@ -418,7 +418,7 @@ private let defaultPoCols = 8.0     // WS7 manual, "Page Layout": "The default p
                                     // renders the offset, so the manual's figure governs.)
 private let defaultHmLines = 2.0    // spec: ".HM ... Default is 2." (header sits INSIDE .mt)
 private let defaultFmLines = 2.0    // spec: ".FM ... Default is 2." (footer sits INSIDE .mb)
-private let defaultLh48 = 8.0       // spec: ".LH ... The default is 8/48 or 6 lines per inch."
+let defaultLh48 = 8.0       // spec: ".LH ... The default is 8/48 or 6 lines per inch."
 private let defaultLs = 1.0         // single spacing (WS7 manual, "Line Spacing")
 private let defaultCw120 = 12.0     // spec: ".CW ... The default is 12 (12/120ths is 10
                                     // characters per inch)."

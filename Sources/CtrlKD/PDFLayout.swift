@@ -450,10 +450,9 @@ private func resolvedPrintedPageHeight(_ doc: Document) -> Int {
 /// (`textLinesPerPage`/Python's `_text_lines_per_page`: `.pl - .mt - .mb` at the `.lh` line
 /// height — 55 for WordStar's own defaults, NOT the 60 a naive 1in-margin computation gave
 /// before this fix). Print streams (`ParsePrintstream.swift`'s `parsePrintstream` — no `page`
-/// meta at all) have no dot commands to resolve geometry from and ARE the printed page
-/// themselves: their margin blanks travel in-band (see `docToPagelines`'s machine-margin
-/// rule), so their budget is the FULL page height in lines (66 on Letter) — anything smaller
-/// would split a physical page the printer produced whole.
+/// meta at all) get the SAME model, from WordStar's documented defaults — see the body for
+/// why the previous "their margin blanks travel in-band, so give them the full 66" reasoning
+/// was retracted.
 ///
 /// Clamped to at least `footnoteFloor + 1` lines either way, so a degenerate/tiny page can
 /// never divide the page-bottom math by, or loop over, too little room.
@@ -461,8 +460,30 @@ func printedCap(_ doc: Document) -> Int {
     if let page = doc.page {
         return max(footnoteFloor + 1, page.textLines)
     }
-    let pageHeight = resolvedPrintedPageHeight(doc)
-    return max(footnoteFloor + 1, pageHeight / PDFMetrics.lead)
+    // PRINT STREAMS GET THE SAME MODEL. Corrected 2026-08-03 (Jon's ruling: "print
+    // streams need to follow WordStar standards, not our falsely invented ones").
+    // This used to hand a print stream the FULL page height — 66 lines on Letter —
+    // justified by the claim that "their margin blanks travel in-band". That claim
+    // was checked against raw bytes and is FALSE for real print-to-disk output: such
+    // a stream carries no form feeds, and no top margin after its first page. It is
+    // not a stack of whole physical pages; it is a run of printed lines. Paginating
+    // it at 66 invented a page size WordStar does not document and no evidence
+    // supports.
+    //
+    // So a stream with no page metadata falls back to WordStar's documented defaults,
+    // the same as a document that declares none: .pl 66 - .mt 3 - .mb 8 = 55 lines.
+    // That is what WordStar 4 itself produces when run (its live output shows 11-line
+    // inter-page gaps = .mb 8 + .mt 3, on a 66-line pitch), and it makes the three
+    // renderings of one document — the WS4 source, its print stream, and the live
+    // program — finally agree at 9 pages, which none of them did before.
+    //
+    // KNOWN LIMIT, recorded rather than papered over: a print stream that DOES carry
+    // its margins in band (WordStar 4's live output does) now gets margin on top of
+    // margin. Distinguishing the two cases needs evidence we do not have, and
+    // inventing a detector is exactly what this change undoes.
+    return max(footnoteFloor + 1,
+               textLinesPerPage(pl: defaultPlLines, mt: defaultMtLines,
+                                mb: defaultMbLines, lh48: defaultLh48))
 }
 
 /// Top-of-text offset in points for printed mode. Port of Python's `_printed_top` (pdf.py,

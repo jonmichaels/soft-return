@@ -67,6 +67,14 @@ public let eras: [Variant: Era] = [
                       hasNotes: false, hasSB: false, columnUnit: .tenthInch, pcDefault: 28),
     .text: Era(name: "printstream", highBitWordwrap: false, symmetricBlocks: false,
                hasNotes: false, hasSB: false, columnUnit: .tenthInch, pcDefault: 28),
+    // `binary` is a DETECTED variant, not an unknown one, and it must not inherit the
+    // ws5+ fallback below. Doing so switched symmetric-block parsing ON for a file
+    // `detect` had already declined to identify, and `symmetricBlocks` treats every
+    // `0x1D` as a block-start marker: `A <ESC> 0x1D B` parsed to `"A"`, losing both the
+    // escaped byte and every byte after it. Conservative on BOTH axes — no high-bit
+    // stripping AND no symmetric blocks.
+    .binary: Era(name: "binary", highBitWordwrap: false, symmetricBlocks: false,
+                 hasNotes: false, hasSB: false, columnUnit: .tenthInch, pcDefault: 28),
 ]
 
 /// WS3's entry, kept out of `eras` until `detect` can actually return a `ws3` variant —
@@ -76,9 +84,16 @@ public let eras: [Variant: Era] = [
 public let ws3Era = Era(name: "ws3", highBitWordwrap: true, symmetricBlocks: false,
                         hasNotes: false, hasSB: false, columnUnit: .font, pcDefault: 33)
 
-/// The `Era` for a detected variant. Unknown variants get the WS5+ entry, which is the
-/// least destructive guess: it does NOT strip high bits, so an unrecognised file loses
-/// no extended characters. Guessing wrong in the other direction destroys text.
+/// The `Era` for a detected variant. Every variant `detect` can actually return has its
+/// own entry above; a name from nowhere gets the WS5+ entry, which does NOT strip high
+/// bits, so it loses no extended characters. Guessing wrong in that direction destroys
+/// text.
+///
+/// That fallback is a guess about ENCODING only. It is emphatically not a licence to
+/// enable behaviour that can itself destroy text — which is exactly what happened when
+/// `.binary` was left to inherit it and picked up symmetric-block parsing along the way.
+/// A new variant belongs in the table, conservative on every axis, rather than relying
+/// on this.
 public func eraFor(_ variant: Variant) -> Era {
     eras[variant] ?? eras[.ws5plus]!
 }

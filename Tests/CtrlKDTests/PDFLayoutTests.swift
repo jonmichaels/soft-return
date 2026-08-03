@@ -36,21 +36,26 @@ private func linesDoc(_ n: Int) -> Document {
     #expect(docToPagelines(linesDoc(54), printed: false).map(\.count) == [54])
 }
 
-@Test func printedPaginatesAtSixtySixLinesWithNoPageGeometry() {
-    // ctrl-kd 1.3.0: a document with no page geometry at all (`doc.page == nil` — what a
-    // bare `parsePrintstream` capture produces; `linesDoc` here builds one by hand the same
-    // way) is treated as a print stream, and a print stream's own margin blanks travel
-    // in-band — so its budget is the FULL page, 66 lines on Letter, not a fixed-margin
-    // figure. This used to be 60 (a hardcoded `(792 - 2*36) / 12`); it is 66 now
-    // (`792 / 12`, no margin subtracted at all) because the model changed, not because this
-    // is a different case than before.
-    #expect(docToPagelines(linesDoc(66), printed: true).count == 1)
+@Test func printedPaginatesAtFiftyFiveLinesWithNoPageGeometry() {
+    // A document with no page geometry at all (`doc.page == nil` — what a bare
+    // `parsePrintstream` capture produces; `linesDoc` here builds one by hand the same
+    // way) gets WordStar's DOCUMENTED defaults: `.pl 66 - .mt 3 - .mb 8` = 55.
+    //
+    // This asserted 66 through ctrl-kd 2.0.0, on the reasoning that a print stream's own
+    // margin blanks travel in-band so its budget is the whole physical page. That
+    // reasoning was checked against raw bytes and retracted (2026-08-03): real
+    // print-to-disk output carries no form feeds and no top margin after page one. 66 was
+    // a page size WordStar does not document and no evidence supported — and the figure
+    // had already been 60 before that, for a third reason. The model now matches the
+    // program: run live, WordStar 4 puts 11-line gaps (`.mb 8 + .mt 3`) on a 66-line
+    // pitch, which is 55 lines of text.
+    #expect(docToPagelines(linesDoc(55), printed: true).count == 1)
 
-    let pages = docToPagelines(linesDoc(67), printed: true)
+    let pages = docToPagelines(linesDoc(56), printed: true)
     #expect(pages.count == 2)
-    #expect(pages[0].count == 66)
+    #expect(pages[0].count == 55)
     #expect(pages[1].count == 1)
-    #expect(pages[1].first?.first?.text == "line67")
+    #expect(pages[1].first?.first?.text == "line56")
 }
 
 /// A `PageGeometry` built from just `.pl`/`.mt`/`.mb` (WordStar's own defaults for
