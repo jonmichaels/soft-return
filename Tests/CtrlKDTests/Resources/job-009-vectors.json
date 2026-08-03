@@ -231,7 +231,7 @@
    "format": "html",
    "mode": "modern",
    "title": "Essay <1> & \"Friends\"",
-   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{max-width:42rem;margin:2rem auto;padding:0 1rem;\nfont:17px/1.6 Georgia,serif;color:#222}p{margin:0 0 1em}\npre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}}</style></head>\n<body>\n<p><strong>Big Title</strong></p>\n<p><em>An italic quote here.</em></p>\n<p>Plain closing paragraph text.</p>\n</body></html>\n"
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Essay &lt;1&gt; &amp; &quot;Friends&quot;</title><style>body{max-width:42rem;margin:2rem auto;padding:0 1rem;\nfont:17px/1.6 Georgia,serif;color:#222}p{margin:0 0 1em}\npre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}}</style></head>\n<body>\n<p><strong>Big Title</strong></p>\n<p><em>An italic quote here.</em></p>\n<p>Plain closing paragraph text.</p>\n</body></html>\n"
   }
  ]
 }

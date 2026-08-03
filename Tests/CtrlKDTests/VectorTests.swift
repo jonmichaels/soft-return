@@ -22,31 +22,13 @@ import Testing
 /// is proven separately by `notesVectors1_2_0` (ground truth from the real, fixed
 /// implementation) and `ws7FootnoteExtractionAndRef` (ParseWSTests.swift, using the
 /// now-fixed `ws7Note` fixture helper).
-private let staleFootnoteVectorNames: Set<String> = [
-    "ws5_footnote_heading/text/modern", "ws5_footnote_heading/text/printed",
-    "ws5_footnote_heading/markdown/modern", "ws5_footnote_heading/markdown/printed",
-    "ws5_footnote_heading/html/modern", "ws5_footnote_heading/html/printed",
-    "ws5_footnote_heading/rtf/modern", "ws5_footnote_heading/rtf/printed",
-    "footnote_doc/modern", "footnote_doc/printed",
-]
+// `staleFootnoteVectorNames` and `strippingNotesCSS` lived here until 2026-08-03. Both
+// were workarounds for vectors that were FROZEN SNAPSHOTS nothing could regenerate: ten
+// footnote cases skipped outright, and every HTML case compared with 1.2.0's notes CSS
+// stripped back out. ctrl-kd's tools/gen_vectors.py regenerates expectations from Python
+// now, so the vectors track the implementation and there is nothing to skip or strip --
+// and the ten skipped cases are checked again for the first time since 1.1.4.
 
-/// ctrl-kd 1.2.0 also added two CSS rules to `emit_html`'s style block —
-/// `section[role=doc-endnotes]` sizing — and it did so UNCONDITIONALLY: they're present
-/// even in a document with no notes at all (confirmed against
-/// `notes-vectors-1.2.0.json`'s note-free `geometry_legal`/`wordtsar` cases). Every HTML
-/// vector in job-008/009/010 was captured from 1.1.3/1.1.4, before that change, so EVERY
-/// one of them is stale in exactly this one place — unlike `staleFootnoteVectorNames`
-/// above, this isn't specific to footnote-bearing fixtures; it's a global addition to a
-/// part of the page every HTML vector includes. Stripped from the actual output before
-/// comparison rather than skipping the vectors outright, so every other byte these
-/// vectors pin (style-tag nesting order, escaping, page rules, printed-mode `<pre>`
-/// wrapping) stays proven against the old fixtures.
-private func strippingNotesCSS(_ html: String) -> String {
-    html.replacingOccurrences(
-        of: "section[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n",
-        with: ""
-    )
-}
 
 private struct VectorFile: Decodable {
     let detect: [DetectVector]
@@ -614,7 +596,6 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
     let vectors = try loadJob008Vectors().emit
     #expect(vectors.count == 28)
     for v in vectors {
-        if staleFootnoteVectorNames.contains(v.name) { continue }   // see file-top comment
         let doc = try parse(bytesFromHex(v.inputHex))
         let mode = try #require(EmitMode(rawValue: v.mode), "unknown mode \(v.mode)")
         let got: String
@@ -635,7 +616,6 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
     let vectors = try loadJob009Vectors().emit2
     #expect(vectors.count == 33)
     for v in vectors {
-        if staleFootnoteVectorNames.contains(v.name) { continue }   // see file-top comment
         let doc = try parse(bytesFromHex(v.inputHex))
         let mode = try #require(EmitMode(rawValue: v.mode), "unknown mode \(v.mode)")
         let got: String
@@ -646,9 +626,7 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
             Issue.record("unknown format \(v.format) in vector \(v.name)")
             continue
         }
-        // see strippingNotesCSS: every html vector here predates 1.2.0's unconditional CSS
-        // addition, a no-op for every other format.
-        let comparable = v.format == "html" ? strippingNotesCSS(got) : got
+        let comparable = got
         #expect(comparable == v.expected, "emit2 vector \(v.name)")
     }
 }
@@ -662,7 +640,7 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
     for v in vectors {
         let got = try convert(bytesFromHex(v.inputHex), to: v.to)
         // see strippingNotesCSS
-        let comparable = v.to == "html" ? strippingNotesCSS(got) : got
+        let comparable = got
         #expect(comparable == v.expected, "convert vector to=\(v.to)")
     }
 }
@@ -699,7 +677,7 @@ private func assertLinesPassVector(_ v: LinesPassVector, label: String) {
             continue
         }
         // see strippingNotesCSS
-        let comparable = e.format == "html" ? strippingNotesCSS(got) : got
+        let comparable = got
         #expect(comparable == e.expected, "formfeed emit \(e.format)/\(e.mode)")
     }
 }
@@ -887,7 +865,6 @@ private func assertPageLine(_ got: PageLine, _ want: [SpanVector], label: String
     let vectors = try loadJob011Vectors().docToPagelines
     #expect(vectors.count == 10)
     for v in vectors {
-        if staleFootnoteVectorNames.contains(v.name) { continue }   // see file-top comment
         let doc = try parse(bytesFromHex(v.inputHex))
         let got = docToPagelines(doc, printed: v.printed)
         #expect(got.count == v.pages.count, "\(v.name): page count")
