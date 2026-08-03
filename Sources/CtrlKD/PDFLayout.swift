@@ -148,12 +148,19 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
     enum LayoutItem {
         case line(PageLine)
         case pageBreak
+        /// `.cp n` — resolved by the page-filling loop below, the only thing that knows
+        /// how full the page is.
+        case condPage(Int)
     }
 
     var items: [LayoutItem] = []
     for block in doc.blocks {
         if block.kind == .pagebreak {
             items.append(.pageBreak)
+            continue
+        }
+        if block.kind == .condpage {
+            items.append(.condPage(max(1, block.heading)))
             continue
         }
         if block.kind == .softpage {
@@ -198,6 +205,12 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
         case .pageBreak:
             pages.append(page)
             page = []
+        case .condPage(let n):
+            // Strictly fewer than n lines left -> break; exactly n is enough room.
+            if PDFMetrics.linesModern - page.count < n, !page.isEmpty {
+                pages.append(page)
+                page = []
+            }
         case .line(let line):
             if page.count >= PDFMetrics.linesModern {
                 pages.append(page)
@@ -299,6 +312,9 @@ private func finalizePages(_ rawPages: [Page], printed: Bool) -> [Page] {
 private enum PrintedBodyItem {
     case pageBreak
     case line(PageLine, due: [Note])
+    /// `.cp n` — resolved in `layoutPrintedPages`, the only place that knows how full the
+    /// page is.
+    case condPage(Int)
 }
 
 /// A footnote/annotation waiting in the page-bottom queue. `remaining` shrinks as pages
@@ -359,6 +375,10 @@ private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
         // a facsimile.
         if block.kind == .pagebreak || block.kind == .softpage {
             items.append(.pageBreak)
+            continue
+        }
+        if block.kind == .condpage {
+            items.append(.condPage(max(1, block.heading)))
             continue
         }
         for line in block.lines {
@@ -646,6 +666,15 @@ private func layoutPrintedPages(_ doc: Document) -> [Page] {
             case .pageBreak:
                 idx += 1
                 break bodyLoop
+            case .condPage(let n):
+                // `.cp n` — break ONLY if fewer than n lines remain. Measured on WordStar 4
+                // (2026-08-03): exactly n remaining is enough room and does NOT break, so
+                // the test is strictly `remaining < n`. An empty page never breaks: that
+                // would emit a blank sheet, which is what `.cp` exists to avoid.
+                idx += 1
+                if capacity - body.count < n, !body.isEmpty {
+                    break bodyLoop
+                }
             case .line(let line, let due):
                 let additions = due.map {
                     QueuedNote(remaining: footerEntryLines($0, doc: doc, width: width),

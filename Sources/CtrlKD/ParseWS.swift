@@ -26,8 +26,16 @@ private let wsDrop: Set<UInt8> = [
     0x01, 0x03, 0x08, 0x0B, 0x0E, 0x10, 0x11, 0x12, 0x15, 0x17, 0x1C,
 ]
 
-/// Dot commands that force a page break (core.py:166), compared uppercased.
-private let dotPagebreak: Set<[UInt8]> = [Array("PA".utf8), Array("CP".utf8)]
+/// Dot commands that force an UNCONDITIONAL page break (core.py:166), compared
+/// uppercased.
+private let dotPagebreak: Set<[UInt8]> = [Array("PA".utf8)]
+
+/// `.CP n` is CONDITIONAL and cannot be decided here: it depends on how many lines are
+/// left on the page, which only the pagination pass knows. It used to live in
+/// `dotPagebreak` and so broke every time, inverting the author's intent — `.cp` exists
+/// precisely so a heading does NOT get stranded, and firing it unconditionally inserts
+/// the break it was there to prevent.
+private let dotCondpage: [UInt8] = Array("CP".utf8)
 
 /// One physical line of bytes -> `[Span]`. `active` persists across lines (WordStar
 /// styles span line breaks) and `unknown` accumulates for the whole document, so both
@@ -182,9 +190,17 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // core.py:290-298 — captured as metadata; the line itself never becomes text.
             let cmd = rstrippingASCIIWhitespace(stripped)
             dots.append(decodeCP437(cmd))
-            if dotPagebreak.contains(Array(cmd.dropFirst().prefix(2)).map(asciiUppercased)) {
+            let head2 = Array(cmd.dropFirst().prefix(2)).map(asciiUppercased)
+            if dotPagebreak.contains(head2) {
                 closeBlock()
                 blocks.append(Block(kind: .pagebreak))
+            } else if head2 == dotCondpage {
+                // Carry the requested line count to the paginator. Measured on WordStar 4
+                // (2026-08-03): it breaks only when the lines REMAINING on the page are
+                // strictly fewer than n — exactly n remaining is enough room and does not
+                // break.
+                closeBlock()
+                blocks.append(Block(kind: .condpage, heading: cpLines(cmd)))
             }
             if Array(cmd.dropFirst().prefix(1)).map(asciiLowercased) == [0x72],  // 'r'
                cmd.contains(0x21) {                                             // '!'
@@ -591,6 +607,26 @@ func textLinesPerPage(pl: Double, mt: Double, mb: Double, lh48: Double) -> Int {
     let usable = pl - mt - mb                          // lines at 6 LPI
     guard usable.isFinite, lh48.isFinite, lh48 > 0 else { return 1 }
     return max(1, Int(usable * 8.0 / lh48))
+}
+
+/// The n of a `.cp n`, defaulting to 1 (a bare `.cp` asks for one line).
+///
+/// Stored on the block so the paginator can apply the rule measured on WordStar 4 on
+/// 2026-08-03: break only when the lines REMAINING are strictly fewer than n. Exactly n
+/// remaining is enough room and does not break. Direct port of `_cp_lines`.
+func cpLines(_ cmd: [UInt8]) -> Int {
+    guard cmd.count > 3, let (value, _) = parseDotNumber(Array(cmd[3...])) else { return 1 }
+    // `.cp 1e9` is damage, not a request; `Int(value)` on a huge Double traps. Clamp to
+    // a page's worth of lines at most — anything beyond that means "always break", which
+    // is what the clamped value does anyway.
+    // `Int(someHugeDouble)` TRAPS in Swift where Python's `int()` just returns a big int,
+    // so the value is clamped before conversion. 100_000 lines is far past "always break",
+    // which is what any larger figure would mean anyway — the only divergence from Python
+    // is for arguments that are damage rather than a request. `Int(_:)` truncates toward
+    // zero, matching Python's `int(float(...))`.
+    guard value.isFinite else { return 1 }
+    let bounded = Swift.min(Swift.max(value, 1.0), 100_000.0)
+    return Swift.max(1, Int(bounded))
 }
 
 /// `pl_lines` -> (height_in, size_name). Snaps to a named size when close; otherwise

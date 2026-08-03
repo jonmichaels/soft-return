@@ -408,3 +408,58 @@ private let fakeBinary = Emitter(name: "fake", ext: ".fake") { doc, _, _ in
     #expect(pages[0].count == 1)                    // leading AND trailing space-lines gone
     #expect(pages[0][0].first?.text == "text")
 }
+
+// ---------------------------------------------------------------- .cp
+
+/// Numbered lines with a `.cp n` inserted before line `cpBefore`. Mirrors Python's
+/// `_cp_doc` so both suites measure the same document.
+private func cpDoc(cpBefore: Int, n: Int, total: Int = 60) -> [UInt8] {
+    var out: [String] = []
+    for i in 1...total {
+        if i == cpBefore {
+            out.append(".cp \(n)")
+        }
+        out.append("LINE \(String(format: "%03d", i)) " + String(repeating: "-", count: 40))
+    }
+    return bytes(out.joined(separator: "\r\n") + "\r\n")
+}
+
+private func pageTexts(_ page: Page) -> [String] {
+    page.map { $0.map(\.text).joined() }
+}
+
+@Test func cpDoesNotBreakWhenThereIsRoom() {
+    // `.cp` exists so a heading is NOT stranded at a page bottom. Firing it
+    // unconditionally inserts the very break it was there to prevent — which is what the
+    // old code did, treating `.CP` exactly like `.PA`.
+    let pages = docToPagelines(parseWS(cpDoc(cpBefore: 20, n: 10)), printed: true)
+    let first = pageTexts(pages[0])
+    // 36 of 55 lines remain at line 20: plenty of room, no break there.
+    #expect(first.contains { $0.contains("LINE 020") }, "line 20 was pushed off page 1")
+    #expect(first.contains { $0.contains("LINE 055") }, "page 1 should still hold 55 lines")
+}
+
+@Test func cpBreaksWhenShortOfRoom() {
+    let pages = docToPagelines(parseWS(cpDoc(cpBefore: 50, n: 10)), printed: true)
+    let first = pageTexts(pages[0])
+    // 6 of 55 remain at line 50 — fewer than 10, so it breaks BEFORE line 50.
+    #expect(first.contains { $0.contains("LINE 049") })
+    #expect(!first.contains { $0.contains("LINE 050") }, ".cp did not break")
+}
+
+@Test func cpBoundaryIsStrict() {
+    // Measured on WordStar 4 (2026-08-03): with EXACTLY n lines remaining it does not
+    // break — the test is `remaining < n`, not `<=`. The manual says only "if there are
+    // less than the number of lines specified remaining" and never settles which.
+    let pages = docToPagelines(parseWS(cpDoc(cpBefore: 46, n: 10)), printed: true)
+    let first = pageTexts(pages[0])
+    #expect(first.contains { $0.contains("LINE 046") }, "exactly n remaining must NOT break")
+    #expect(first.contains { $0.contains("LINE 055") })
+}
+
+@Test func bareCPAsksForOneLine() {
+    // `_cp_lines`' default. A bare `.cp` with a full page left must not break.
+    let doc = parseWS(bytes(".cp\r\n") + bytes("only line\r\n"))
+    #expect(doc.blocks.contains { $0.kind == .condpage && $0.heading == 1 })
+    #expect(docToPagelines(doc, printed: true).count == 1)
+}

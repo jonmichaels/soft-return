@@ -6,6 +6,11 @@ public enum BlockKind: String, Hashable, Sendable {
     case pagebreak
     /// WordStar's own pagination — render only in printed mode.
     case softpage
+    /// `.cp n` — a CONDITIONAL page break, requesting that n lines be kept together.
+    /// The condition cannot be evaluated at parse time (it depends on how many lines
+    /// remain on the page, which only pagination knows), so the block carries n in
+    /// `heading` and the page-filling loop applies the rule.
+    case condpage
 }
 
 /// A paragraph-level unit of the document: one kind, an optional heading level,
@@ -17,6 +22,10 @@ public struct Block: Hashable, Sendable {
     public var kind: BlockKind
     public var lines: [Line]
     /// 0 = body text; 1-3 = WS5+ title/header/subheading.
+    ///
+    /// Overloaded for `.condpage`, where it carries `.cp`'s requested line count
+    /// instead — Python stores it in the same slot, and a port that invented a second
+    /// field here would diverge from the vectors for no behavioural gain.
     public var heading: Int
 
     public init(kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0) {
