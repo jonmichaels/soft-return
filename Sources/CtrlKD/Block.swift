@@ -50,12 +50,36 @@ public struct Block: Hashable, Sendable {
 public func mergedLines(_ block: Block) -> [Line] {
     var out: [Line] = []
     var cur: Line? = nil
+    // Hard blanks are emitted only BETWEEN content, never trailing. A block that ENDS
+    // with the author's blank already gets a structural blank from the Modern layout,
+    // and emitting both double-spaces every paragraph of a WS4 document ([52, 26] where
+    // [54] is right). Buffering them until real content follows serves both shapes.
+    var pendingBlanks = 0
     for line in block.lines {
         if line.spans.isEmpty {
-            // A blank PHYSICAL line (2026-08-03). Printed renders it; reflow does
-            // not — Modern emits its own blank between paragraphs, and a `.ls 2`
-            // filler line is typography, not a logical line of text.
+            // A blank PHYSICAL line, and the two kinds mean different things.
+            //
+            // SOFT is `.ls` filler — typography, not a logical line of text, so reflow
+            // drops it and lets the Modern layout do its own spacing.
+            //
+            // HARD is the author's own return, and it is the ONLY paragraph separation
+            // a print stream has. Dropping it was correct only while blank lines still
+            // delimited BLOCKS; once they became content (2026-08-03) a whole print
+            // stream is one block, so "Modern emits its own blank between paragraphs"
+            // fired exactly once for the entire document and every paragraph ran
+            // together in the PDF.
+            if !line.soft {
+                if let c = cur {
+                    out.append(c)
+                    cur = nil
+                }
+                pendingBlanks += 1
+            }
             continue
+        }
+        if pendingBlanks > 0 {
+            out.append(contentsOf: (0..<pendingBlanks).map { _ in Line(spans: []) })
+            pendingBlanks = 0
         }
         if cur == nil {
             cur = Line(spans: line.spans)

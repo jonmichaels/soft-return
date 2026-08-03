@@ -1191,18 +1191,6 @@
        "text": "here.",
        "styles": []
       }
-     ],
-     [
-      {
-       "text": ".pa",
-       "styles": []
-      }
-     ],
-     [
-      {
-       "text": ".pa",
-       "styles": []
-      }
      ]
     ]
    ]
@@ -1217,18 +1205,6 @@
      [
       {
        "text": "Page one text here.",
-       "styles": []
-      }
-     ],
-     [
-      {
-       "text": ".pa",
-       "styles": []
-      }
-     ],
-     [
-      {
-       "text": ".pa",
        "styles": []
       }
      ]
@@ -1247,19 +1223,10 @@
        "text": "One.",
        "styles": []
       }
-     ],
-     [
-      {
-       "text": ".pa",
-       "styles": []
-      }
-     ],
-     [
-      {
-       "text": ".pa",
-       "styles": []
-      }
-     ],
+     ]
+    ],
+    [],
+    [
      [
       {
        "text": "Two.",
@@ -1281,19 +1248,10 @@
        "text": "One.",
        "styles": []
       }
-     ],
-     [
-      {
-       "text": ".pa",
-       "styles": []
-      }
-     ],
-     [
-      {
-       "text": ".pa",
-       "styles": []
-      }
-     ],
+     ]
+    ],
+    [],
+    [
      [
       {
        "text": "Two.",

@@ -951,7 +951,15 @@ private func loadJob012Vectors() throws -> Job012VectorFile {
 /// the only evidence that the version changed. Instead the expectation is DERIVED here by the
 /// documented fix — drop trailing empty pages — which keeps the case asserting something: if
 /// the pop breaks, `[53, 0]` comes back and this fails.
-private let job012CasesFixedIn116: Set<String> = ["exact_fill_no_blank_sheet/modern"]
+// `job012CasesFixedIn116` lived here until 2026-08-03. It named the one job-012 case
+// whose vector still carried a trailing empty page — 1.1.5's blank-sheet bug, captured
+// before 1.1.6 fixed it — and the test compensated by stripping that page off the
+// EXPECTATION before comparing, then asserting it had really stripped one.
+//
+// The vectors regenerate from Python now (ctrl-kd tools/gen_vectors.py), so the trailing
+// empty page is simply not there, and a test that insists on removing one fails for the
+// right reason. Compensating for a stale vector and testing against a live one are
+// different jobs; this was the last of the former.
 
 @Test func layoutUpdatesMatchPython116Vectors() throws {
     // The two 1.1.5 layout fixes, generated from the fixed Python: heading blocks render
@@ -969,16 +977,7 @@ private let job012CasesFixedIn116: Set<String> = ["exact_fill_no_blank_sheet/mod
     let vectors = try loadJob012Vectors().layoutUpdates
     #expect(vectors.count == 4)
     for v in vectors {
-        var want = v.pages
-        if job012CasesFixedIn116.contains(v.name) {
-            let before = want.count
-            while want.count > 1, want[want.count - 1].isEmpty {
-                want.removeLast()
-            }
-            #expect(want.count < before,
-                    "\(v.name) is listed as fixed in 1.1.6 but pins no trailing empty page")
-        }
-
+        let want = v.pages
         let doc = try parse(bytesFromHex(v.inputHex))
         let got = docToPagelines(doc, printed: v.printed)
         #expect(got.count == want.count, "\(v.name): page count")
