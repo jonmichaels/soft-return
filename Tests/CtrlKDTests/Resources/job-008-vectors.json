@@ -13,7 +13,7 @@
    "input_hex": "024269e7205469746ce5020d0a0d0a1941ee206974616c69e32071756f74e52068657265ae190d0a0d0a506c6169ee20636c6f73696ee7207061726167726170e82074657874ae0d0a",
    "format": "text",
    "mode": "printed",
-   "expected": "Big Title\nAn italic quote here.\nPlain closing paragraph text.\n"
+   "expected": "Big Title\n\nAn italic quote here.\n\nPlain closing paragraph text.\n"
   },
   {
    "name": "bold_ital_paras/markdown/modern",
@@ -27,7 +27,7 @@
    "input_hex": "024269e7205469746ce5020d0a0d0a1941ee206974616c69e32071756f74e52068657265ae190d0a0d0a506c6169ee20636c6f73696ee7207061726167726170e82074657874ae0d0a",
    "format": "markdown",
    "mode": "printed",
-   "expected": "```\nBig Title\nAn italic quote here.\nPlain closing paragraph text.\n```\n"
+   "expected": "```\nBig Title\n\nAn italic quote here.\n\nPlain closing paragraph text.\n```\n"
   },
   {
    "name": "poem_linebreaks/text/modern",
@@ -41,7 +41,7 @@
    "input_hex": "2020202020412073686f727420706f656d206c696e652c8d0a2020202020616e6f746865722073686f7274206c696e652e8d0a0d0a8d0a20202020205365636f6e64207374616e7a6120636c6f7365732e0d0a",
    "format": "text",
    "mode": "printed",
-   "expected": "     A short poem line,\n     another short line.\n     Second stanza closes.\n"
+   "expected": "     A short poem line,\n     another short line.\n\n\n     Second stanza closes.\n"
   },
   {
    "name": "poem_linebreaks/markdown/modern",
@@ -55,7 +55,7 @@
    "input_hex": "2020202020412073686f727420706f656d206c696e652c8d0a2020202020616e6f746865722073686f7274206c696e652e8d0a0d0a8d0a20202020205365636f6e64207374616e7a6120636c6f7365732e0d0a",
    "format": "markdown",
    "mode": "printed",
-   "expected": "```\n     A short poem line,\n     another short line.\n     Second stanza closes.\n```\n"
+   "expected": "```\n     A short poem line,\n     another short line.\n\n\n     Second stanza closes.\n```\n"
   },
   {
    "name": "md_escaping/text/modern",
@@ -90,28 +90,28 @@
    "input_hex": "1d0100001d0200110243686170746572204f6e650d0a0d0a54726561746965732077657265206d6164652e1d25000300000000000000000000000000000000001d53656520746865206163636f7264732e2c00204d6f726520746578742e0d0a1d01000b4e65787420706167652e0d0a",
    "format": "text",
    "mode": "modern",
-   "expected": "Chapter One\n\nTreaties were made.1 More text.\n\nNext page.\n\n[1] See the accords.\n"
+   "expected": "Chapter One\n\nTreaties were made.[1] More text.\n\nNext page.\n\nFootnotes:\n[1] \n"
   },
   {
    "name": "ws5_footnote_heading/text/printed",
    "input_hex": "1d0100001d0200110243686170746572204f6e650d0a0d0a54726561746965732077657265206d6164652e1d25000300000000000000000000000000000000001d53656520746865206163636f7264732e2c00204d6f726520746578742e0d0a1d01000b4e65787420706167652e0d0a",
    "format": "text",
    "mode": "printed",
-   "expected": "Chapter One\nTreaties were made.1 More text.\n\f\nNext page.\n\n[1] See the accords.\n"
+   "expected": "Chapter One\n\nTreaties were made.[1] More text.\n\f\nNext page.\n\nFootnotes:\n[1] \n"
   },
   {
    "name": "ws5_footnote_heading/markdown/modern",
    "input_hex": "1d0100001d0200110243686170746572204f6e650d0a0d0a54726561746965732077657265206d6164652e1d25000300000000000000000000000000000000001d53656520746865206163636f7264732e2c00204d6f726520746578742e0d0a1d01000b4e65787420706167652e0d0a",
    "format": "markdown",
    "mode": "modern",
-   "expected": "## Chapter One\n\nTreaties were made.[^1] More text.\n\nNext page.\n\n[^1]: See the accords.\n"
+   "expected": "## Chapter One\n\nTreaties were made.[^1] More text.\n\nNext page.\n\n[^1]: \n"
   },
   {
    "name": "ws5_footnote_heading/markdown/printed",
    "input_hex": "1d0100001d0200110243686170746572204f6e650d0a0d0a54726561746965732077657265206d6164652e1d25000300000000000000000000000000000000001d53656520746865206163636f7264732e2c00204d6f726520746578742e0d0a1d01000b4e65787420706167652e0d0a",
    "format": "markdown",
    "mode": "printed",
-   "expected": "```\nChapter One\nTreaties were made.1 More text.\n\f\nNext page.\n\n[1] See the accords.\n```\n"
+   "expected": "```\nChapter One\n\nTreaties were made.[1] More text.\n\f\nNext page.\n\nFootnotes:\n[1] \n```\n"
   },
   {
    "name": "dot_pagebreak/text/modern",

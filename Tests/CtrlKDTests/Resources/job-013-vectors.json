@@ -970,156 +970,182 @@
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 1 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 2 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 3 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 4 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 5 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 6 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 7 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 8 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 9 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 10 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 11 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 12 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 13 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 14 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 15 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 16 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 17 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 18 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 19 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 20 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 21 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 22 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 23 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 24 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "Paragraph 25 here today.",
        "styles": []
       }
      ],
+     [],
      [
       {
        "text": "This final paragraph is deliberately long enough that the wrap test must break it across two physical lines.",
@@ -1165,6 +1191,18 @@
        "text": "here.",
        "styles": []
       }
+     ],
+     [
+      {
+       "text": ".pa",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": ".pa",
+       "styles": []
+      }
      ]
     ]
    ]
@@ -1179,6 +1217,18 @@
      [
       {
        "text": "Page one text here.",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": ".pa",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": ".pa",
        "styles": []
       }
      ]
@@ -1197,10 +1247,19 @@
        "text": "One.",
        "styles": []
       }
-     ]
-    ],
-    [],
-    [
+     ],
+     [
+      {
+       "text": ".pa",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": ".pa",
+       "styles": []
+      }
+     ],
      [
       {
        "text": "Two.",
@@ -1222,10 +1281,19 @@
        "text": "One.",
        "styles": []
       }
-     ]
-    ],
-    [],
-    [
+     ],
+     [
+      {
+       "text": ".pa",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": ".pa",
+       "styles": []
+      }
+     ],
      [
       {
        "text": "Two.",

@@ -67,6 +67,7 @@
        ]
       }
      ],
+     [],
      [
       {
        "text": "Body text here.",
@@ -104,7 +105,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -127,7 +127,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -150,7 +149,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -173,7 +171,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -196,7 +193,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -219,7 +215,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -242,7 +237,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -265,7 +259,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -288,7 +281,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -311,7 +303,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -334,7 +325,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -357,7 +347,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -380,7 +369,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -403,7 +391,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -426,7 +413,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -449,7 +435,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -472,7 +457,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -495,7 +479,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -518,7 +501,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -541,7 +523,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -564,7 +545,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -587,7 +567,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -610,7 +589,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -633,7 +611,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -656,7 +633,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -679,7 +655,6 @@
        "styles": []
       }
      ],
-     [],
      [
       {
        "text": "Paragraph",
@@ -702,8 +677,7 @@
        "styles": []
       }
      ]
-    ],
-    []
+    ]
    ]
   },
   {

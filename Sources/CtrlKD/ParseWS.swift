@@ -20,10 +20,16 @@ private let wsToggles: [UInt8: Style] = [
     0x04: .bold,
 ]
 
-/// Control codes that are known-but-ignored: consumed silently, never counted as
-/// unknown (core.py:164).
+/// Codes discarded without comment (core.py:164).
+///
+/// `0x08` (^H overprint) was here until 2026-08-03 and is deliberately NOT any more:
+/// WordStar-era authors used backspace-and-overtype to compose accented letters and
+/// ad-hoc symbols, so dropping it SILENTLY loses content with no trace. It now falls
+/// through to the `unknown` tally, which `--diagnose` reports — the project's own rule
+/// is never to go quiet. Composing the overprinted pair properly is a separate job;
+/// being able to SEE that a document contains overprints is the prerequisite for it.
 private let wsDrop: Set<UInt8> = [
-    0x01, 0x03, 0x08, 0x0B, 0x0E, 0x10, 0x11, 0x12, 0x15, 0x17, 0x1C,
+    0x01, 0x03, 0x0B, 0x0E, 0x10, 0x11, 0x12, 0x15, 0x17, 0x1C,
 ]
 
 /// Dot commands that force an UNCONDITIONAL page break (core.py:166), compared

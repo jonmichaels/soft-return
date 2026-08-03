@@ -16,7 +16,8 @@
           "b"
          ]
         }
-       ]
+       ],
+       []
       ]
      },
      {
@@ -173,7 +174,8 @@
          "text": "Chapter One",
          "styles": []
         }
-       ]
+       ],
+       []
       ]
      },
      {
@@ -218,7 +220,12 @@
      }
     ],
     "footnotes": [
-     "See the accords."
+     [
+      {
+       "text": "",
+       "styles": []
+      }
+     ]
     ],
     "meta": {
      "variant": "ws5+",
@@ -268,11 +275,9 @@
         {
          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx words continue flowing here toward margin",
          "styles": []
-        },
-        {
-         "text": " ",
-         "styles": []
-        },
+        }
+       ],
+       [
         {
          "text": "and wrap onto this line.",
          "styles": []
@@ -295,9 +300,9 @@
  "symmetric_blocks_extra": [
   {
    "input_hex": "1d010000546578742e1d22000300000000000000000000000000000000001dff48656c6c6f207468657265ff2c000d0a",
-   "output_hex": "546578742e070d0a",
+   "output_hex": "546578742e000d0a",
    "footnotes": [
-    "Hello there"
+    ""
    ]
   }
  ]

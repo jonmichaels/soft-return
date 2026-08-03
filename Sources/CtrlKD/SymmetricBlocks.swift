@@ -13,10 +13,18 @@
 /// dropped. The result feeds `linesPass`, which never sees a `0x1D` byte from a
 /// well-formed ws5+ document.
 
-/// Sentinels injected into the cleaned stream. These byte values cannot appear as text
-/// in a WS5+ document body, so the assembly loop (job-006) can distinguish them from
-/// real content unambiguously.
-public let SENT_FNREF: UInt8 = 0x07
+/// Sentinels injected into the cleaned stream. They must be bytes that CANNOT occur as
+/// content, or a document's own byte gets mistaken for one — which is how the assembly
+/// loop (job-006) tells them from real content.
+///
+/// `SENT_FNREF` was `0x07` until 2026-08-03. `0x07` is ^G, WordStar's phantom rubout —
+/// rare and print-time-only by 1990, but REAL, and a literal one in a WS5+ body was read
+/// as a note reference. Out-of-range degraded gracefully; an IN-range collision silently
+/// attached the WRONG footnote to a piece of body text. Moved to `0x00`. NUL is not text
+/// in a WordStar body — the format terminates on `0x1A` and never emits a NUL as content
+/// — and unlike `0x1B` (the extended-character escape, tried first and rejected) nothing
+/// downstream consumes it.
+public let SENT_FNREF: UInt8 = 0x00
 public let SENT_SOFTPAGE: UInt8 = 0x0B
 public let SENT_HEADING: UInt8 = 0x11
 

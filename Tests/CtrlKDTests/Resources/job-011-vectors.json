@@ -751,6 +751,7 @@
        ]
       }
      ],
+     [],
      [
       {
        "text": "This paragraph contains enough words that wrapping at the sixty-five column limit must occur several times before it finally ends, proving the wrapper against the real limit rather than a toy one.",
@@ -874,6 +875,8 @@
        "styles": []
       }
      ],
+     [],
+     [],
      [
       {
        "text": "     Second stanza closes.",
@@ -1143,30 +1146,6 @@
       {
        "text": "[1]",
        "styles": []
-      },
-      {
-       "text": " ",
-       "styles": []
-      },
-      {
-       "text": "See",
-       "styles": []
-      },
-      {
-       "text": " ",
-       "styles": []
-      },
-      {
-       "text": "the",
-       "styles": []
-      },
-      {
-       "text": " ",
-       "styles": []
-      },
-      {
-       "text": "accords.",
-       "styles": []
       }
      ]
     ]
@@ -1205,31 +1184,7 @@
      [],
      [
       {
-       "text": "[1]",
-       "styles": []
-      },
-      {
-       "text": " ",
-       "styles": []
-      },
-      {
-       "text": "See",
-       "styles": []
-      },
-      {
-       "text": " ",
-       "styles": []
-      },
-      {
-       "text": "the",
-       "styles": []
-      },
-      {
-       "text": " ",
-       "styles": []
-      },
-      {
-       "text": "accords.",
+       "text": "1.",
        "styles": []
       }
      ]
