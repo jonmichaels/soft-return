@@ -51,6 +51,26 @@ public struct Detection: Hashable, Sendable {
 }
 
 public func detect(_ data: [UInt8]) -> Detection {
+    // The file may DECLARE itself before any statistics: a WS5+ document opens
+    // with a type-0 header block (version BCD + driver + style pointer) at
+    // offset 0. Full framing is validated -- jump range, trailing count and
+    // bracket, plausible BCD version -- so a random 0x1D cannot impersonate
+    // one. This runs BEFORE the 0x1A truncation below: the header's own
+    // content can contain 0x1A, and truncating there judged a real 6.6 KB
+    // document on its first 17 bytes.
+    if data.count >= 8, data[0] == 0x1D, data[3] == 0x00 {
+        let jump = Int(data[1]) | (Int(data[2]) << 8)
+        let end = 2 + jump
+        if jump >= 8, jump < 0x400, end < data.count, data[end] == 0x1D,
+           Int(data[end - 2]) | (Int(data[end - 1]) << 8) == jump,
+           [0x50, 0x55, 0x60, 0x70].contains(data[4]) {
+            return Detection(
+                variant: .ws5plus,
+                reason: "opens with a valid header block (declared release "
+                    + "\(data[4] >> 4).\(data[4] & 0x0F))",
+                size: data.count)
+        }
+    }
     // core.py:60 — truncate at the first ^Z (0x1A) before any counting.
     let core: [UInt8]
     if let zIndex = data.firstIndex(of: 0x1A) {
@@ -74,7 +94,21 @@ public func detect(_ data: [UInt8]) -> Detection {
             count += 1
         }
     }
-    let txt = textLike * 100 / core.count
+    // A wrapped extended character <1B x 1C> is three bytes of WS5+ machinery
+    // around ONE text character; its frame bytes counted as binary noise, so
+    // a document whose body is box-drawing read as "63% text but no
+    // structure" and was refused.
+    var trips = 0
+    var t = 0
+    while t + 2 < core.count {
+        if core[t] == 0x1B, core[t + 2] == 0x1C {
+            trips += 1
+            t += 3
+        } else {
+            t += 1
+        }
+    }
+    let txt = min(100, (textLike + 2 * trips) * 100 / core.count)
 
     func result(_ variant: Variant, reason: String? = nil) -> Detection {
         Detection(
@@ -93,9 +127,10 @@ public func detect(_ data: [UInt8]) -> Detection {
     if txt < 40 {
         return result(.binary, reason: "only \(txt)% text-like")
     }
-    // core.py:72-74 — 1D symmetric blocks are WS5+ machinery regardless of anything else,
-    // checked first after the binary gate.
-    if blocks1D >= 2 {
+    // core.py:72-74 — 1D symmetric blocks and 1B..1C wrapped extended
+    // characters are WS5+ machinery regardless of anything else, checked
+    // first after the binary gate.
+    if blocks1D >= 2 || trips >= 3 {
         return result(.ws5plus)
     }
     // core.py:75-83 — soft returns are strong WS evidence on their own; high-bit density
