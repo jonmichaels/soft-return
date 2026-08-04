@@ -10,21 +10,15 @@
      [
       {
        "text": "Chapter",
-       "styles": [
-        "b"
-       ]
+       "styles": []
       },
       {
        "text": " ",
-       "styles": [
-        "b"
-       ]
+       "styles": []
       },
       {
        "text": "One",
-       "styles": [
-        "b"
-       ]
+       "styles": []
       }
      ],
      [],
@@ -62,9 +56,7 @@
      [
       {
        "text": "Chapter One",
-       "styles": [
-        "b"
-       ]
+       "styles": []
       }
      ],
      [],

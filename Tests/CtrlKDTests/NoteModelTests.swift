@@ -329,6 +329,8 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
 }
 
 @Test func printFileIncludesKeepTheirFilename() {
+    // The reference lives INSIDE the printer payload — after the HMI word and the
+    // display-character count, which is zero here.
     let doc = parseWS(bytes("Before ")
                       + wsBlock(cmd: 0x0F, content: [0, 0, 0] + Array(#"%F"PLEAD.PS""#.utf8))
                       + bytes(" after.\r\n"))
@@ -336,10 +338,41 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
     #expect(doc.blocks[0].lines.map { $0.text() }.joined().contains("[include: PLEAD.PS]"))
 }
 
+@Test func userPrintControlIsParsedNotScanned() {
+    // WSFORMAT.TXT, "0Fh User print control":
+    //
+    //     Word:  number of hmis this sequence uses on the printed page
+    //     Byte:  number of characters used for screen display
+    //     Text:  the display string itself
+    //     "The remaining bytes … will be sent directly to the printer."
+    //
+    // This block used to be scanned for printable bytes looking for `%F"NAME"`,
+    // ignoring the structure. The DISPLAY STRING is real content — what WordStar shows
+    // on screen where the control sits — and three archive blocks carry 70 characters of
+    // it. The file reference is one thing INSIDE the printer payload, not the payload.
+
+    // a display string, no file reference
+    let withDisplay = parseWS(bytes("Before ")
+                              + wsBlock(cmd: 0x0F,
+                                        content: [0, 0, 7] + bytes("[LOGO] ")
+                                                 + [0x1B] + bytes("*p0002x"))
+                              + bytes(" after.\r\n"))
+    #expect(emitText(withDisplay, mode: .printed).contains("[LOGO]"))
+    #expect(withDisplay.includes.isEmpty)
+
+    // neither: pure printer bytes stay a REPORTED unknown
+    let opaque = parseWS(bytes("T ")
+                         + wsBlock(cmd: 0x0F, content: [0, 0, 0] + [0x1B] + bytes("*c2370a"))
+                         + bytes(" more text here.\r\n"))
+    #expect(opaque.unknownBlocks.map(\.cmd) == [0x0F])
+    #expect(opaque.includes.isEmpty)
+}
+
 @Test func aPrintBlockWithNoFilenameStaysAReportedUnknown() {
     // Consuming it silently would be WORSE than the bug being fixed: it turns a
     // reported unknown into an unreported one. 108 of the archive's 110 such blocks
-    // are PostScript preambles with no `%F` at all.
+    // are PostScript preambles with no `%F` at all — and no display string either, so
+    // the documented-layout parse still reports them.
     let doc = parseWS(bytes("T ")
                       + wsBlock(cmd: 0x0F, content: [0, 0, 0] + Array("/bw 7 inch def".utf8))
                       + bytes(".\r\n"))

@@ -167,7 +167,7 @@
     "blocks": [
      {
       "kind": "para",
-      "heading": 1,
+      "heading": 0,
       "lines": [
        [
         {
@@ -191,18 +191,7 @@
          "text": " More text.",
          "styles": []
         }
-       ]
-      ]
-     },
-     {
-      "kind": "softpage",
-      "heading": 0,
-      "lines": []
-     },
-     {
-      "kind": "para",
-      "heading": 0,
-      "lines": [
+       ],
        [
         {
          "text": "Next page.",

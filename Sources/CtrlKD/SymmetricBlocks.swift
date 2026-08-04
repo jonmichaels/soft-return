@@ -216,42 +216,56 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                         height1440: Int(content[2]) | (Int(content[3]) << 8),
                         typestyle: Int(content[4]) | (Int(content[5]) << 8)))
                 }
-            } else if cmd == 0x0F {                                // print-file inclusion
-                // A file the printer was told to pull in — the archive carries
-                // `%F"PLEAD.PS"`. Like an inset graphic, the block holds a FILENAME
-                // and was being dropped whole.
+            } else if cmd == 0x0F {                                // user print control
+                // WSFORMAT.TXT, "0Fh User print control":
+                //     Word:  number of hmis this sequence uses on the printed page
+                //     Byte:  number of characters used for screen display
+                //     Text:  the display string itself
+                //     "The remaining bytes … will be sent directly to the printer."
+                //
+                // This used to scan the whole block for printable bytes and look for a
+                // `%F"NAME"` file reference, ignoring the structure entirely. The
+                // DISPLAY STRING is real content — it is what WordStar shows on screen
+                // where the control sits, and three archive blocks carry 70 characters
+                // of it. Dropping it lost text; the file reference is one thing inside
+                // the printer payload, not the whole payload. Parsing the documented
+                // fields recovers 5 references where the scan found 2.
+                //
                 // Written byte-wise: `range(of:)`/`trimmingCharacters` are Foundation
                 // and this module deliberately imports nothing.
-                let printable = blockContent(block)
-                    .map { $0 & 0x7F }.filter { $0 >= 0x20 && $0 < 0x7F }
-                var mark = -1
-                if printable.count >= 2 {
-                    for k in 0...(printable.count - 2)
-                    where printable[k] == 0x25 && printable[k + 1] == 0x46 {   // "%F"
-                        mark = k + 2
-                        break
+                let content = blockContent(block)
+                var handled = false
+                if content.count >= 3 {
+                    let nch = Int(content[2])
+                    let split = Swift.min(3 + nch, content.count)
+                    let shown = printableASCII(Array(content[3..<split]))
+                    let ptext = printableASCII(Array(content[split...]))
+                    var name: [UInt8] = []
+                    if let mark = indexOfPercentF(ptext) {
+                        // Python's `ptext[mark+2:].strip().strip('"')` — whitespace
+                        // first, THEN quotes, in that order.
+                        name = stripASCII(Array(ptext[(mark + 2)...]), of: 0x20)
+                        name = stripASCII(name, of: 0x22)
                     }
-                }
-                if mark >= 0 {
-                    var body = Array(printable[mark...])
-                    while let f = body.first, f == 0x20 || f == 0x22 || f == 0x09 {
-                        body.removeFirst()
-                    }
-                    while let l = body.last, l == 0x20 || l == 0x22 || l == 0x09 {
-                        body.removeLast()
-                    }
-                    let name = decodeCP437(body)
                     if !name.isEmpty {
-                        includes.append(name)
-                        out += Array("[include: \(name)]".utf8)
-                        i += jump + 3
-                        continue
+                        // `%F"NAME"` inside the printer payload names a file the printer
+                        // is told to pull in — same class as an inset graphic.
+                        let decoded = decodeCP437(name)
+                        includes.append(decoded)
+                        out += Array("[include: \(decoded)]".utf8)
+                        handled = true
+                    } else if !stripASCII(shown, of: 0x20).isEmpty {
+                        // No file reference, but a display string the editor shows.
+                        out += Array(decodeCP437(shown).utf8)
+                        handled = true
                     }
                 }
-                // No `%F` in it — most of these are PostScript preambles. Consuming
-                // them silently would be WORSE than the bug being fixed: it turns a
-                // reported unknown into an unreported one.
-                unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
+                if !handled {
+                    // Neither: pure printer bytes (most of these are PostScript
+                    // preambles). Consuming them silently would be WORSE than the bug
+                    // being fixed — it turns a reported unknown into an unreported one.
+                    unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
+                }
             } else if cmd == 0x00 {                                // HEADER sequence
                 // WSFORMAT.TXT, type 0 Header — 128 bytes in total:
                 //     Byte:      version number in BCD (50h = Release 5.0, 55h = 5.5,
@@ -401,6 +415,29 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                                  includes: includes, shiftRuns: shiftRuns,
                                  printerDriver: driver, header: header,
                                  tabAt: tabAt, marks: marks)
+}
+
+/// Python's `bytes(c & 0x7F for c in b if 0x20 <= (c & 0x7F) < 0x7F)` — mask bit 7, keep
+/// only what a 1987 screen could show.
+private func printableASCII(_ b: [UInt8]) -> [UInt8] {
+    b.map { $0 & 0x7F }.filter { $0 >= 0x20 && $0 < 0x7F }
+}
+
+/// Python's `str.strip(ch)` for one byte value.
+private func stripASCII(_ b: [UInt8], of ch: UInt8) -> [UInt8] {
+    var start = 0, end = b.count
+    while start < end, b[start] == ch { start += 1 }
+    while end > start, b[end - 1] == ch { end -= 1 }
+    return Array(b[start..<end])
+}
+
+/// `text.find('%F')` — the offset of the two-byte marker, or `nil`.
+private func indexOfPercentF(_ b: [UInt8]) -> Int? {
+    guard b.count >= 2 else { return nil }
+    for k in 0...(b.count - 2) where b[k] == 0x25 && b[k + 1] == 0x46 {
+        return k
+    }
+    return nil
 }
 
 /// `block[3:-3] if len(block) >= 6 else block[3:]` — strips the leading length+cmd
