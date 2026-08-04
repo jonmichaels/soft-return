@@ -393,6 +393,13 @@ public struct FontChange: Hashable, Sendable {
         [GenericStyle.sans, .serif, .script, .display][(typestyle >> 10) & 0x03]
     }
     public var typestyleNumber: Int { typestyle & 0x01FF }
+    /// The spec's own 245-entry name table (`Typestyles.swift`); `nil` for numbers the
+    /// table doesn't carry. A NAME, not a font choice: the table never picks a typeface,
+    /// it says what the file said.
+    public var typestyleName: String? {
+        let n = typestyleNumber
+        return n < typestyleNames.count ? typestyleNames[n] : nil
+    }
 }
 
 /// WSFORMAT.TXT, type 0 Header — 128 bytes in total:

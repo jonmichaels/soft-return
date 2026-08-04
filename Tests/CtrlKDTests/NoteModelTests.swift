@@ -490,3 +490,23 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
         #expect(text.contains("One.") && text.contains("Two."))
     }
 }
+
+@Test func fontBlocksCarryTheirTypestyleName() {
+    // The spec's own 245-entry typestyle-number -> typeface-name table (WSFORMAT.TXT,
+    // "Typestyles are defined by a word..."; public copy: sfwriter.com/wsformat.txt),
+    // kept verbatim including alternate names. Pass-through: the table never picks a
+    // font, it reports what the file said. The number is the low 9 bits of the typestyle
+    // word, so the high bits (proportional, letter-quality, symbol map, generic style)
+    // must not disturb the lookup.
+    func typestyle(_ word: Int) -> FontChange {
+        parseWS(bytes("Text ")
+                + wsBlock(cmd: 0x02, content: [180, 0, 240, 0,
+                                               UInt8(word & 0xFF), UInt8((word >> 8) & 0xFF)]
+                                              + [UInt8](repeating: 0, count: 6))
+                + bytes(" more text here for detection.\r\n")).fonts[0]
+    }
+    #expect(typestyle(3).typestyleName == "Courier")
+    #expect(typestyle(0x8400 | 5).typestyleName == "Tms Rmn (also CG Times, Times Roman and Dutch)")
+    #expect(typestyle(244).typestyleName == "Greek (PS (Universal Greek))")
+    #expect(typestyle(245).typestyleName == nil)          // past the table's last entry
+}
