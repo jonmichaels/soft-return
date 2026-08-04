@@ -484,9 +484,12 @@ let italicOn: [UInt8] = [0x19]
     // (flagged ^T) toggled superscript with a visible font-size/baseline change. Real
     // extended characters travel as <1B xx 1C> triples. Decoding these bytes as cp437
     // invented an e-grave at 14 page boundaries of one document.
-    let data = ws7Block(0x00)
-        + bytes("the dirt underfoot") + [0x8D, 0x8A] + bytes("ash gray.") + HARD   // WS7's soft pair
-        + bytes("wa") + [0x94] + bytes("s") + [0x94] + bytes(" raised text here.") + HARD
+    // staged: 6.2.4's type-checker times out on the one-expression form
+    var data = ws7Block(0x00) + bytes("the dirt underfoot")
+    data += [0x8D, 0x8A]                                       // WS7's soft pair
+    data += bytes("ash gray.") + HARD
+    data += bytes("wa") + [0x94] + bytes("s") + [0x94]
+    data += bytes(" raised text here.") + HARD
     let doc = parseWS(data)
     let txt = emitText(doc, mode: .printed)
     #expect(!txt.contains("è") && !txt.contains("ö"))
@@ -502,10 +505,12 @@ let italicOn: [UInt8] = [0x19]
     // `linesPass` truncated a whole novel at its first occurrence; 0x9D would become
     // 0x1D block framing. Both bytes must survive the mask untouched, and the text after
     // them must survive with them.
-    let doc = parseWS(ws7Block(0x00)
-                      + bytes("Before the byte ") + [0x9A]
-                      + bytes(" and after it the document continues normally.") + HARD
-                      + bytes("A second paragraph proves nothing was truncated.") + HARD)
+    // staged: 6.2.4's type-checker times out on the one-expression form
+    var data = ws7Block(0x00) + bytes("Before the byte ")
+    data += [0x9A]
+    data += bytes(" and after it the document continues normally.") + HARD
+    data += bytes("A second paragraph proves nothing was truncated.") + HARD
+    let doc = parseWS(data)
     let txt = emitText(doc, mode: .printed)
     #expect(txt.contains("A second paragraph proves nothing was truncated."))
 }
