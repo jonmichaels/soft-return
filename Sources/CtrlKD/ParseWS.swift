@@ -737,6 +737,15 @@ private func resolveCwArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
 /// rather than propagating NaN/infinity into pagination. Direct port of
 /// `_text_lines_per_page`.
 func textLinesPerPage(pl: Double, mt: Double, mb: Double, lh48: Double) -> Int {
+    if pl == 0 {
+        // `.pl 0` turns page breaks OFF entirely in 7.0 document mode — MicroPro bug
+        // 12284 (engineering note 649): DRIVERA.OVR inserts ".pl0" at the start of
+        // PRVIEW output precisely so "displayed page breaks are thus avoided" (bare
+        // ".pl" stopped meaning this in 7.0). Modelled as a page TOO TALL TO FILL rather
+        // than a zero-height page — the old arithmetic produced 1 text line, i.e.
+        // MAXIMAL breakage, the exact opposite of what the command asks.
+        return 1_000_000_000
+    }
     let usable = pl - mt - mb                          // lines at 6 LPI
     guard usable.isFinite, lh48.isFinite, lh48 > 0 else { return 1 }
     return max(1, Int(usable * 8.0 / lh48))

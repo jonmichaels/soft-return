@@ -108,6 +108,20 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     #expect(page.sizeSource == .file)
 }
 
+@Test func plZeroTurnsPageBreaksOff() {
+    // MicroPro bug 12284 (engineering note 649): '.pl0' at the start of PRVIEW output
+    // exists so "displayed page breaks are thus avoided" — `.pl 0` means NO page breaks
+    // in 7.0 document mode. The old page model computed a 0-height page, floored to a
+    // 4-line cap: maximal breakage, the exact opposite. 60 lines must stay on one
+    // printed page, and the PDF page box falls back to Letter since an unbounded page is
+    // not expressible in PDF.
+    var body: [UInt8] = []
+    for i in 0..<60 { body += bytes("Line \(i) of the continuous document.") + HARD }
+    let doc = parseWS(bytes(".pl 0") + HARD + body)
+    #expect(docToPagelines(doc, printed: true).count == 1)
+    #expect(resolvedPageHeight(doc, printed: true) == PDFMetrics.pageHeight)
+}
+
 @Test func malformedPLArgumentDoesNotCrashAndDefaults() {
     // A `.PL` with no numeric argument at all must degrade to the default, never raise.
     let doc = parseWS(bytes(".PL") + HARD + bytes("Body.") + HARD)

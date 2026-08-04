@@ -456,6 +456,12 @@ func resolvedPageHeight(_ doc: Document, printed: Bool) -> Int {
 /// page can never send the capacity below the floor `_printed_cap` itself also enforces.
 private func resolvedPrintedPageHeight(_ doc: Document) -> Int {
     let heightIn = doc.page?.heightIn ?? 11.0
+    if heightIn == 0 {
+        // `.pl 0` = page breaks off (bug 12284; see `textLinesPerPage`). The text model
+        // already never breaks; the PDF page box itself falls back to Letter — a truly
+        // unbounded page is not expressible in PDF.
+        return PDFMetrics.pageHeight
+    }
     let floorPoints = PDFMetrics.lead * (footnoteFloor + 1)
     return max(floorPoints, roundHalfToEven(heightIn * 72))
 }
