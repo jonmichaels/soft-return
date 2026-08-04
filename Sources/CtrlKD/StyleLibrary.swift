@@ -129,9 +129,26 @@ public func styleHeadingLevel(_ name: String) -> Int {
     if n == "h1" { return 1 }
     if n == "h2" { return 2 }
     if n == "h3" { return 3 }
-    if n.contains("chapter title") || n.hasSuffix(" title") || n == "title" { return 1 }
-    if n.contains("subhead") || n.contains("section heading") { return 2 }
+    if asciiContains(n, "chapter title") || n.hasSuffix(" title") || n == "title" { return 1 }
+    if asciiContains(n, "subhead") || asciiContains(n, "section heading") { return 2 }
     return 0
+}
+
+/// `String.contains(String)` without Foundation resolves to the stdlib overload
+/// gated on macOS 13 (SE-0405) — a platform truth Linux never enforces, found by
+/// the first chonky worker build (2026-08-04): borgcube's suite was green while
+/// the identical source refused to compile on a Mac at the default deployment
+/// target. Hand-rolled over UTF-8, availability-free; the needles are ASCII
+/// style-name fragments, so byte equality is exact.
+private func asciiContains(_ s: String, _ needle: String) -> Bool {
+    let h = Array(s.utf8), n = Array(needle.utf8)
+    if n.isEmpty || h.count < n.count { return false }
+    for start in 0...(h.count - n.count) {
+        var k = 0
+        while k < n.count && h[start + k] == n[k] { k += 1 }
+        if k == n.count { return true }
+    }
+    return false
 }
 
 /// Python's `str.lower()` restricted to ASCII — the style names this compares against are
