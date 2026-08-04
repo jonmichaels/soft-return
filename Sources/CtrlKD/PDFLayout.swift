@@ -140,7 +140,7 @@ public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
 }
 
 /// Modern mode: unchanged from the original Python-parity port. Reflows every line to
-/// `maxCols`, ignores WordStar's own pagination (`.softpage`), and collects footnotes at
+/// `maxCols` and collects footnotes at
 /// the very end under one 20-dash rule using the flattened `doc.footnotes` view — the
 /// shape this project shipped before the period-authentic Printed layout existed, and
 /// which Printed mode below no longer shares.
@@ -162,9 +162,6 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
         if block.kind == .condpage {
             items.append(.condPage(max(1, block.heading)))
             continue
-        }
-        if block.kind == .softpage {
-            continue                          // WordStar's own pagination: printed-only
         }
         // Reflowed: logical lines, soft wraps joined back (`mergedLines`, ctrl-kd 2.0.0) —
         // Modern mode wraps to `maxCols` anyway, so a soft break here is redundant with the
@@ -371,9 +368,9 @@ private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
     var items: [PrintedBodyItem] = []
 
     for block in doc.blocks {
-        // Both an explicit `.pa` and WordStar's own soft pagination are honored verbatim in
-        // a facsimile.
-        if block.kind == .pagebreak || block.kind == .softpage {
+        // An explicit `.pa` is honored verbatim in a facsimile. WordStar's own 0x0B
+        // end-of-page marks are NOT breaks -- see `Line.softpage`.
+        if block.kind == .pagebreak {
             items.append(.pageBreak)
             continue
         }

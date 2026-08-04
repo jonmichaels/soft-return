@@ -185,11 +185,6 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     var parts: [String] = []
 
     for block in doc.blocks {
-        if block.kind == .softpage {
-            // WordStar's own pagination: a visible rule only when we're reproducing pages.
-            if printed { parts.append(pageRule) }
-            continue
-        }
         if block.kind == .pagebreak {
             parts.append(pageRule)
             continue
@@ -270,5 +265,5 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     return page
 }
 
-/// The page-break rule, shared by the `softpage` and `pagebreak` branches (emit.py:162, 165).
+/// The page-break rule, for the `pagebreak` branch (emit.py:165).
 private let pageRule = "<hr class=\"pb\">"

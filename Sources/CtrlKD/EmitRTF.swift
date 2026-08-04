@@ -136,10 +136,6 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     var parts: [String] = []
 
     for block in doc.blocks {
-        if block.kind == .softpage {
-            if printed { parts.append(pageControl) }
-            continue
-        }
         if block.kind == .pagebreak {
             parts.append(pageControl)
             continue
@@ -198,5 +194,5 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     return out
 }
 
-/// A hard page break, shared by the `softpage` and `pagebreak` branches (emit.py:215, 218).
+/// A hard page break, for the `pagebreak` branch (emit.py:218).
 private let pageControl = #"\page "#

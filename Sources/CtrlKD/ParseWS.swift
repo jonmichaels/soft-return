@@ -328,8 +328,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
         for (rel, mark) in physical.marks {
             switch mark {
             case .softpage:
-                closeBlock()
-                blocks.append(Block(kind: .softpage))
+                // NOT a block, NOT a break: the editor drops these wherever the page
+                // currently ends, including mid-paragraph, so closing the block here
+                // severed real paragraphs. See the 0x0B parse site for the measurement.
+                curLine.softpage = true
             case .heading(let level, let styleID):
                 closeBlock()
                 // Level 0 means "a style, but not one of the three this parser gives a

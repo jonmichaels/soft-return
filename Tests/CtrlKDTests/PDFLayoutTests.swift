@@ -153,16 +153,37 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     #expect(pages[2].first?.first?.text == "last")
 }
 
-@Test func softPageIsPrintedOnlyPagination() {
-    // WordStar's own pagination is honored in a facsimile and dropped when reflowing. Both
-    // directions, because a port that ignored `printed` here would still pass one of them.
-    let doc = Document(blocks: [
-        Block(lines: [Line(spans: [Span(text: "first")])]),
-        Block(kind: .softpage),
-        Block(lines: [Line(spans: [Span(text: "last")])]),
-    ])
-    #expect(docToPagelines(doc, printed: true).count == 2)
-    #expect(docToPagelines(doc, printed: false).count == 1)
+@Test func softpageNeverBreaksAPage() {
+    // WSFORMAT.TXT on 0Bh End of page: "This sequence should usually be ignored. It's
+    // used by the WordStar editor to keep track of page breaks. It is TRANSIENT, and
+    // moves around with the page break."
+    //
+    // MEASURED on WordStar 7 (2026-08-04): the same document printed with and without
+    // 0x0B marks produced BYTE-IDENTICAL output. The marks carry two words (VMIs on page,
+    // line # on page) and the print pipeline never reads them. Honouring them as breaks
+    // changed the page count of 43 archive documents. The block is still PARSED (real
+    // structure a viewer may want); no renderer may act on it.
+    //
+    // Written as the minimal pair the physical experiment was: marked versus unmarked.
+    let p1 = bytes("First paragraph of perfectly plain prose.")
+    let p2 = bytes("Second paragraph, still plain.")
+    let p3 = bytes("Third paragraph closes the document.")
+    let mark = ws7Block(0x0B, payload: [24, 0, 3, 0])
+    let base = parseWS(ws7Block(0x00) + p1 + HARD + p2 + HARD + p3 + HARD)
+    let marked = parseWS(ws7Block(0x00) + p1 + HARD + mark + p2 + HARD + mark + p3 + HARD)
+
+    #expect(marked.blocks.flatMap(\.lines).filter(\.softpage).count == 2)
+    // and the mark must not sever the flow into extra blocks
+    #expect(marked.blocks.map(\.kind) == base.blocks.map(\.kind))
+    for mode in [EmitMode.printed, .modern] {
+        #expect(emitText(marked, mode: mode) == emitText(base, mode: mode))
+        #expect(emitHTML(marked, mode: mode) == emitHTML(base, mode: mode))
+        #expect(emitRTF(marked, mode: mode) == emitRTF(base, mode: mode))
+    }
+    for printed in [true, false] {
+        #expect(docToPagelines(marked, printed: printed).count
+                == docToPagelines(base, printed: printed).count)
+    }
 }
 
 @Test func emptyDocumentIsOneEmptyPage() {

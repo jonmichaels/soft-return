@@ -4,8 +4,8 @@ public enum BlockKind: String, Hashable, Sendable {
     case para
     /// An explicit page break (`.pa` dot command / form feed).
     case pagebreak
-    /// WordStar's own pagination — render only in printed mode.
-    case softpage
+    // `softpage` RETIRED 2026-08-04: a 0x0B end-of-page mark is transient editor state,
+    // now `Line.softpage` — it never breaks a page and never splits a block.
     /// `.cp n` — a CONDITIONAL page break, requesting that n lines be kept together.
     /// The condition cannot be evaluated at parse time (it depends on how many lines
     /// remain on the page, which only pagination knows), so the block carries n in

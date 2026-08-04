@@ -140,6 +140,14 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 tabAt.insert(out.count)
                 for _ in 0..<cols { out.append(leader) }
             } else if cmd == 0x0B {                                // end of page
+                // WSFORMAT.TXT: "This sequence should usually be ignored. It's used by
+                // the WordStar editor to keep track of page breaks. It is transient, and
+                // moves around with the page break." MEASURED on WordStar 7
+                // (2026-08-04): a document printed with and without 0x0B marks produced
+                // BYTE-IDENTICAL output — the print pipeline never looks at them. The
+                // block is still parsed (it is real structure, and a viewer may want the
+                // editor's last-seen pagination), but NO renderer may treat it as a page
+                // break: honouring them changed the page count of 43 archive documents.
                 marks[out.count] = .softpage
             } else if cmd == 0x0D {                                // paragraph number
                 // WordStar's AUTOMATIC outline/legal numbering (`.p#`) — "2.1.3" and

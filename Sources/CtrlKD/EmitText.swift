@@ -78,11 +78,6 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
     let printed = mode == .printed || isPrinted(doc)
     var out: [String] = []
     for block in doc.blocks {
-        if block.kind == .softpage {
-            // WordStar's own pagination: meaningful only line-for-line (emit.py:61-64).
-            if mode == .printed { out.append("\u{0C}") }
-            continue
-        }
         if block.kind == .pagebreak {
             out.append(mode == .printed ? "\u{0C}" : "\n" + String(repeating: "-", count: 20) + "\n")
             continue

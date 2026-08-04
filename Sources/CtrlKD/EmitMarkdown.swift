@@ -122,9 +122,6 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
     let refNotes = inlineReferenceNotes(doc)
     var out: [String] = []
     for block in doc.blocks {
-        if block.kind == .softpage {
-            continue                                // dropped entirely in modern mode
-        }
         if block.kind == .pagebreak {
             out.append("---")
             continue
