@@ -311,11 +311,28 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     }
 }
 
-@Test func shiftJISRunsArePreservedUndecoded() {
-    // C15. Double-byte Shift-JIS; a cp437 decoder would produce confident mojibake,
-    // which is worse than an honest placeholder because it LOOKS like text.
-    let raw: [UInt8] = [0x82, 0xA0, 0x82, 0xA2]
-    let doc = parseWS(bytes("Before ") + wsBlock(cmd: 0x17, content: raw) + bytes(" after.\r\n"))
-    #expect(doc.shiftRuns.map(\.bytes) == [raw])
+@Test func shiftJISIsAModeToggleNotATextContainer() {
+    // C15, corrected against WSFORMAT.TXT: "Byte: Shift-In (to Japanese) = 1,
+    // Shift-Out (Back to Normal) = 0." A one-byte TOGGLE — the Japanese bytes live in
+    // the ordinary stream BETWEEN the two markers.
+    let jp: [UInt8] = [0x82, 0xA0, 0x82, 0xA2]
+    let doc = parseWS(bytes("Before ") + wsBlock(cmd: 0x17, content: [1]) + jp
+                      + wsBlock(cmd: 0x17, content: [0]) + bytes(" after.\r\n"))
+    #expect(doc.shiftRuns.map(\.bytes) == [jp])
     #expect(doc.blocks[0].lines[0].text() == "Before [shift-jis: 4 bytes] after.")
+}
+
+@Test func theEscapeByteCannotFireInsideAJapaneseRun() {
+    // The spec: "When shifted in, WordStar no longer uses the 1Bh/1Ch wrap characters".
+    // `decodeSpans` treats 1Bh as the extended-character escape UNCONDITIONALLY, so a
+    // 1Bh inside a Japanese run would swallow the byte after it. Lifting the run out
+    // before decoding is what makes that impossible — a correctness property.
+    let jp: [UInt8] = [0x1B, 0x41, 0x82, 0xA0]
+    let doc = parseWS(bytes("Some ordinary English text here. ")
+                      + wsBlock(cmd: 0x17, content: [1]) + jp
+                      + wsBlock(cmd: 0x17, content: [0]) + bytes(" tail.\r\n"))
+    #expect(doc.shiftRuns.map(\.bytes) == [jp])
+    let text = doc.blocks[0].lines[0].text()
+    #expect(text.contains("[shift-jis: 4 bytes]"))
+    #expect(text.hasSuffix(" tail."), "got: \(text)")   // nothing swallowed past the run
 }

@@ -89,6 +89,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var fonts: [FontChange] = []
     var includes: [String] = []
     var shiftRuns: [ShiftRun] = []
+    var shiftOpen: [Int] = []
     var driver: String? = nil
     var tabAt: Set<Int> = []
     var i = 0
@@ -216,13 +217,35 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                     driver = decodeCP437(name)
                 }
             } else if cmd == 0x17 {                                // Shift-In/Shift-Out
-                // Japanese double-byte text. NOT decoded: these are Shift-JIS and a
-                // cp437 decoder would produce confident mojibake — worse than an
-                // honest placeholder, because it looks like text. Nothing in the
-                // archive contains one; implemented from the spec. Register C15.
+                // WSFORMAT.TXT (the WordStar 7.0 file format spec), "17h Japanese
+                // Font Shift-In/Shift-Out":
+                //     "Byte: Shift-In (to Japanese) = 1, Shift-Out (Back to
+                //      Normal) = 0."
+                //
+                // A ONE-BYTE MODE TOGGLE, not a container of text. The Japanese bytes
+                // live in the ordinary stream BETWEEN a shift-in and its shift-out, as
+                // double-byte Shift-JIS.
+                //
+                // This was first implemented as if the block held the text itself,
+                // emitting a placeholder for the MARKER — which would have put a bogus
+                // placeholder where a mode marker belongs AND left the real Japanese to
+                // be mangled by the cp437 decoder.
+                //
+                // Lifting the run out is CORRECTNESS, not tidiness. The spec goes on:
+                // "When shifted in, WordStar no longer uses the 1Bh/1Ch wrap
+                // characters". `decodeSpans` treats 1Bh as the extended-character
+                // escape UNCONDITIONALLY, so a 1Bh inside a Japanese run would be read
+                // as an escape and swallow the byte after it. Because the run never
+                // reaches `decodeSpans`, that cannot happen. Register C15.
                 let content = blockContent(block)
-                shiftRuns.append(ShiftRun(offset: out.count, bytes: content))
-                out += Array("[shift-jis: \(content.count) bytes]".utf8)
+                if let first = content.first, first != 0 {
+                    shiftOpen.append(out.count)
+                } else if let start = shiftOpen.popLast() {
+                    let raw = Array(out[start...])
+                    out.removeSubrange(start...)
+                    shiftRuns.append(ShiftRun(offset: start, bytes: raw))
+                    out += Array("[shift-jis: \(raw.count) bytes]".utf8)
+                }
             } else if cmd == 0x16 {                                // truncation marker
                 // The spec says a truncated line shows a literal marker. Nothing in
                 // the archive contains one, so this is implemented FROM THE SPEC and
@@ -277,6 +300,15 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
             i += 1
         }
     }
+    // An unterminated shift-in runs to the end of the document: the text is Japanese
+    // from there on, and dropping the run would lose that fact entirely.
+    while let start = shiftOpen.popLast() {
+        let raw = Array(out[start...])
+        out.removeSubrange(start...)
+        shiftRuns.append(ShiftRun(offset: start, bytes: raw))
+        out += Array("[shift-jis: \(raw.count) bytes]".utf8)
+    }
+    shiftRuns.sort { $0.offset < $1.offset }
     return SymmetricBlocksResult(bytes: out, notes: notes, unknownBlocks: unknownBlocks,
                                  graphics: graphics, colours: colours, fonts: fonts,
                                  includes: includes, shiftRuns: shiftRuns,

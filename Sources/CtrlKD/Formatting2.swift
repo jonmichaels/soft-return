@@ -268,7 +268,12 @@ public struct FontChange: Hashable, Sendable {
     public var points: Double { Double(height20thPt) / 20.0 }
 }
 
-/// A Japanese Shift-In/Out run (symmetric type 0x17), kept UNDECODED. Register C15.
+/// A Japanese run: the UNDECODED Shift-JIS that sat between a shift-in and its
+/// shift-out, lifted out of the text stream and replaced there by a placeholder.
+///
+/// Per WSFORMAT.TXT the `0x17` block is a one-byte MODE TOGGLE (1 = into Japanese,
+/// 0 = back), not a container of text, so the run is the span BETWEEN two markers.
+/// Nothing is lost and no mojibake is presented as text. Register C15.
 public struct ShiftRun: Hashable, Sendable {
     public let offset: Int
     public let bytes: [UInt8]
