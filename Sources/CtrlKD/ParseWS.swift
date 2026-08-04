@@ -363,10 +363,33 @@ public func parseWS(_ data: [UInt8]) -> Document {
         // printed." `parsePrintstream` has always honoured it; `parseWS` did not, so a
         // WS document carrying ^L had its two pages run together into one paragraph and
         // the only trace was an "unknown code 0x0c" line in --diagnose.
+        //
+        // EVERY part is decoded HERE, the trailing one included, and `raw` is then empty
+        // for the rest of the loop — core.py's `raw = b''`. This port used to keep the
+        // last part back and let it fall through to the ordinary decode below, which put
+        // it AFTER the structural-mark loop instead of before it. The two orders agree
+        // until a line carries both a 0x0C and a mark: a paragraph-style selection at the
+        // end of such a line then closed a block that Python had already filled, and the
+        // document gained a boundary Python does not have (a blank line in text/modern, a
+        // split `<pre>`/`\par` in html/rtf, and every following line shifted).
+        //
+        // Latent until 2026-08-04: the gate is `0x0C in raw` in both engines, and a
+        // wrapped `<1B 0C 1C>` satisfies it, so the branch has always run for a line whose
+        // only 0x0C is a triple middle. While that middle byte still SPLIT the line, both
+        // engines were wrong in the same way and matched; once the split stopped, the
+        // divergence in what happens to the trailing part became visible — one archive
+        // document, a table whose rows carry a wrapped 0x0C and a style selection.
         if raw.contains(0x0C) {
             var segment: [UInt8] = []
-            var first = true
             var k = 0
+            func decodeSegment() {
+                if !segment.isEmpty {
+                    curLine.spans += decodeSpans(segment, stripHibit: stripHibit,
+                                                 active: &active, unknown: &unknown,
+                                                 fnCounter: &fnCounter)
+                    segment = []
+                }
+            }
             while k < raw.count {
                 // Split on BARE form feeds only — a wrapped `<1B 0C 1C>` is the cp437
                 // glyph at 0x0C (the chart cell in ASCIITAB.WS), never a page eject.
@@ -377,23 +400,20 @@ public func parseWS(_ data: [UInt8]) -> Document {
                     continue
                 }
                 if raw[k] == 0x0C {
-                    if !segment.isEmpty {
-                        curLine.spans += decodeSpans(segment, stripHibit: stripHibit,
-                                                     active: &active, unknown: &unknown,
-                                                     fnCounter: &fnCounter)
-                        segment = []
-                    }
-                    if !first || !curLine.spans.isEmpty || !cur.lines.isEmpty {
-                        closeBlock()
-                        blocks.append(Block(kind: .pagebreak))
-                    }
-                    first = false
+                    decodeSegment()
+                    // EVERY bare form feed ejects, the one that opens the document
+                    // included — core.py's `if n:` over the split parts, with no
+                    // is-anything-open guard. A leading ^L is a deliberate blank first
+                    // page; suppressing it dropped a page the author asked for.
+                    closeBlock()
+                    blocks.append(Block(kind: .pagebreak))
                 } else {
                     segment.append(raw[k])
                 }
                 k += 1
             }
-            raw = segment
+            decodeSegment()
+            raw = []
         }
 
         // Structural marks, carried as OFFSETS rather than injected bytes — every byte
