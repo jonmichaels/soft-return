@@ -160,6 +160,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var includes: [String] = []
     var shiftRuns: [ShiftRun] = []
     var printerDriver: String? = nil
+    var wsHeader: WSHeader? = nil
     var tabAt: Set<Int> = []
     var wsMarks: [Int: StructuralMark] = [:]
     if ws5 {
@@ -173,6 +174,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         includes = stripped.includes
         shiftRuns = stripped.shiftRuns
         printerDriver = stripped.printerDriver
+        wsHeader = stripped.header
         tabAt = stripped.tabAt
         wsMarks = stripped.marks
         // footnotes/endnotes/annotations are all rendered the same way (a numbered
@@ -461,7 +463,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
             endnotesHere: fmt.endnotesHere, convertNotes: fmt.convertNotes,
             autoPageNumbers: fmt.autoPageNumbers),
         graphics: graphics, colours: colours, fonts: fonts, includes: includes,
-        shiftRuns: shiftRuns, printerDriver: printerDriver,
+        shiftRuns: shiftRuns, printerDriver: printerDriver, wsHeader: wsHeader,
         tocEntries: tocEntries, indexEntries: indexEntries, lineNumbering: lineNumbering
     )
 }

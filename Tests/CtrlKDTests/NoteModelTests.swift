@@ -276,13 +276,56 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
 
 @Test func colourAndFontChangesAreRecorded() {
     // C2/C3. Neither risked losing TEXT, but both were invisible: a document that
-    // coloured a passage or set 9pt type rendered identically to one that did not.
-    let colour = wsBlock(cmd: 0x01, content: [0x08, 0x04])
-    let font = wsBlock(cmd: 0x02, content: [180, 0, 240, 0, 0x03, 0x46] + [UInt8](repeating: 0, count: 6))
+    // coloured a passage or set 12pt type rendered identically to one that did not.
+    let colour = wsBlock(cmd: 0x01, content: [0x08, 0x04])      // colour 8, previous 4
+    // WSFORMAT.TXT type 2: width HMI (1/1800in), height VMI (1/1440in), typestyle, then
+    // the previous triple. WIDTH FIRST — this was read swapped until 2026-08-04, and
+    // survived because 1/1440in IS 1/20pt (1440/72 = 20), so the WIDTH word read as
+    // 20ths-of-a-point gave plausible sizes off the wrong field.
+    let font = wsBlock(cmd: 0x02, content: [180, 0,             // width  180/1800in = 10 CPI
+                                            240, 0,             // height 240/1440in = 12pt
+                                            0x00, 0x84]         // proportional, serif
+                                           + [UInt8](repeating: 0, count: 6))
     let doc = parseWS(bytes("Plain ") + colour + bytes("coloured ") + font + bytes("sized.\r\n"))
-    #expect(doc.colours.map { [$0.foreground, $0.background] } == [[8, 4]])
-    #expect(doc.fonts.map(\.height20thPt) == [180])
-    #expect(doc.fonts[0].points == 9.0)
+    #expect(doc.colours.map { [$0.colour, $0.previous] } == [[8, 4]])
+    let f = doc.fonts[0]
+    #expect(f.points == 12.0)
+    #expect(f.cpi == 10.0)
+    #expect(f.proportional)
+    #expect(f.genericStyle == .serif)
+    #expect(f.symbolMap == .cp437)
+}
+
+@Test func fontBlockReadsWidthBeforeHeight() {
+    // The trap that hid a swapped field for a day: 1/1440in IS 1/20 point exactly
+    // (1440/72 = 20), so reading the WIDTH word as 20ths-of-a-point yields sizes that
+    // look like real type — 9pt, 8pt, 11pt across 862 archive blocks. Those numbers were
+    // cited as confirming the reading. They were the right arithmetic on the wrong word.
+    //
+    // Read correctly the same corpus gives 12pt for 749 of those blocks, with 10 CPI,
+    // which is what a 1992 document actually looks like.
+    let font = wsBlock(cmd: 0x02, content: [180, 0, 240, 0, 0, 0]
+                                           + [UInt8](repeating: 0, count: 6))
+    let f = parseWS(bytes("Text ") + font + bytes(" more text here for detection.\r\n")).fonts[0]
+    #expect(f.width1800 == 180 && f.cpi == 10.0)
+    #expect(f.height1440 == 240 && f.points == 12.0)
+}
+
+@Test func headerSequenceStatesTheReleaseInsteadOfGuessingIt() {
+    // WSFORMAT.TXT, type 0 Header: "Byte: version number in BCD (50h for Release 5.0,
+    // 55h for Release 5.5, 60h for Release 6.0)", then a 9-byte driver name, 2 reserved,
+    // and a 32-bit pointer to the file's style library.
+    //
+    // This block was read as nothing but a driver name. The version byte is the more
+    // valuable field: `detect` INFERS ws4-vs-ws5+ from byte statistics, and the file says
+    // its release outright. 78 archive documents declare 7.0 and 3 declare 6.0. The
+    // style-library pointer is what C1 proper needs.
+    let body: [UInt8] = [0x70] + bytes("LASERJET") + [0x00] + [0x00, 0x00]
+        + [0x34, 0x12] + [0x01, 0x00]
+    let doc = parseWS(wsBlock(cmd: 0x00, content: body)
+                      + bytes("Body text, with enough ordinary prose to detect.\r\n"))
+    #expect(doc.wsHeader?.release == "7.0")
+    #expect(doc.wsHeader?.styleLibraryOffset == 0x00011234)
 }
 
 @Test func printFileIncludesKeepTheirFilename() {

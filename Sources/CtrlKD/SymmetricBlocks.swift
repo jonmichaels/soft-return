@@ -68,6 +68,9 @@ public struct SymmetricBlocksResult: Hashable, Sendable {
     public let includes: [String]
     public let shiftRuns: [ShiftRun]
     public let printerDriver: String?
+    /// The type 0 header sequence's own fields — release and style-library pointer.
+    /// `nil` when no 0x00 block carried either.
+    public let header: WSHeader?
     /// Offsets into `bytes` at which TAB-derived padding begins — `linesPass` needs to
     /// tell a program-emitted indent from one the author typed. A3.
     public let tabAt: Set<Int>
@@ -78,7 +81,9 @@ public struct SymmetricBlocksResult: Hashable, Sendable {
                 graphics: [String] = [], colours: [ColourChange] = [],
                 fonts: [FontChange] = [], includes: [String] = [],
                 shiftRuns: [ShiftRun] = [], printerDriver: String? = nil,
+                header: WSHeader? = nil,
                 tabAt: Set<Int> = [], marks: [Int: StructuralMark] = [:]) {
+        self.header = header
         self.tabAt = tabAt
         self.marks = marks
         self.colours = colours
@@ -104,6 +109,9 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var shiftRuns: [ShiftRun] = []
     var shiftOpen: [Int] = []
     var driver: String? = nil
+    var headerVersionBCD: Int? = nil
+    var headerRelease: String? = nil
+    var headerLibOffset: Int? = nil
     var tabAt: Set<Int> = []
     var marks: [Int: StructuralMark] = [:]
     var i = 0
@@ -166,34 +174,47 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                     if !parts.isEmpty { out += Array(parts.joined(separator: ".").utf8) }
                 }
             } else if cmd == 0x01 {                                // colour change
-                // Two bytes: foreground and background colour INDICES into WordStar's
-                // own palette, not RGB (the archive shows 00/00, 04/00, 08/04, 0c/08).
-                // The text was never at risk here, but the change was invisible: a
-                // document that coloured a passage rendered identically to one that
-                // did not. Recorded, not rendered — the printed page this project
-                // reproduces was monochrome. Register C2.
+                // WSFORMAT.TXT, type 1 Color:
+                //     Byte: Color number (see below).
+                //     Byte: Previous color in file.
+                //
+                // CURRENT and PREVIOUS, not foreground and background — which is what
+                // this recorded until 2026-08-04. The palette is named and fixed
+                // (0 Black … 0Fh White on black), so the number resolves to a colour
+                // rather than being an opaque index.
+                //
+                // Recorded, not rendered: the printed page this project reproduces was
+                // monochrome. Register C2.
                 let content = blockContent(block)
                 if content.count >= 2 {
                     colours.append(ColourChange(offset: out.count,
-                                                foreground: Int(content[0]),
-                                                background: Int(content[1])))
+                                                colour: Int(content[0]),
+                                                previous: Int(content[1])))
                 }
             } else if cmd == 0x02 || cmd == 0x15 {                 // font change
-                // Six 16-bit little-endian values. The first is the type size in 1/20
-                // POINT — across 862 real blocks that yields 9pt, 8pt, 11pt, 7pt, 6pt,
-                // 12pt, 10pt, 14pt, and it is those sensible sizes that confirm the
-                // reading. The rest identify the face to a 1987 printer driver and
-                // mean nothing without it.
+                // WSFORMAT.TXT, type 2 Font — six little-endian words:
+                //     Word: Font width in HMIs  (1/1800ths of an inch)
+                //     Word: Font height in VMIs (1/1440ths of an inch)
+                //     Word: Typestyle
+                //     Word x3: the previous width, height and typestyle
                 //
-                // Deliberate for PDF, which is Courier by design — but there is no
-                // excuse for RTF/HTML, where a size change is expressible. Register C3.
+                // WIDTH COMES FIRST. Until 2026-08-04 this read word 1 as the height
+                // "in 1/20 point" and word 2 as the width — swapped. The error survived
+                // because 1/1440in IS 1/20 point exactly (1440/72 = 20), so treating the
+                // WIDTH word as 20ths-of-a-point produced 9pt, 8pt, 11pt across 862 real
+                // blocks: sizes plausible enough that they were cited as confirming the
+                // reading. They were the right arithmetic on the wrong word. Read
+                // correctly, 749 of those blocks are 12pt at 10 CPI.
+                //
+                // Register C3. Deliberate for PDF, which is Courier by design; RTF/HTML
+                // can express a size change and now have the figures.
                 let content = blockContent(block)
-                if content.count >= 4 {
+                if content.count >= 6 {
                     fonts.append(FontChange(
                         offset: out.count,
-                        height20thPt: Int(content[0]) | (Int(content[1]) << 8),
-                        width20thPt: Int(content[2]) | (Int(content[3]) << 8),
-                        driverBytes: Array(content[4...])))
+                        width1800: Int(content[0]) | (Int(content[1]) << 8),
+                        height1440: Int(content[2]) | (Int(content[3]) << 8),
+                        typestyle: Int(content[4]) | (Int(content[5]) << 8)))
                 }
             } else if cmd == 0x0F {                                // print-file inclusion
                 // A file the printer was told to pull in — the archive carries
@@ -231,13 +252,40 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 // them silently would be WORSE than the bug being fixed: it turns a
                 // reported unknown into an unreported one.
                 unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
-            } else if cmd == 0x00 {                                // printer/driver name
+            } else if cmd == 0x00 {                                // HEADER sequence
+                // WSFORMAT.TXT, type 0 Header — 128 bytes in total:
+                //     Byte:      version number in BCD (50h = Release 5.0, 55h = 5.5,
+                //                60h = 6.0)
+                //     9 bytes:   null-terminated driver name
+                //     2 bytes:   reserved
+                //     2 words:   32-bit pointer to the file's style library
+                //     107 bytes: reserved
+                //
+                // This was read as nothing but a driver name. The VERSION BYTE is the
+                // more valuable field by far: `detect` infers ws4-vs-ws5+ from byte
+                // statistics, and the file states its release outright.
+                //
+                // Fields accumulate across 0x00 blocks the way Python's `header` dict
+                // does — each key set only when this block actually carries it, so a
+                // second, emptier header cannot erase the first one's pointer.
+                let content = blockContent(block)
+                if let v = content.first, v == 0x50 || v == 0x55 || v == 0x60 || v == 0x70 {
+                    headerVersionBCD = Int(v)
+                    headerRelease = "\(Int(v) >> 4).\(Int(v) & 0x0F)"
+                }
+                if content.count >= 14 {
+                    let lo = Int(content[12]) | (Int(content[13]) << 8)
+                    let hi = content.count >= 16
+                        ? Int(content[14]) | (Int(content[15]) << 8) : 0
+                    let ptr = (hi << 16) | lo
+                    if ptr != 0 { headerLibOffset = ptr }
+                }
                 // The driver the document was last formatted for (LASERJET in 43
                 // archive documents). Provenance: it explains why a file's
                 // measurements look the way they do. The byte before the name is a
                 // record tag, not part of it (`pLASERJET`).
                 var name: [UInt8] = []
-                for c in blockContent(block) {
+                for c in content {
                     let ch = c & 0x7F
                     if (ch >= 0x41 && ch <= 0x5A) || (ch >= 0x30 && ch <= 0x39) {
                         name.append(ch)
@@ -344,10 +392,15 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
         out += Array("[shift-jis: \(raw.count) bytes]".utf8)
     }
     shiftRuns.sort { $0.offset < $1.offset }
+    let header = (headerVersionBCD == nil && headerLibOffset == nil)
+        ? nil
+        : WSHeader(versionBCD: headerVersionBCD, release: headerRelease,
+                   styleLibraryOffset: headerLibOffset)
     return SymmetricBlocksResult(bytes: out, notes: notes, unknownBlocks: unknownBlocks,
                                  graphics: graphics, colours: colours, fonts: fonts,
                                  includes: includes, shiftRuns: shiftRuns,
-                                 printerDriver: driver, tabAt: tabAt, marks: marks)
+                                 printerDriver: driver, header: header,
+                                 tabAt: tabAt, marks: marks)
 }
 
 /// `block[3:-3] if len(block) >= 6 else block[3:]` — strips the leading length+cmd

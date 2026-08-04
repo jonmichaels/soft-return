@@ -250,35 +250,131 @@ func parseSRArg(_ arg: [UInt8]) -> Double? {
     return num
 }
 
-/// A colour change (symmetric type 0x01): palette INDICES, not RGB. Recorded, not
-/// rendered — the printed page this project reproduces was monochrome. Register C2.
+/// A colour change (symmetric type 0x01). WSFORMAT.TXT, type 1 Color:
+///
+///     Byte: Color number (see below).
+///     Byte: Previous color in file.
+///
+/// CURRENT and PREVIOUS, not foreground and background — which is what this recorded
+/// until 2026-08-04. The palette is named and fixed (0 Black … 0Fh White on black), so
+/// the number resolves to a colour rather than being an opaque index.
+///
+/// Recorded, not rendered: the printed page this project reproduces was monochrome.
+/// Register C2.
 public struct ColourChange: Hashable, Sendable {
     public let offset: Int
-    public let foreground: Int
-    public let background: Int
-    public init(offset: Int, foreground: Int, background: Int) {
+    public let colour: Int
+    public let previous: Int
+    public init(offset: Int, colour: Int, previous: Int) {
         self.offset = offset
-        self.foreground = foreground
-        self.background = background
+        self.colour = colour
+        self.previous = previous
     }
 }
 
-/// A font change (symmetric type 0x02/0x15). `height20thPt` is the type size in 1/20
-/// point — 180 = 9pt — which is the part a modern renderer can actually use;
-/// `driverBytes` identify the face to a 1987 printer and mean nothing without it. C3.
+/// The typestyle word's symbol-map field, bits 12-13.
+///
+/// FLAGGED, NOT YET ACTED ON: across the archive this reads cp437 183, MATH 302,
+/// CP850 377, and every decode in this project is cp437 unconditionally. CP850 differs
+/// from CP437 through the whole upper half, so accented characters in those documents
+/// may be decoding wrong. Recorded rather than guessed at.
+public enum SymbolMap: String, Hashable, Sendable {
+    case cp437
+    case cp850
+    case math
+    case symbols
+}
+
+/// The typestyle word's generic-style field, bits 10-11.
+public enum GenericStyle: String, Hashable, Sendable {
+    case sans
+    case serif
+    case script
+    case display
+}
+
+/// A font change (symmetric type 0x02/0x15). WSFORMAT.TXT, type 2 Font — six
+/// little-endian words:
+///
+///     Word: Font width in HMIs  (1/1800ths of an inch)
+///     Word: Font height in VMIs (1/1440ths of an inch)
+///     Word: Typestyle
+///     Word x3: the previous width, height and typestyle
+///
+/// WIDTH COMES FIRST. Until 2026-08-04 this read word 1 as the height "in 1/20 point"
+/// and word 2 as the width — swapped. The error survived because 1/1440in IS 1/20 point
+/// exactly (1440/72 = 20), so treating the WIDTH word as 20ths-of-a-point produced 9pt,
+/// 8pt, 11pt across 862 real blocks: sizes plausible enough that they were cited as
+/// confirming the reading. They were the right arithmetic on the wrong word. Read
+/// correctly, 749 of those blocks are 12pt at 10 CPI.
+///
+/// Register C3. Deliberate for PDF, which is Courier by design; RTF/HTML can express a
+/// size change and now have the figures.
 public struct FontChange: Hashable, Sendable {
     public let offset: Int
-    public let height20thPt: Int
-    public let width20thPt: Int
-    public let driverBytes: [UInt8]
-    public init(offset: Int, height20thPt: Int, width20thPt: Int, driverBytes: [UInt8]) {
+    /// Width in HMIs, 1/1800 inch.
+    public let width1800: Int
+    /// Height in VMIs, 1/1440 inch.
+    public let height1440: Int
+    /// The raw typestyle word; the accessors below decode its documented bit fields.
+    public let typestyle: Int
+
+    public init(offset: Int, width1800: Int, height1440: Int, typestyle: Int) {
         self.offset = offset
-        self.height20thPt = height20thPt
-        self.width20thPt = width20thPt
-        self.driverBytes = driverBytes
+        self.width1800 = width1800
+        self.height1440 = height1440
+        self.typestyle = typestyle
     }
-    /// The size in points, which is what an emitter wants.
-    public var points: Double { Double(height20thPt) / 20.0 }
+
+    /// The size in points — 1/1440in IS 1/20pt exactly.
+    public var points: Double { Double(height1440) / 20.0 }
+    /// Characters per inch. `nil` for a zero width, which is not a printable pitch.
+    public var cpi: Double? { width1800 == 0 ? nil : 1800.0 / Double(width1800) }
+    public var proportional: Bool { typestyle & 0x8000 != 0 }
+    public var letterQuality: Bool { typestyle & 0x4000 != 0 }
+    public var symbolMap: SymbolMap {
+        [SymbolMap.cp437, .cp850, .math, .symbols][(typestyle >> 12) & 0x03]
+    }
+    public var genericStyle: GenericStyle {
+        [GenericStyle.sans, .serif, .script, .display][(typestyle >> 10) & 0x03]
+    }
+    public var typestyleNumber: Int { typestyle & 0x01FF }
+}
+
+/// WSFORMAT.TXT, type 0 Header — 128 bytes in total:
+///
+///     Byte:      version number in BCD (50h = Release 5.0, 55h = 5.5, 60h = 6.0)
+///     9 bytes:   null-terminated driver name
+///     2 bytes:   reserved
+///     2 words:   32-bit pointer to the file's style library
+///     107 bytes: reserved
+///
+/// This block was read as nothing but a driver name (`Document.printerDriver`, still
+/// parsed below it). The VERSION BYTE is the more valuable field by far: `detect`
+/// INFERS ws4-vs-ws5+ from byte statistics, and the file states its release outright —
+/// 78 archive documents say 7.0 and 3 say 6.0. The style-library pointer is what C1
+/// proper needs, and 81 documents carry one.
+public struct WSHeader: Hashable, Sendable {
+    /// The raw BCD byte, when it was one of the recognised releases.
+    public let versionBCD: Int?
+    /// `versionBCD` rendered as `"7.0"` — the two BCD nybbles, dot-joined.
+    public let release: String?
+    /// File-absolute offset of the paragraph style library; `nil` when the field is
+    /// zero. A pointer equal to the file length is WordStar's "next available offset"
+    /// default and means no library — see `parseStyleLibrary`.
+    public let styleLibraryOffset: Int?
+
+    public init(versionBCD: Int? = nil, release: String? = nil,
+                styleLibraryOffset: Int? = nil) {
+        self.versionBCD = versionBCD
+        self.release = release
+        self.styleLibraryOffset = styleLibraryOffset
+    }
+
+    /// Nothing was readable in the block — no version byte, no pointer.
+    public var isEmpty: Bool {
+        versionBCD == nil && styleLibraryOffset == nil
+    }
 }
 
 /// A Japanese run: the UNDECODED Shift-JIS that sat between a shift-in and its

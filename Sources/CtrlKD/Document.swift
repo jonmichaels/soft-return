@@ -313,6 +313,10 @@ public struct Document: Hashable, Sendable {
     /// The printer driver this file was last formatted for. Provenance: it explains why
     /// a file's measurements look the way they do.
     public var printerDriver: String?
+    /// The type 0 HEADER sequence: the release the file declares outright (where
+    /// `detection` only infers it from byte statistics) and the pointer to its
+    /// paragraph style library. WS5+ only; `nil` when no header block carried either.
+    public var wsHeader: WSHeader?
     /// `.tc` entries. Register C7.
     public var tocEntries: [TOCEntry]
     /// `.ix` entries. Register C6.
@@ -354,6 +358,7 @@ public struct Document: Hashable, Sendable {
         includes: [String] = [],
         shiftRuns: [ShiftRun] = [],
         printerDriver: String? = nil,
+        wsHeader: WSHeader? = nil,
         tocEntries: [TOCEntry] = [],
         indexEntries: [IndexEntry] = [],
         lineNumbering: Int? = nil
@@ -382,6 +387,7 @@ public struct Document: Hashable, Sendable {
         self.includes = includes
         self.shiftRuns = shiftRuns
         self.printerDriver = printerDriver
+        self.wsHeader = wsHeader
         self.tocEntries = tocEntries
         self.indexEntries = indexEntries
         self.lineNumbering = lineNumbering
