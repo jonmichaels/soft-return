@@ -185,6 +185,22 @@ public func parseWS(_ data: [UInt8]) -> Document {
         }
         tabAt = stripped.tabAt
         wsMarks = stripped.marks
+        // A bare high-bit byte whose low 7 bits are a CONTROL CODE is that control with
+        // WordStar's soft/flag bit set, NOT a cp437 glyph. MEASURED on WordStar 7
+        // (2026-08-04, two independent traces): a real document's 0x8A performed a line
+        // advance in the printed PCL (zero glyphs — flagged ^J); an injected 0x94
+        // toggled superscript (flagged ^T, the font size and baseline visibly changed).
+        // Real extended characters travel as <1B xx 1C> triples — the corpus carries
+        // 10,000+ of them — never as bare bytes.
+        //
+        // Masked by ALLOWLIST, not by range: a blanket 0x80-0x9F mask CREATES structural
+        // bytes — 0x9A becomes 0x1A (EOF: `linesPass` truncated a whole novel at its
+        // first occurrence), 0x9D becomes 0x1D (block framing). The list is every value
+        // observed in real BODY text (pre-EOF, outside blocks and 1B..1C wrappers) plus
+        // the oracle-measured 0x94; extend it as evidence arrives. 0x8D/0x8A stay
+        // flagged: `linesPass` reads them as the soft-return pair. Translation is
+        // LENGTH-PRESERVING, so recorded offsets (marks, tabAt) stay valid.
+        body = body.map { flaggedControls[$0] ?? $0 }
         // footnotes/endnotes/annotations are all rendered the same way (a numbered
         // list at the end) and share one inline reference counter below, so
         // `footnotes` stays the flattened view the existing emitters already know how
@@ -978,6 +994,15 @@ private func parsePageDot(
         break
     }
 }
+
+/// Bare high-bit bytes that are a flagged CONTROL CODE, and the control they mask to.
+///
+///     0x82  flagged ^B bold toggle   (27x in 4 documents)
+///     0x8C  flagged ^L form feed     (20x in 5 documents)
+///     0x94  flagged ^T sup toggle    (oracle-measured)
+///
+/// See `parseWS` for why this is an allowlist and never a range.
+private let flaggedControls: [UInt8: UInt8] = [0x82: 0x02, 0x8C: 0x0C, 0x94: 0x14]
 
 /// Formatting the ACTIVE paragraph style contributes, if any. Every field is `nil`/empty
 /// when the style's record inherits it, which is exactly when the running dot-command

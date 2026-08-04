@@ -197,10 +197,18 @@ private enum BreakKind {
     case eof
 }
 
-/// Hand-rolled equivalent of `re.split(rb'(\x8d\x0a|\x0d\x0a|\x8d|\x0d|\x0a)', data)`
-/// followed by core.py:113-118's pairing loop. Swift has no bytes-regex, but the
-/// alternation is ordered and non-overlapping, so a left-to-right scanner that tries
-/// the two-byte tokens before their one-byte prefixes produces the identical stream.
+/// Hand-rolled equivalent of
+/// `re.split(rb'(\x8d\x8a|\x8d\x0a|\x0d\x8a|\x0d\x0a|\x8d|\x8a|\x0d|\x0a)', data)`
+/// followed by core.py's pairing loop. Swift has no bytes-regex, but the alternation is
+/// ordered and non-overlapping, so a left-to-right scanner that tries the two-byte tokens
+/// before their one-byte prefixes produces the identical stream.
+///
+/// THE LF OF A RETURN PAIR MAY CARRY THE HIGH BIT TOO. MEASURED on a real WS7 document
+/// (2026-08-04), the soft return written after every end-of-page block is `<8D 8A>` — both
+/// bytes flagged — and a hard CR can be followed by a flagged LF (`<0D 8A>`). WordStar's
+/// own printer masks the flag and performs the line advance (traced in PCL: a
+/// vertical-move escape, zero glyphs); decoding 0x8A as text invented an 'e-grave' at 14
+/// page boundaries in one document.
 ///
 /// A separator always emits a line (with possibly-empty text) — those empty lines are
 /// the blank lines the break-run logic counts. Trailing text with no separator emits
@@ -230,11 +238,13 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
     while i < data.count {
         let b = data[i]
         let next: UInt8? = (i + 1 < data.count) ? data[i + 1] : nil
-        if b == 0x8d && next == 0x0a {
+        if b == 0x8d && (next == 0x8a || next == 0x0a) {
             emit(.soft, 2); i += 2
-        } else if b == 0x0d && next == 0x0a {
+        } else if b == 0x0d && (next == 0x8a || next == 0x0a) {
+            // The break's FIRST byte decides the kind (Python's `brk[0] in (0x8D, 0x8A)`),
+            // so a flagged LF after a hard CR is still a hard return.
             emit(.hard, 2); i += 2
-        } else if b == 0x8d {
+        } else if b == 0x8d || b == 0x8a {
             emit(.soft, 1); i += 1
         } else if b == 0x0d || b == 0x0a {
             emit(.hard, 1); i += 1

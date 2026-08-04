@@ -355,3 +355,35 @@ let italicOn: [UInt8] = [0x19]
     #expect(segments.contains { $0.text == "Styled" && $0.styles.contains(.bold) })
     #expect(segments.contains { $0.text == "Plain" && !$0.styles.contains(.bold) })
 }
+
+@Test func flaggedControlBytesAreControlsNotCP437Glyphs() {
+    // MEASURED on WordStar 7 (2026-08-04): a real document's bare 0x8A (flagged ^J)
+    // performed a line advance in the printed PCL — zero glyphs — and an injected 0x94
+    // (flagged ^T) toggled superscript with a visible font-size/baseline change. Real
+    // extended characters travel as <1B xx 1C> triples. Decoding these bytes as cp437
+    // invented an e-grave at 14 page boundaries of one document.
+    let data = ws7Block(0x00)
+        + bytes("the dirt underfoot") + [0x8D, 0x8A] + bytes("ash gray.") + HARD   // WS7's soft pair
+        + bytes("wa") + [0x94] + bytes("s") + [0x94] + bytes(" raised text here.") + HARD
+    let doc = parseWS(data)
+    let txt = emitText(doc, mode: .printed)
+    #expect(!txt.contains("è") && !txt.contains("ö"))
+    #expect(txt.contains("underfoot") && txt.contains("ash gray."))
+    let spans = doc.blocks.flatMap(\.lines).flatMap(\.spans)
+    #expect(spans.filter { $0.styles.contains(.sup) }.map(\.text) == ["s"])   // ^T…^T span
+    // (wrap-vs-line classification of the soft pair is the margin heuristic's call, same
+    // as any 0x8D return — not asserted here)
+}
+
+@Test func theFlaggedControlMaskIsAnAllowlistNeverARange() {
+    // A blanket 0x80-0x9F mask CREATES structural bytes: 0x9A becomes 0x1A and
+    // `linesPass` truncated a whole novel at its first occurrence; 0x9D would become
+    // 0x1D block framing. Both bytes must survive the mask untouched, and the text after
+    // them must survive with them.
+    let doc = parseWS(ws7Block(0x00)
+                      + bytes("Before the byte ") + [0x9A]
+                      + bytes(" and after it the document continues normally.") + HARD
+                      + bytes("A second paragraph proves nothing was truncated.") + HARD)
+    let txt = emitText(doc, mode: .printed)
+    #expect(txt.contains("A second paragraph proves nothing was truncated."))
+}
