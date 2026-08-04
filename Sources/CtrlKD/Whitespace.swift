@@ -75,6 +75,16 @@ extension String {
         return String(view)
     }
 
+    /// Equivalent of Python's `str.rstrip()` with no argument — the string with its
+    /// trailing whitespace run removed. The mirror of `trimmedLeading()`.
+    func trimmedTrailing() -> String {
+        var scalars = Array(unicodeScalars)
+        while let last = scalars.last, String.isPythonSpace(last) { scalars.removeLast() }
+        var view = String.UnicodeScalarView()
+        view.append(contentsOf: scalars)
+        return String(view)
+    }
+
     /// The trailing run of whitespace — Python's `s[len(s.rstrip()):]`.
     func trailingWhitespace() -> String {
         var trailing: [Unicode.Scalar] = []

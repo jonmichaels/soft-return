@@ -317,6 +317,12 @@ public struct Document: Hashable, Sendable {
     /// `detection` only infers it from byte statistics) and the pointer to its
     /// paragraph style library. WS5+ only; `nil` when no header block carried either.
     public var wsHeader: WSHeader?
+    /// Paragraph style library (WS5.5+): the styles the document carries at its end,
+    /// reached via the header block's 32-bit pointer. Each entry is a name plus, where
+    /// the index item says one exists, the 102-byte record's fields (margins/tabs in HMI
+    /// 1/1800in, line height in VMI, attribute words), with each inheritable field `nil`
+    /// when its sentinel says "inherit". Register C1.
+    public var styles: [StyleEntry]
     /// `.tc` entries. Register C7.
     public var tocEntries: [TOCEntry]
     /// `.ix` entries. Register C6.
@@ -359,6 +365,7 @@ public struct Document: Hashable, Sendable {
         shiftRuns: [ShiftRun] = [],
         printerDriver: String? = nil,
         wsHeader: WSHeader? = nil,
+        styles: [StyleEntry] = [],
         tocEntries: [TOCEntry] = [],
         indexEntries: [IndexEntry] = [],
         lineNumbering: Int? = nil
@@ -388,6 +395,7 @@ public struct Document: Hashable, Sendable {
         self.shiftRuns = shiftRuns
         self.printerDriver = printerDriver
         self.wsHeader = wsHeader
+        self.styles = styles
         self.tocEntries = tocEntries
         self.indexEntries = indexEntries
         self.lineNumbering = lineNumbering

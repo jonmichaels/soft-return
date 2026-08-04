@@ -261,3 +261,44 @@ let italicOn: [UInt8] = [0x19]
     #expect(doc.unknownCodes.isEmpty, "a handled code must not be reported unknown")
     #expect(parsePrintstream(src).blocks.map(\.kind) == doc.blocks.map(\.kind))
 }
+
+// MARK: - The paragraph style library (C1)
+
+@Test func styleLibraryParsesWithThirtyThreeByteStride() {
+    // The "garbage entries" were a wrongly assumed 32-byte index stride; the spec's own
+    // field list sums to 24+1+2+2+4 = 33. With stride 33, corpus validation decodes
+    // 194/194 index entries and 59/59 style records across every document carrying a
+    // library, zero errors.
+    let lib = styleLibrary([
+        (name: "WordStar Defaults", record: nil),
+        (name: "WordStar Defaults", record: nil),
+        (name: nil, record: nil),                                 // deleted slot: skipped
+        (name: "MS Body Copy", record: styleRecord(just: 0)),
+        (name: "Old Tabs", record: styleRecord(inheritTabs: true)),
+    ])
+    let doc = parseWS(documentWithStyleLibrary(
+        body: bytes("Some body text follows.") + HARD, library: lib))
+    #expect(doc.styles.map(\.name) == ["WordStar Defaults", "WordStar Defaults",
+                                       "MS Body Copy", "Old Tabs"])
+    let bodyStyle = try! #require(doc.styles[2].record)
+    #expect(bodyStyle.leftMarginHMI == 1800)
+    #expect(bodyStyle.rightMarginHMI == nil)                      // -2 sentinel
+    #expect(bodyStyle.tabsHMI == [900, 1800])
+    #expect(bodyStyle.justification == StyleJustification.none)
+    #expect(bodyStyle.attrsOn == 0b1000000)
+    #expect(bodyStyle.lineSpacing == nil)
+    // tab counts 0xFF mean INHERITED and the array is stale — never read it
+    #expect(doc.styles[3].record?.tabsHMI == nil)
+    // and the recordless base entry is a real, selectable style that simply carries none
+    #expect(doc.styles[0].record == nil)
+}
+
+@Test func styleLibraryPointerAtEOFMeansNoLibrary() {
+    // 56 of 85 corpus documents: pointer == file length, WordStar's "next available
+    // offset" default when no style was ever defined. Not an error.
+    var data = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+        + bytes("Text.") + HARD
+    let length = data.count
+    for k in 0..<4 { data[4 + 12 + k] = UInt8((length >> (8 * k)) & 0xFF) }
+    #expect(parseWS(data).styles.isEmpty)
+}

@@ -184,6 +184,84 @@ func wsBlock(cmd: UInt8, content: [UInt8] = []) -> [UInt8] {
     return [0x1D, lo, hi, cmd] + content + [lo, hi, 0x1D]
 }
 
+// MARK: - Paragraph style library
+
+private func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+private func le32(_ v: Int) -> [UInt8] {
+    [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]
+}
+
+/// A 102-byte style record per WSFORMAT's field list (validated corpus-wide 2026-08-04:
+/// 59/59 records). Inheritance sentinels: margins -2, most others -1 — and tab COUNTS are
+/// 0xFF when inherited (the spec's prose says 0; the corpus says 0xFF, 56/118 fields),
+/// with the 32-word tab array then holding STALE bytes that must not be read. Port of
+/// Python's `_style_record` test helper.
+func styleRecord(left: Int = 1800, tabs: [Int] = [900, 1800], decimalTabs: Int = 0,
+                 just: Int = 0, inheritTabs: Bool = false,
+                 attrsOn: Int = 0b1000000) -> [UInt8] {
+    var rec = [UInt8](repeating: 0, count: 102)
+    func put(_ off: Int, _ b: [UInt8]) { for (k, v) in b.enumerated() { rec[off + k] = v } }
+    put(0, le16(0xFFFF))                          // font: inherited
+    put(10, le16(left))                           // left margin HMI
+    put(12, le16(0xFFFE))                         // right: inherited
+    put(14, le16(0xFFFE))                         // para: inherited
+    if inheritTabs {
+        rec[18] = 0xFF; rec[19] = 0xFF
+        for k in 0..<32 { put(20 + 2 * k, le16(0xBEEF)) }    // stale junk on purpose
+    } else {
+        rec[18] = UInt8(tabs.count - decimalTabs); rec[19] = UInt8(decimalTabs)
+        for (k, t) in tabs.enumerated() { put(20 + 2 * k, le16(t)) }
+    }
+    rec[86] = UInt8(((just % 256) + 256) % 256)
+    rec[87] = 1                                   // wrap on
+    put(88, le16(0xFFFF))                         // line height: inherit
+    rec[90] = 0xFF                                // spacing: inherit
+    put(91, le16(attrsOn))
+    rec[95] = 0xFF                                // colour: inherit
+    return rec
+}
+
+/// One style library: master index header (13 bytes) + one object-index block with
+/// stride-33 items, then the records those items point at. A `nil` name is an unused/
+/// deleted slot (24 x 0x3F), which still occupies a slot number. Port of Python's
+/// `_style_library` test helper.
+func styleLibrary(_ entries: [(name: String?, record: [UInt8]?)]) -> [UInt8] {
+    let n = entries.count
+    var items: [UInt8] = []
+    var records: [UInt8] = []
+    let recBase = 13 + 5 + 33 * n
+    for entry in entries {
+        guard let name = entry.name else {
+            items += [UInt8](repeating: 0x3F, count: 24) + [UInt8](repeating: 0, count: 9)
+            continue
+        }
+        var nm = bytes(name)
+        while nm.count < 24 { nm.append(0x20) }
+        if let rec = entry.record {
+            items += nm + [0x02] + [UInt8](repeating: 0, count: 4) + le32(recBase + records.count)
+            records += rec
+        } else {
+            items += nm + [0x00] + [UInt8](repeating: 0, count: 8)
+        }
+    }
+    let head: [UInt8] = [0x1A, 0x55] + le16(1) + [0x01] + le16(n) + le16(102) + le32(13)
+    return head + [UInt8(n)] + [UInt8](repeating: 0, count: 4) + items + records
+}
+
+/// A ws5+ document whose header block points at `lib`: the body padded to a 128-byte
+/// boundary with the EOF byte, then the library, with the header's own content offsets
+/// 12-15 patched to the resulting base. Mirrors what the Python tests build inline.
+func documentWithStyleLibrary(header: [UInt8] = [0x70] + [UInt8](repeating: 0, count: 15),
+                              body: [UInt8], library: [UInt8]) -> [UInt8] {
+    var doc = ws7Block(0x00, payload: header) + body
+    let base = ((doc.count + 127) / 128) * 128
+    while doc.count < base { doc.append(0x1A) }
+    doc += library
+    // content offsets 12-15 inside the 0x00 block: 0x1D + 2 length bytes + cmd = 4
+    for (k, v) in le32(base).enumerated() { doc[4 + 12 + k] = v }
+    return doc
+}
+
 /// A WS5+ note block (3=footnote, 4=endnote, 5=annotation, 6=comment) carrying `text`.
 /// Content layout per the WordStar 7.0 spec's Notes section: line-count word, number
 /// word, conversion-flag byte (high nybble = numbering format), then the text.
