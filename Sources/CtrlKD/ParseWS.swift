@@ -162,6 +162,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var printerDriver: String? = nil
     var wsHeader: WSHeader? = nil
     var styles: [StyleEntry] = []
+    var styleSlots: [Int: StyleEntry] = [:]
     var tabAt: Set<Int> = []
     var wsMarks: [Int: StructuralMark] = [:]
     if ws5 {
@@ -180,6 +181,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         // as they arrived -- not the block-stripped `body`.
         if let ptr = stripped.header?.styleLibraryOffset {
             styles = parseStyleLibrary(data, base: ptr)
+            for entry in styles { styleSlots[entry.slot] = entry }
         }
         tabAt = stripped.tabAt
         wsMarks = stripped.marks
@@ -338,13 +340,21 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // currently ends, including mid-paragraph, so closing the block here
                 // severed real paragraphs. See the 0x0B parse site for the measurement.
                 curLine.softpage = true
-            case .heading(let level, let styleID):
+            case .style(let w0):
                 closeBlock()
-                // Level 0 means "a style, but not one of the three this parser gives a
-                // heading meaning to" — the block is still marked with WHICH style, so
-                // a consumer can act on it. Register C1.
-                cur.heading = level
-                cur.styleID = styleID
+                // Resolve the handle against the file's own library. Pool tag 0x02 =
+                // this file; anything else (0x03xx editing temps) is unresolvable BY
+                // DESIGN and left unstyled rather than guessed. Heading level comes from
+                // the RESOLVED NAME — the corpus proved slot numbers carry none (see the
+                // 0x11 parse site). Register C1.
+                if (w0 >> 8) == 0x02 {
+                    let slot = w0 & 0xFF
+                    cur.styleID = slot
+                    if let entry = styleSlots[slot] {
+                        cur.styleName = entry.name
+                        cur.heading = styleHeadingLevel(entry.name)
+                    }
+                }
             case .fnref:
                 fnrefAt.append(rel)
             }

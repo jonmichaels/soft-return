@@ -24,7 +24,7 @@ import Testing
 @Test func detectWS5PlusFromSymmetricBlocks() {
     // Mirrors the 1D-symmetric-block shape from test_ws7_heading_and_softpage; only
     // detect()'s classification is asserted here, since parse_ws() isn't ported yet.
-    let data = ws7Block(0x00) + ws7Block(0x11, payload: [0x02]) + Array("Chapter One".utf8) +
+    let data = ws7Block(0x00) + styleRef(2) + Array("Chapter One".utf8) +
                HARD + HARD + Array("Body text of the chapter.".utf8) + HARD +
                ws7Block(0x0B) + Array("Next page text.".utf8) + HARD
     #expect(detect(data).variant == .ws5plus)

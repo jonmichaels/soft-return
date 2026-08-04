@@ -95,12 +95,48 @@ public enum StyleJustification: String, Hashable, Sendable {
 /// which is a real, selectable style — it contributes no formatting of its own.
 public struct StyleEntry: Hashable, Sendable {
     public let name: String
+    /// 0-based position in ALLOCATION ORDER, deleted slots counted — exactly what a 0x11
+    /// handle's low byte indexes.
+    public let slot: Int
     public let record: StyleRecord?
 
-    public init(name: String, record: StyleRecord? = nil) {
+    public init(name: String, slot: Int = 0, record: StyleRecord? = nil) {
         self.name = name
+        self.slot = slot
         self.record = record
     }
+}
+
+/// Heading level from a RESOLVED style name — never from the handle's slot number, which
+/// the corpus proved carries no semantics (NOVEL.WS's real H1/H2/H3 styles sat at slots
+/// 4/10/8 while its footer style was being rendered as a heading).
+///
+/// HEURISTIC tiers, drawn from the archive's own style names: exact H1/H2/H3; 'chapter
+/// title' / trailing 'Title' -> 1 (MS Chapter Title); 'subhead' / 'section heading' -> 2
+/// (MS Subhead, Section Heading Font). Everything else is a non-heading style: the block
+/// still carries `styleName` for consumers with better taxonomy.
+public func styleHeadingLevel(_ name: String) -> Int {
+    let n = asciiLowercased(name.trimmed())
+    if n == "h1" { return 1 }
+    if n == "h2" { return 2 }
+    if n == "h3" { return 3 }
+    if n.contains("chapter title") || n.hasSuffix(" title") || n == "title" { return 1 }
+    if n.contains("subhead") || n.contains("section heading") { return 2 }
+    return 0
+}
+
+/// Python's `str.lower()` restricted to ASCII — the style names this compares against are
+/// ASCII, and a full Unicode case fold is Foundation's job, not this library's.
+private func asciiLowercased(_ s: String) -> String {
+    var view = String.UnicodeScalarView()
+    for scalar in s.unicodeScalars {
+        if scalar.value >= 0x41 && scalar.value <= 0x5A {
+            view.append(Unicode.Scalar(scalar.value + 0x20)!)
+        } else {
+            view.append(scalar)
+        }
+    }
+    return String(view)
 }
 
 /// Parse the paragraph style library at file-absolute offset `base`.
@@ -215,7 +251,7 @@ public func parseStyleLibrary(_ raw: [UInt8], base: Int) -> [StyleEntry] {
                     attrsOff: word(rec + 93),
                     colour: sbyte(rec + 95) == -1 ? nil : sbyte(rec + 95))
             }
-            styles.append(StyleEntry(name: name, record: record))
+            styles.append(StyleEntry(name: name, slot: walked - 1, record: record))
         }
         blockOff = link != 0 ? base + link : 0
     }

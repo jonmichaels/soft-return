@@ -8,7 +8,7 @@
 /// with a command byte at the start of the body. This pass rewrites the byte stream:
 /// footnote/endnote/annotation blocks are extracted to `notes` and replaced with a
 /// `SENT_FNREF` sentinel (comments never get one — WordStar never printed them
-/// inline); structural blocks (tab, softpage, heading) become either literal bytes or
+/// inline); structural blocks (tab, end-of-page, paragraph style) become either bytes or
 /// another sentinel; anything else is preserved as an `UnknownBlock` rather than
 /// dropped. The result feeds `linesPass`, which never sees a `0x1D` byte from a
 /// well-formed ws5+ document.
@@ -35,7 +35,10 @@
 public enum StructuralMark: Hashable, Sendable {
     case fnref
     case softpage
-    case heading(level: Int, styleID: Int)
+    /// A paragraph-style SELECTION: word 0 of the 0x11 block's four LE16 handles. The
+    /// handle is resolved against the document's own style library in `parseWS` -- this
+    /// pass has no library to resolve against.
+    case style(handle: Int)
 }
 
 /// Symmetrical-sequence "Notes" types (WordStar 7.0 file format spec, WordStar
@@ -382,20 +385,29 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 out += blockContent(block)
                     .map { $0 & 0x7F }
                     .filter { $0 >= 0x20 && $0 < 0x7F }
-            } else if cmd == 0x11 && block.count > 3 {             // paragraph style
-                // WordStar's paragraph-style mechanism. Three IDs were mapped to
-                // heading levels and EVERY OTHER STYLE WAS DROPPED — silently, so a
-                // styled paragraph became an unstyled one with nothing to say a style
-                // had been applied. The archive uses at least twelve distinct IDs;
-                // 0x06 alone appears 60 times, more often than two of the three that
-                // were mapped. Register C1.
+            } else if cmd == 0x11 && block.count >= 6 {            // paragraph style
+                // Four LE16 style HANDLES (WSFORMAT: new / previously selected /
+                // previous "modified" temp / previous-previous). All 1,727 blocks across
+                // the archive are exactly 8 content bytes. Only word 0 — the newly
+                // selected style — is joinable: high byte 0x02 tags this file's own
+                // library, low byte is the 0-BASED index-item slot in allocation order,
+                // DELETED SLOTS COUNTED (validated 60/60 distinct references, 22/22
+                // documents). The 0x03xx pool in word 2 names editing-temp styles that
+                // were never written to the file: unresolvable by design, reject rather
+                // than mask.
                 //
-                // The sentinel carries the style ID as well as the level, so a
-                // consumer can see WHICH style even where this parser has no heading
-                // meaning for it. Level 0 = "a style, but not one of the three".
-                let styleID = Int(block[3])
-                let level = [0x05: 1, 0x02: 2, 0x03: 3][styleID] ?? 0
-                marks[out.count] = .heading(level: level, styleID: styleID)
+                // The old reading took content[0] alone — the LOW BYTE of w0 — and
+                // mapped three slot numbers to heading levels. Slot numbers carry no
+                // semantics: 0x05 resolves to 'Bulleted List' in one document and 'Body
+                // copy font' in another, and NOVEL.WS's real H1/H2/H3 styles sat unmapped
+                // while its footer style rendered as a heading. Heading meaning now comes
+                // from the RESOLVED entry (see `parseWS`), never from the slot.
+                let content = blockContent(block)
+                if content.count == 8 {
+                    marks[out.count] = .style(handle: Int(content[0]) | (Int(content[1]) << 8))
+                } else {
+                    unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
+                }
             } else {
                 unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
             }

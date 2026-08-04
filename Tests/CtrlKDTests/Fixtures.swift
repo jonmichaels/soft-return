@@ -186,8 +186,19 @@ func wsBlock(cmd: UInt8, content: [UInt8] = []) -> [UInt8] {
 
 // MARK: - Paragraph style library
 
-private func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
-private func le32(_ v: Int) -> [UInt8] {
+/// A paragraph-style SELECTION: four LE16 handles per WSFORMAT (new / prev /
+/// prev-modified-temp / prev-prev). Word 0 is the joinable one — 0x02 pool tag in the
+/// high byte, 0-based library slot in the low byte. Whether it renders as a heading
+/// depends on the NAME the slot resolves to in the document's style library, not on the
+/// slot number. Port of Python's `ws_fixture.style_ref`, which REPLACED a `heading(level)`
+/// helper that emitted an invented 1-byte form real WordStar never wrote (it always
+/// writes 8 content bytes, and slot numbers carry no semantics).
+func styleRef(_ slot: Int) -> [UInt8] {
+    ws7Block(0x11, payload: le16(0x0200 | slot) + le16(0x0201) + le16(0x0300) + le16(0x0201))
+}
+
+func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+func le32(_ v: Int) -> [UInt8] {
     [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]
 }
 

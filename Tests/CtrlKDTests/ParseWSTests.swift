@@ -84,11 +84,23 @@ let italicOn: [UInt8] = [0x19]
 }
 
 @Test func ws7HeadingAndSoftpage() {
-    // Mirrors test_ws7_heading_and_softpage.
-    let data = ws7Block(0x00) + ws7Block(0x11, payload: [0x02]) + bytes("Chapter One") +
-               HARD + HARD + bytes("Body text of the chapter.") + HARD +
-               ws7Block(0x0B) + bytes("Next page text.") + HARD
+    // Mirrors test_ws7_heading_and_softpage. Heading level comes from the NAME the style
+    // handle resolves to in the document's own library — never from the slot number (the
+    // old mapping promoted NOVEL.WS's footer style to a heading while its real H1/H2/H3
+    // went unmapped). Slot 2 here resolves to 'H2'.
+    let lib = styleLibrary([
+        (name: "WordStar Defaults", record: nil),
+        (name: "WordStar Defaults", record: nil),
+        (name: "H2", record: styleRecord()),
+    ])
+    let data = documentWithStyleLibrary(
+        body: styleRef(2) + bytes("Chapter One") + HARD + HARD
+            + bytes("Body text of the chapter.") + HARD
+            + ws7Block(0x0B) + bytes("Next page text.") + HARD,
+        library: lib)
     let doc = parseWS(data)
+    #expect(doc.blocks.first { $0.heading != 0 }?.styleName == "H2")
+    #expect(doc.blocks.first { $0.heading != 0 }?.styleID == 2)
     let headings = doc.blocks.filter { $0.heading != 0 }
     #expect(headings.first?.heading == 2)
     #expect(headings.first?.lines[0].text().trimmed() == "Chapter One")

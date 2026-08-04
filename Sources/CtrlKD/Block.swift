@@ -61,17 +61,20 @@ public struct Block: Hashable, Sendable {
     /// not the same as asking for one column. Register C5.
     public var columns: Int?
     public var columnGutter: Double?
-    /// WordStar's paragraph-style ID (symmetric type 0x11), when one was applied.
-    /// `heading` is the subset this parser gives a heading meaning to (1-3); every OTHER
-    /// style used to be dropped silently, so a styled paragraph became an unstyled one
-    /// with no trace. The archive uses at least twelve distinct IDs. Register C1.
+    /// WordStar's paragraph style (symmetric type 0x11), when one was applied: the
+    /// 0-based library SLOT the block's style HANDLE resolves to, and the resolved
+    /// entry's name. `heading` derives from the NAME (`styleHeadingLevel`) — the corpus
+    /// proved slot numbers carry no semantics. Full entry: `Document.styles`, matched on
+    /// `slot`. Register C1.
     public var styleID: Int?
+    public var styleName: String?
 
     public init(
         kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0,
         align: Alignment = .left, wrap: Bool = true,
         leftMargin: Double? = nil, rightMargin: Double? = nil, paraMargin: Double? = nil,
-        columns: Int? = nil, columnGutter: Double? = nil, styleID: Int? = nil
+        columns: Int? = nil, columnGutter: Double? = nil, styleID: Int? = nil,
+        styleName: String? = nil
     ) {
         self.leftMargin = leftMargin
         self.rightMargin = rightMargin
@@ -79,6 +82,7 @@ public struct Block: Hashable, Sendable {
         self.columns = columns
         self.columnGutter = columnGutter
         self.styleID = styleID
+        self.styleName = styleName
         self.kind = kind
         self.lines = lines
         self.heading = heading

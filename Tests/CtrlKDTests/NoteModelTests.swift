@@ -165,18 +165,16 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     #expect(result.unknownBlocks[0].cmd == 0)
 }
 
-@Test func headingBlockTooShortForItsLevelByteIsPreservedAsUnknown() {
-    // cmd 0x11 (paragraph style) truncated before its level byte even arrives (the
-    // block's declared length leaves only the length-field-plus-cmd, no room for a
-    // level byte at all) can't be interpreted as a heading — Python's
-    // `_symmetric_blocks` falls through to the catch-all `unknown_blocks` branch for
-    // exactly this shape (`len(block) > 3` is false), rather than silently dropping
-    // it. Built from raw bytes, not `ws7Block`, since that helper always appends a
-    // trailing closer that makes `block.count >= 6` — this specific gap only shows up
-    // in a genuinely truncated block.
-    let data: [UInt8] = [0x1d, 0x01, 0x00, 0x11]   // jump=1: block = [len,len,cmd] only
-    let result = symmetricBlocks(data)
-    #expect(result.unknownBlocks.contains { $0.cmd == 0x11 })
+@Test func styleBlockTooShortForItsFourHandlesIsPreservedAsUnknown() {
+    // A 0x11 block is four LE16 handles — 8 content bytes, in all 1,727 archive blocks.
+    // Anything else cannot be joined against the library, and Python's
+    // `_symmetric_blocks` reports it rather than dropping it: once because the block is
+    // too short to have content at all (`len(block) >= 6` is false), and once because its
+    // content is the wrong length.
+    let truncated: [UInt8] = [0x1d, 0x01, 0x00, 0x11]   // jump=1: [len,len,cmd] only
+    #expect(symmetricBlocks(truncated).unknownBlocks.contains { $0.cmd == 0x11 })
+    let wrongWidth = ws7Block(0x11, payload: [0x02])    // the invented 1-byte form
+    #expect(symmetricBlocks(wrongWidth).unknownBlocks.contains { $0.cmd == 0x11 })
 }
 
 // MARK: - NBSP-stripping in note text (replaces the pre-1.2.0-shaped job-006 coverage
@@ -422,21 +420,27 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
 }
 
 @Test func everyParagraphStyleSurvivesNotJustTheThreeHeadings() {
-    // C1. Three style IDs were mapped to heading levels and EVERY OTHER STYLE WAS
-    // DROPPED — silently. The archive uses at least twelve distinct IDs, and 0x06
-    // alone appears 60 times: more often than two of the three that WERE mapped.
-    func styled(_ id: UInt8) -> Block {
-        parseWS(wsBlock(cmd: 0x11, content: [id, 2, 1, 2, 2, 3, 1, 2])
+    // C1. A 0x11 block is four LE16 handles; word 0's low byte is the 0-based library
+    // SLOT (deleted slots counted), its high byte the 0x02 pool tag. Slot numbers carry
+    // no heading semantics — the corpus's own NOVEL.WS has real H1/H2/H3 styles at slots
+    // 4/10/8 while the old {0x05,0x02,0x03} map promoted its footer style to a heading.
+    // Without a resolvable library the slot is still recorded; heading requires the
+    // resolved NAME.
+    func styled(_ slot: UInt8) -> Block {
+        parseWS(wsBlock(cmd: 0x11, content: [slot, 2, 1, 2, 2, 3, 1, 2])
                 + bytes("Styled text.\r\n")).blocks[0]
     }
-    #expect(styled(0x05).heading == 1)
-    #expect(styled(0x05).styleID == 5)
-    for id: UInt8 in [0x06, 0x0F, 0x19] {
-        let b = styled(id)
-        #expect(b.heading == 0, "not one of the three known headings")
-        #expect(b.styleID == Int(id), "but WHICH style must still be known")
+    for slot: UInt8 in [0x05, 0x06, 0x0F, 0x19] {
+        let b = styled(slot)
+        #expect(b.heading == 0, "no library to resolve against => no heading")
+        #expect(b.styleID == Int(slot), "but WHICH slot must still be known")
         #expect(b.lines[0].text() == "Styled text.")
     }
+    // A 0x03xx handle names an editing-temp style that was never written to the file —
+    // unresolvable BY DESIGN, must stay unstyled, never guessed.
+    let temp = parseWS(wsBlock(cmd: 0x11, content: [5, 3, 1, 2, 2, 3, 1, 2])
+                       + bytes("Styled text.\r\n")).blocks[0]
+    #expect(temp.styleID == nil && temp.heading == 0)
 }
 
 @Test func shiftJISIsAModeToggleNotATextContainer() {

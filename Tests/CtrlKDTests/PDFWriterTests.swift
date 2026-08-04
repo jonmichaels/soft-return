@@ -82,8 +82,17 @@ import Testing
 
 /// Python 1.1.5's `test_pdf_headings_render_bold` — the fix for this port's job-011 finding.
 @Test func pdfHeadingsRenderBold() throws {
-    let data = ws7Block(0x00) + ws7Block(0x11, payload: [0x02]) + bytes("Chapter One")
-        + HARD + HARD + bytes("Body text here.") + HARD
+    // Heading level comes from the NAME the style handle resolves to in the document's
+    // own library, never from the slot number, so the fixture carries a real library.
+    let lib = styleLibrary([
+        (name: "WordStar Defaults", record: nil),
+        (name: "WordStar Defaults", record: nil),
+        (name: "MS Chapter Title", record: styleRecord()),
+    ])
+    let data = documentWithStyleLibrary(
+        body: styleRef(2) + bytes("Chapter One") + HARD + HARD
+            + bytes("Body text here.") + HARD,
+        library: lib)
     let segments = docToPagelines(parseWS(data), printed: false).flatMap { $0 }.flatMap { $0 }
     // `wrapLine` tokenizes into words, so assert at segment granularity.
     #expect(segments.contains { $0.text == "Chapter" && $0.styles.contains(.bold) })
