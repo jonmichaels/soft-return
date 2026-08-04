@@ -97,11 +97,23 @@ private func decodeSpans(
         // that's the bug that turned whole paragraphs italic in production.
         let b: UInt8 = (stripHibit && raw[i] >= 0x80) ? (raw[i] & 0x7F) : raw[i]
 
-        // core.py:186-187 — extended-character escape. Note it appends `raw[i + 1]`,
-        // the UNMASKED byte: the escape exists precisely to smuggle a high byte past
-        // the bit-7 stripping so it can decode as a cp437 extended character.
+        // core.py:186-187 — extended-character escape. Note it takes `raw[i + 1]`, the
+        // UNMASKED byte: the escape exists precisely to smuggle a high byte past the
+        // bit-7 stripping so it can decode as a cp437 extended character.
         if b == 0x1B && i + 1 < raw.count {
-            buf.append(raw[i + 1])
+            // `<1B x 1C>`: x is a CHARACTER TO DISPLAY, any value 00h-FFh (WSFORMAT).
+            // For x in the control range that means the cp437 GLYPH at that position —
+            // the smiley/arrow/music graphics — never the control action: ASCIITAB.WS
+            // wraps every control code to PRINT the chart, and emitting the raw byte put
+            // literal tabs and CRs inside its table rows. `cp437Graphics` is keyed on
+            // exactly 00h-1Fh and 7Fh, so a miss means "not control range".
+            let x = raw[i + 1]
+            if let glyph = cp437Graphics[x] {
+                flush()
+                spans.append(Span(text: glyph, styles: active))
+            } else {
+                buf.append(x)
+            }
             i += 2
             continue
         }
@@ -200,7 +212,24 @@ public func parseWS(_ data: [UInt8]) -> Document {
         // the oracle-measured 0x94; extend it as evidence arrives. 0x8D/0x8A stay
         // flagged: `linesPass` reads them as the soft-return pair. Translation is
         // LENGTH-PRESERVING, so recorded offsets (marks, tabAt) stay valid.
-        body = body.map { flaggedControls[$0] ?? $0 }
+        //
+        // ... and applied OUTSIDE `<1B x 1C>` wrapped extended characters: the middle
+        // byte is a character to display (any value 00h-FFh), so masking it would corrupt
+        // a wrapped character that happens to share a flagged value. Triples are opaque
+        // three-byte units everywhere between the block walk and span decode.
+        var masked: [UInt8] = []
+        masked.reserveCapacity(body.count)
+        var m = 0
+        while m < body.count {
+            if body[m] == 0x1B && m + 2 < body.count && body[m + 2] == 0x1C {
+                masked.append(body[m]); masked.append(body[m + 1]); masked.append(body[m + 2])
+                m += 3
+                continue
+            }
+            masked.append(flaggedControls[body[m]] ?? body[m])
+            m += 1
+        }
+        body = masked
         // footnotes/endnotes/annotations are all rendered the same way (a numbered
         // list at the end) and share one inline reference counter below, so
         // `footnotes` stays the flattened view the existing emitters already know how
@@ -337,8 +366,17 @@ public func parseWS(_ data: [UInt8]) -> Document {
         if raw.contains(0x0C) {
             var segment: [UInt8] = []
             var first = true
-            for byte in raw {
-                if byte == 0x0C {
+            var k = 0
+            while k < raw.count {
+                // Split on BARE form feeds only — a wrapped `<1B 0C 1C>` is the cp437
+                // glyph at 0x0C (the chart cell in ASCIITAB.WS), never a page eject.
+                // `_split_bare_ff` in core.py.
+                if raw[k] == 0x1B && k + 2 < raw.count && raw[k + 2] == 0x1C {
+                    segment.append(raw[k]); segment.append(raw[k + 1]); segment.append(raw[k + 2])
+                    k += 3
+                    continue
+                }
+                if raw[k] == 0x0C {
                     if !segment.isEmpty {
                         curLine.spans += decodeSpans(segment, stripHibit: stripHibit,
                                                      active: &active, unknown: &unknown,
@@ -351,8 +389,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
                     }
                     first = false
                 } else {
-                    segment.append(byte)
+                    segment.append(raw[k])
                 }
+                k += 1
             }
             raw = segment
         }

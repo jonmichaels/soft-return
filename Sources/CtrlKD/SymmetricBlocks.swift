@@ -119,10 +119,37 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var marks: [Int: StructuralMark] = [:]
     var i = 0
     while i < data.count {
+        if data[i] == 0x1b && i + 1 < data.count {
+            // `<1B x>` extended-character escape (usually `<1B x 1C>`): x is DATA, never
+            // a block start. Without this, ASCIITAB.WS's wrapped `<1B 1D 1C>` chart cell
+            // read as a block whose overrunning "jump" (the next two chart bytes)
+            // swallowed 3.5 KB to end of file. Both bytes pass through for `decodeSpans`
+            // to render.
+            out.append(data[i])
+            out.append(data[i + 1])
+            i += 2
+            continue
+        }
         // core.py — need the marker plus both length bytes present.
         if data[i] == 0x1d && i + 3 <= data.count {
             let start = i
             let jump = Int(data[i + 1]) | (Int(data[i + 2]) << 8)   // little-endian 16-bit
+            // A 0x1D whose framing does not close is NOT a block — the count must echo
+            // and the closing bracket must be there. `end` is where the block's own
+            // closing 0x1D has to sit (the leading count skips exactly to the trailing
+            // one), and the minimum a real sequence can carry is 4: the command byte, the
+            // count echo, the bracket.
+            //
+            // The spec says a bare 0x1D "should not appear in files"; WordStar itself
+            // TRUNCATES the file when fooled by one (engineering note 650, "false
+            // symmetrical sequences"). Skipping the byte keeps the document — taking it
+            // on faith cost ASCIITAB.WS 86% of its text.
+            let end = i + 2 + jump
+            guard jump >= 4, end < data.count, data[end] == 0x1d,
+                  (Int(data[end - 2]) | (Int(data[end - 1]) << 8)) == jump else {
+                i += 1                          // dropped, exactly as core.py drops it
+                continue
+            }
             // `block` re-includes the 2-byte length field, then `jump` more bytes:
             // block[0..<2] is the length, block[2] is the command byte.
             let blockEnd = min(i + 3 + jump, data.count)

@@ -68,9 +68,10 @@ public struct LinesPassResult: Hashable, Sendable {
 
 public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
                       marks: [Int: StructuralMark] = [:]) -> LinesPassResult {
-    // core.py:108-110 — truncate at the first ^Z before anything else.
+    // core.py:108-110 — truncate at the first ^Z before anything else. The first BARE
+    // one: a 0x1A wrapped in `<1B 1A 1C>` is a character to display, not end of file.
     var body = data
-    if let cut = data.firstIndex(of: 0x1a) {
+    if let cut = bareEOF(data) {
         body = Array(data[..<cut])
     }
 
@@ -190,6 +191,24 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
 
 // ---------------------------------------------------------------- internals
 
+/// Offset of the first 0x1A that actually MEANS end-of-file — i.e. one that is not the
+/// middle byte of a `<1B x 1C>` wrapped extended character. ASCIITAB.WS wraps every
+/// control code to print its chart, `<1B 1A 1C>` included, and cutting the document at
+/// that middle byte amputated 86% of the file. `nil` when no bare 0x1A exists. Direct
+/// port of `_bare_eof`.
+private func bareEOF(_ data: [UInt8]) -> Int? {
+    var at = 0
+    while at < data.count {
+        if data[at] == 0x1a {
+            let wrapped = at >= 1 && data[at - 1] == 0x1b
+                && at + 1 < data.count && data[at + 1] == 0x1c
+            if !wrapped { return at }
+        }
+        at += 1
+    }
+    return nil
+}
+
 /// The break tokens, in the alternation order of the Python regex (core.py:111).
 private enum BreakKind {
     case soft
@@ -238,7 +257,18 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
     while i < data.count {
         let b = data[i]
         let next: UInt8? = (i + 1 < data.count) ? data[i + 1] : nil
-        if b == 0x8d && (next == 0x8a || next == 0x0a) {
+        if b == 0x1b && i + 2 < data.count && data[i + 2] == 0x1c {
+            // A `<1B x 1C>` wrapped extended character is matched FIRST and is TEXT: its
+            // middle byte can be any value 00h-FFh, and a wrapped 0x0A or 0x0D is a chart
+            // glyph, not a line break — ASCIITAB.WS's table rows broke apart at those
+            // cells. The triple wins the alternation (Python matches it as the first
+            // branch of the regex, ahead of every break token), so a break inside one is
+            // never seen; all three bytes travel on to `decodeSpans`.
+            text.append(b)
+            text.append(data[i + 1])
+            text.append(data[i + 2])
+            i += 3
+        } else if b == 0x8d && (next == 0x8a || next == 0x0a) {
             emit(.soft, 2); i += 2
         } else if b == 0x0d && (next == 0x8a || next == 0x0a) {
             // The break's FIRST byte decides the kind (Python's `brk[0] in (0x8D, 0x8A)`),

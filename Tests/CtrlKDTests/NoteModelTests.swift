@@ -64,26 +64,28 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     #expect(doc.notes[0].number == nil)
 }
 
-@Test func lengthFieldLargerThanDataDoesNotCrash() {
-    // A symmetric block whose declared length claims far more bytes than actually
-    // follow it in the stream — `blockEnd = min(i + 3 + jump, data.count)` must clamp
-    // this, both at the top-level `symmetricBlocks` scan and inside `parseNote`'s walk
-    // over a note's own content.
+@Test func lengthFieldLargerThanDataIsNotABlockAtAll() {
+    // A symmetric block whose declared length claims far more bytes than actually follow
+    // it. Until 2026-08-04 the walker took the marker on faith and clamped
+    // (`blockEnd = min(i + 3 + jump, data.count)`), so an overrunning jump SWALLOWED the
+    // rest of the document into one note — 3.5 KB of ASCIITAB.WS in the case that found
+    // this. The framing check now rejects it before any clamping: the count does not echo
+    // and no closing 0x1D sits where the jump points, so this is a bare 0x1D, which the
+    // spec says "should not appear in files". The byte is dropped and everything after it
+    // stays in the document as text.
     let data: [UInt8] = [0x1d, 0xff, 0xff, 0x03, 0x01, 0x00, 0x00, 0x00, 0x30] + bytes("hi")
     let result = symmetricBlocks(data)
-    #expect(result.notes.count == 1)
-    #expect(result.notes[0].kind == .footnote)
+    #expect(result.notes.isEmpty)
+    #expect(result.bytes == Array(data.dropFirst()))     // only the false marker is gone
 
-    // And through the full parseWS pipeline (paired with a second, well-formed block
-    // so detect() has enough 0x1d evidence to route this as ws5+). The oversized
-    // block's clamped `blockEnd` reaches all the way to the end of the document, so
-    // it swallows everything after it (including " trailing." and the closing hard
-    // return) into its own note text/content — that's expected of a deliberately
-    // malformed length field, not a bug; what matters is that parsing completes.
+    // And through the full parseWS pipeline (paired with a well-formed block so detect()
+    // has enough 0x1d evidence to route this as ws5+): the trailing text is KEPT, which
+    // is the whole point of rejecting the false block. WordStar itself truncates the file
+    // when fooled by one (engineering note 650); we keep the document.
     let full = ws7Block(0x00) + data + bytes(" trailing.") + HARD
     let doc = parseWS(full)
-    #expect(doc.notes.count == 1)
-    #expect(doc.notes[0].kind == .footnote)
+    #expect(doc.notes.isEmpty)
+    #expect(doc.blocks[0].lines[0].text().hasSuffix("hi trailing."))
 }
 
 @Test func nestedSequenceInsideNoteWithHugeJumpDoesNotHang() {
@@ -165,16 +167,21 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     #expect(result.unknownBlocks[0].cmd == 0)
 }
 
-@Test func styleBlockTooShortForItsFourHandlesIsPreservedAsUnknown() {
+@Test func styleBlockOfTheWrongWidthIsPreservedAsUnknown() {
     // A 0x11 block is four LE16 handles — 8 content bytes, in all 1,727 archive blocks.
     // Anything else cannot be joined against the library, and Python's
-    // `_symmetric_blocks` reports it rather than dropping it: once because the block is
-    // too short to have content at all (`len(block) >= 6` is false), and once because its
-    // content is the wrong length.
-    let truncated: [UInt8] = [0x1d, 0x01, 0x00, 0x11]   // jump=1: [len,len,cmd] only
-    #expect(symmetricBlocks(truncated).unknownBlocks.contains { $0.cmd == 0x11 })
+    // `_symmetric_blocks` reports it rather than dropping it.
     let wrongWidth = ws7Block(0x11, payload: [0x02])    // the invented 1-byte form
     #expect(symmetricBlocks(wrongWidth).unknownBlocks.contains { $0.cmd == 0x11 })
+
+    // A jump of 1 leaves no room for the count echo and the closing bracket that every
+    // real sequence carries (minimum 4: cmd + echo + bracket), so this never reaches the
+    // 0x11 handler at all — it is a bare 0x1D, rejected as framing that does not close,
+    // and reporting it as an unknown BLOCK would claim a structure that isn't there.
+    let truncated: [UInt8] = [0x1d, 0x01, 0x00, 0x11]   // jump=1: [len,len,cmd] only
+    let rejected = symmetricBlocks(truncated)
+    #expect(rejected.unknownBlocks.isEmpty)
+    #expect(rejected.bytes == [0x01, 0x00, 0x11])
 }
 
 // MARK: - NBSP-stripping in note text (replaces the pre-1.2.0-shaped job-006 coverage

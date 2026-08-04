@@ -5,9 +5,14 @@
 /// exactly IS matching ctrl-kd, not "matching CP437" in the abstract. That matters for
 /// 0x00-0x1F: the IBM PC ROM font renders those as graphics/control-picture glyphs
 /// (☺, ♥, →, ...), but Python's codec maps them to the plain C0 control characters
-/// U+0000-U+001F instead. This table follows Python, not the hardware chart — ctrl-kd
-/// never renders 0x00-0x1F as text glyphs anyway (`_decode_spans` intercepts every
-/// control byte in that range before it would reach decoding).
+/// U+0000-U+001F instead. This table follows Python, not the hardware chart — a control
+/// byte reaching it from the ordinary stream is the control, and `decodeSpans`
+/// intercepts every one of those before it would reach decoding.
+///
+/// The one place the HARDWARE chart is what's meant is a `<1B x 1C>` wrapped character,
+/// whose middle byte is "a character to display" (WSFORMAT) for any value 00h-FFh —
+/// `cp437Graphics` below, kept deliberately separate from this table so neither reading
+/// can leak into the other's callers.
 ///
 /// Table data: `Tests/CtrlKDTests/Resources/job-004-vectors.json`
 /// (`cp437_byte_to_unicode_codepoint`, machine-generated from Python's
@@ -46,6 +51,28 @@ private let cp437Table: [UInt16] = [
     0x03a6, 0x0398, 0x03a9, 0x03b4, 0x221e, 0x03c6, 0x03b5, 0x2229,  // 0xe8-0xef
     0x2261, 0x00b1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00f7, 0x2248,  // 0xf0-0xf7
     0x00b0, 0x2219, 0x00b7, 0x221a, 0x207f, 0x00b2, 0x25a0, 0x00a0,  // 0xf8-0xff
+]
+
+/// The cp437 GLYPHS at the control-code positions (and 0x7F) — what the IBM PC ROM font
+/// actually draws there: the smiley, the card suits, the arrows, the musical notes.
+/// `cp437Table` above maps 0x00-0x1F to the C0 controls themselves (that is what Python's
+/// codec does, and it is right for a control byte in the ordinary stream), so the DISPLAY
+/// glyphs IBM put at those positions need their own table.
+///
+/// Used for `<1B x 1C>` wrapped characters, whose middle byte is "a character to display"
+/// for any value 00h-FFh (WSFORMAT). Direct port of `CP437_GRAPHICS` (core.py). The keys
+/// are exactly 0x00-0x1F and 0x7F, so a lookup miss IS "not a control-range byte" — no
+/// caller needs to re-test the range.
+let cp437Graphics: [UInt8: String] = [
+    0x00: " ",  0x01: "☺", 0x02: "☻", 0x03: "♥",
+    0x04: "♦", 0x05: "♣", 0x06: "♠", 0x07: "•",
+    0x08: "◘", 0x09: "○", 0x0A: "◙", 0x0B: "♂",
+    0x0C: "♀", 0x0D: "♪", 0x0E: "♫", 0x0F: "☼",
+    0x10: "►", 0x11: "◄", 0x12: "↕", 0x13: "‼",
+    0x14: "¶", 0x15: "§", 0x16: "▬", 0x17: "↨",
+    0x18: "↑", 0x19: "↓", 0x1A: "→", 0x1B: "←",
+    0x1C: "∟", 0x1D: "↔", 0x1E: "▲", 0x1F: "▼",
+    0x7F: "⌂",
 ]
 
 /// Decode CP437 bytes to a `String`, one Unicode scalar per input byte (CP437 is a
