@@ -58,11 +58,16 @@ public struct SymmetricBlocksResult: Hashable, Sendable {
     public let includes: [String]
     public let shiftRuns: [ShiftRun]
     public let printerDriver: String?
+    /// Offsets into `bytes` at which TAB-derived padding begins — `linesPass` needs to
+    /// tell a program-emitted indent from one the author typed. A3.
+    public let tabAt: Set<Int>
 
     public init(bytes: [UInt8], notes: [Note], unknownBlocks: [UnknownBlock],
                 graphics: [String] = [], colours: [ColourChange] = [],
                 fonts: [FontChange] = [], includes: [String] = [],
-                shiftRuns: [ShiftRun] = [], printerDriver: String? = nil) {
+                shiftRuns: [ShiftRun] = [], printerDriver: String? = nil,
+                tabAt: Set<Int> = []) {
+        self.tabAt = tabAt
         self.colours = colours
         self.fonts = fonts
         self.includes = includes
@@ -85,6 +90,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var includes: [String] = []
     var shiftRuns: [ShiftRun] = []
     var driver: String? = nil
+    var tabAt: Set<Int> = []
     var i = 0
     while i < data.count {
         // core.py — need the marker plus both length bytes present.
@@ -103,7 +109,12 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                     out.append(SENT_FNREF)
                 }
             } else if cmd == 0x09 {                                // tab (and dot leaders)
+                // Remember that this padding came from a TAB, not from typed spaces.
+                // Recorded as an offset into the CLEANED stream, which is exactly what
+                // `linesPass` then scans, so the mark stays aligned without injecting a
+                // sentinel byte. A3.
                 let (cols, leader) = tabColumns(blockContent(block))
+                tabAt.insert(out.count)
                 for _ in 0..<cols { out.append(leader) }
             } else if cmd == 0x0B {                                // end of page
                 out.append(SENT_SOFTPAGE)
@@ -269,7 +280,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     return SymmetricBlocksResult(bytes: out, notes: notes, unknownBlocks: unknownBlocks,
                                  graphics: graphics, colours: colours, fonts: fonts,
                                  includes: includes, shiftRuns: shiftRuns,
-                                 printerDriver: driver)
+                                 printerDriver: driver, tabAt: tabAt)
 }
 
 /// `block[3:-3] if len(block) >= 6 else block[3:]` — strips the leading length+cmd

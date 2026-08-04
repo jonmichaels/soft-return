@@ -146,6 +146,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var includes: [String] = []
     var shiftRuns: [ShiftRun] = []
     var printerDriver: String? = nil
+    var tabAt: Set<Int> = []
     if ws5 {
         let stripped = symmetricBlocks(data)
         body = stripped.bytes
@@ -157,6 +158,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         includes = stripped.includes
         shiftRuns = stripped.shiftRuns
         printerDriver = stripped.printerDriver
+        tabAt = stripped.tabAt
         // footnotes/endnotes/annotations are all rendered the same way (a numbered
         // list at the end) and share one inline reference counter below, so
         // `footnotes` stays the flattened view the existing emitters already know how
@@ -167,7 +169,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
             .map { [Span(text: $0.text)] }
     }
 
-    let pass = linesPass(body)
+    let pass = linesPass(body, tabAt: tabAt)
 
     var active: Style = []
     var unknown: [UInt8: Int] = [:]

@@ -48,14 +48,14 @@ public struct LinesPassResult: Hashable, Sendable {
     }
 }
 
-public func linesPass(_ data: [UInt8]) -> LinesPassResult {
+public func linesPass(_ data: [UInt8], tabAt: Set<Int> = []) -> LinesPassResult {
     // core.py:108-110 — truncate at the first ^Z before anything else.
     var body = data
     if let cut = data.firstIndex(of: 0x1a) {
         body = Array(data[..<cut])
     }
 
-    let lines = splitIntoRawLines(body)
+    let lines = splitIntoRawLines(body, tabAt: tabAt)
 
     // core.py:120-122 — margin is the 90th percentile of soft-wrapped line lengths
     // (outliers from hanging punctuation sit 1-2 past the true margin), floor 65.
@@ -127,8 +127,21 @@ public func linesPass(_ data: [UInt8]) -> LinesPassResult {
             sep = .line                                     // core.py:145-146
         } else {
             // core.py:147-154 — the wrap test, applied to an all-soft break run.
-            let nextVis = visible(lines[j].text)
-            if nextVis.first == 0x20 {
+            var nextVis = visible(lines[j].text)
+            if lines[j].machineIndent {
+                // Machine indent: WordStar re-stamped the left margin onto this wrapped
+                // line from a TAB. Drop it before measuring, or the "first word" is the
+                // empty string before the spaces, W is 0, and the wrap test concludes
+                // the next word would have fit — which lands back on 'deliberate' by a
+                // different route.
+                nextVis = Array(nextVis.drop(while: { $0 == 0x20 }))
+            }
+            if nextVis.first == 0x20 && !lines[j].machineIndent {
+                // An indented continuation the AUTHOR typed is a deliberate break (a
+                // poem, a block quote). One WordStar itself emitted from a tab is not:
+                // it re-stamps the left indent onto every wrapped line, so treating that
+                // as deliberate stopped whole paragraphs from ever reflowing in Modern —
+                // they rendered as physical lines with the wrong margins. A3.
                 sep = .line                                 // indented continuation = deliberate
             } else {
                 let L = rstrippingSpaces(vis).count
@@ -171,28 +184,41 @@ private enum BreakKind {
 /// A separator always emits a line (with possibly-empty text) — those empty lines are
 /// the blank lines the break-run logic counts. Trailing text with no separator emits
 /// an `.eof` line only when non-empty, matching core.py:117.
-private func splitIntoRawLines(_ data: [UInt8]) -> [(text: [UInt8], kind: BreakKind)] {
-    var result: [(text: [UInt8], kind: BreakKind)] = []
+/// `machineIndent` marks a line whose leading whitespace was emitted by WordStar from a
+/// TAB, not typed by the author — see the wrap test, where the difference decides whether
+/// a paragraph reflows at all. A3.
+private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>)
+    -> [(text: [UInt8], kind: BreakKind, machineIndent: Bool)] {
+    var result: [(text: [UInt8], kind: BreakKind, machineIndent: Bool)] = []
     var text: [UInt8] = []
     var i = 0
+    // Offset of the CURRENT line's first byte, so a tab-derived indent recorded by
+    // `symmetricBlocks` can be matched to the line it starts. Python tracks the same
+    // figure as `at`, advancing by `len(text) + len(brk)` per line.
+    var lineStart = 0
+    func emit(_ kind: BreakKind, _ advance: Int) {
+        result.append((text, kind, tabAt.contains(lineStart)))
+        lineStart += text.count + advance
+        text = []
+    }
     while i < data.count {
         let b = data[i]
         let next: UInt8? = (i + 1 < data.count) ? data[i + 1] : nil
         if b == 0x8d && next == 0x0a {
-            result.append((text, .soft)); text = []; i += 2
+            emit(.soft, 2); i += 2
         } else if b == 0x0d && next == 0x0a {
-            result.append((text, .hard)); text = []; i += 2
+            emit(.hard, 2); i += 2
         } else if b == 0x8d {
-            result.append((text, .soft)); text = []; i += 1
+            emit(.soft, 1); i += 1
         } else if b == 0x0d || b == 0x0a {
-            result.append((text, .hard)); text = []; i += 1
+            emit(.hard, 1); i += 1
         } else {
             text.append(b)
             i += 1
         }
     }
     if !text.isEmpty {
-        result.append((text, .eof))
+        emit(.eof, 0)
     }
     return result
 }
