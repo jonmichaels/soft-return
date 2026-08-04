@@ -20,23 +20,26 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
 
 @Test func tabUndocumentedRightAlignType() {
     // ']' is an undocumented right-align tab variant WordTsar's author found testing
-    // MicroPro's own PRINT.TST; a real type-9 block there carries tab type ']' with
-    // size 4500 HMI (4500/144 = 31.25 -> 31 columns, round-half-to-even doesn't apply
-    // here since it's not an exact tie).
+    // MicroPro's own PRINT.TST; a real type-9 block there carries tab type ']' with size
+    // 4500 HMI. An HMI is 1/1800in (HORTAB.TXT), so 4500 HMI = 2.5in = 25 ten-CPI
+    // columns. (The old expectation of 31 came from dividing by 144 — VMI's 1/1440in
+    // unit misapplied to the horizontal axis; every archive tab block's own tenths-byte
+    // says /180.)
     let data = ws7Block(0x00) + ws7Tab(sizeHMI: 4500, tabType: UInt8(ascii: "]")) + bytes("Indented.") + HARD
     let doc = parseWS(data)
     let text = doc.blocks[0].lines[0].text()
-    #expect(text.hasPrefix(String(repeating: " ", count: 31)))
+    #expect(text.hasPrefix(String(repeating: " ", count: 25)))
     #expect(text.trimmed() == "Indented.")
 }
 
 @Test func tabDotLeaderRepeatsLeaderCharacter() {
-    // spec: "Other character such as '.' or '*' are used for dot leaders." 720/144 = 5.
+    // spec: "Other character such as '.' or '*' are used for dot leaders."
+    // 720 HMI = 0.4in = 4 columns.
     let data = ws7Block(0x00) + bytes("Row") + ws7Tab(sizeHMI: 720, tabType: UInt8(ascii: ".")) +
                bytes("Contents") + HARD
     let doc = parseWS(data)
     let text = doc.blocks[0].lines[0].text()
-    #expect(text.contains(String(repeating: ".", count: 5)))
+    #expect(text.contains(String(repeating: ".", count: 4)))
     #expect(text.hasPrefix("Row") && text.hasSuffix("Contents"))
 }
 
