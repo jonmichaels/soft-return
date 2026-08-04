@@ -288,7 +288,7 @@
  "symmetric_blocks_extra": [
   {
    "input_hex": "546578742e1d140003010001003048656c6c6f20746865726514001d0d0a",
-   "output_hex": "546578742e000d0a",
+   "output_hex": "546578742e0d0a",
    "footnotes": [
     "Hello there"
    ]

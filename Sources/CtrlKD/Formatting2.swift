@@ -326,9 +326,12 @@ public struct IndexEntry: Hashable, Sendable {
 /// All three were parsed as text and discarded, so a document that asked for a table of
 /// contents produced none and said nothing about it. Compiling the finished list is the
 /// consumer's job; not losing the entries is this one's. Register C6, C7, C11.
+/// Returns a `.fi` filename when the command was one, so the caller can place its
+/// marker in document order.
+@discardableResult
 func parseCollectDot(_ cmd: [UInt8], toc: inout [TOCEntry], index: inout [IndexEntry],
-                     lineNumbering: inout Int?, blockIndex: Int) {
-    guard cmd.count >= 3 else { return }
+                     lineNumbering: inout Int?, blockIndex: Int) -> String? {
+    guard cmd.count >= 3 else { return nil }
     let c1 = asciiUpper(cmd[1]), c2 = asciiUpper(cmd[2])
 
     if c1 == 0x54 && c2 == 0x43 {                                   // ".TC"
@@ -342,21 +345,41 @@ func parseCollectDot(_ cmd: [UInt8], toc: inout [TOCEntry], index: inout [IndexE
         toc.append(TOCEntry(level: level,
                             text: decodeCP437(rstripASCII(Array(cmd[k...]))),
                             blockIndex: blockIndex))
-        return
+        return nil
+    }
+    if c1 == 0x46 && c2 == 0x49 {                                   // ".FI"
+        // WSFORMAT.TXT: ".FI  File insert.  Prints the specified file at that point in
+        // the document." A whole file the document composes itself from, rendering as
+        // NOTHING — the same class already fixed for inset graphics (0x10) and the
+        // printer's `%F"NAME"` includes (0x0F), missed here because it is a dot command
+        // rather than a block.
+        //
+        // The file is NOT read: it may not exist, and the spec allows it to be a Lotus
+        // worksheet. Saying a file belongs here is the honest half. The CALLER places
+        // the marker, so it lands in document order.
+        var k = 3
+        while k < cmd.count, cmd[k] == 0x20 || cmd[k] == 0x09 { k += 1 }
+        var name: [UInt8] = []
+        while k < cmd.count, cmd[k] != 0x20, cmd[k] != 0x09, cmd[k] != 0x0D {
+            name.append(cmd[k]); k += 1
+        }
+        if !name.isEmpty { return decodeCP437(name) }
+        return nil
     }
     if c1 == 0x49 && c2 == 0x58 {                                   // ".IX"
         var k = 3
         if k < cmd.count, cmd[k] == 0x20 { k += 1 }
         index.append(IndexEntry(text: decodeCP437(rstripASCII(Array(cmd[k...]))),
                                 blockIndex: blockIndex))
-        return
+        return nil
     }
     if c1 == 0x4C && cmd[2] == 0x23 {                               // ".L#"
         // `.l# 0` turns line numbering OFF; any other number is the interval.
         guard let (value, _) = parseDotNumber(Array(cmd.dropFirst(3))), value.isFinite
-        else { return }
+        else { return nil }
         lineNumbering = Int(value) > 0 ? Int(value) : nil
     }
+    return nil
 }
 
 private func rstripASCII(_ b: [UInt8]) -> [UInt8] {

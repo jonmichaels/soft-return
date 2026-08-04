@@ -46,13 +46,20 @@ private let dotCondpage: [UInt8] = Array("CP".utf8)
 /// One physical line of bytes -> `[Span]`. `active` persists across lines (WordStar
 /// styles span line breaks) and `unknown` accumulates for the whole document, so both
 /// are `inout`. `fnCounter` is non-nil only for ws5+ documents, where it numbers the
-/// footnote-reference sentinels `symmetricBlocks` injected.
+/// note references.
+///
+/// `fnrefAt` holds the OFFSETS within this line at which a note reference belongs. They
+/// used to be an in-band sentinel byte, but every byte available for one is a real
+/// WordStar control code — `SENT_FNREF` sat on `0x00`, which the spec assigns to ^@
+/// "fix the print position" and which occurs 2328 times in five archive documents. A
+/// literal one was read as a reference to a note that does not exist.
 private func decodeSpans(
     _ raw: [UInt8],
     stripHibit: Bool,
     active: inout Style,
     unknown: inout [UInt8: Int],
-    fnCounter: inout Int?
+    fnCounter: inout Int?,
+    fnrefAt: [Int] = []
 ) -> [Span] {
     var spans: [Span] = []
     var buf: [UInt8] = []
@@ -68,8 +75,21 @@ private func decodeSpans(
         }
     }
 
+    var pending = fnrefAt.sorted()
     var i = 0
-    while i < raw.count {
+    while i < raw.count || !pending.isEmpty {
+        // A note reference sits BETWEEN bytes, so emit any that fall here before
+        // decoding the byte at this offset.
+        while let first = pending.first, first <= i {
+            pending.removeFirst()
+            if let current = fnCounter {
+                flush()
+                let n = current + 1
+                fnCounter = n
+                spans.append(Span(text: String(n), styles: active.union([.sup, .fnref])))
+            }
+        }
+        if i >= raw.count { break }
         // core.py:182-185 — MASK BEFORE DISPATCH. WS4 sets bit 7 on the last character
         // of each word even when that character is a control toggle, so a word ending at
         // a style boundary arrives as e.g. 0x94 (= ^T | 0x80). Dispatching on the raw
@@ -86,13 +106,7 @@ private func decodeSpans(
             continue
         }
 
-        if b == SENT_FNREF, let current = fnCounter {
-            // core.py:188-191 — ws5+ only; counter is 1-based.
-            flush()
-            let n = current + 1
-            fnCounter = n
-            spans.append(Span(text: String(n), styles: active.union([.sup, .fnref])))
-        } else if let style = wsToggles[b] {
+        if let style = wsToggles[b] {
             // core.py:192-195
             flush()
             if active.contains(style) {
@@ -147,6 +161,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var shiftRuns: [ShiftRun] = []
     var printerDriver: String? = nil
     var tabAt: Set<Int> = []
+    var wsMarks: [Int: StructuralMark] = [:]
     if ws5 {
         let stripped = symmetricBlocks(data)
         body = stripped.bytes
@@ -159,6 +174,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         shiftRuns = stripped.shiftRuns
         printerDriver = stripped.printerDriver
         tabAt = stripped.tabAt
+        wsMarks = stripped.marks
         // footnotes/endnotes/annotations are all rendered the same way (a numbered
         // list at the end) and share one inline reference counter below, so
         // `footnotes` stays the flattened view the existing emitters already know how
@@ -169,7 +185,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
             .map { [Span(text: $0.text)] }
     }
 
-    let pass = linesPass(body, tabAt: tabAt)
+    let pass = linesPass(body, tabAt: tabAt, marks: wsMarks)
 
     var active: Style = []
     var unknown: [UInt8: Int] = [:]
@@ -245,8 +261,17 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // which is the block still open (if it has content) or the next to open.
             // "This heading is in the table of contents" refers forward, not back.
             let pointsAt = blocks.count + ((!cur.lines.isEmpty || !curLine.spans.isEmpty) ? 1 : 0)
-            parseCollectDot(cmd, toc: &tocEntries, index: &indexEntries,
-                            lineNumbering: &lineNumbering, blockIndex: pointsAt)
+            if let inserted = parseCollectDot(cmd, toc: &tocEntries, index: &indexEntries,
+                                              lineNumbering: &lineNumbering,
+                                              blockIndex: pointsAt) {
+                // `.fi` sits BETWEEN paragraphs in the printed result, so the text
+                // before it has to be closed out first or the marker jumps to the front
+                // of the document.
+                includes.append(inserted)
+                closeBlock()
+                blocks.append(Block(kind: .para, lines: [
+                    Line(spans: [Span(text: "[insert: \(inserted)]")])]))
+            }
             // A formatting change starts a NEW block: `.oc on` mid-paragraph means the
             // lines after it are centred and the ones before it are not, and a single
             // block cannot hold both.
@@ -265,26 +290,54 @@ public func parseWS(_ data: [UInt8]) -> Document {
             continue
         }
 
-        if ws5 {
-            // core.py:299-308 — sentinels injected by symmetricBlocks.
-            if raw.contains(SENT_SOFTPAGE) {
+        // A LITERAL form feed is a page break, in any variant. WSFORMAT.TXT: "0Ch ^L
+        // Form Feed.  At print time causes page to be ejected.  No footer lines are
+        // printed." `parsePrintstream` has always honoured it; `parseWS` did not, so a
+        // WS document carrying ^L had its two pages run together into one paragraph and
+        // the only trace was an "unknown code 0x0c" line in --diagnose.
+        if raw.contains(0x0C) {
+            var segment: [UInt8] = []
+            var first = true
+            for byte in raw {
+                if byte == 0x0C {
+                    if !segment.isEmpty {
+                        curLine.spans += decodeSpans(segment, stripHibit: stripHibit,
+                                                     active: &active, unknown: &unknown,
+                                                     fnCounter: &fnCounter)
+                        segment = []
+                    }
+                    if !first || !curLine.spans.isEmpty || !cur.lines.isEmpty {
+                        closeBlock()
+                        blocks.append(Block(kind: .pagebreak))
+                    }
+                    first = false
+                } else {
+                    segment.append(byte)
+                }
+            }
+            raw = segment
+        }
+
+        // Structural marks, carried as OFFSETS rather than injected bytes — every byte
+        // the old sentinels used (0x00 ^@, 0x0B ^K, 0x11 ^Q) is a real WordStar control
+        // code that occurs in real documents, so a literal one was read as a page break,
+        // a heading, or a note reference the author never wrote. See `StructuralMark`.
+        var fnrefAt: [Int] = []
+        for (rel, mark) in physical.marks {
+            switch mark {
+            case .softpage:
                 closeBlock()
                 blocks.append(Block(kind: .softpage))
-                raw.removeAll { $0 == SENT_SOFTPAGE }
-            }
-            // SENT_HEADING is a 2-BYTE unit: the sentinel plus an ASCII level digit.
-            // The heading lands on the block `closeBlock()` just opened, not the one it
-            // closed.
-            if raw.first == SENT_HEADING && raw.count > 2 {
+            case .heading(let level, let styleID):
                 closeBlock()
                 // Level 0 means "a style, but not one of the three this parser gives a
                 // heading meaning to" — the block is still marked with WHICH style, so
                 // a consumer can act on it. Register C1.
-                cur.heading = Int(raw[1]) - 0x30
-                cur.styleID = Int(raw[2]) - 0x30
-                raw = Array(raw.dropFirst(3))
+                cur.heading = level
+                cur.styleID = styleID
+            case .fnref:
+                fnrefAt.append(rel)
             }
-            raw.removeAll { $0 == SENT_HEADING }
         }
 
         let spans = decodeSpans(
@@ -292,7 +345,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             stripHibit: stripHibit,
             active: &active,
             unknown: &unknown,
-            fnCounter: &fnCounter
+            fnCounter: &fnCounter,
+            fnrefAt: fnrefAt
         )
         curLine.spans.append(contentsOf: spans)
 

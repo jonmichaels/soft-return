@@ -226,3 +226,38 @@ let italicOn: [UInt8] = [0x19]
     if let h = doc.page?.heightIn { #expect(h.isFinite, "page height went non-finite") }
     #expect(doc.page?.sizeSource == .default, "a damaged .pl must fall back to the default")
 }
+
+@Test func realControlCodesAreNotMistakenForStructure() {
+    // The sentinels were IN-BAND BYTES, and every byte available for one is a real
+    // WordStar control code:
+    //
+    //     SENT_FNREF    0x00 = ^@ fix print position   (2328 in 5 archive docs)
+    //     SENT_SOFTPAGE 0x0B = ^K index marker         (21 in 3)
+    //     SENT_HEADING  0x11 = ^Q custom print control (37 in 5)
+    //
+    // A literal ^K produced a page break the author never wrote. Marks now travel as
+    // OFFSETS — the pattern `tabAt` already used, and whose own comment said "that
+    // lesson is cheap to apply here". It had not been applied backwards until now.
+    for byte: UInt8 in [0x00, 0x0B, 0x11] {
+        let doc = parseWS(wsBlock(cmd: 0x00)
+                          + bytes("Ordinary prose here, plenty of it. ")
+                          + [byte] + bytes("More prose follows on.\r\n"))
+        #expect(doc.blocks.map(\.kind) == [.para], "\(byte) invented a block")
+        #expect(doc.blocks[0].heading == 0, "\(byte) invented a heading")
+        #expect(!doc.blocks.contains { $0.lines.contains { $0.spans.contains {
+            $0.styles.contains(.fnref) } } }, "\(byte) invented a note reference")
+    }
+}
+
+@Test func aLiteralFormFeedBreaksThePageInAWSDocument() {
+    // WSFORMAT.TXT: "0Ch ^L  Form Feed.  At print time causes page to be ejected."
+    // `parsePrintstream` honoured it; `parseWS` did not, so a WS document carrying ^L
+    // ran its two pages together into ONE paragraph, the only trace an "unknown code"
+    // line. The two parse paths disagreed about identical bytes.
+    let src = bytes("Page one text here with plenty of ordinary prose.")
+        + [0x0C] + bytes("Page two text here also with prose.\r\n")
+    let doc = parseWS(src)
+    #expect(doc.blocks.map(\.kind) == [.para, .pagebreak, .para])
+    #expect(doc.unknownCodes.isEmpty, "a handled code must not be reported unknown")
+    #expect(parsePrintstream(src).blocks.map(\.kind) == doc.blocks.map(\.kind))
+}

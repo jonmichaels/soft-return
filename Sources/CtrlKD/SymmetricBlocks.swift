@@ -13,20 +13,30 @@
 /// dropped. The result feeds `linesPass`, which never sees a `0x1D` byte from a
 /// well-formed ws5+ document.
 
-/// Sentinels injected into the cleaned stream. They must be bytes that CANNOT occur as
-/// content, or a document's own byte gets mistaken for one — which is how the assembly
-/// loop (job-006) tells them from real content.
+/// A structural event that used to be an in-band SENTINEL BYTE, now carried as an
+/// offset into the cleaned stream.
 ///
-/// `SENT_FNREF` was `0x07` until 2026-08-03. `0x07` is ^G, WordStar's phantom rubout —
-/// rare and print-time-only by 1990, but REAL, and a literal one in a WS5+ body was read
-/// as a note reference. Out-of-range degraded gracefully; an IN-range collision silently
-/// attached the WRONG footnote to a piece of body text. Moved to `0x00`. NUL is not text
-/// in a WordStar body — the format terminates on `0x1A` and never emits a NUL as content
-/// — and unlike `0x1B` (the extended-character escape, tried first and rejected) nothing
-/// downstream consumes it.
-public let SENT_FNREF: UInt8 = 0x00
-public let SENT_SOFTPAGE: UInt8 = 0x0B
-public let SENT_HEADING: UInt8 = 0x11
+/// RETIRED 2026-08-04: `SENT_FNREF` (`0x00`), `SENT_SOFTPAGE` (`0x0B`) and
+/// `SENT_HEADING` (`0x11`). Every byte available for a sentinel is a documented
+/// WordStar control code, and all three occur in real archive documents outside any
+/// block:
+///
+///     0x00  ^@  fix the print position     2328 occurrences in 5 documents
+///     0x0B  ^K  index marker                 21 occurrences in 3
+///     0x11  ^Q  custom print control         37 occurrences in 5
+///
+/// A literal ^K produced a page break the author never wrote; a literal ^Q, a heading;
+/// a literal ^@, a reference to a footnote that does not exist. `SENT_FNREF` had been
+/// moved ONTO `0x00` two days earlier on the reasoning that "NUL is not text in a
+/// WordStar body" — the spec assigns `0x00` to ^@, so that traded a rare clash for a
+/// common one.
+///
+/// Offsets are the pattern `tabAt` already used for exactly this reason.
+public enum StructuralMark: Hashable, Sendable {
+    case fnref
+    case softpage
+    case heading(level: Int, styleID: Int)
+}
 
 /// Symmetrical-sequence "Notes" types (WordStar 7.0 file format spec, WordStar
 /// International, 1992): 3 Footnote, 4 Endnote, 5 Annotation, 6 Comment. All four are
@@ -61,13 +71,16 @@ public struct SymmetricBlocksResult: Hashable, Sendable {
     /// Offsets into `bytes` at which TAB-derived padding begins — `linesPass` needs to
     /// tell a program-emitted indent from one the author typed. A3.
     public let tabAt: Set<Int>
+    /// Structural events by offset into `bytes` — what the sentinel bytes used to be.
+    public let marks: [Int: StructuralMark]
 
     public init(bytes: [UInt8], notes: [Note], unknownBlocks: [UnknownBlock],
                 graphics: [String] = [], colours: [ColourChange] = [],
                 fonts: [FontChange] = [], includes: [String] = [],
                 shiftRuns: [ShiftRun] = [], printerDriver: String? = nil,
-                tabAt: Set<Int> = []) {
+                tabAt: Set<Int> = [], marks: [Int: StructuralMark] = [:]) {
         self.tabAt = tabAt
+        self.marks = marks
         self.colours = colours
         self.fonts = fonts
         self.includes = includes
@@ -92,6 +105,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var shiftOpen: [Int] = []
     var driver: String? = nil
     var tabAt: Set<Int> = []
+    var marks: [Int: StructuralMark] = [:]
     var i = 0
     while i < data.count {
         // core.py — need the marker plus both length bytes present.
@@ -107,7 +121,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 let content = blockContent(block)
                 notes.append(parseNote(kind: kind, cmd: cmd, content: content, offset: start))
                 if cmd != 0x06 {                                   // comments: never printed inline
-                    out.append(SENT_FNREF)
+                    marks[out.count] = .fnref
                 }
             } else if cmd == 0x09 {                                // tab (and dot leaders)
                 // Remember that this padding came from a TAB, not from typed spaces.
@@ -118,16 +132,39 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 tabAt.insert(out.count)
                 for _ in 0..<cols { out.append(leader) }
             } else if cmd == 0x0B {                                // end of page
-                out.append(SENT_SOFTPAGE)
+                marks[out.count] = .softpage
             } else if cmd == 0x0D {                                // paragraph number
                 // WordStar's AUTOMATIC outline/legal numbering (`.p#`) — "2.1.3" and
-                // the like. It used to fall through to `UnknownBlock`, which DELETES
-                // the computed number from the output entirely: not unstyled, gone.
-                // Outline-numbered essays, wills and structured reports lost every
-                // generated number with no trace.
-                out += blockContent(block)
-                    .map { $0 & 0x7F }
-                    .filter { $0 >= 0x20 && $0 < 0x7F }
+                // the like. Documented layout (WSFORMAT.TXT, "0Dh Paragraph number"):
+                //
+                //   Byte: level moves FORWARD from the previous number
+                //   Byte: level moves BACKWARD
+                //   Byte: level number of this paragraph number (1 based)
+                //   Word x8: the level counters, 0 BASED
+                //   31 bytes: the format string, zero-terminated
+                //
+                // It is BINARY. An earlier pass scanned the block for printable-looking
+                // bytes and emitted those, on the assumption the number was stored as
+                // text. What that actually extracted was the 31-byte FORMAT TEMPLATE —
+                // so a real document printed "1.1.1.1.1.1.1.1" for every paragraph,
+                // plausible enough to pass unnoticed and completely wrong.
+                //
+                // The number is COMPUTED: take the first `level` counters, add one to
+                // each (they are 0-based) and join with dots.
+                let content = blockContent(block)
+                if content.count >= 5 {
+                    let level = Int(content[2])
+                    var parts: [String] = []
+                    for k in 0..<Swift.min(level, 8) {
+                        let off = 3 + k * 2
+                        if off + 2 > content.count { break }
+                        // Parenthesised deliberately: `|` binds looser than `+`, so
+                        // `a | b << 8 + 1` would add one INSIDE the shift.
+                        let counter = Int(content[off]) | (Int(content[off + 1]) << 8)
+                        parts.append(String(counter + 1))
+                    }
+                    if !parts.isEmpty { out += Array(parts.joined(separator: ".").utf8) }
+                }
             } else if cmd == 0x01 {                                // colour change
                 // Two bytes: foreground and background colour INDICES into WordStar's
                 // own palette, not RGB (the archive shows 00/00, 04/00, 08/04, 0c/08).
@@ -288,9 +325,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 // meaning for it. Level 0 = "a style, but not one of the three".
                 let styleID = Int(block[3])
                 let level = [0x05: 1, 0x02: 2, 0x03: 3][styleID] ?? 0
-                out.append(SENT_HEADING)
-                out.append(UInt8(0x30 + level))
-                out.append(UInt8(0x30 + (styleID & 0x3F)))
+                marks[out.count] = .heading(level: level, styleID: styleID)
             } else {
                 unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
             }
@@ -312,7 +347,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     return SymmetricBlocksResult(bytes: out, notes: notes, unknownBlocks: unknownBlocks,
                                  graphics: graphics, colours: colours, fonts: fonts,
                                  includes: includes, shiftRuns: shiftRuns,
-                                 printerDriver: driver, tabAt: tabAt)
+                                 printerDriver: driver, tabAt: tabAt, marks: marks)
 }
 
 /// `block[3:-3] if len(block) >= 6 else block[3:]` — strips the leading length+cmd

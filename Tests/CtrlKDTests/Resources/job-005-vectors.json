@@ -1,21 +1,19 @@
 {
  "note": "machine-generated from Python ctrl-kd 1.1.3 _symmetric_blocks(data, \"cp437\") \u2014 input bytes -> (rewritten bytes with sentinels, extracted note strings)",
  "sentinels": {
-  "SENT_FNREF": "0x00",
-  "SENT_SOFTPAGE": "0x0b",
-  "SENT_HEADING": "0x11 followed by ascii level digit"
+  "retired": "structure travels as offsets; the sentinel bytes 0x00 ^@, 0x0B ^K and 0x11 ^Q are all real WordStar control codes"
  },
  "symmetric_blocks": [
   {
    "input_hex": "54726561746965732077657265206d6164652e1d1e00030100010030536565207468652031383638206163636f7264732e1e001d204d6f726520746578742e0d0a",
-   "output_hex": "54726561746965732077657265206d6164652e00204d6f726520746578742e0d0a",
+   "output_hex": "54726561746965732077657265206d6164652e204d6f726520746578742e0d0a",
    "footnotes": [
     "See the 1868 accords."
    ]
   },
   {
    "input_hex": "1d0100001d0200110243686170746572204f6e650d0a0d0a426f647920746578742e0d0a1d01000b4e65787420706167652e0d0a",
-   "output_hex": "11323243686170746572204f6e650d0a0d0a426f647920746578742e0d0a0b4e65787420706167652e0d0a",
+   "output_hex": "43686170746572204f6e650d0a0d0a426f647920746578742e0d0a4e65787420706167652e0d0a",
    "footnotes": []
   },
   {
@@ -25,14 +23,14 @@
   },
   {
    "input_hex": "456e646e6f746520746573742e1d1900040100010030416e20656e646e6f746520686572652e19001d0d0a",
-   "output_hex": "456e646e6f746520746573742e000d0a",
+   "output_hex": "456e646e6f746520746573742e0d0a",
    "footnotes": [
     "An endnote here."
    ]
   },
   {
    "input_hex": "1d0200110541205469746c650d0a1d02001103412053756268656164696e670d0a",
-   "output_hex": "11313541205469746c650d0a113333412053756268656164696e670d0a",
+   "output_hex": "41205469746c650d0a412053756268656164696e670d0a",
    "footnotes": []
   },
   {
@@ -42,7 +40,7 @@
   },
   {
    "input_hex": "54776f206e6f7465732e1d14000301000100304669727374206e6f74652e14001d205468656e1d15000301000200305365636f6e64206e6f74652e15001d20656e642e0d0a",
-   "output_hex": "54776f206e6f7465732e00205468656e0020656e642e0d0a",
+   "output_hex": "54776f206e6f7465732e205468656e20656e642e0d0a",
    "footnotes": [
     "First note.",
     "Second note."

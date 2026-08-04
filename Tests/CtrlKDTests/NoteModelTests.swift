@@ -181,15 +181,32 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
 
 // ------------------------------------------- outline numbers and indexed phrases
 
-@Test func paragraphNumbersAreContentNotUnknownBlocks() {
-    // WordStar's AUTOMATIC outline/legal numbering (`.p#`). This used to fall through
-    // to UnknownBlock, which DELETES the computed number from the output entirely —
-    // not unstyled, gone. Outline-numbered essays, wills and structured reports lost
-    // every generated number with no trace.
-    let numbered = wsBlock(cmd: 0x0D, content: Array("2.1.3".utf8))
-    let doc = parseWS(numbered + bytes(" The clause text.\r\n"))
+/// A 0x0D block body per WSFORMAT.TXT: two level-move bytes, a 1-BASED level byte, then
+/// eight 0-BASED level counters as words, then a 31-byte format string. Binary
+/// throughout — there is no rendered number in it.
+private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
+    var body: [UInt8] = [0, 0, level]
+    for n in 0..<8 {
+        let v = n < counters.count ? counters[n] : 0
+        body += [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)]
+    }
+    return body + [UInt8](repeating: 0, count: 31)
+}
+
+@Test func paragraphNumberIsComputedFromItsLevelCounters() {
+    // WordStar's AUTOMATIC outline/legal numbering (`.p#`), and the block is BINARY.
+    //
+    // This test used to feed the block `"2.1.3"` as literal text and assert that text
+    // came back — the same misunderstanding the code had, so it passed against an
+    // implementation that scanned for printable bytes. What that scan actually
+    // extracted was the 31-byte FORMAT TEMPLATE, so real archive documents printed
+    // "1.1.1.1.1.1.1.1" for every paragraph: plausible enough to pass unnoticed and
+    // completely wrong. Level 3 with counters 1, 0, 2 renders "2.1.3".
+    let doc = parseWS(wsBlock(cmd: 0x0D, content: paranum(level: 3, 1, 0, 2))
+                      + bytes(" The clause text, with enough ordinary prose that "
+                              + "detection is not in doubt.\r\n"))
     let text = doc.blocks[0].lines[0].text()
-    #expect(text.contains("2.1.3"), "the generated number was dropped: \(text)")
+    #expect(text.contains("2.1.3"), "got: \(text)")
     #expect(doc.unknownBlocks.isEmpty)
 }
 
@@ -335,4 +352,26 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     let text = doc.blocks[0].lines[0].text()
     #expect(text.contains("[shift-jis: 4 bytes]"))
     #expect(text.hasSuffix(" tail."), "got: \(text)")   // nothing swallowed past the run
+}
+
+@Test func fiFileInsertLeavesATrace() {
+    // WSFORMAT.TXT: ".FI  File insert.  Prints the specified file at that point in the
+    // document." A whole file the document composes itself from, rendering as NOTHING.
+    // Three archive documents use it. Same class as inset graphics and `%F"NAME"`
+    // includes — missed twice because it is a dot command, not a block.
+    let doc = parseWS(bytes("Body one.\r\n.fi CHAPTER2.WS\r\nBody two.\r\n"))
+    #expect(doc.includes == ["CHAPTER2.WS"])
+    // and it lands BETWEEN the paragraphs, not at the front of the document
+    #expect(emitText(doc, mode: .printed)
+            == "Body one.\n[insert: CHAPTER2.WS]\nBody two.\n")
+}
+
+@Test func igAndDoubleDotCommentsNeverPrint() {
+    // WSFORMAT.TXT: ".IG or..  Ignore.  The text on the remainder of the line is
+    // treated as an unprinted comment." Verified rather than assumed.
+    for src in ["One.\r\n.ig hidden note\r\nTwo.\r\n", "One.\r\n.. hidden note\r\nTwo.\r\n"] {
+        let text = emitText(parseWS(bytes(src)), mode: .printed)
+        #expect(!text.contains("hidden"), "got: \(text)")
+        #expect(text.contains("One.") && text.contains("Two."))
+    }
 }

@@ -29,8 +29,26 @@ public enum LineSeparator: String, Hashable, Sendable {
 public struct PhysicalLine: Hashable, Sendable {
     public let text: [UInt8]
     public let separator: LineSeparator
+    /// Structural events falling inside this line, rebased to it. These used to be
+    /// in-band sentinel bytes; every byte available for one is a real WordStar control
+    /// code — see `StructuralMark`.
+    public var marks: [(offset: Int, mark: StructuralMark)] {
+        markPairs.map { (offset: $0.0, mark: $0.1) }
+    }
+    let markPairs: [(Int, StructuralMark)]
 
-    public init(text: [UInt8], separator: LineSeparator) {
+    public static func == (a: PhysicalLine, b: PhysicalLine) -> Bool {
+        a.text == b.text && a.separator == b.separator
+            && a.markPairs.map(\.0) == b.markPairs.map(\.0)
+            && a.markPairs.map(\.1) == b.markPairs.map(\.1)
+    }
+    public func hash(into h: inout Hasher) {
+        h.combine(text); h.combine(separator); h.combine(markPairs.map(\.0))
+    }
+
+    public init(text: [UInt8], separator: LineSeparator,
+                markPairs: [(Int, StructuralMark)] = []) {
+        self.markPairs = markPairs
         self.text = text
         self.separator = separator
     }
@@ -48,14 +66,15 @@ public struct LinesPassResult: Hashable, Sendable {
     }
 }
 
-public func linesPass(_ data: [UInt8], tabAt: Set<Int> = []) -> LinesPassResult {
+public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
+                      marks: [Int: StructuralMark] = [:]) -> LinesPassResult {
     // core.py:108-110 — truncate at the first ^Z before anything else.
     var body = data
     if let cut = data.firstIndex(of: 0x1a) {
         body = Array(data[..<cut])
     }
 
-    let lines = splitIntoRawLines(body, tabAt: tabAt)
+    let lines = splitIntoRawLines(body, tabAt: tabAt, marks: marks)
 
     // core.py:120-122 — margin is the 90th percentile of soft-wrapped line lengths
     // (outliers from hanging punctuation sit 1-2 past the true margin), floor 65.
@@ -94,7 +113,8 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = []) -> LinesPassResult 
         if isBlank(vis) {
             if kind != .eof {
                 out.append(PhysicalLine(text: text,
-                                        separator: kind == .soft ? .blankSoft : .blankHard))
+                                        separator: kind == .soft ? .blankSoft : .blankHard,
+                                        markPairs: lines[i].marks))
             }
             i += 1
             continue
@@ -116,7 +136,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = []) -> LinesPassResult 
 
         // core.py:140-142 — nothing but blanks left: this line ends the document.
         if j >= lines.count {
-            out.append(PhysicalLine(text: text, separator: .eof))
+            out.append(PhysicalLine(text: text, separator: .eof, markPairs: lines[i].marks))
             break
         }
 
@@ -152,14 +172,15 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = []) -> LinesPassResult 
                 sep = (L + 1 + W < margin) ? .line : .wrap
             }
         }
-        out.append(PhysicalLine(text: text, separator: sep))
+        out.append(PhysicalLine(text: text, separator: sep, markPairs: lines[i].marks))
         // The blanks this run consumed, in document order, after the line they
         // follow. They were counted above to classify `sep` and are now also kept
         // as content — the counting and the keeping are separate jobs.
         if i + 1 < j {
             for b in (i + 1)..<j where lines[b].kind != .eof {
                 out.append(PhysicalLine(text: lines[b].text,
-                                        separator: lines[b].kind == .soft ? .blankSoft : .blankHard))
+                                        separator: lines[b].kind == .soft ? .blankSoft : .blankHard,
+                                        markPairs: lines[b].marks))
             }
         }
         i = j
@@ -187,9 +208,13 @@ private enum BreakKind {
 /// `machineIndent` marks a line whose leading whitespace was emitted by WordStar from a
 /// TAB, not typed by the author — see the wrap test, where the difference decides whether
 /// a paragraph reflows at all. A3.
-private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>)
-    -> [(text: [UInt8], kind: BreakKind, machineIndent: Bool)] {
-    var result: [(text: [UInt8], kind: BreakKind, machineIndent: Bool)] = []
+private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
+                               marks: [Int: StructuralMark] = [:])
+    -> [(text: [UInt8], kind: BreakKind, machineIndent: Bool,
+         marks: [(Int, StructuralMark)])] {
+    var result: [(text: [UInt8], kind: BreakKind, machineIndent: Bool,
+                  marks: [(Int, StructuralMark)])] = []
+    var starts: [(at: Int, len: Int, idx: Int)] = []
     var text: [UInt8] = []
     var i = 0
     // Offset of the CURRENT line's first byte, so a tab-derived indent recorded by
@@ -197,7 +222,8 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>)
     // figure as `at`, advancing by `len(text) + len(brk)` per line.
     var lineStart = 0
     func emit(_ kind: BreakKind, _ advance: Int) {
-        result.append((text, kind, tabAt.contains(lineStart)))
+        starts.append((at: lineStart, len: text.count, idx: result.count))
+        result.append((text, kind, tabAt.contains(lineStart), []))
         lineStart += text.count + advance
         text = []
     }
@@ -220,6 +246,20 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>)
     if !text.isEmpty {
         emit(.eof, 0)
     }
+    // Attach each mark to the line containing it. A mark landing INSIDE a break — a
+    // soft page break sits between two lines, not within one — belongs to the line
+    // that FOLLOWS it, at relative offset 0. Otherwise it would be silently dropped,
+    // which is the failure the sentinels were replaced to end.
+    for (off, m) in marks.sorted(by: { $0.key < $1.key }) {
+        if let s = starts.first(where: { off >= $0.at && off < $0.at + $0.len }) {
+            result[s.idx].marks.append((off - s.at, m))
+        } else if let n = starts.first(where: { $0.at >= off }) {
+            result[n.idx].marks.append((0, m))
+        } else if let last = starts.last {
+            result[last.idx].marks.append((last.len, m))
+        }
+    }
+    for i in result.indices { result[i].marks.sort { $0.0 < $1.0 } }
     return result
 }
 
