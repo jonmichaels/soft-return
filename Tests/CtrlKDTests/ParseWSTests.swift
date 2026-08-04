@@ -219,9 +219,13 @@ let italicOn: [UInt8] = [0x19]
 
 @Test func aWrappedEOFByteDoesNotCutTheDocument() {
     // `<1B 1A 1C>` is the chart's 1A cell. Cutting there amputated 86% of the file.
-    let doc = parseWS(ws7Block(0x00) + bytes("Chart row ") + [0x1B, 0x1A, 0x1C]
-                      + bytes(" continues.") + HARD
-                      + bytes("And the file is not cut here.") + HARD)
+    // built up in stages: chonky's Swift 6.2.4 type-checker times out on the
+    // one-expression form that 6.3.3 accepts (found by the first worker build)
+    var data = ws7Block(0x00) + bytes("Chart row ")
+    data += [0x1B, 0x1A, 0x1C]
+    data += bytes(" continues.") + HARD
+    data += bytes("And the file is not cut here.") + HARD
+    let doc = parseWS(data)
     #expect(doc.blocks[0].lines.map { $0.text() }
             == ["Chart row → continues.", "And the file is not cut here."])
 }
