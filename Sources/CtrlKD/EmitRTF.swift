@@ -134,6 +134,10 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     let refNotes = inlineReferenceNotes(doc)
     var rtfAlign: Alignment = .left      // RTF alignment persists across \par
     var parts: [String] = []
+    let stylesheet = options.styles ? rtfStylesheet(doc) : ""
+    let styledSlots: Set<Int> = options.styles
+        ? Set(doc.styles.filter { $0.record != nil }.map(\.slot))
+        : []
 
     for block in doc.blocks {
         if block.kind == .pagebreak {
@@ -169,6 +173,12 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
                 parts.append(rtfAlignControl(block.align))
                 rtfAlign = block.align
             }
+            if let slot = block.styleID, styledSlots.contains(slot) {
+                // Style pass-through: tag the paragraph with its `\sN` so a consumer can
+                // act on the named style. The visible formatting is still carried inline,
+                // as RTF readers expect.
+                parts.append(#"\s"# + String(slot + 1) + " ")
+            }
             parts.append(para + #"\par "#)
         }
         if !printed {
@@ -188,6 +198,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
 
     let body = parts.joined(separator: "\n")
     var out = #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
+    out += stylesheet
     out += "\n" + font + #"\fs24 "# + "\n"
     out += body
     out += "\n}\n"
@@ -196,3 +207,46 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
 
 /// A hard page break, for the `pagebreak` branch (emit.py:218).
 private let pageControl = #"\page "#
+
+/// An RTF `\stylesheet` group derived from the style records — the same pass-through rule
+/// as the HTML CSS: properties come from the file's own data, names are carried verbatim,
+/// nothing is hardwired. `\sN` numbers are slot+1, since RTF style 0 is reserved for
+/// Normal.
+func rtfStylesheet(_ doc: Document) -> String {
+    var entries: [String] = []
+    for entry in doc.styles {
+        guard let record = entry.record else { continue }   // recordless base entry
+        var props = ""
+        switch record.justification {
+        case .center: props += #"\qc"#
+        case .right: props += #"\qr"#
+        case .justify: props += #"\qj"#
+        default: break                                       // `.left`/inherited: nothing
+        }
+        // Twips: HMI/1800 inches, 1440 twips to the inch.
+        if let lm = record.leftMarginHMI, lm != 0 {
+            props += #"\li"# + String(roundHalfToEven(Double(lm) / 1800.0 * 1440.0))
+        }
+        if let rm = record.rightMarginHMI, rm != 0 {
+            props += #"\ri"# + String(roundHalfToEven(Double(rm) / 1800.0 * 1440.0))
+        }
+        let attrs = record.attrs
+        if attrs.contains(.bold) { props += #"\b"# }
+        if attrs.contains(.italic) { props += #"\i"# }
+        if attrs.contains(.underline) { props += #"\ul"# }
+        if attrs.contains(.strike) { props += #"\strike"# }
+        if let font = record.font, font.height != 0 {
+            props += #"\fs"# + String(roundHalfToEven(Double(font.height) / 20.0 * 2.0))
+        }
+        // The name is carried VERBATIM apart from the three characters that would break
+        // out of the group. Not the usual `rtfEscape`: a style name is a name, and
+        // hex-escaping it would change what a consumer reads back.
+        var name = ""
+        for character in entry.name where character != "\\" && character != "{" && character != "}" {
+            name.append(character)
+        }
+        entries.append(#"{\s"# + String(entry.slot + 1) + props + " " + name + ";}")
+    }
+    guard !entries.isEmpty else { return "" }
+    return #"{\stylesheet{\s0 Normal;}"# + entries.joined() + "}"
+}

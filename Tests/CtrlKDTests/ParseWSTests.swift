@@ -108,7 +108,10 @@ let italicOn: [UInt8] = [0x19]
     // The Python test's last two assertions, which this port had to leave out until the
     // markdown and html emitters existed. Both do now.
     #expect(emitMarkdown(doc).contains("## Chapter One"))
-    #expect(emitHTML(doc).contains("<h2>Chapter One</h2>"))
+    // The `<h2>` now carries the style's pass-through class, so match around it rather
+    // than on the bare tag (Python swapped to a regex here for the same reason).
+    let html = emitHTML(doc)
+    #expect(html.contains("<h2") && html.contains(">Chapter One</h2>"))
 }
 
 @Test func ws7TabBlock() {

@@ -43,6 +43,9 @@ public struct Options: Equatable, Sendable {
     /// `EmitOptions.defaultNotes` (footnote/endnote/annotation — never comments, since
     /// WordStar itself never printed one).
     public var notes: Set<NoteKind> = EmitOptions.defaultNotes
+    /// Paragraph-style pass-through (HTML classes + generated CSS, RTF stylesheet).
+    /// `--no-styles` turns it off; on by default, like ctrl-kd's `styles=`.
+    public var styles = true
 
     public init() {}
 }
@@ -178,6 +181,11 @@ public func parseArguments(
                 return .usageError("argument \(flag): ignored explicit argument '\(attached!)'")
             }
             comments = true
+        case "--no-styles":
+            if attached != nil {
+                return .usageError("argument \(flag): ignored explicit argument '\(attached!)'")
+            }
+            options.styles = false
         case "--encoding":
             // Dropped, not forgotten — see the help text. Named explicitly so anyone porting a
             // ctrl-kd command line gets an answer instead of "unrecognized option".
@@ -221,7 +229,8 @@ private func quotedList(_ items: [String]) -> String {
 public func helpText(registry: EmitterRegistry = .standard) -> String {
     """
     usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] [--mode MODE]
-              [--variant VARIANT] [--no-notes] [--comments] [--diagnose] FILE [FILE ...]
+              [--variant VARIANT] [--no-styles] [--no-notes] [--comments] [--diagnose]
+              FILE [FILE ...]
 
     Convert WordStar 4-7 documents and print-to-disk files to text, Markdown, HTML,
     RTF, or PDF. ^KD: save and done.
@@ -242,6 +251,8 @@ public func helpText(registry: EmitterRegistry = .standard) -> String {
                             printed)
       --variant VARIANT     override detection
                             choices: \(variantChoices.joined(separator: ", "))
+      --no-styles           omit paragraph-style pass-through (HTML classes +
+                            generated CSS, RTF stylesheet) from the output
       --no-notes            omit footnotes, endnotes and annotations from the output
       --comments            include WordStar comments, which it never printed
                             (author's asides, hidden since the file was written)

@@ -344,10 +344,29 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
     #expect(help.contains("CP437"))
     #expect(help.contains("--diagnose"))
     #expect(help.contains("--no-notes"))
+    #expect(help.contains("--no-styles"))
     #expect(help.contains("--comments"))
     for format in EmitterRegistry.standard.formats() {
         #expect(help.contains(format))
     }
+}
+
+// MARK: - Style pass-through (--no-styles)
+
+@Test func stylePassThroughIsOnByDefaultAndOffWithTheFlag() {
+    guard case .run(let byDefault) = parseArguments(["A.WS"]),
+          case .run(let off) = parseArguments(["--no-styles", "A.WS"]) else {
+        Issue.record("expected a run")
+        return
+    }
+    #expect(byDefault.styles)
+    #expect(!off.styles)
+
+    guard case .usageError(let message) = parseArguments(["--no-styles=x", "A.WS"]) else {
+        Issue.record("expected a usage error")
+        return
+    }
+    #expect(message.contains("ignored explicit argument"))
 }
 
 // MARK: - Note selection (--no-notes / --comments)

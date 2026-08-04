@@ -219,3 +219,35 @@ import Testing
     ])
     #expect(emitHTML(doc).contains("<body>\n<p>A</p>\n<p>B</p>\n</body></html>\n"))
 }
+
+@Test func stylePassThroughHTMLCSSAndRTFStylesheet() {
+    // Jon's ruling 2026-08-04: styles are a PASS-THROUGH — no hardwiring a name to a
+    // font; expose the record's own data as CSS/RTF so a consumer can attach font/size.
+    // Every property below comes from the fixture's 102-byte record, none from the name.
+    let rec = styleRecord(left: 1800, just: -2, attrsOn: 0x40)      // centered, bold
+    let lib = styleLibrary([
+        (name: "WordStar Defaults", record: nil),
+        (name: "WordStar Defaults", record: nil),
+        (name: "Callout", record: rec),
+    ])
+    let doc = parseWS(documentWithStyleLibrary(
+        body: bytes("Plain opening paragraph with plenty of ordinary prose.") + HARD
+            + styleRef(2) + bytes("Styled paragraph in the Callout style.") + HARD
+            + styleRef(1) + bytes("Back to defaults for the closing prose.") + HARD,
+        library: lib))
+
+    let html = emitHTML(doc, mode: .modern)
+    #expect(html.contains(".ws-2-callout { "))                       // generated CSS rule
+    #expect(html.contains("text-align:center") && html.contains("margin-left:1.00in"))
+    #expect(html.contains("font-weight:bold"))
+    let body = html.components(separatedBy: "<body>")[1]
+    #expect(body.contains("class=\"ws-2-callout\""))
+    #expect(!emitHTML(doc, mode: .modern, options: EmitOptions(styles: false))
+        .contains("ws-2-callout"))
+
+    let rtf = emitRTF(doc, mode: .modern)
+    #expect(rtf.contains(#"{\stylesheet{\s0 Normal;}{\s3\qc\li1440\b Callout;}"#))
+    #expect(rtf.components(separatedBy: #"\stylesheet"#)[1].contains(#"\s3 "#))
+    #expect(!emitRTF(doc, mode: .modern, options: EmitOptions(styles: false))
+        .contains(#"\stylesheet"#))
+}

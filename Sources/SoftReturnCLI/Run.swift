@@ -107,7 +107,7 @@ private func convertAll(
                 status = ExitStatus.fileFailure
                 continue
             }
-            let output = emitter.emit(doc, options.mode, EmitOptions(title: base, notes: options.notes))
+            let output = emitter.emit(doc, options.mode, EmitOptions(title: base, notes: options.notes, styles: options.styles))
 
             let destination: String
             if let explicit = options.output {

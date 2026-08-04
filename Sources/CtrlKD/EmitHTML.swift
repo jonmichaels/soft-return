@@ -183,12 +183,19 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     let printed = mode == .printed || isPrinted(doc)
     let refNotes = inlineReferenceNotes(doc)
     var parts: [String] = []
+    var styleClass: [Int: String] = [:]
+    if options.styles {
+        for entry in doc.styles {
+            styleClass[entry.slot] = " class=\"\(styleSlug(entry))\""
+        }
+    }
 
     for block in doc.blocks {
         if block.kind == .pagebreak {
             parts.append(pageRule)
             continue
         }
+        let cls = block.styleID.flatMap { styleClass[$0] } ?? ""
         // emit.py:167-172 — a heading is a heading in both modes; note this check sits
         // AFTER the two break kinds and BEFORE the printed/modern split, so a heading never
         // renders as `<pre>`.
@@ -200,7 +207,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                 .joined(separator: " ")             // heading lines read as one phrase
                 .trimmed()
             if !text.isEmpty {
-                parts.append("<h\(block.heading)>\(text)</h\(block.heading)>")
+                parts.append("<h\(block.heading)\(cls)>\(text)</h\(block.heading)>")
             }
             continue
         }
@@ -210,7 +217,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                 .map { line in line.spans.map { htmlBodySpan($0, keepWS: true, refNotes: refNotes, doc: doc, options: options) }.joined() }
                 .joined(separator: "\n")
             if !body.trimmed().isEmpty {
-                parts.append("<pre>\(body)</pre>")
+                parts.append("<pre\(cls)>\(body)</pre>")
             }
         } else {
             // Logical lines: soft wraps joined back (`mergedLines`, ctrl-kd 2.0.0).
@@ -222,7 +229,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                 // does not collapse justify into left. `left` is WordStar's default and
                 // gets no attribute, so a document that never touches `.oc`/`.oj` emits
                 // byte-identical HTML to before.
-                let pTag = "<p\(htmlAlignAttribute(block.align))>\(para)</p>"
+                let pTag = "<p\(cls)\(htmlAlignAttribute(block.align))>\(para)</p>"
                 // C5: newspaper columns. CSS does this properly, so HTML is the one
                 // format that can honour `.co` rather than merely record it. A gutter
                 // is print columns at 10 CPI -> tenths of an inch.
@@ -258,7 +265,12 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     // half of the type-checker trap the byte-array literals hit in earlier jobs.
     var page = "<!doctype html><html><head><meta charset=\"utf-8\">"
     page += "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-    page += "<title>\(htmlEscape(title))</title><style>\(htmlCSS)</style></head>\n"
+    var css = htmlCSS
+    if options.styles {
+        let extra = styleCSS(doc)
+        if !extra.isEmpty { css += "\n" + extra }
+    }
+    page += "<title>\(htmlEscape(title))</title><style>\(css)</style></head>\n"
     page += "<body>\n"
     page += parts.joined(separator: "\n")
     page += "\n</body></html>\n"
@@ -267,3 +279,97 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
 
 /// The page-break rule, for the `pagebreak` branch (emit.py:165).
 private let pageRule = "<hr class=\"pb\">"
+
+
+// MARK: - Paragraph style pass-through (C1)
+
+/// A stable, readable CSS class for one library entry: slot + slugged name (the slot
+/// disambiguates same-named entries, and the archive is full of them — two `WordStar
+/// Defaults` in the same library is the normal case).
+func styleSlug(_ entry: StyleEntry) -> String {
+    // Python's `re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') or 'style'`: lower
+    // FIRST, so an upper-case letter is a letter, not a separator.
+    var out = ""
+    var pendingDash = false
+    for scalar in entry.name.unicodeScalars {
+        let v = scalar.value >= 0x41 && scalar.value <= 0x5A ? scalar.value + 0x20 : scalar.value
+        if (v >= 0x61 && v <= 0x7A) || (v >= 0x30 && v <= 0x39) {
+            if pendingDash, !out.isEmpty { out.append("-") }
+            pendingDash = false
+            out.unicodeScalars.append(Unicode.Scalar(v)!)
+        } else {
+            pendingDash = true
+        }
+    }
+    return "ws-\(entry.slot)-" + (out.isEmpty ? "style" : out)
+}
+
+/// CSS rules derived from the style records themselves — a PASS-THROUGH of the file's own
+/// data (Jon, 2026-08-04: never hardwire a style name to a font or a size; expose the data
+/// so a consumer can attach its own). Every property below comes from the entry's 102-byte
+/// record: alignment, margins (HMI/1800 = inches), print attributes, and the font block's
+/// height word (VMI/20 = points). Inherited fields emit nothing.
+func styleCSS(_ doc: Document) -> String {
+    var rules: [String] = []
+    for entry in doc.styles {
+        guard let record = entry.record else { continue }   // recordless base entry
+        var props: [String] = []
+        if let align = record.justification {
+            props.append("text-align:\(align.rawValue)")
+        }
+        // A ZERO margin is not a margin worth emitting — Python tests the value's own
+        // truthiness, not merely its presence.
+        if let lm = record.leftMarginHMI, lm != 0 {
+            props.append("margin-left:\(fixedTwoDecimals(Double(lm) / 1800.0))in")
+        }
+        if let rm = record.rightMarginHMI, rm != 0 {
+            props.append("margin-right:\(fixedTwoDecimals(Double(rm) / 1800.0))in")
+        }
+        let attrs = record.attrs
+        if attrs.contains(.bold) { props.append("font-weight:bold") }
+        if attrs.contains(.italic) { props.append("font-style:italic") }
+        var deco: [String] = []
+        if attrs.contains(.underline) { deco.append("underline") }
+        if attrs.contains(.strike) { deco.append("line-through") }
+        if !deco.isEmpty { props.append("text-decoration:" + deco.joined(separator: " ")) }
+        if let font = record.font {
+            if font.height != 0 {
+                props.append("font-size:\(fourSignificantDigits(Double(font.height) / 20.0))pt")
+            }
+            props.append("--ws-typestyle:\(font.typestyle & 0x01FF)")
+        }
+        if !props.isEmpty {
+            rules.append(".\(styleSlug(entry)) { " + props.joined(separator: "; ") + " }")
+        }
+    }
+    return rules.joined(separator: "\n")
+}
+
+/// Python's `'%.4g'`, for the one place that needs it (a style record's type size).
+///
+/// No exponent form is reachable here and none is implemented: the value is always
+/// `height / 20` for a 16-bit VMI word, i.e. 0.05 … 3276.75, whose decimal exponent stays
+/// inside `%g`'s fixed-notation window (-4 <= exp < 4). Rounds half-to-even like Python's
+/// own formatter, then drops trailing zeros and a bare trailing point.
+func fourSignificantDigits(_ value: Double) -> String {
+    guard value != 0 else { return "0" }
+    let negative = value < 0
+    let magnitude = negative ? -value : value
+    var decimals = 3
+    var bound = 10.0
+    while decimals > 0 && magnitude >= bound {
+        decimals -= 1
+        bound *= 10
+    }
+    var scale = 1
+    for _ in 0..<decimals { scale *= 10 }
+    let scaled = roundHalfToEven(magnitude * Double(scale))
+    var whole = String(scaled / scale)
+    if decimals > 0 {
+        var frac = String(scaled % scale)
+        while frac.count < decimals { frac = "0" + frac }
+        while frac.hasSuffix("0") { frac.removeLast() }
+        if !frac.isEmpty { whole += "." + frac }
+    }
+    return (negative ? "-" : "") + whole
+}

@@ -44,8 +44,20 @@ public struct EmitOptions: Hashable, Sendable {
     /// No notes at all: every inline marker and every trailing entry disappears.
     public static let noNotes: Set<NoteKind> = []
 
-    public init(title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes) {
+    /// Whether to pass the document's own paragraph styles through to formats that can
+    /// carry them: HTML gets a `.ws-<slot>-<slug>` class per styled block plus generated
+    /// CSS, RTF gets a real `\stylesheet` group and `\sN` on styled paragraphs (ctrl-kd's
+    /// `styles=` parameter and `--no-styles`). Default on.
+    ///
+    /// The rule behind it (Jon, 2026-08-04): never hardwire a style NAME to a font or a
+    /// size. Every property emitted comes from the entry's own 102-byte record, so a
+    /// consumer can attach its own typography downstream.
+    public var styles: Bool
+
+    public init(title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes,
+                styles: Bool = true) {
         self.title = title
         self.notes = notes
+        self.styles = styles
     }
 }
