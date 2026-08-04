@@ -39,6 +39,9 @@ struct FormatState {
     var endnotesHere: Bool? = nil           // `.pe`  C4
     var convertNotes: [String] = []         // `.cv`  C13
     var autoPageNumbers: Bool? = nil        // `.op` / `.pg`
+    var paranumFormat: String? = nil        // `.p#`
+    var condCol: [String] = []              // `.cc`
+    var tabStops: [Double]? = nil           // `.tb`
 
     /// Everything stamped onto a `Block` when it opens. A change to ANY of these has to
     /// close the current block, because a single block cannot hold two values of it:
@@ -92,12 +95,26 @@ public struct Formatting: Hashable, Sendable {
     /// `.op` / `.pg` — whether the AUTOMATIC page number prints. `nil` when neither was
     /// seen. A `#` in a header or footer is unaffected either way.
     public var autoPageNumbers: Bool?
+    /// `.p#` — the format string for the 0x0D paragraph-number blocks, verbatim.
+    /// RECORDED, not rendered: see `applyFormatDot`.
+    public var paranumFormat: String?
+    /// `.cc n` arguments verbatim, in order — `.cp`'s partner for newspaper columns.
+    /// RECORDED, deliberately inert: see `applyFormatDot`.
+    public var condCol: [String]
+    /// `.tb` — the stops a plain ASCII 0x09 tab expands to, in print columns. `nil` when
+    /// the file never set them; ASCII-tab expansion stays at the spec's modulus-8
+    /// default either way. See `applyFormatDot`.
+    public var tabStops: [Double]?
 
     public init(underlineBlanks: Bool? = nil, suppressBlanks: Bool? = nil,
                 proportional: Bool? = nil, kerning: Bool? = nil,
                 orientation: Orientation? = nil, subSuperRoll48: Double? = nil,
                 endnotesHere: Bool? = nil, convertNotes: [String] = [],
-                autoPageNumbers: Bool? = nil) {
+                autoPageNumbers: Bool? = nil, paranumFormat: String? = nil,
+                condCol: [String] = [], tabStops: [Double]? = nil) {
+        self.paranumFormat = paranumFormat
+        self.condCol = condCol
+        self.tabStops = tabStops
         self.endnotesHere = endnotesHere
         self.convertNotes = convertNotes
         self.autoPageNumbers = autoPageNumbers
@@ -114,6 +131,7 @@ public struct Formatting: Hashable, Sendable {
         underlineBlanks == nil && suppressBlanks == nil && proportional == nil
             && kerning == nil && orientation == nil && subSuperRoll48 == nil
             && endnotesHere == nil && convertNotes.isEmpty && autoPageNumbers == nil
+            && paranumFormat == nil && condCol.isEmpty && tabStops == nil
     }
 }
 
@@ -141,7 +159,13 @@ private func trimmed(_ b: [UInt8]) -> [UInt8] {
 
 /// Update running formatting state from one dot-command line.
 func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
-    guard let (name, arg) = dotCommandNameAndArg(cmd) else { return }
+    guard var (name, arg) = dotCommandNameAndArg(cmd) else { return }
+    if name.map(asciiUpper) == Array("P".utf8), arg.first == 0x23 {
+        // `.p#` — '#' is not a letter, so the shared name scanner splits it into name
+        // 'P', arg '#...'; rejoin before dispatch.
+        name = Array("P#".utf8)
+        arg = Array(arg.dropFirst())
+    }
     switch String(decoding: name.map(asciiUpper), as: UTF8.self) {
     case "OC":
         if let v = onOff(arg) { state.centering = v }
@@ -213,6 +237,36 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // `.cv <from> <to>` retypes notes mid-document. Recorded verbatim: acting on
         // it means re-kinding notes already parsed, a separate pass. Register C13.
         state.convertNotes.append(decodeCP437(trimmed(arg)))
+    case "P#":
+        // `.p#` sets the format and/or initial value for the 0x0D paragraph-number
+        // blocks. Format alphabet, from Sawyer's own PARAGRAP.NUM notes (a WS file, read
+        // with THIS converter): '1' numerals from 1, '9' numerals from 0, 'Z'/'z'
+        // upper/lowercase letters, 'I' roman. RECORDED, not rendered: zero documents in
+        // the archive use it, so a format engine would be code with no real input to
+        // check against — the 47 real 0x0D blocks all render with the default numeric
+        // form.
+        state.paranumFormat = decodeCP437(trimmed(arg))
+    case "CC":
+        // `.cc n` is `.cp`'s partner for newspaper columns (WSFORMAT: "Like the .CP
+        // command, but works with columnar breaks instead"). RECORDED, deliberately
+        // inert: this converter does not simulate column filling (columns render as CSS
+        // column-count in HTML; the browser decides the breaks), so there is no column
+        // fill state to test n against. Zero archive documents use it.
+        state.condCol.append(decodeCP437(trimmed(arg)))
+    case "TB":
+        // `.tb` sets the stops a plain ASCII 0x09 tab expands to. RECORDED; ASCII-tab
+        // expansion stays at the spec's own default ("At print time the number of hard
+        // spaces required to reach a modulus 8 print position is generated" — WSFORMAT
+        // control-code table; HORTAB concurs "as though tab stops were set every .8
+        // inches"). Whether `.tb` overrides that at print time is UNMEASURED, and zero
+        // archive documents use `.tb` — symseq tabs carry their own positions.
+        var stops: [Double] = []
+        for token in splitOnDotSpace(arg.map { $0 == 0x2C ? 0x20 : $0 }) {
+            if let (value, unit) = parseDotNumber(token), value.isFinite {
+                stops.append(resolveColsArg(value, unit))
+            }
+        }
+        if !stops.isEmpty { state.tabStops = stops }
     case "SR":
         if let roll = parseSRArg(arg) { state.subSuperRoll48 = roll }
     default:
@@ -482,4 +536,21 @@ private func rstripASCII(_ b: [UInt8]) -> [UInt8] {
     var e = b.count
     while e > 0, b[e - 1] == 0x20 || b[e - 1] == 0x09 || b[e - 1] == 0x0D { e -= 1 }
     return Array(b[..<e])
+}
+
+/// Python's `bytes.split()` with no argument: split on runs of ASCII whitespace, dropping
+/// empty fields (including leading and trailing ones).
+private func splitOnDotSpace(_ b: [UInt8]) -> [[UInt8]] {
+    var out: [[UInt8]] = []
+    var current: [UInt8] = []
+    for byte in b {
+        if byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+            || byte == 0x0B || byte == 0x0C {
+            if !current.isEmpty { out.append(current); current = [] }
+        } else {
+            current.append(byte)
+        }
+    }
+    if !current.isEmpty { out.append(current) }
+    return out
 }

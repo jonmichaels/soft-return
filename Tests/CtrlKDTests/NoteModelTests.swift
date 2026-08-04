@@ -270,6 +270,24 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
     #expect(parseWS(bytes(".l# 0\r\nT.\r\n")).lineNumbering == nil)
 }
 
+@Test func pHashCcTbAreRecordedNotLost() {
+    // All three have ZERO users in the archive, so they are RECORDED deliberately rather
+    // than modelled: `.p#`'s format alphabet is documented in Sawyer's PARAGRAP.NUM ('1'
+    // numerals, 'Z'/'z' letters, 'I' roman); `.cc` is `.cp`'s column partner (we don't
+    // simulate column filling); `.tb` sets ASCII-tab stops (spec default is modulus 8,
+    // unchanged).
+    //
+    // `.p#` needs its own special case: '#' is not a letter, so the shared dot-command
+    // name scanner stops at 'P' and leaves '#' at the head of the argument.
+    let doc = parseWS(bytes(".p# Z.1\r\n.cc 5\r\n.tb 8 16 2.5\"\r\n")
+                      + bytes("Ordinary body text follows the dot commands here.\r\n"))
+    let f = doc.formatting
+    #expect(f.paranumFormat == "Z.1")
+    #expect(f.condCol == ["5"])
+    #expect(f.tabStops == [8, 16, 25])
+    #expect(emitText(doc, mode: .modern).contains("Ordinary body text"))
+}
+
 @Test func peAndCvAreRecordedRatherThanSilentlyDropped() {
     // C4/C13. `.pe` asks for endnotes HERE, not at the document end; `.cv` retypes
     // notes mid-document. Acting on either is a further pass — not pretending the

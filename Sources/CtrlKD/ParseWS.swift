@@ -469,7 +469,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             proportional: fmt.proportional, kerning: fmt.kerning,
             orientation: fmt.orientation, subSuperRoll48: fmt.subSuperRoll48,
             endnotesHere: fmt.endnotesHere, convertNotes: fmt.convertNotes,
-            autoPageNumbers: fmt.autoPageNumbers),
+            autoPageNumbers: fmt.autoPageNumbers, paranumFormat: fmt.paranumFormat,
+            condCol: fmt.condCol, tabStops: fmt.tabStops),
         graphics: graphics, colours: colours, fonts: fonts, includes: includes,
         shiftRuns: shiftRuns, printerDriver: printerDriver, wsHeader: wsHeader, styles: styles,
         tocEntries: tocEntries, indexEntries: indexEntries, lineNumbering: lineNumbering
