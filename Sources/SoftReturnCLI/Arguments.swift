@@ -10,20 +10,24 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 1.3.0 adds physical lines + horizontal geometry (printed
+/// CLI's user-visible contract. 2.0.0 is the spec-audit wave (paragraph styles parsed,
+/// applied, and passed through to HTML/RTF with --no-styles to opt out; heading levels
+/// from resolved style names; flagged-control model; wrapped-character opacity; detection
+/// that believes the header block; tab HMI correction; FAQ/ERAS documentation);
+/// 1.3.0 added physical lines + horizontal geometry (printed
 /// mode now shows every line where WordStar broke it, `.po`/`.cw`-derived left margin and
 /// type size in the PDF writer, `.po`'s default changes from 0 to 8 columns); 1.2.0 adds
 /// WordStar's own page-geometry model (printed capacity/top/lead from `.pl`/`.mt`/`.mb`/
 /// `.lh`, with `.hm`/`.fm`/`.ls` in --diagnose); 1.1.0 added the note-selection flags and
 /// the expanded --diagnose fields; 1.0.0 was the first CLI release.
-public let srVersion = "1.3.0"
+public let srVersion = "2.0.0"
 
 /// The `ctrl-kd` release this port is verified against. A constant, updated by hand when a
 /// sync job pins the port to a new Python release — it is a claim about which reference the
 /// vectors came from, so it must never be derived or guessed.
-public let ctrlKDParity = "2.0.0"
+public let ctrlKDParity = "3.0.0"
 
-/// `sr 1.3.0 (ctrl-kd parity 2.0.0)`.
+/// `sr 2.0.0 (ctrl-kd parity 3.0.0)`.
 public var versionLine: String { "sr \(srVersion) (ctrl-kd parity \(ctrlKDParity))" }
 
 /// Everything the run needs, after parsing and validation.
