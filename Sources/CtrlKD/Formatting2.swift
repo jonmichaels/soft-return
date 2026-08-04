@@ -38,6 +38,7 @@ struct FormatState {
     var columnGutter: Double? = nil
     var endnotesHere: Bool? = nil           // `.pe`  C4
     var convertNotes: [String] = []         // `.cv`  C13
+    var autoPageNumbers: Bool? = nil        // `.op` / `.pg`
 
     /// Everything stamped onto a `Block` when it opens. A change to ANY of these has to
     /// close the current block, because a single block cannot hold two values of it:
@@ -88,13 +89,18 @@ public struct Formatting: Hashable, Sendable {
     public var endnotesHere: Bool?
     /// `.cv` arguments verbatim, in order. Register C13.
     public var convertNotes: [String]
+    /// `.op` / `.pg` — whether the AUTOMATIC page number prints. `nil` when neither was
+    /// seen. A `#` in a header or footer is unaffected either way.
+    public var autoPageNumbers: Bool?
 
     public init(underlineBlanks: Bool? = nil, suppressBlanks: Bool? = nil,
                 proportional: Bool? = nil, kerning: Bool? = nil,
                 orientation: Orientation? = nil, subSuperRoll48: Double? = nil,
-                endnotesHere: Bool? = nil, convertNotes: [String] = []) {
+                endnotesHere: Bool? = nil, convertNotes: [String] = [],
+                autoPageNumbers: Bool? = nil) {
         self.endnotesHere = endnotesHere
         self.convertNotes = convertNotes
+        self.autoPageNumbers = autoPageNumbers
         self.underlineBlanks = underlineBlanks
         self.suppressBlanks = suppressBlanks
         self.proportional = proportional
@@ -107,7 +113,7 @@ public struct Formatting: Hashable, Sendable {
     public var isEmpty: Bool {
         underlineBlanks == nil && suppressBlanks == nil && proportional == nil
             && kerning == nil && orientation == nil && subSuperRoll48 == nil
-            && endnotesHere == nil && convertNotes.isEmpty
+            && endnotesHere == nil && convertNotes.isEmpty && autoPageNumbers == nil
     }
 }
 
@@ -192,6 +198,13 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
                 state.columnGutter = resolveColsArg(g, unit)
             }
         }
+    case "OP", "PG":
+        // WSFORMAT.TXT: ".OP  Omit page number" / ".PG  Number pages ... Usually used
+        // to restore page numbering after being turned off with .OP." A STATEFUL pair —
+        // front matter often turns it off and the body turns it back on — and only the
+        // AUTOMATIC number is affected. A `#` the author placed in a header or footer
+        // prints either way; the spec names that as the explicit exemption.
+        state.autoPageNumbers = (String(decoding: name.map(asciiUpper), as: UTF8.self) == "PG")
     case "PE":
         // `.pe` marks where endnotes should print instead of the document end.
         // Previously endnotes always went to the end regardless. Register C4.

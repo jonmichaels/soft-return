@@ -156,10 +156,14 @@ func runningOps(
     left: Double, printed: Bool
 ) -> [[UInt8]] {
     guard printed, !(doc.headers.isEmpty && doc.footers.isEmpty) else { return [] }
-    let omit = doc.dotCommands.contains { cmd in
-        let head = cmd.drop(while: { $0 == "." }).prefix(while: { !$0.isWhitespace })
-        return head.lowercased() == "op"
-    }
+    // `.op` does NOT suppress a `#` in a header or footer. WSFORMAT.TXT is explicit:
+    // ".OP  Omit page number.  At print time no page numbers are printed UNLESS THE
+    // '#' HAS BEEN USED IN FOOTERS OR HEADERS." It suppresses the AUTOMATIC page
+    // number, the one `.pc` positions; a `#` the author put in a running head is the
+    // exemption, not the target.
+    //
+    // This was implemented backwards on both sides, and the test asserted the backwards
+    // behaviour while its docstring quoted the exempting clause. See ctrl-kd 88a0c43.
     let pl = Int(doc.page?.plLines ?? defaultPlLines)
     let mb = Int(doc.page?.mbLines ?? defaultMbLines)
     let fm = Int(doc.page?.fmLines ?? 2)
@@ -167,7 +171,7 @@ func runningOps(
     // `#` -> the page number. Written by hand because this module imports nothing —
     // `replacingOccurrences` is Foundation, which CtrlKD deliberately does without.
     func render(_ txt: String) -> String {
-        let replacement = omit ? "" : String(pageNo)
+        let replacement = String(pageNo)
         var out = ""
         for ch in txt {
             if ch == "#" { out += replacement } else { out.append(ch) }

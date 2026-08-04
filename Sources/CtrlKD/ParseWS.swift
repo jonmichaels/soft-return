@@ -404,7 +404,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             underlineBlanks: fmt.underlineBlanks, suppressBlanks: fmt.suppressBlanks,
             proportional: fmt.proportional, kerning: fmt.kerning,
             orientation: fmt.orientation, subSuperRoll48: fmt.subSuperRoll48,
-            endnotesHere: fmt.endnotesHere, convertNotes: fmt.convertNotes),
+            endnotesHere: fmt.endnotesHere, convertNotes: fmt.convertNotes,
+            autoPageNumbers: fmt.autoPageNumbers),
         graphics: graphics, colours: colours, fonts: fonts, includes: includes,
         shiftRuns: shiftRuns, printerDriver: printerDriver,
         tocEntries: tocEntries, indexEntries: indexEntries, lineNumbering: lineNumbering

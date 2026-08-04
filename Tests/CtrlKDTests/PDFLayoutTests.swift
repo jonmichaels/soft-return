@@ -532,7 +532,9 @@ private func pageTexts(_ page: Page) -> [String] {
         return ops.map { String(decoding: $0, as: UTF8.self) }.joined()
     }
     #expect(footerText(".fo Page #\r\nBody.\r\n", page: 3).contains("(Page 3)"))
-    // `.op` — "omit page number ... unless the # has been used in footers or headers".
-    // The token is left OUT, not printed literally.
-    #expect(footerText(".op\r\n.fo Page #\r\nBody.\r\n", page: 3).contains("(Page )"))
+    // `.op` does NOT suppress a `#` in a header or footer. WSFORMAT.TXT: "no page
+    // numbers are printed UNLESS THE '#' HAS BEEN USED IN FOOTERS OR HEADERS" — the
+    // running head is the exemption, not the target. This asserted the opposite until
+    // 2026-08-03, and passed against a backwards implementation.
+    #expect(footerText(".op\r\n.fo Page #\r\nBody.\r\n", page: 3).contains("(Page 3)"))
 }
