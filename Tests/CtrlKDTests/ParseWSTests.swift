@@ -296,7 +296,10 @@ let italicOn: [UInt8] = [0x19]
     #expect(bodyStyle.leftMarginHMI == 1800)
     #expect(bodyStyle.rightMarginHMI == nil)                      // -2 sentinel
     #expect(bodyStyle.tabsHMI == [900, 1800])
-    #expect(bodyStyle.justification == StyleJustification.none)
+    // Spec byte 0 is "no justification", which is this parser's `.left`; byte 1 ("right
+    // justified") is WordStar-speak for FULL justification, and -3 ("flush right") is
+    // what today reads as right-aligned.
+    #expect(bodyStyle.justification == .left)
     #expect(bodyStyle.attrsOn == 0b1000000)
     #expect(bodyStyle.lineSpacing == nil)
     // tab counts 0xFF mean INHERITED and the array is stale — never read it
@@ -313,4 +316,42 @@ let italicOn: [UInt8] = [0x19]
     let length = data.count
     for k in 0..<4 { data[4 + 12 + k] = UInt8((length >> (8 * k)) & 0xFF) }
     #expect(parseWS(data).styles.isEmpty)
+}
+
+@Test func styleRecordFormattingAppliesAndPersists() {
+    // A 0x11 selection applies its record's formatting from that paragraph ON, until the
+    // next selection (real documents switch back explicitly — NOVEL.WS re-selects 'MS
+    // Body Copy' after every heading). Inherited fields fall back to the running
+    // dot-command state; selecting the recordless base entry resets everything.
+    let rec = styleRecord(left: 900, just: -2, attrsOn: 0x40)   // centered, lm 5 cols, bold
+    let lib = styleLibrary([
+        (name: "WordStar Defaults", record: nil),
+        (name: "WordStar Defaults", record: nil),
+        (name: "Callout", record: rec),
+    ])
+    let doc = parseWS(documentWithStyleLibrary(
+        body: bytes("Plain opening paragraph.") + HARD
+            + styleRef(2) + bytes("Styled paragraph one.") + HARD
+            + bytes("Still styled, no new selection.") + HARD
+            + styleRef(1) + bytes("Back to defaults.") + HARD,
+        library: lib))
+    // consecutive hard-return lines share a block, so the two styled lines arrive as ONE
+    // two-line block — persistence shows in its second line
+    #expect(doc.blocks.map { $0.lines[0].text() }
+            == ["Plain opening paragraph.", "Styled paragraph one.", "Back to defaults."])
+    let (plain, styled, reset) = (doc.blocks[0], doc.blocks[1], doc.blocks[2])
+    #expect(styled.lines.map { $0.text() }
+            == ["Styled paragraph one.", "Still styled, no new selection."])
+    #expect(plain.align == .left && plain.styleAttrs == [])
+    #expect(styled.styleName == "Callout")
+    #expect(styled.align == .center)
+    #expect(styled.leftMargin == 5)                  // 900 HMI / 180
+    #expect(styled.rightMargin == nil)               // -2 sentinel: inherited
+    #expect(styled.styleAttrs == .bold)
+    #expect(reset.styleName == "WordStar Defaults")  // recordless base entry
+    #expect(reset.align == .left && reset.styleAttrs == [])
+    // the PDF path merges style attrs into every span, like heading bold
+    let segments = docToPagelines(doc, printed: false).flatMap { $0 }.flatMap { $0 }
+    #expect(segments.contains { $0.text == "Styled" && $0.styles.contains(.bold) })
+    #expect(segments.contains { $0.text == "Plain" && !$0.styles.contains(.bold) })
 }

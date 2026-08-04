@@ -68,13 +68,17 @@ public struct Block: Hashable, Sendable {
     /// `slot`. Register C1.
     public var styleID: Int?
     public var styleName: String?
+    /// Print attributes the active style turns ON, as span styles. Emitters merge them
+    /// into every span in the block, the same way heading bold is merged -- the style's
+    /// formatting is not a property of any one span, it applies to the paragraph.
+    public var styleAttrs: Style
 
     public init(
         kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0,
         align: Alignment = .left, wrap: Bool = true,
         leftMargin: Double? = nil, rightMargin: Double? = nil, paraMargin: Double? = nil,
         columns: Int? = nil, columnGutter: Double? = nil, styleID: Int? = nil,
-        styleName: String? = nil
+        styleName: String? = nil, styleAttrs: Style = []
     ) {
         self.leftMargin = leftMargin
         self.rightMargin = rightMargin
@@ -83,6 +87,7 @@ public struct Block: Hashable, Sendable {
         self.columnGutter = columnGutter
         self.styleID = styleID
         self.styleName = styleName
+        self.styleAttrs = styleAttrs
         self.kind = kind
         self.lines = lines
         self.heading = heading

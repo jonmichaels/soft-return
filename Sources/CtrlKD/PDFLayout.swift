@@ -170,10 +170,12 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
             // The module docstring's "headings bold" promise, unimplemented until Python
             // 1.1.5 (found by this port, job-011). Bold is added to EVERY span in a heading
             // block, not substituted: a span already italic stays italic and becomes
-            // bold-italic, which is why this is a union and not an assignment.
-            let spans = block.heading != 0
-                ? line.spans.map { Span(text: $0.text, styles: $0.styles.union(.bold)) }
-                : line.spans
+            // bold-italic, which is why this is a union and not an assignment. The active
+            // paragraph style's own attributes merge the same way.
+            let extra = (block.heading != 0 ? Style.bold : []).union(block.styleAttrs)
+            let spans = extra.isEmpty
+                ? line.spans
+                : line.spans.map { Span(text: $0.text, styles: $0.styles.union(extra)) }
             items.append(contentsOf: wrapLine(spans, width: PDFMetrics.maxCols)
                 .map(LayoutItem.line))
         }
@@ -379,9 +381,10 @@ private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
             continue
         }
         for line in block.lines {
-            let baseSpans = block.heading != 0
-                ? line.spans.map { Span(text: $0.text, styles: $0.styles.union(.bold)) }
-                : line.spans
+            let extra = (block.heading != 0 ? Style.bold : []).union(block.styleAttrs)
+            let baseSpans = extra.isEmpty
+                ? line.spans
+                : line.spans.map { Span(text: $0.text, styles: $0.styles.union(extra)) }
 
             var outSpans: [Span] = []
             var due: [Note] = []

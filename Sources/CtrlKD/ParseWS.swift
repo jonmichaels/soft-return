@@ -215,11 +215,27 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var indexEntries: [IndexEntry] = []
     var lineNumbering: Int? = nil
 
+    // Formatting from the ACTIVE paragraph style. A 0x11 selection applies from its
+    // paragraph ON, until the next selection — WordStar keeps the selected style in force,
+    // and real documents switch back explicitly (NOVEL.WS re-selects 'MS Body Copy' after
+    // every heading). Only fields the style's record sets non-inherited appear here;
+    // everything else falls back to the running dot-command state.
+    var styleFmt = StyleFormat()
+
     var blocks: [Block] = []
-    var cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true,
-                      leftMargin: fmt.leftMargin, rightMargin: fmt.rightMargin,
-                      paraMargin: fmt.paraMargin, columns: fmt.columns,
-                      columnGutter: fmt.columnGutter)
+    func newBlock() -> Block {
+        Block(kind: .para,
+              heading: styleFmt.heading ?? 0,
+              align: styleFmt.align ?? fmt.alignment,
+              wrap: styleFmt.wrap ?? fmt.wrap ?? true,
+              leftMargin: styleFmt.leftMargin ?? fmt.leftMargin,
+              rightMargin: styleFmt.rightMargin ?? fmt.rightMargin,
+              paraMargin: styleFmt.paraMargin ?? fmt.paraMargin,
+              columns: fmt.columns, columnGutter: fmt.columnGutter,
+              styleID: styleFmt.styleID, styleName: styleFmt.styleName,
+              styleAttrs: styleFmt.attrs)
+    }
+    var cur = newBlock()
     var curLine = Line()
 
     // core.py:275-286 — empty lines and empty blocks are never appended.
@@ -234,10 +250,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         if !cur.lines.isEmpty {
             blocks.append(cur)
         }
-        cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true,
-                      leftMargin: fmt.leftMargin, rightMargin: fmt.rightMargin,
-                      paraMargin: fmt.paraMargin, columns: fmt.columns,
-                      columnGutter: fmt.columnGutter)
+        cur = newBlock()
     }
 
     for physical in pass.lines {
@@ -341,20 +354,43 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // severed real paragraphs. See the 0x0B parse site for the measurement.
                 curLine.softpage = true
             case .style(let w0):
-                closeBlock()
                 // Resolve the handle against the file's own library. Pool tag 0x02 =
                 // this file; anything else (0x03xx editing temps) is unresolvable BY
                 // DESIGN and left unstyled rather than guessed. Heading level comes from
                 // the RESOLVED NAME — the corpus proved slot numbers carry none (see the
                 // 0x11 parse site). Register C1.
+                //
+                // The selection PERSISTS: `styleFmt` stays in force for every following
+                // block until the next 0x11. A recordless entry (the inherit-everything
+                // base, e.g. 'WordStar Defaults') resets formatting to the dot-command
+                // state BY CONSTRUCTION, since it contributes no record fields.
                 if (w0 >> 8) == 0x02 {
                     let slot = w0 & 0xFF
-                    cur.styleID = slot
+                    styleFmt = StyleFormat()
+                    styleFmt.styleID = slot
                     if let entry = styleSlots[slot] {
-                        cur.styleName = entry.name
-                        cur.heading = styleHeadingLevel(entry.name)
+                        styleFmt.styleName = entry.name
+                        styleFmt.heading = styleHeadingLevel(entry.name)
+                        if let record = entry.record {
+                            // `.left` means EXPLICIT no-justification — it overrides a
+                            // running `.oj`, so it must occupy the align slot rather than
+                            // fall through.
+                            styleFmt.align = record.justification
+                            styleFmt.wrap = record.wordWrap
+                            // HMI 1/1800in -> print columns at 10 CPI, the unit
+                            // `.lm`/`.rm` already use (180 = 1 col).
+                            styleFmt.leftMargin = record.leftMarginHMI.map(hmiToColumns)
+                            styleFmt.rightMargin = record.rightMarginHMI.map(hmiToColumns)
+                            styleFmt.paraMargin = record.paraMarginHMI.map(hmiToColumns)
+                            styleFmt.attrs = record.attrs
+                        }
                     }
                 }
+                // `styleFmt` is updated BEFORE this close: the previous block keeps its
+                // old style, the fresh block picks the new one up from `newBlock()`. A
+                // 0x03xx temp-pool handle is unresolvable by design, but a selection is
+                // still a block boundary in the file, so this runs either way.
+                closeBlock()
             case .fnref:
                 fnrefAt.append(rel)
             }
@@ -941,4 +977,26 @@ private func parsePageDot(
     default:
         break
     }
+}
+
+/// Formatting the ACTIVE paragraph style contributes, if any. Every field is `nil`/empty
+/// when the style's record inherits it, which is exactly when the running dot-command
+/// state should show through instead — see `parseWS`'s `newBlock`.
+private struct StyleFormat {
+    var styleID: Int? = nil
+    var styleName: String? = nil
+    var heading: Int? = nil
+    var align: Alignment? = nil
+    var wrap: Bool? = nil
+    var leftMargin: Double? = nil
+    var rightMargin: Double? = nil
+    var paraMargin: Double? = nil
+    var attrs: Style = []
+}
+
+/// HMI (1/1800in) -> print columns at 10 CPI, round-half-to-even like Python's `round()`.
+/// Margins can be negative in principle, so this is not the integer-only helper
+/// `SymmetricBlocks.swift` uses for tab widths.
+private func hmiToColumns(_ hmi: Int) -> Double {
+    Double(roundHalfToEven(Double(hmi) / 180.0))
 }

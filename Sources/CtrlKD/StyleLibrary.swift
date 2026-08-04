@@ -19,10 +19,15 @@ public struct StyleRecord: Hashable, Sendable {
     public let tabsHMI: [Int]?
     /// How many of `tabsHMI` are decimal tabs; `nil` alongside an inherited tab array.
     public let decimalTabs: Int?
-    /// The justification byte mapped to the spec's own vocabulary; `nil` when inherited
+    /// The justification byte in this parser's own align vocabulary; `nil` when inherited
     /// (-1) or when the byte is a value the spec does not name. `justificationRaw` keeps
     /// the byte either way, so nothing is dropped.
-    public let justification: StyleJustification?
+    ///
+    /// Spec: "0 means no justification, -1 inherit, 1 right justified, -2 centered, -3
+    /// flush right". In WordStar's own vocabulary "right justified" is a JUSTIFIED right
+    /// edge -- i.e. full justification (the same term the `.oj`/`.uj` docs use); "flush
+    /// right" is what today reads as right-ALIGNED.
+    public let justification: Alignment?
     /// The raw signed justification byte; `nil` only for the -1 inherit sentinel.
     public let justificationRaw: Int?
     public let wordWrap: Bool?
@@ -32,6 +37,19 @@ public struct StyleRecord: Hashable, Sendable {
     /// The print attributes this style turns on / off, as the spec's own bit words.
     public let attrsOn: Int
     public let attrsOff: Int
+    /// The ON word as span styles (spec bit values, given in binary: strikeout=1,
+    /// doublestrike=10, underline=1000, sub=10000, super=100000, bold=1000000,
+    /// italic=10000000). Doublestrike -- printing each character twice -- renders as
+    /// bold, the same degradation every emitter here uses.
+    public var attrs: Style {
+        var out: Style = []
+        for (bit, style) in [(0x01, Style.strike), (0x02, .bold), (0x08, .underline),
+                             (0x10, .sub), (0x20, .sup), (0x40, .bold), (0x80, .italic)]
+        where attrsOn & bit != 0 {
+            out.insert(style)
+        }
+        return out
+    }
     /// Palette index. Sentinel: -1.
     public let colour: Int?
 
@@ -39,7 +57,7 @@ public struct StyleRecord: Hashable, Sendable {
         font: (width: Int, height: Int, typestyle: Int)? = nil,
         leftMarginHMI: Int? = nil, rightMarginHMI: Int? = nil, paraMarginHMI: Int? = nil,
         tabsHMI: [Int]? = nil, decimalTabs: Int? = nil,
-        justification: StyleJustification? = nil, justificationRaw: Int? = nil,
+        justification: Alignment? = nil, justificationRaw: Int? = nil,
         wordWrap: Bool? = nil, lineHeightVMI: Int? = nil, lineSpacing: Int? = nil,
         attrsOn: Int = 0, attrsOff: Int = 0, colour: Int? = nil
     ) {
@@ -79,15 +97,6 @@ public struct StyleRecord: Hashable, Sendable {
         h.combine(justificationRaw); h.combine(wordWrap); h.combine(lineHeightVMI)
         h.combine(lineSpacing); h.combine(attrsOn); h.combine(attrsOff); h.combine(colour)
     }
-}
-
-/// The spec's justification vocabulary: "0 means no justification, -1 inherit, 1 right
-/// justified, -2 centered, -3 flush right."
-public enum StyleJustification: String, Hashable, Sendable {
-    case none
-    case right
-    case center
-    case flushright
 }
 
 /// One library entry: its name, and the 102-byte record where the index item says one
@@ -230,8 +239,10 @@ public func parseStyleLibrary(_ raw: [UInt8], base: Int) -> [StyleEntry] {
                 }
                 // else: inherited, and the array is STALE — never read it.
                 let just = sbyte(rec + 86)
-                let justification: StyleJustification? = [
-                    0: StyleJustification.none, 1: .right, -2: .center, -3: .flushright,
+                // Emitted in this parser's align vocabulary directly -- see
+                // `StyleRecord.justification` for why "right justified" is `.justify`.
+                let justification: Alignment? = [
+                    0: Alignment.left, 1: .justify, -2: .center, -3: .right,
                 ][just]
                 let wrapByte = sbyte(rec + 87)
                 let ls = sbyte(rec + 90)

@@ -89,9 +89,16 @@ import Testing
         (name: "WordStar Defaults", record: nil),
         (name: "MS Chapter Title", record: styleRecord()),
     ])
+    // A style selection PERSISTS until the next one, so the fixture switches back to the
+    // recordless base before the body — exactly what real documents do (NOVEL.WS
+    // re-selects 'MS Body Copy' after every heading). Prose padding keeps the
+    // block-heavy fixture detecting as ws5+, not binary (the documented small-fixture
+    // trap).
     let data = documentWithStyleLibrary(
         body: styleRef(2) + bytes("Chapter One") + HARD + HARD
-            + bytes("Body text here.") + HARD,
+            + styleRef(1)
+            + bytes("Body text here, at a perfectly ordinary length for a paragraph.") + HARD
+            + bytes("A second sentence keeps the prose-to-binary ratio realistic.") + HARD,
         library: lib)
     let segments = docToPagelines(parseWS(data), printed: false).flatMap { $0 }.flatMap { $0 }
     // `wrapLine` tokenizes into words, so assert at segment granularity.
@@ -102,7 +109,7 @@ import Testing
     // promise was made and where a reader sees it: the heading must select Courier-Bold.
     let pdf = emitPDF(parseWS(data), mode: .modern)
     #expect(contains(pdf, bytes("BT /F2 12 Tf 0 Ts 72.0 708.0 Td (Chapter One) Tj ET")))
-    #expect(contains(pdf, bytes("(Body text here.)")))
+    #expect(contains(pdf, bytes("(A second sentence keeps the prose-to-binary ratio realistic.)")))
 }
 
 /// Python 1.1.6's `test_pdf_exact_fill_no_blank_sheet` — the rewritten version.
