@@ -34,6 +34,10 @@ struct FormatState {
     var leftMargin: Double? = nil
     var rightMargin: Double? = nil
     var paraMargin: Double? = nil
+    var columns: Int? = nil                 // `.co`  C5
+    var columnGutter: Double? = nil
+    var endnotesHere: Bool? = nil           // `.pe`  C4
+    var convertNotes: [String] = []         // `.cv`  C13
 
     /// Everything stamped onto a `Block` when it opens. A change to ANY of these has to
     /// close the current block, because a single block cannot hold two values of it:
@@ -41,7 +45,8 @@ struct FormatState {
     /// are not, and `.lm 5` mid-paragraph means the same about the indent.
     var blockFormat: BlockFormat {
         BlockFormat(align: alignment, wrap: wrap ?? true, leftMargin: leftMargin,
-                    rightMargin: rightMargin, paraMargin: paraMargin)
+                    rightMargin: rightMargin, paraMargin: paraMargin,
+                    columns: columns, columnGutter: columnGutter)
     }
 
     /// The alignment in force.
@@ -59,6 +64,8 @@ struct BlockFormat: Equatable {
     var leftMargin: Double?
     var rightMargin: Double?
     var paraMargin: Double?
+    var columns: Int?
+    var columnGutter: Double?
 }
 
 public enum Orientation: String, Hashable, Sendable {
@@ -77,10 +84,17 @@ public struct Formatting: Hashable, Sendable {
     /// `.sr` — the sub/superscript roll, in 1/48in units. `0` is a real value meaning
     /// "do not shift at all", which is why this is an optional rather than defaulting.
     public var subSuperRoll48: Double?
+    /// `.pe` — endnotes print HERE rather than at the document end. Register C4.
+    public var endnotesHere: Bool?
+    /// `.cv` arguments verbatim, in order. Register C13.
+    public var convertNotes: [String]
 
     public init(underlineBlanks: Bool? = nil, suppressBlanks: Bool? = nil,
                 proportional: Bool? = nil, kerning: Bool? = nil,
-                orientation: Orientation? = nil, subSuperRoll48: Double? = nil) {
+                orientation: Orientation? = nil, subSuperRoll48: Double? = nil,
+                endnotesHere: Bool? = nil, convertNotes: [String] = []) {
+        self.endnotesHere = endnotesHere
+        self.convertNotes = convertNotes
         self.underlineBlanks = underlineBlanks
         self.suppressBlanks = suppressBlanks
         self.proportional = proportional
@@ -93,6 +107,7 @@ public struct Formatting: Hashable, Sendable {
     public var isEmpty: Bool {
         underlineBlanks == nil && suppressBlanks == nil && proportional == nil
             && kerning == nil && orientation == nil && subSuperRoll48 == nil
+            && endnotesHere == nil && convertNotes.isEmpty
     }
 }
 
@@ -161,6 +176,30 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         case "RM": state.rightMargin = cols
         default: state.paraMargin = cols
         }
+    case "CO":
+        // `.co <n>, <gutter>` — the archive writes `.co2, 0.3"`, `.CO3,  .20"` and
+        // `.co1` (one column = columns off). Stateful like the margins. Register C5.
+        guard let (n, _) = parseDotNumber(arg), n.isFinite else { return }
+        state.columns = Swift.max(1, Int(n))
+        // The gutter follows a comma; a bare figure is columns like `.po`, and the
+        // archive's own values carry an inch mark, which converts.
+        var rest = trimmed(arg)
+        var k = 0
+        while k < rest.count, rest[k] != 0x2C { k += 1 }          // ','
+        if k < rest.count {
+            rest = Array(rest[(k + 1)...])
+            if let (g, unit) = parseDotNumber(rest), g.isFinite {
+                state.columnGutter = resolveColsArg(g, unit)
+            }
+        }
+    case "PE":
+        // `.pe` marks where endnotes should print instead of the document end.
+        // Previously endnotes always went to the end regardless. Register C4.
+        state.endnotesHere = true
+    case "CV":
+        // `.cv <from> <to>` retypes notes mid-document. Recorded verbatim: acting on
+        // it means re-kinding notes already parsed, a separate pass. Register C13.
+        state.convertNotes.append(decodeCP437(trimmed(arg)))
     case "SR":
         if let roll = parseSRArg(arg) { state.subSuperRoll48 = roll }
     default:
@@ -196,4 +235,114 @@ func parseSRArg(_ arg: [UInt8]) -> Double? {
     guard num.isFinite else { return nil }
     if let inches = dotArgInches(num, unitAfterNum) { return inches * 48.0 }
     return num
+}
+
+/// A colour change (symmetric type 0x01): palette INDICES, not RGB. Recorded, not
+/// rendered — the printed page this project reproduces was monochrome. Register C2.
+public struct ColourChange: Hashable, Sendable {
+    public let offset: Int
+    public let foreground: Int
+    public let background: Int
+    public init(offset: Int, foreground: Int, background: Int) {
+        self.offset = offset
+        self.foreground = foreground
+        self.background = background
+    }
+}
+
+/// A font change (symmetric type 0x02/0x15). `height20thPt` is the type size in 1/20
+/// point — 180 = 9pt — which is the part a modern renderer can actually use;
+/// `driverBytes` identify the face to a 1987 printer and mean nothing without it. C3.
+public struct FontChange: Hashable, Sendable {
+    public let offset: Int
+    public let height20thPt: Int
+    public let width20thPt: Int
+    public let driverBytes: [UInt8]
+    public init(offset: Int, height20thPt: Int, width20thPt: Int, driverBytes: [UInt8]) {
+        self.offset = offset
+        self.height20thPt = height20thPt
+        self.width20thPt = width20thPt
+        self.driverBytes = driverBytes
+    }
+    /// The size in points, which is what an emitter wants.
+    public var points: Double { Double(height20thPt) / 20.0 }
+}
+
+/// A Japanese Shift-In/Out run (symmetric type 0x17), kept UNDECODED. Register C15.
+public struct ShiftRun: Hashable, Sendable {
+    public let offset: Int
+    public let bytes: [UInt8]
+    public init(offset: Int, bytes: [UInt8]) {
+        self.offset = offset
+        self.bytes = bytes
+    }
+}
+
+/// A `.tc` table-of-contents entry. `blockIndex` is what lets a consumer resolve the
+/// entry to a PAGE after pagination — the text alone cannot, since two chapters can
+/// share a title. Register C7.
+public struct TOCEntry: Hashable, Sendable {
+    public let level: Int
+    public let text: String
+    public let blockIndex: Int
+    public init(level: Int, text: String, blockIndex: Int) {
+        self.level = level
+        self.text = text
+        self.blockIndex = blockIndex
+    }
+}
+
+/// A `.ix` index entry. Register C6.
+public struct IndexEntry: Hashable, Sendable {
+    public let text: String
+    public let blockIndex: Int
+    public init(text: String, blockIndex: Int) {
+        self.text = text
+        self.blockIndex = blockIndex
+    }
+}
+
+/// Dot commands that COLLECT an entry rather than set state: `.tc`/`.tc1`-`.tc9`
+/// (table of contents), `.ix` (index), `.l#` (line numbering).
+///
+/// All three were parsed as text and discarded, so a document that asked for a table of
+/// contents produced none and said nothing about it. Compiling the finished list is the
+/// consumer's job; not losing the entries is this one's. Register C6, C7, C11.
+func parseCollectDot(_ cmd: [UInt8], toc: inout [TOCEntry], index: inout [IndexEntry],
+                     lineNumbering: inout Int?, blockIndex: Int) {
+    guard cmd.count >= 3 else { return }
+    let c1 = asciiUpper(cmd[1]), c2 = asciiUpper(cmd[2])
+
+    if c1 == 0x54 && c2 == 0x43 {                                   // ".TC"
+        var k = 3
+        var level = 1
+        if k < cmd.count, cmd[k] >= 0x31 && cmd[k] <= 0x39 {        // ".tc1".."tc9"
+            level = Int(cmd[k] - 0x30)
+            k += 1
+        }
+        if k < cmd.count, cmd[k] == 0x20 { k += 1 }                 // Python's `\s?`
+        toc.append(TOCEntry(level: level,
+                            text: decodeCP437(rstripASCII(Array(cmd[k...]))),
+                            blockIndex: blockIndex))
+        return
+    }
+    if c1 == 0x49 && c2 == 0x58 {                                   // ".IX"
+        var k = 3
+        if k < cmd.count, cmd[k] == 0x20 { k += 1 }
+        index.append(IndexEntry(text: decodeCP437(rstripASCII(Array(cmd[k...]))),
+                                blockIndex: blockIndex))
+        return
+    }
+    if c1 == 0x4C && cmd[2] == 0x23 {                               // ".L#"
+        // `.l# 0` turns line numbering OFF; any other number is the interval.
+        guard let (value, _) = parseDotNumber(Array(cmd.dropFirst(3))), value.isFinite
+        else { return }
+        lineNumbering = Int(value) > 0 ? Int(value) : nil
+    }
+}
+
+private func rstripASCII(_ b: [UInt8]) -> [UInt8] {
+    var e = b.count
+    while e > 0, b[e - 1] == 0x20 || b[e - 1] == 0x09 || b[e - 1] == 0x0D { e -= 1 }
+    return Array(b[..<e])
 }

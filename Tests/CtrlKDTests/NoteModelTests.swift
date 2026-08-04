@@ -217,3 +217,105 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     #expect(text.contains("Before.") && text.contains("After."))
     #expect(doc.unknownBlocks.isEmpty, "the graphic should no longer be an unknown block")
 }
+
+// ------------------------------------------- Category C: passes 2 and 3
+
+@Test func tocAndIndexEntriesAreCollectedWithAPosition() {
+    // C6/C7. A document that asked for a table of contents produced none and said
+    // nothing about it. The block index resolves an entry to a PAGE after pagination —
+    // the text alone cannot, since two chapters can share a title. It points FORWARD.
+    let doc = parseWS(bytes(".tc Chapter One\r\nBody.\r\n.tc2 A Section\r\nMore.\r\n"
+                            + ".ix wordstar\r\nEnd.\r\n"))
+    #expect(doc.tocEntries.map { [$0.level, $0.blockIndex] } == [[1, 0], [2, 1]])
+    #expect(doc.tocEntries.map(\.text) == ["Chapter One", "A Section"])
+    #expect(doc.indexEntries.map(\.text) == ["wordstar"])
+}
+
+@Test func lineNumberingIntervalIsReadAndZeroTurnsItOff() {
+    #expect(parseWS(bytes(".l# 5\r\nT.\r\n")).lineNumbering == 5)      // C11
+    #expect(parseWS(bytes(".l# 0\r\nT.\r\n")).lineNumbering == nil)
+}
+
+@Test func peAndCvAreRecordedRatherThanSilentlyDropped() {
+    // C4/C13. `.pe` asks for endnotes HERE, not at the document end; `.cv` retypes
+    // notes mid-document. Acting on either is a further pass — not pretending the
+    // command was absent is this one.
+    let f = parseWS(bytes(".pe\r\n.cv 3 4\r\nT.\r\n")).formatting
+    #expect(f.endnotesHere == true)
+    #expect(f.convertNotes == ["3 4"])
+}
+
+@Test func columnsArePerBlockAndRenderInHTML() {
+    // C5. The archive writes `.co2, 0.3"`, `.CO3,  .20"` and `.co1` (one column = off).
+    var doc = parseWS(bytes(".co2, 0.3\"\r\nTwo columns.\r\n.co1\r\nBack to one.\r\n"))
+    #expect(doc.blocks.map { [$0.columns.map(Double.init), $0.columnGutter] }
+            == [[2.0, 3.0], [1.0, 3.0]])
+    doc.detection = Detection(variant: .ws4, softReturns: 0, hardReturns: 4,
+                              highBitBytes: 0, textPct: 100, symmetricBlocks1D: 0, size: 50)
+    let html = emitHTML(doc, mode: .modern)
+    #expect(html.contains("column-count:2"))
+    #expect(html.contains("column-gap:0.30in"))
+}
+
+@Test func colourAndFontChangesAreRecorded() {
+    // C2/C3. Neither risked losing TEXT, but both were invisible: a document that
+    // coloured a passage or set 9pt type rendered identically to one that did not.
+    let colour = wsBlock(cmd: 0x01, content: [0x08, 0x04])
+    let font = wsBlock(cmd: 0x02, content: [180, 0, 240, 0, 0x03, 0x46] + [UInt8](repeating: 0, count: 6))
+    let doc = parseWS(bytes("Plain ") + colour + bytes("coloured ") + font + bytes("sized.\r\n"))
+    #expect(doc.colours.map { [$0.foreground, $0.background] } == [[8, 4]])
+    #expect(doc.fonts.map(\.height20thPt) == [180])
+    #expect(doc.fonts[0].points == 9.0)
+}
+
+@Test func printFileIncludesKeepTheirFilename() {
+    let doc = parseWS(bytes("Before ")
+                      + wsBlock(cmd: 0x0F, content: [0, 0, 0] + Array(#"%F"PLEAD.PS""#.utf8))
+                      + bytes(" after.\r\n"))
+    #expect(doc.includes == ["PLEAD.PS"])
+    #expect(doc.blocks[0].lines.map { $0.text() }.joined().contains("[include: PLEAD.PS]"))
+}
+
+@Test func aPrintBlockWithNoFilenameStaysAReportedUnknown() {
+    // Consuming it silently would be WORSE than the bug being fixed: it turns a
+    // reported unknown into an unreported one. 108 of the archive's 110 such blocks
+    // are PostScript preambles with no `%F` at all.
+    let doc = parseWS(bytes("T ")
+                      + wsBlock(cmd: 0x0F, content: [0, 0, 0] + Array("/bw 7 inch def".utf8))
+                      + bytes(".\r\n"))
+    #expect(doc.includes.isEmpty)
+    #expect(doc.unknownBlocks.map(\.cmd) == [0x0F])
+}
+
+@Test func printerDriverNameIsReportedWithoutItsRecordTag() {
+    let doc = parseWS(wsBlock(cmd: 0x00, content: Array("pLASERJET".utf8) + [0, 0, 0, 0x80])
+                      + bytes("T.\r\n"))
+    #expect(doc.printerDriver == "LASERJET")
+}
+
+@Test func everyParagraphStyleSurvivesNotJustTheThreeHeadings() {
+    // C1. Three style IDs were mapped to heading levels and EVERY OTHER STYLE WAS
+    // DROPPED — silently. The archive uses at least twelve distinct IDs, and 0x06
+    // alone appears 60 times: more often than two of the three that WERE mapped.
+    func styled(_ id: UInt8) -> Block {
+        parseWS(wsBlock(cmd: 0x11, content: [id, 2, 1, 2, 2, 3, 1, 2])
+                + bytes("Styled text.\r\n")).blocks[0]
+    }
+    #expect(styled(0x05).heading == 1)
+    #expect(styled(0x05).styleID == 5)
+    for id: UInt8 in [0x06, 0x0F, 0x19] {
+        let b = styled(id)
+        #expect(b.heading == 0, "not one of the three known headings")
+        #expect(b.styleID == Int(id), "but WHICH style must still be known")
+        #expect(b.lines[0].text() == "Styled text.")
+    }
+}
+
+@Test func shiftJISRunsArePreservedUndecoded() {
+    // C15. Double-byte Shift-JIS; a cp437 decoder would produce confident mojibake,
+    // which is worse than an honest placeholder because it LOOKS like text.
+    let raw: [UInt8] = [0x82, 0xA0, 0x82, 0xA2]
+    let doc = parseWS(bytes("Before ") + wsBlock(cmd: 0x17, content: raw) + bytes(" after.\r\n"))
+    #expect(doc.shiftRuns.map(\.bytes) == [raw])
+    #expect(doc.blocks[0].lines[0].text() == "Before [shift-jis: 4 bytes] after.")
+}

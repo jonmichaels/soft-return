@@ -158,6 +158,16 @@ private func htmlNoteListItem(_ entry: NoteListEntry) -> String {
 ///   `htmlBodySpan`/`htmlNoteListItem`.
 @Sendable
 /// `text-align` for a block, or "" for WordStar's default.
+/// Two-decimal formatting without Foundation, matching Python's `'%.2f'`.
+func fixedTwoDecimals(_ v: Double) -> String {
+    // `Int(_:)` truncates, so +0.5 rounds half away from zero. `.rounded()` would
+    // pull in libm, and this module deliberately imports nothing.
+    let scaled = v >= 0 ? Int(v * 100 + 0.5) : -Int(-v * 100 + 0.5)
+    let whole = scaled / 100
+    let frac = abs(scaled % 100)
+    return "\(whole)." + (frac < 10 ? "0\(frac)" : "\(frac)")
+}
+
 func htmlAlignAttribute(_ align: Alignment) -> String {
     switch align {
     case .left: return ""
@@ -217,7 +227,18 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                 // does not collapse justify into left. `left` is WordStar's default and
                 // gets no attribute, so a document that never touches `.oc`/`.oj` emits
                 // byte-identical HTML to before.
-                parts.append("<p\(htmlAlignAttribute(block.align))>\(para)</p>")
+                let pTag = "<p\(htmlAlignAttribute(block.align))>\(para)</p>"
+                // C5: newspaper columns. CSS does this properly, so HTML is the one
+                // format that can honour `.co` rather than merely record it. A gutter
+                // is print columns at 10 CPI -> tenths of an inch.
+                if let n = block.columns, n > 1 {
+                    let gap = block.columnGutter.map {
+                        "; column-gap:\(fixedTwoDecimals($0 / 10.0))in"
+                    } ?? ""
+                    parts.append("<div style=\"column-count:\(n)\(gap)\">\(pTag)</div>")
+                } else {
+                    parts.append(pTag)
+                }
             }
         }
     }

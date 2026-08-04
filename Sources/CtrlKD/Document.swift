@@ -301,6 +301,24 @@ public struct Document: Hashable, Sendable {
     /// consumer can find the file, and the placeholder means the reader can see that a
     /// figure belongs there. Register C10.
     public var graphics: [String]
+    /// Colour changes (type 0x01): palette indices, not RGB. Register C2.
+    public var colours: [ColourChange]
+    /// Font changes (type 0x02/0x15). Size is 1/20 point. Register C3.
+    public var fonts: [FontChange]
+    /// Files the printer was told to pull in (`%F"NAME"`), one per `[include: NAME]`
+    /// placeholder in the text — same class as `graphics`.
+    public var includes: [String]
+    /// Japanese Shift-In/Out runs, kept UNDECODED. Register C15.
+    public var shiftRuns: [ShiftRun]
+    /// The printer driver this file was last formatted for. Provenance: it explains why
+    /// a file's measurements look the way they do.
+    public var printerDriver: String?
+    /// `.tc` entries. Register C7.
+    public var tocEntries: [TOCEntry]
+    /// `.ix` entries. Register C6.
+    public var indexEntries: [IndexEntry]
+    /// `.l#` interval; `nil` when off or never set. Register C11.
+    public var lineNumbering: Int?
     public var formatting: Formatting
     public var headers: [Int: String]
     /// Running foot text by line number (1-5). `.fo` is line 1; `.f1`-`.f5` select
@@ -330,7 +348,15 @@ public struct Document: Hashable, Sendable {
         headers: [Int: String] = [:],
         footers: [Int: String] = [:],
         formatting: Formatting = Formatting(),
-        graphics: [String] = []
+        graphics: [String] = [],
+        colours: [ColourChange] = [],
+        fonts: [FontChange] = [],
+        includes: [String] = [],
+        shiftRuns: [ShiftRun] = [],
+        printerDriver: String? = nil,
+        tocEntries: [TOCEntry] = [],
+        indexEntries: [IndexEntry] = [],
+        lineNumbering: Int? = nil
     ) {
         self.blocks = blocks
         self.footnotes = footnotes
@@ -351,6 +377,14 @@ public struct Document: Hashable, Sendable {
         self.footers = footers
         self.formatting = formatting
         self.graphics = graphics
+        self.colours = colours
+        self.fonts = fonts
+        self.includes = includes
+        self.shiftRuns = shiftRuns
+        self.printerDriver = printerDriver
+        self.tocEntries = tocEntries
+        self.indexEntries = indexEntries
+        self.lineNumbering = lineNumbering
     }
 
     public func iterLines() -> [Line] {

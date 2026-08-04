@@ -141,12 +141,22 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var notes: [Note] = []
     var unknownBlocks: [UnknownBlock] = []
     var graphics: [String] = []
+    var colours: [ColourChange] = []
+    var fonts: [FontChange] = []
+    var includes: [String] = []
+    var shiftRuns: [ShiftRun] = []
+    var printerDriver: String? = nil
     if ws5 {
         let stripped = symmetricBlocks(data)
         body = stripped.bytes
         notes = stripped.notes
         unknownBlocks = stripped.unknownBlocks
         graphics = stripped.graphics
+        colours = stripped.colours
+        fonts = stripped.fonts
+        includes = stripped.includes
+        shiftRuns = stripped.shiftRuns
+        printerDriver = stripped.printerDriver
         // footnotes/endnotes/annotations are all rendered the same way (a numbered
         // list at the end) and share one inline reference counter below, so
         // `footnotes` stays the flattened view the existing emitters already know how
@@ -173,11 +183,15 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // Running FORMATTING state, stamped onto each block as it opens. Stateful, unlike
     // page geometry — see `Formatting2.swift`.
     var fmt = FormatState()
+    var tocEntries: [TOCEntry] = []
+    var indexEntries: [IndexEntry] = []
+    var lineNumbering: Int? = nil
 
     var blocks: [Block] = []
     var cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true,
                       leftMargin: fmt.leftMargin, rightMargin: fmt.rightMargin,
-                      paraMargin: fmt.paraMargin)
+                      paraMargin: fmt.paraMargin, columns: fmt.columns,
+                      columnGutter: fmt.columnGutter)
     var curLine = Line()
 
     // core.py:275-286 — empty lines and empty blocks are never appended.
@@ -194,7 +208,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
         }
         cur = Block(kind: .para, align: fmt.alignment, wrap: fmt.wrap ?? true,
                       leftMargin: fmt.leftMargin, rightMargin: fmt.rightMargin,
-                      paraMargin: fmt.paraMargin)
+                      paraMargin: fmt.paraMargin, columns: fmt.columns,
+                      columnGutter: fmt.columnGutter)
     }
 
     for physical in pass.lines {
@@ -224,6 +239,12 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 ruler = true
             }
             parseHeadFoot(cmd, headers: &headers, footers: &footers)
+            // The index of the block this entry POINTS AT — the one that follows it,
+            // which is the block still open (if it has content) or the next to open.
+            // "This heading is in the table of contents" refers forward, not back.
+            let pointsAt = blocks.count + ((!cur.lines.isEmpty || !curLine.spans.isEmpty) ? 1 : 0)
+            parseCollectDot(cmd, toc: &tocEntries, index: &indexEntries,
+                            lineNumbering: &lineNumbering, blockIndex: pointsAt)
             // A formatting change starts a NEW block: `.oc on` mid-paragraph means the
             // lines after it are centred and the ones before it are not, and a single
             // block cannot hold both.
@@ -252,10 +273,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // SENT_HEADING is a 2-BYTE unit: the sentinel plus an ASCII level digit.
             // The heading lands on the block `closeBlock()` just opened, not the one it
             // closed.
-            if raw.first == SENT_HEADING && raw.count > 1 {
+            if raw.first == SENT_HEADING && raw.count > 2 {
                 closeBlock()
+                // Level 0 means "a style, but not one of the three this parser gives a
+                // heading meaning to" — the block is still marked with WHICH style, so
+                // a consumer can act on it. Register C1.
                 cur.heading = Int(raw[1]) - 0x30
-                raw = Array(raw.dropFirst(2))
+                cur.styleID = Int(raw[2]) - 0x30
+                raw = Array(raw.dropFirst(3))
             }
             raw.removeAll { $0 == SENT_HEADING }
         }
@@ -376,8 +401,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
         formatting: Formatting(
             underlineBlanks: fmt.underlineBlanks, suppressBlanks: fmt.suppressBlanks,
             proportional: fmt.proportional, kerning: fmt.kerning,
-            orientation: fmt.orientation, subSuperRoll48: fmt.subSuperRoll48),
-        graphics: graphics
+            orientation: fmt.orientation, subSuperRoll48: fmt.subSuperRoll48,
+            endnotesHere: fmt.endnotesHere, convertNotes: fmt.convertNotes),
+        graphics: graphics, colours: colours, fonts: fonts, includes: includes,
+        shiftRuns: shiftRuns, printerDriver: printerDriver,
+        tocEntries: tocEntries, indexEntries: indexEntries, lineNumbering: lineNumbering
     )
 }
 

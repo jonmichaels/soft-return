@@ -53,8 +53,21 @@ public struct SymmetricBlocksResult: Hashable, Sendable {
     /// the rewritten stream. Register C10.
     public let graphics: [String]
 
+    public let colours: [ColourChange]
+    public let fonts: [FontChange]
+    public let includes: [String]
+    public let shiftRuns: [ShiftRun]
+    public let printerDriver: String?
+
     public init(bytes: [UInt8], notes: [Note], unknownBlocks: [UnknownBlock],
-                graphics: [String] = []) {
+                graphics: [String] = [], colours: [ColourChange] = [],
+                fonts: [FontChange] = [], includes: [String] = [],
+                shiftRuns: [ShiftRun] = [], printerDriver: String? = nil) {
+        self.colours = colours
+        self.fonts = fonts
+        self.includes = includes
+        self.shiftRuns = shiftRuns
+        self.printerDriver = printerDriver
         self.bytes = bytes
         self.notes = notes
         self.unknownBlocks = unknownBlocks
@@ -67,6 +80,11 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var notes: [Note] = []
     var unknownBlocks: [UnknownBlock] = []
     var graphics: [String] = []
+    var colours: [ColourChange] = []
+    var fonts: [FontChange] = []
+    var includes: [String] = []
+    var shiftRuns: [ShiftRun] = []
+    var driver: String? = nil
     var i = 0
     while i < data.count {
         // core.py — need the marker plus both length bytes present.
@@ -98,6 +116,107 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 out += blockContent(block)
                     .map { $0 & 0x7F }
                     .filter { $0 >= 0x20 && $0 < 0x7F }
+            } else if cmd == 0x01 {                                // colour change
+                // Two bytes: foreground and background colour INDICES into WordStar's
+                // own palette, not RGB (the archive shows 00/00, 04/00, 08/04, 0c/08).
+                // The text was never at risk here, but the change was invisible: a
+                // document that coloured a passage rendered identically to one that
+                // did not. Recorded, not rendered — the printed page this project
+                // reproduces was monochrome. Register C2.
+                let content = blockContent(block)
+                if content.count >= 2 {
+                    colours.append(ColourChange(offset: out.count,
+                                                foreground: Int(content[0]),
+                                                background: Int(content[1])))
+                }
+            } else if cmd == 0x02 || cmd == 0x15 {                 // font change
+                // Six 16-bit little-endian values. The first is the type size in 1/20
+                // POINT — across 862 real blocks that yields 9pt, 8pt, 11pt, 7pt, 6pt,
+                // 12pt, 10pt, 14pt, and it is those sensible sizes that confirm the
+                // reading. The rest identify the face to a 1987 printer driver and
+                // mean nothing without it.
+                //
+                // Deliberate for PDF, which is Courier by design — but there is no
+                // excuse for RTF/HTML, where a size change is expressible. Register C3.
+                let content = blockContent(block)
+                if content.count >= 4 {
+                    fonts.append(FontChange(
+                        offset: out.count,
+                        height20thPt: Int(content[0]) | (Int(content[1]) << 8),
+                        width20thPt: Int(content[2]) | (Int(content[3]) << 8),
+                        driverBytes: Array(content[4...])))
+                }
+            } else if cmd == 0x0F {                                // print-file inclusion
+                // A file the printer was told to pull in — the archive carries
+                // `%F"PLEAD.PS"`. Like an inset graphic, the block holds a FILENAME
+                // and was being dropped whole.
+                // Written byte-wise: `range(of:)`/`trimmingCharacters` are Foundation
+                // and this module deliberately imports nothing.
+                let printable = blockContent(block)
+                    .map { $0 & 0x7F }.filter { $0 >= 0x20 && $0 < 0x7F }
+                var mark = -1
+                if printable.count >= 2 {
+                    for k in 0...(printable.count - 2)
+                    where printable[k] == 0x25 && printable[k + 1] == 0x46 {   // "%F"
+                        mark = k + 2
+                        break
+                    }
+                }
+                if mark >= 0 {
+                    var body = Array(printable[mark...])
+                    while let f = body.first, f == 0x20 || f == 0x22 || f == 0x09 {
+                        body.removeFirst()
+                    }
+                    while let l = body.last, l == 0x20 || l == 0x22 || l == 0x09 {
+                        body.removeLast()
+                    }
+                    let name = decodeCP437(body)
+                    if !name.isEmpty {
+                        includes.append(name)
+                        out += Array("[include: \(name)]".utf8)
+                        i += jump + 3
+                        continue
+                    }
+                }
+                // No `%F` in it — most of these are PostScript preambles. Consuming
+                // them silently would be WORSE than the bug being fixed: it turns a
+                // reported unknown into an unreported one.
+                unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
+            } else if cmd == 0x00 {                                // printer/driver name
+                // The driver the document was last formatted for (LASERJET in 43
+                // archive documents). Provenance: it explains why a file's
+                // measurements look the way they do. The byte before the name is a
+                // record tag, not part of it (`pLASERJET`).
+                var name: [UInt8] = []
+                for c in blockContent(block) {
+                    let ch = c & 0x7F
+                    if (ch >= 0x41 && ch <= 0x5A) || (ch >= 0x30 && ch <= 0x39) {
+                        name.append(ch)
+                    } else if !name.isEmpty {
+                        break
+                    }
+                }
+                if name.isEmpty {
+                    // No name in it. An EMPTY 0x00 block is a plain wrapper, not a
+                    // driver record — same rule as an 0x0F with no `%F`: consuming it
+                    // silently would turn a reported unknown into an unreported one.
+                    unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
+                } else if driver == nil {
+                    driver = decodeCP437(name)
+                }
+            } else if cmd == 0x17 {                                // Shift-In/Shift-Out
+                // Japanese double-byte text. NOT decoded: these are Shift-JIS and a
+                // cp437 decoder would produce confident mojibake — worse than an
+                // honest placeholder, because it looks like text. Nothing in the
+                // archive contains one; implemented from the spec. Register C15.
+                let content = blockContent(block)
+                shiftRuns.append(ShiftRun(offset: out.count, bytes: content))
+                out += Array("[shift-jis: \(content.count) bytes]".utf8)
+            } else if cmd == 0x16 {                                // truncation marker
+                // The spec says a truncated line shows a literal marker. Nothing in
+                // the archive contains one, so this is implemented FROM THE SPEC and
+                // has never been checked against a file that really has it. C14.
+                out += Array("<TRUNCATED>".utf8)
             } else if cmd == 0x10 {                                // inset graphic
                 // An INSET picture placed in the text. The block's content is the
                 // image's path, and it was falling through to `UnknownBlock` — which
@@ -123,13 +242,21 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                     .map { $0 & 0x7F }
                     .filter { $0 >= 0x20 && $0 < 0x7F }
             } else if cmd == 0x11 && block.count > 3 {             // paragraph style
-                let level = [0x05: 1, 0x02: 2, 0x03: 3][Int(block[3])] ?? 0
-                if level != 0 {
-                    out.append(SENT_HEADING)
-                    out.append(UInt8(0x30 + level))
-                }
-                // level == 0 (unrecognised style byte): silently skipped, matching the
-                // Python source — this branch is a deliberate no-op, not a gap.
+                // WordStar's paragraph-style mechanism. Three IDs were mapped to
+                // heading levels and EVERY OTHER STYLE WAS DROPPED — silently, so a
+                // styled paragraph became an unstyled one with nothing to say a style
+                // had been applied. The archive uses at least twelve distinct IDs;
+                // 0x06 alone appears 60 times, more often than two of the three that
+                // were mapped. Register C1.
+                //
+                // The sentinel carries the style ID as well as the level, so a
+                // consumer can see WHICH style even where this parser has no heading
+                // meaning for it. Level 0 = "a style, but not one of the three".
+                let styleID = Int(block[3])
+                let level = [0x05: 1, 0x02: 2, 0x03: 3][styleID] ?? 0
+                out.append(SENT_HEADING)
+                out.append(UInt8(0x30 + level))
+                out.append(UInt8(0x30 + (styleID & 0x3F)))
             } else {
                 unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
             }
@@ -140,7 +267,9 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
         }
     }
     return SymmetricBlocksResult(bytes: out, notes: notes, unknownBlocks: unknownBlocks,
-                                 graphics: graphics)
+                                 graphics: graphics, colours: colours, fonts: fonts,
+                                 includes: includes, shiftRuns: shiftRuns,
+                                 printerDriver: driver)
 }
 
 /// `block[3:-3] if len(block) >= 6 else block[3:]` — strips the leading length+cmd

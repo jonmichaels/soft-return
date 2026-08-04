@@ -56,15 +56,29 @@ public struct Block: Hashable, Sendable {
     public var leftMargin: Double?
     public var rightMargin: Double?
     public var paraMargin: Double?
+    /// `.co <n>, <gutter>` — newspaper columns in force when this block opened, and the
+    /// gutter between them in print columns. `nil` means the file never asked, which is
+    /// not the same as asking for one column. Register C5.
+    public var columns: Int?
+    public var columnGutter: Double?
+    /// WordStar's paragraph-style ID (symmetric type 0x11), when one was applied.
+    /// `heading` is the subset this parser gives a heading meaning to (1-3); every OTHER
+    /// style used to be dropped silently, so a styled paragraph became an unstyled one
+    /// with no trace. The archive uses at least twelve distinct IDs. Register C1.
+    public var styleID: Int?
 
     public init(
         kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0,
         align: Alignment = .left, wrap: Bool = true,
-        leftMargin: Double? = nil, rightMargin: Double? = nil, paraMargin: Double? = nil
+        leftMargin: Double? = nil, rightMargin: Double? = nil, paraMargin: Double? = nil,
+        columns: Int? = nil, columnGutter: Double? = nil, styleID: Int? = nil
     ) {
         self.leftMargin = leftMargin
         self.rightMargin = rightMargin
         self.paraMargin = paraMargin
+        self.columns = columns
+        self.columnGutter = columnGutter
+        self.styleID = styleID
         self.kind = kind
         self.lines = lines
         self.heading = heading
