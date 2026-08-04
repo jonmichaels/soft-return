@@ -139,7 +139,12 @@ private func convertAll(
                 status = ExitStatus.fileFailure
                 continue
             }
-            environment.writeOut("\(path) -> \(destination)")
+            // Status goes to STDERR: with `-o /dev/stdout` (or a pipe) a status
+            // line on stdout lands INSIDE the converted document -- found
+            // 2026-08-04 when a Python-vs-Swift archive comparison flagged all
+            // 81 convertible documents as differing by exactly this line.
+            // Both CLIs carried the defect; both fixed together.
+            environment.writeErr("\(path) -> \(destination)")
         }
     }
     return status

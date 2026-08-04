@@ -209,16 +209,18 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
     case "CO":
         // `.co <n>, <gutter>` — the archive writes `.co2, 0.3"`, `.CO3,  .20"` and
         // `.co1` (one column = columns off). Stateful like the margins. Register C5.
-        guard let (n, _) = parseDotNumber(arg), n.isFinite else { return }
+        let body = trimmed(arg)
+        guard let (n, _, numEnd) = parseDotNumberConsuming(body), n.isFinite else { return }
         state.columns = Swift.max(1, Int(n))
-        // The gutter follows a comma; a bare figure is columns like `.po`, and the
-        // archive's own values carry an inch mark, which converts.
-        var rest = trimmed(arg)
-        var k = 0
-        while k < rest.count, rest[k] != 0x2C { k += 1 }          // ','
-        if k < rest.count {
-            rest = Array(rest[(k + 1)...])
-            if let (g, unit) = parseDotNumber(rest), g.isFinite {
+        // The gutter follows the count after separators that may be a comma OR
+        // just spaces -- `.co2, 0.3"` and `.co 2  1.00"` are both real. Python:
+        // `body[m.end():].lstrip(b' \t,')`. Scanning for a comma lost every
+        // space-separated gutter (BOOKLET's two-column gap, cross-check
+        // 2026-08-04).
+        var k = numEnd
+        while k < body.count, body[k] == 0x20 || body[k] == 0x09 || body[k] == 0x2C { k += 1 }
+        if k < body.count {
+            if let (g, unit) = parseDotNumber(Array(body[k...])), g.isFinite {
                 state.columnGutter = resolveColsArg(g, unit)
             }
         }

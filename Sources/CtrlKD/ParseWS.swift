@@ -676,6 +676,17 @@ func dotCommandNameAndArg(_ cmd: [UInt8]) -> (name: [UInt8], arg: [UInt8])? {
 /// empty match and leaves the dot itself unconsumed) — e.g. "5." matches value 5 with
 /// the trailing dot left dangling, unconsumed, not an error.
 func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? {
+    parseDotNumberConsuming(arg).map { ($0.value, $0.unit) }
+}
+
+/// Like `parseDotNumber`, but also reports how far the match consumed —
+/// Python's `m.end()`: leading spaces + number + trailing spaces + the
+/// optional unit. `.co`'s gutter parse needs it: the gutter follows the
+/// column count after separators that may be a comma OR just spaces
+/// (`.co 2  1.00"` is real), so "scan for a comma" loses space-separated
+/// gutters. Found 2026-08-04 when the archive cross-check flagged one
+/// document: BOOKLET's two-column gutter vanished from the Swift HTML.
+func parseDotNumberConsuming(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?, end: Int)? {
     var i = 0
     while i < arg.count && isDotSpace(arg[i]) { i += 1 }
 
@@ -708,16 +719,20 @@ func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? {
     var j = i
     while j < arg.count && isDotSpace(arg[j]) { j += 1 }
     var unit: [UInt8]? = nil
+    var end = j                                     // `\s*` consumed either way,
+                                                     // matching the regex's m.end()
     if j < arg.count {
         if arg[j] == 0x22 {                         // '"'
             unit = [arg[j]]
+            end = j + 1
         } else if isASCIILetter(arg[j]) {
             var k = j + 1
             if k < arg.count && isASCIILetter(arg[k]) { k += 1 }   // up to 2 letters
             unit = Array(arg[j..<k])
+            end = k
         }
     }
-    return (value, unit)
+    return (value, unit, end)
 }
 
 /// Convert a dot-command argument's optional unit suffix to inches. Returns `nil` for

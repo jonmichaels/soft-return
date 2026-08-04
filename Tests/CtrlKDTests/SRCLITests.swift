@@ -463,7 +463,11 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 
     #expect(status == ExitStatus.ok)
     #expect(Array(recorder.written.keys) == ["/archive/PAPER.md"])
-    #expect(recorder.out == ["/archive/PAPER.WS -> /archive/PAPER.md"])
+    // Status lines go to STDERR: on stdout they land inside the converted
+    // document whenever the destination is /dev/stdout or a pipe (both CLIs
+    // carried this defect; fixed together 2026-08-04).
+    #expect(recorder.out.isEmpty)
+    #expect(recorder.err == ["/archive/PAPER.WS -> /archive/PAPER.md"])
     #expect(recorder.createdDirectories.isEmpty)
 }
 
@@ -530,7 +534,9 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 
     #expect(status == ExitStatus.fileFailure, "one bad input must not make the run succeed")
     #expect(Array(recorder.written.keys) == ["/archive/GOOD.md"], "the good file still converts")
-    #expect(recorder.err.count == 1)
+    // stderr carries the failure for MISSING.WS plus GOOD's status line
+    #expect(recorder.err.count == 2)
+    #expect(recorder.err.contains("/archive/GOOD.WS -> /archive/GOOD.md"))
 }
 
 @Test func usageErrorsExitTwoAndSayUsage() {
