@@ -1,5 +1,13 @@
 # Soft Return
 
+```
+   _____       ______     ____       __
+  / ___/____  / __/ /_   / __ \___  / /___  ___________
+  \__ \/ __ \/ /_/ __/  / /_/ / _ \/ __/ / / / ___/ __ \
+ ___/ / /_/ / __/ /_   / _, _/  __/ /_/ /_/ / /  / / / /
+/____/\____/_/  \__/  /_/ |_|\___/\__/\__,_/_/  /_/ /_/
+```
+
 Read WordStar files and turn them back into something you can open today.
 
 WordStar 4 through 7, plus the "print to disk" streams those versions produced, converted
