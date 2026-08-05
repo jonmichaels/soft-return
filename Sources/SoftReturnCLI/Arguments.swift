@@ -305,11 +305,21 @@ public func parseArguments(
                 return .usageError(message)
             }
         case "--encoding":
-            // Dropped, not forgotten — see the help text. Named explicitly so anyone porting a
-            // ctrl-kd command line gets an answer instead of "unrecognized option".
-            return .usageError(
-                "argument --encoding: no longer accepted — the source encoding is always "
-                    + "CP437, the only code page a WordStar file's high-bit bytes can be")
+            // Standardized with ctrl-kd (Jon's ruling, 2026-08-05): the flag EXISTS in both
+            // CLIs and accepts exactly one value. cp437 is the only code page any known
+            // WordStar file uses, and with no non-437 corpus to validate against, another
+            // decoding would be an assumption — this project ships evidence, so the CLI
+            // refuses what it cannot verify (reasoning documented in ctrl-kd's FAQ.md).
+            guard let value = takeValue(flag, attached: attached) else {
+                return .usageError("argument \(flag): expected one argument")
+            }
+            guard value.lowercased() == "cp437" else {
+                return .usageError(
+                    "argument --encoding: invalid choice: '\(value)' (choose from 'cp437') — "
+                        + "every known WordStar file uses IBM PC code page 437, and no "
+                        + "non-437 corpus exists to validate another decoding against")
+            }
+            // cp437 is already the (only) behavior; accepting it is a no-op.
         default:
             return .usageError("unrecognized arguments: \(arg)")
         }
@@ -351,8 +361,9 @@ public func helpText(registry: EmitterRegistry = .standard) -> String {
 func helpBody(registry: EmitterRegistry = .standard) -> String {
     """
     usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] [--mode MODE]
-              [--variant VARIANT] [--fonts TARGET] [--no-styles] [--no-notes]
-              [--comments] [--diagnose] FILE [FILE ...]
+              [--variant VARIANT] [--fonts TARGET] [--encoding cp437]
+              [--no-styles] [--no-notes] [--comments] [--diagnose]
+              FILE [FILE ...]
 
     Convert WordStar 4-7 documents and print-to-disk files to text, Markdown, HTML,
     RTF, or PDF. ^KD: save and done.
@@ -396,9 +407,10 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             unknown codes, note counts, page geometry) as JSON;
                             no conversion
 
-    The source encoding is always CP437 and there is no flag to change it: the
-    high-bit bytes in a WordStar file are IBM-PC code page 437, and every other
-    code page mis-decodes them.
+    --encoding cp437 is accepted (and is the default); every other value is
+    refused. The high-bit bytes in every known WordStar file are IBM-PC code
+    page 437, and no non-437 corpus exists to validate another decoding
+    against — the CLI refuses what it cannot verify.
 
     examples:
       sr PAPER.WS                       # -> PAPER.md, modern reflow
