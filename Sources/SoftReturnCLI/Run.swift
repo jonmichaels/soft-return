@@ -50,7 +50,7 @@ public func run(
         environment.writeOut(helpText(registry: registry))
         return ExitStatus.ok
     case .version:
-        environment.writeOut(versionLine)
+        environment.writeOut(versionOutput)
         return ExitStatus.ok
     case .usageError(let message):
         environment.writeErr("usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] "

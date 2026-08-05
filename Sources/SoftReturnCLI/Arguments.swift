@@ -28,7 +28,22 @@ public let srVersion = "2.0.0"
 public let ctrlKDParity = "3.0.0"
 
 /// `sr 2.0.0 (ctrl-kd parity 3.0.0)`.
+/// FIGlet "Slant" by Glenn Chappell (1993) -- FIGlet's own co-creator, in the
+/// WordStar 7 release window. Jon's ruling: --version, --help and the README
+/// carry it; conversion output and stderr status never do. A static constant:
+/// the name never changes, so no .flf machinery.
+public let slantBanner = """
+        __       __      __       __
+  _____/ /______/ /     / /______/ /
+ / ___/ __/ ___/ /_____/ //_/ __  /
+/ /__/ /_/ /  / /_____/ ,< / /_/ /
+\\___/\\__/_/  /_/     /_/|_|\\__,_/
+"""
+
 public var versionLine: String { "sr \(srVersion) (ctrl-kd parity \(ctrlKDParity))" }
+
+/// What `--version` actually prints: the banner, then the version line.
+public var versionOutput: String { slantBanner + "\n" + versionLine }
 
 /// Everything the run needs, after parsing and validation.
 public struct Options: Equatable, Sendable {
@@ -248,6 +263,10 @@ private func quotedList(_ items: [String]) -> String {
 /// extension point is `EmitterRegistry.register` at the call site, not an installable
 /// package (see Registry.swift), and a CLI that promised otherwise would be lying.
 public func helpText(registry: EmitterRegistry = .standard) -> String {
+    return slantBanner + "\n\n" + helpBody(registry: registry)
+}
+
+func helpBody(registry: EmitterRegistry = .standard) -> String {
     """
     usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] [--mode MODE]
               [--variant VARIANT] [--fonts TARGET] [--no-styles] [--no-notes]
