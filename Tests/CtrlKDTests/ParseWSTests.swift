@@ -581,3 +581,40 @@ let italicOn: [UInt8] = [0x19]
     #expect(txt.contains("✁✂✃"))                 // Dingbats run -> U+2701..
     #expect(txt.contains("Plain. "))             // untouched outside the runs
 }
+
+@Test func ws4AlternateFontFlagIsStoredNotLost() {
+    // Port of test_ws4_alternate_font_flag_is_stored_not_lost. Jon, 2026-08-04:
+    // "Store that ws4 font switch flag. Don't lose it." ^PA (0x01) / ^PN (0x0E) is the
+    // ONLY typeface signal a WS4 file can carry -- the face itself lived in the printer
+    // hardware. Preserved as the `.altFont` span style; deliberately unrendered until a
+    // use exists, which is why nothing below asserts on emitter output.
+    //
+    // `makeProse()` is the prose padding: a fixture this short and this control-heavy
+    // is not read as a document at all without it.
+    // staged: 6.2.4's type-checker times out on the one-expression form
+    var data = ws4Text("Pica here") + bytes(" ") + [0x01]
+    data += ws4Text("elite here") + [0x0E] + bytes(" ")
+    data += ws4Text("pica again.") + HARD + makeProse()
+    let doc = parseWS(data)
+    let spans = doc.blocks.flatMap(\.lines).flatMap(\.spans)
+
+    #expect(spans.filter { $0.styles.contains(.altFont) }.map(\.text) == ["elite here"])
+    #expect(!spans.contains { $0.text.contains("pica") && $0.styles.contains(.altFont) })
+    // The flag is a STYLE, not a font identity: a WS4 file populates no font blocks.
+    #expect(doc.fonts.isEmpty)
+    #expect(spans.allSatisfy { $0.font == nil })
+    // No longer noise: 0x01/0x0E are handled, so they never reach the unknown tally --
+    // and they were never in it before either, having been silently dropped instead.
+    #expect(doc.unknownCodes[0x01] == nil)
+    #expect(doc.unknownCodes[0x0E] == nil)
+
+    // No masquerade. Python had to teach `_html_span` that a style code starting with
+    // 'font' is only a font when a DIGIT follows, or 'altfont' would have emitted a
+    // `ws-font-` class of its own. Swift needs no such guard and gets none: the class
+    // is built from `Span.font`, an `Int?` index into `Document.fonts`, so a `Style`
+    // flag cannot reach it by any spelling. Pinned rather than argued.
+    #expect(!emitHTML(doc, mode: .modern).contains("ws-font"))
+    // Unrendered everywhere else too -- the flag is stored for a future use, not shown.
+    #expect(!emitRTF(doc, mode: .modern).contains("altfont"))
+    #expect(emitText(doc, mode: .modern).contains("elite here"))
+}

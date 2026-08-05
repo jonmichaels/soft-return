@@ -10,38 +10,54 @@
      [
       {
        "text": "Chapter",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       },
       {
        "text": " ",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       },
       {
        "text": "One",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       }
      ],
      [],
      [
       {
        "text": "Body",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       },
       {
        "text": " ",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       },
       {
        "text": "text",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       },
       {
        "text": " ",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       },
       {
        "text": "here.",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       }
      ]
     ]
@@ -56,14 +72,18 @@
      [
       {
        "text": "Chapter One",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       }
      ],
      [],
      [
       {
        "text": "Body text here.",
-       "styles": []
+       "styles": [
+        "altfont"
+       ]
       }
      ]
     ]

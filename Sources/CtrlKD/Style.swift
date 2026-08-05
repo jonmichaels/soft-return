@@ -19,4 +19,13 @@ public struct Style: OptionSet, Hashable, Sendable {
     public static let sub       = Style(rawValue: 1 << 4)
     public static let strike    = Style(rawValue: 1 << 5)
     public static let fnref     = Style(rawValue: 1 << 6)
+    /// `^PA`/`^PN` — the printer's ALTERNATE font. Stored, never rendered (Jon,
+    /// 2026-08-04: "Store that ws4 font switch flag. Don't lose it. Just in case.").
+    ///
+    /// It belongs here rather than beside `Span.font` because it is a bounded on/off
+    /// flag, not a font identity: a WS4 file names no typeface at all — the two faces
+    /// lived in the printer hardware (a daisy wheel, a cartridge, a ROM), so all the
+    /// file can say is *which of the two* is in force. `Span.font` is an index into
+    /// `Document.fonts`, which only WS5+ font blocks populate.
+    public static let altFont   = Style(rawValue: 1 << 7)
 }
