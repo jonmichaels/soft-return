@@ -72,9 +72,9 @@ let variantChoices = ["ws4", "ws5+", "printstream", "text"]
 
 let modeChoices = ["modern", "printed"]
 
-/// `--fonts`. `FontsTarget` has exactly these three cases, so — as with `--mode` — the
+/// `--fonts`. `FontsTarget` has exactly these four cases, so — as with `--mode` — the
 /// initializer IS the validation and this list only spells the error message.
-let fontsChoices = ["office", "mac", "google"]
+let fontsChoices = ["office", "mac", "google", "linux"]
 
 public func parseArguments(
     _ argv: [String],
@@ -272,9 +272,11 @@ public func helpText(registry: EmitterRegistry = .standard) -> String {
                             printed)
       --variant VARIANT     override detection
                             choices: \(variantChoices.joined(separator: ", "))
-      --fonts TARGET        RTF font-name target: office (Word/Docs, default),
+      --fonts TARGET        RTF font-name target: office (Word/Docs, default;
+                            these fonts ship with MS Office, not bare Windows),
                             mac (Cocoa-native: TextEdit/Pages), google (Docs
-                            catalog incl. its chancery script)
+                            catalog incl. its chancery script), linux (URW
+                            base-35 -- free clones of exactly this era's faces)
                             choices: \(fontsChoices.joined(separator: ", "))
       --no-styles           omit paragraph-style pass-through (HTML classes +
                             generated CSS, RTF stylesheet) from the output

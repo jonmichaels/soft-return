@@ -376,20 +376,25 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
     // single answer — Word and Google Docs both resolve the Microsoft names.
     guard case .run(let byDefault) = parseArguments(["A.WS"]),
           case .run(let mac) = parseArguments(["--fonts", "mac", "A.WS"]),
+          case .run(let linux) = parseArguments(["--fonts", "linux", "A.WS"]),
           case .run(let attached) = parseArguments(["--fonts=google", "A.WS"]) else {
         Issue.record("expected a run")
         return
     }
     #expect(byDefault.fontsTarget == .office)
     #expect(mac.fontsTarget == .mac)
+    #expect(linux.fontsTarget == .linux)
     #expect(attached.fontsTarget == .google)
+    // Every case of the enum is a choice and every choice is a case — the list that
+    // spells the error message cannot drift from the vocabulary it describes.
+    #expect(fontsChoices == FontsTarget.allCases.map(\.rawValue))
 
     guard case .usageError(let message) = parseArguments(["--fonts", "libreoffice", "A.WS"]) else {
         Issue.record("expected a usage error")
         return
     }
     #expect(message.contains("invalid choice: 'libreoffice'"))
-    #expect(message.contains("'office', 'mac', 'google'"))
+    #expect(message.contains("'office', 'mac', 'google', 'linux'"))
 }
 
 // MARK: - Note selection (--no-notes / --comments)

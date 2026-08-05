@@ -355,3 +355,32 @@ import Testing
     #expect(unnamedGoogle.contains(#"{\f2 Dancing Script;}"#))
     #expect(!unnamedGoogle.contains(#"\f3 "#))               // one primary, one \fK
 }
+
+@Test func linuxTargetUsesURWBase35Clones() {
+    // Port of test_linux_target_uses_urw_base35_clones. Jon: 'We can't leave out our
+    // Open Source friends.' The URW base-35 set (fonts-urw-base35, Ghostscript
+    // heritage) is free metric-compatible clones of EXACTLY this era's faces: URW
+    // Gothic IS Avant Garde, Z003 IS Zapf Chancery. The most faithful target, libre.
+    guard let ag = typestyleNames.firstIndex(where: { $0.lowercased().hasPrefix("avant garde") }),
+          let zc = typestyleNames.firstIndex(where: { $0.lowercased().hasPrefix("zapfchancery") })
+    else {
+        Issue.record("the spec typestyle table lost Avant Garde or ZapfChancery")
+        return
+    }
+    func fontBlock(_ number: Int) -> [UInt8] {
+        // staged: 6.2.4's type-checker times out on the one-expression form
+        var payload = le16(180) + le16(240)
+        payload += le16(number & 0x01FF) + [UInt8](repeating: 0, count: 6)
+        return ws7Block(0x02, payload: payload)
+    }
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding for detection, a perfectly ordinary sentence.") + HARD
+    data += fontBlock(ag) + bytes("Geometric. ")
+    data += fontBlock(zc) + bytes("Scripted.") + HARD
+    data += bytes("Closing prose line keeps the byte ratio looking like text.") + HARD
+    let doc = parseWS(data)
+
+    let rtf = emitRTF(doc, mode: .modern, options: EmitOptions(fontsTarget: .linux))
+    #expect(rtf.contains(#"{\f2 URW Gothic{\*\falt Century Gothic};}"#))
+    #expect(rtf.contains("Z003"))
+}
