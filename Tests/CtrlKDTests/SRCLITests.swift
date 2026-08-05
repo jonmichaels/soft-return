@@ -355,7 +355,7 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
     #expect(recorder.out == [versionOutput])
     #expect(versionOutput.hasSuffix("sr 2.0.0 (ctrl-kd parity 3.0.0)"))
-    #expect(versionOutput.contains("__/ /______/ /"))     // the Slant banner leads
+    #expect(versionOutput.contains("_____       ______     ____"))  // the SOFT RETURN Slant banner leads
     #expect(recorder.written.isEmpty)
 }
 

@@ -33,11 +33,11 @@ public let ctrlKDParity = "3.0.0"
 /// carry it; conversion output and stderr status never do. A static constant:
 /// the name never changes, so no .flf machinery.
 public let slantBanner = """
-        __       __      __       __
-  _____/ /______/ /     / /______/ /
- / ___/ __/ ___/ /_____/ //_/ __  /
-/ /__/ /_/ /  / /_____/ ,< / /_/ /
-\\___/\\__/_/  /_/     /_/|_|\\__,_/
+   _____       ______     ____       __
+  / ___/____  / __/ /_   / __ \\___  / /___  ___________
+  \\__ \\/ __ \\/ /_/ __/  / /_/ / _ \\/ __/ / / / ___/ __ \\
+ ___/ / /_/ / __/ /_   / _, _/  __/ /_/ /_/ / /  / / / /
+/____/\\____/_/  \\__/  /_/ |_|\\___/\\__/\\__,_/_/  /_/ /_/
 """
 
 public var versionLine: String { "sr \(srVersion) (ctrl-kd parity \(ctrlKDParity))" }
