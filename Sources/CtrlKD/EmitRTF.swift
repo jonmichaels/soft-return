@@ -128,10 +128,17 @@ func fontControlRTF(_ doc: Document) -> (fontTable: String, control: [Int: Strin
                 for character in family where character != "\\" && character != "{" && character != "}" {
                     safe.append(character)
                 }
-                // `{\*\falt X}` is RTF's native fallback — the era name travels first
-                // (pass-through), Word substitutes when the font is absent.
+                // PRIMARY is the modern equivalent, the era name rides in {\*\falt}:
+                // TextEdit — and every Cocoa RTF importer, including the future Soft
+                // Return.app — ignores \falt entirely and silently substitutes
+                // Helvetica for an unknown primary (Jon's PS.TST render, 2026-08-04:
+                // every unmapped row in Helvetica, while Courier and Palatino landed
+                // only because those exact names exist on macOS). Word honours whichever
+                // name it finds first, so a machine that carries the era font still
+                // reaches it via the falt. The VERBATIM era name always remains in
+                // Document.fonts and leads the HTML stacks, where CSS fallback works.
                 if let alt = rtfAlternate(family), alt != family {
-                    extra += "{\\f\(nextK) \(safe){\\*\\falt \(alt)};}"
+                    extra += "{\\f\(nextK) \(alt){\\*\\falt \(safe)};}"
                 } else {
                     extra += "{\\f\(nextK) \(safe);}"
                 }
