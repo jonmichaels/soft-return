@@ -156,7 +156,11 @@ public func mergedLines(_ block: Block) -> [Line] {
             if let f = spans.first {
                 let stripped = String(f.text.drop(while: { $0 == " " }))
                 if stripped != f.text {
-                    spans[0] = Span(text: stripped, styles: f.styles)
+                    // The font run travels with the styles: Python keeps `fontN` in the
+                    // same frozenset it copies here, so a rebuilt span that dropped it
+                    // ended the run at every wrap point (the modern HTML/RTF of six
+                    // archive documents lost the tag on every continuation line).
+                    spans[0] = Span(text: stripped, styles: f.styles, font: f.font)
                 }
             }
             cur!.spans.append(contentsOf: spans)
@@ -164,7 +168,8 @@ public func mergedLines(_ block: Block) -> [Line] {
         if line.soft {
             let t = cur!.spans.last?.text ?? ""
             if !t.isEmpty, !t.hasSuffix(" "), !t.hasSuffix("-") {
-                cur!.spans.append(Span(text: " ", styles: cur!.spans.last!.styles))
+                cur!.spans.append(Span(text: " ", styles: cur!.spans.last!.styles,
+                                       font: cur!.spans.last!.font))
             }
             continue
         }
