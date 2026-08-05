@@ -140,7 +140,7 @@ public func styleHeadingLevel(_ name: String) -> Int {
 /// the identical source refused to compile on a Mac at the default deployment
 /// target. Hand-rolled over UTF-8, availability-free; the needles are ASCII
 /// style-name fragments, so byte equality is exact.
-private func asciiContains(_ s: String, _ needle: String) -> Bool {
+func asciiContains(_ s: String, _ needle: String) -> Bool {
     let h = Array(s.utf8), n = Array(needle.utf8)
     if n.isEmpty || h.count < n.count { return false }
     for start in 0...(h.count - n.count) {
@@ -153,7 +153,7 @@ private func asciiContains(_ s: String, _ needle: String) -> Bool {
 
 /// Python's `str.lower()` restricted to ASCII — the style names this compares against are
 /// ASCII, and a full Unicode case fold is Foundation's job, not this library's.
-private func asciiLowercased(_ s: String) -> String {
+func asciiLowercased(_ s: String) -> String {
     var view = String.UnicodeScalarView()
     for scalar in s.unicodeScalars {
         if scalar.value >= 0x41 && scalar.value <= 0x5A {
