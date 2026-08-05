@@ -143,6 +143,14 @@ public struct PageGeometry: Hashable, Sendable {
     /// them was the bug this field exists to keep apart. `nil` when unset.
     public var pcCol: Int?
     public var pcSource: Provenance
+    /// True when ANY line's `.lh` differs from `lh48` above — one flag so a consumer can
+    /// say "this document changes its leading" without walking every line.
+    ///
+    /// `.lh` is STATEFUL (register C24): it applies from where it appears, so `lh48` is the
+    /// document DEFAULT (the file's first occurrence, which is also what page capacity is
+    /// computed at) and `Line.lead48` carries the rest. The archive's banner document
+    /// switches leading fifteen times.
+    public var lhVaries: Bool
 
     public init(
         plLines: Double,
@@ -169,7 +177,8 @@ public struct PageGeometry: Hashable, Sendable {
         pnStart: Int = 1,
         pnSource: Provenance = .default,
         pcCol: Int? = nil,
-        pcSource: Provenance = .default
+        pcSource: Provenance = .default,
+        lhVaries: Bool = false
     ) {
         self.plLines = plLines
         self.heightIn = heightIn
@@ -196,6 +205,7 @@ public struct PageGeometry: Hashable, Sendable {
         self.pnSource = pnSource
         self.pcCol = pcCol
         self.pcSource = pcSource
+        self.lhVaries = lhVaries
     }
 }
 

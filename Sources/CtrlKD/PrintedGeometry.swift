@@ -36,7 +36,14 @@ public struct PrintedPageMetrics: Hashable, Sendable {
     /// and the app's own geometry oracle was written from the same sentence, so it AGREED
     /// with the bug and could not see it. Two independent things wrong from one comment.
     public let top: Double
-    /// Baseline-to-baseline distance, from `.lh`.
+    /// Baseline-to-baseline distance, from `.lh` — the document DEFAULT, which is the file's
+    /// FIRST `.lh` and what page capacity is computed at.
+    ///
+    /// ⚠️ `.lh` is stateful (2026-08-05). A line set at a different leading carries its own
+    /// in `Line.lead48`, and `emitPDF` advances by that instead; `PageGeometry.lhVaries` is
+    /// true when any line does. A caller laying out pages itself must read the per-line value
+    /// or a multi-`.lh` document will render as it did before the fix — 72pt banners stacked
+    /// on a 14pt lead. A LEAD IS THE SPACE ABOVE ITS LINE, not below it.
     public let lead: Double
     /// Type size in whole points, from `.cw`. Courier advances 0.6em, so the character
     /// pitch this implies is `Double(size) * 0.6` — the figure a monospace grid needs.

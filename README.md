@@ -73,7 +73,11 @@ reading. `.printed` reproduces the typescript line for line, which is what you w
 layout was the point — the PDF emitter renders on a viewer's built-in base-14 fonts, nothing
 embedded: Modern mode is Courier at 10 CPI and 6 LPI on US Letter, because that is the
 machine the file was written for, and Printed mode additionally follows the document's own
-font blocks (Times, Helvetica, Courier, Symbol, ZapfDingbats).
+font blocks (Times, Helvetica, Courier, Symbol, ZapfDingbats) *and its own layout arithmetic*
+— the `.lh` in force on each line (`.lh` is **stateful**, so a document that changes leading
+around its headings gets each line's own lead), and each span placed at the per-character
+advance the file's font blocks declare, with a proportional face scaled onto that grid using
+the Adobe Core 14 glyph metrics.
 
 Formats: `text`, `markdown`, `html`, `rtf`, `pdf`, plus `txt` and `md` as aliases.
 

@@ -56,19 +56,28 @@ func base14(_ family: PDFFamily, bold: Bool, italic: Bool) -> String {
 /// typescript facsimile must never make. Pica/Elite/LinePrinter go the same way.
 let monoFamilies = ["courier", "pica", "elite", "lineprinter"]
 
-/// Average advance per em, used ONLY to place underline/strikethrough rules and never to
-/// position text (see `lineOpsProportional`). Courier's 0.6 is exact; the others are
-/// approximations, because exact placement would need the full AFM width tables and this
-/// emitter carries no font metrics at all.
-func familyAdvance(_ family: PDFFamily) -> Double {
-    switch family {
-    case .courier: return 0.6
-    case .times: return 0.5
-    case .helvetica: return 0.55
-    case .symbol: return 0.55
-    case .zapfDingbats: return 0.75
-    }
-}
+/// WordStar measures horizontal advance in HMIs — 1/1800 inch — and every font block in a
+/// WS5+ file carries the per-character width it laid the document out on. A PDF point is
+/// 1/72 inch, so 1800 HMI = 72pt and the conversion is a division by 25.
+///
+/// (The per-family average-advance guesses this replaced — Times 0.5, Helvetica 0.55 — are
+/// gone: `AFM.swift` carries the real per-glyph tables now, so nothing here has to
+/// approximate a width.)
+let hmiPerPoint = 1800.0 / 72.0                 // = 25
+
+/// `Tz` (horizontal scaling, percent) clamp. A span is scaled to land exactly on WordStar's
+/// grid; a ratio outside this range does not mean the author wanted glyphs at a quarter
+/// width, it means the file's HMI and the substituted face's metrics disagree — a typestyle
+/// we can only approximate, a font block from a printer whose pitch had nothing to do with
+/// the base-14. Stretching to obey it would produce unreadable text in the name of fidelity,
+/// so outside the clamp the span keeps its natural advance and the grid loses that one
+/// argument. 40/250 is wide enough to cover every real substitution in the reference corpus
+/// (the worst honest case there is ~0.85) and narrow enough that a genuinely absurd ratio is
+/// caught.
+let tzMin = 40.0
+let tzMax = 250.0
+/// PDF's own initial text state.
+let tzDefault = 100.0
 
 /// The base-14 family for one `Document.fonts` entry. Port of `pdf._pdf_family`.
 ///
@@ -147,7 +156,7 @@ func spanFontEntry(_ index: Int?, _ fonts: [FontChange]) -> FontChange? {
     return fonts[index]
 }
 
-/// `(text-as-written, family, size)` for one span. Port of `pdf._span_render`.
+/// `(text-as-written, family, size, font-entry)` for one span. Port of `pdf._span_render`.
 ///
 /// Symbol/ZapfDingbats runs were transliterated to real Unicode at parse time
 /// (`SymbolTranslit.swift`) so that every text format renders without a font. Here we HAVE
@@ -155,7 +164,7 @@ func spanFontEntry(_ index: Int?, _ fonts: [FontChange]) -> FontChange? {
 /// with the real face selected, and a viewer draws the actual glyph -- alpha, not the letter
 /// 'a', with nothing embedded.
 func spanRender(_ text: String, font: Int?, fonts: [FontChange], size: Int)
-    -> (text: String, family: PDFFamily, size: Int)
+    -> (text: String, family: PDFFamily, size: Int, entry: FontChange?)
 {
     let entry = spanFontEntry(font, fonts)
     let family = pdfFamily(entry)
@@ -166,6 +175,9 @@ func spanRender(_ text: String, font: Int?, fonts: [FontChange], size: Int)
     // `Tf` has always been written as an integer here; the span's own size comes from the
     // font block's height word, falling back to the document's size. Python's `if pts` is
     // false for a zero height word, which is not a printable size.
+    //
+    // The entry itself rides along because the LAYOUT needs its width word — `width1800`,
+    // the per-character advance WordStar used (`spanPitch`).
     let points = entry?.points ?? 0
-    return (written, family, points > 0 ? max(1, roundHalfToEven(points)) : size)
+    return (written, family, points > 0 ? max(1, roundHalfToEven(points)) : size, entry)
 }

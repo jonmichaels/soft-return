@@ -209,6 +209,13 @@ private struct LineSegment {
     let styles: Style
     let family: PDFFamily
     let size: Int
+    /// The `Document.fonts` entry this run points at, or `nil` for a run with no font block —
+    /// every WS4 file, every print stream, and every run before a WS5+ document's first font
+    /// change. Carried because the LAYOUT needs its `width1800`, not just its face.
+    let entry: FontChange?
+    /// This segment is a line's LEADING WHITESPACE and is measured in the document's print
+    /// columns rather than in its font. Set by `splitIndent`.
+    let indent: Bool
 }
 
 /// `(point size, baseline rise)` for a span set at `size`. Port of `pdf._sized`.
@@ -235,79 +242,204 @@ private func rules(_ styles: Style, _ text: String, x: Double, y: Double, w: Dou
     return ops
 }
 
-/// One line of the typewriter: every span Courier at the document's own size, so 0.6em per
-/// character positions each span EXACTLY and each gets its own text object at an absolute x.
-/// Port of `pdf._line_ops_courier`.
+/// Per-character advance in POINTS for one span — WordStar's own number. Port of
+/// `pdf._span_pitch`.
 ///
-/// This is the path this emitter has always taken and its bytes are unchanged — see
-/// `FontResources` for why that matters.
-private func lineOpsCourier(
-    _ segs: [LineSegment], left: Double, y: Double, size: Int, res: FontResources
+/// A WS5+ font block's FIRST word is the font width in HMIs (1/1800in): the pitch WordStar
+/// itself laid the document out on, and the pitch it sent the printer. 1800 HMI = 1 inch =
+/// 72pt, so the conversion is /25.
+///
+/// A span with no font block — every WS4 file, every print stream, and every run before a
+/// WS5+ document's first font change — gets the document's own `.cw`-derived pitch instead.
+/// `.cw` is character width in 1/120in, which `printedSize` already resolved into the point
+/// size for exactly this reason (a Courier em advances 0.6, so cw/120in per character IS a
+/// cw-point font), so the pitch here is that size's 0.6em. Written in POINTS rather than
+/// converted through HMI on purpose: it is arithmetically the same number and it is the same
+/// float this emitter has always produced, which is what keeps a fontless PDF byte-identical.
+func spanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
+    if let width = entry?.width1800, width != 0 { return Double(width) / hmiPerPoint }
+    return Double(pt) * 0.6
+}
+
+/// The slot WordStar reserved for a run of `count` characters, in points.
+///
+/// THE FONTLESS BRANCH IS NOT `count * spanPitch(...)`, and the difference is one of
+/// evaluation order, not of value. The pitch is `pt * 0.6`, so the two forms are
+/// `count * (pt * 0.6)` and `(count * pt) * 0.6` — equal in exact arithmetic, and not always
+/// equal in binary64: at count 3, pt 12, the first is 21.599999999999998 and the second is
+/// 21.6. This emitter has multiplied in the SECOND order since it existed, `x` accumulates
+/// these, and the fontless digests are pinned on the result. So the legacy order is kept
+/// verbatim where it can be observed, and the HMI form is used only where there was no
+/// previous answer to preserve.
+private func spanTarget(_ entry: FontChange?, _ pt: Int, count: Int) -> Double {
+    if entry?.width1800 ?? 0 != 0 { return Double(count) * spanPitch(entry, pt) }
+    return Double(count) * Double(pt) * 0.6
+}
+
+/// `(Tz percentage or nil, width actually occupied)` for one span asked to fill `targetW`
+/// points. Port of `pdf._tz_scale`.
+///
+/// Courier lands on WordStar's grid by construction — 600/1000 em is exactly the 0.6 the
+/// pitch was derived from — so the ratio comes out 100 and no `Tz` is emitted at all. Nothing
+/// else does: Times at 12pt sets a word in whatever width Times wants, which is not the width
+/// WordStar reserved for it, and by the end of a line the accumulated error is a word or
+/// more. `AFM.swift` gives the natural width; `Tz` (horizontal scaling, percent) closes the
+/// gap, so the span occupies the grid slot the file asked for and the NEXT span starts where
+/// WordStar put it.
+///
+/// `nil` means "emit no scaling" and comes from three different places, all of which want the
+/// same operator (or the absence of one) but not the same width:
+///   * the ratio is 100 — Courier, or any face whose metrics happen to agree. Occupies the
+///     target; nothing to say.
+///   * the ratio is outside `[tzMin, tzMax]` — the metrics disagree pathologically (see the
+///     clamp's own note). The span keeps its NATURAL width and the rest of the line shifts
+///     with it, because overprinting the next span is worse than losing the grid.
+///   * there is no metric at all (a face `AFM.swift` cannot measure, or a string of glyphs it
+///     has no widths for). Nothing to compute a ratio from.
+func tzScale(_ text: String, _ baseFont: String, _ pt: Int, _ targetW: Double)
+    -> (scale: Double?, width: Double)
+{
+    let natural = stringWidthPt(text, baseFont, pt)
+    if natural <= 0 || targetW <= 0 { return (nil, natural) }
+    let scale = targetW / natural * 100.0
+    if hundredths(scale) == hundredths(tzDefault) { return (nil, targetW) }
+    if !(tzMin <= scale && scale <= tzMax) { return (nil, natural) }
+    return (scale, targetW)
+}
+
+/// `segs` with each entry gaining an INDENT flag, and the first span split where a line's
+/// leading whitespace ends. Port of `pdf._split_indent`.
+///
+/// The indent is rarely a span of its own: a tab's padding and the text after it carry the
+/// same styles and the same font, so `coalesce` has already merged them into one run by the
+/// time layout sees it. Peeling it off here is what lets the indent be measured in the
+/// document's own print columns while the text keeps the font's advance (see `lineOpsPrinted`
+/// for why those are different measures).
+///
+/// A span with NO font block is never flagged: the run's own pitch already IS the document's
+/// there, so the flag would change nothing — and not raising it keeps every fontless line's
+/// arithmetic, and therefore its bytes, untouched.
+private func splitIndent(_ segs: [LineSegment]) -> [LineSegment] {
+    var out: [LineSegment] = []
+    var leading = true
+    for seg in segs {
+        if !leading {
+            out.append(seg)
+            continue
+        }
+        let pad = seg.text.count - seg.text.drop(while: { $0 == " " }).count
+        if seg.entry != nil, pad > 0 {
+            if pad < seg.text.count {
+                out.append(LineSegment(text: String(seg.text.prefix(pad)), styles: seg.styles,
+                                       family: seg.family, size: seg.size, entry: seg.entry,
+                                       indent: true))
+                out.append(LineSegment(text: String(seg.text.dropFirst(pad)),
+                                       styles: seg.styles, family: seg.family, size: seg.size,
+                                       entry: seg.entry, indent: false))
+                leading = false
+            } else {
+                out.append(LineSegment(text: seg.text, styles: seg.styles, family: seg.family,
+                                       size: seg.size, entry: seg.entry, indent: true))
+            }
+            continue
+        }
+        out.append(seg)
+        if seg.text.contains(where: { !$0.isWhitespace }) {
+            leading = false
+        }
+    }
+    return out
+}
+
+/// One laid-out line, on the document's own horizontal grid. Port of `pdf._line_ops_printed`.
+///
+/// Every span gets its own text object at an ABSOLUTE x, and that x is WordStar's: the
+/// characters before it, each at its own run's HMI advance (`spanPitch`). This replaced two
+/// paths — a Courier one that did exactly this arithmetic with a hardcoded 0.6, and a
+/// proportional one that put the whole line in a single text object and let PDF's natural
+/// advance carry the pen. The second was the right call while this emitter had no font
+/// metrics: with no way to know how wide Times actually set a word, a computed x was a guess
+/// and natural advance at least never overlapped. `AFM.swift` removes that limitation, and
+/// Jon's ruling followed it: "Printed that ignores fonts can't call itself Printed" — the
+/// document's own layout math governs, so the grid is computed and each span is width-matched
+/// onto it with `Tz`.
+///
+/// `tzState` carries the CURRENT horizontal scaling ACROSS calls, in exact hundredths. `Tz` is
+/// text state, and text state survives `ET` — an 85 `Tz` set on one span would silently scale
+/// every span after it, on every following line of the same content stream. So the operator is
+/// written only when the value CHANGES, which also means a document that never needs scaling
+/// (every fontless file, and Modern mode entirely) never emits one and its bytes are exactly
+/// what they were before any of this existed.
+///
+/// THE ONE EXCEPTION to the HMI grid, and it is the document's own math too: a line's LEADING
+/// WHITESPACE is positioning, measured in the document's print columns rather than in the
+/// font. WordStar re-stamps a left indent from `.tb`/`.lm`/`.po` as machine spaces, and every
+/// one of those commands is specified in 10-CPI print columns — the tab expander literally
+/// converts the tab's HMI size to columns before emitting the padding. Run that padding at a
+/// 72pt display font's own advance and a one-column shadow offset becomes a six-inch one: the
+/// reference archive's own banner document tabs to 1.39in on one line and 1.4in on the next,
+/// an offset of exactly one print column (7.2pt at 10 CPI), to print a display face twice with
+/// a shadow. On the font's advance the second copy landed off the right edge of the paper.
+/// Interior spaces — inside a run, after real text — are the author's own characters and stay
+/// on the font's advance.
+///
+/// (The exception only fires for a span that HAS a font block: without one the run's pitch
+/// already IS the document's, so it cannot change a fontless byte.)
+private func lineOpsPrinted(
+    _ segs: [LineSegment], left: Double, y: Double, size: Int, res: FontResources,
+    tzState: inout Int
 ) -> [[UInt8]] {
     var ops: [[UInt8]] = []
     var x = left
-    for seg in segs {
-        let (pt, rise) = sized(seg.styles, size)
-        let font = res.ref(base14(.courier, bold: seg.styles.contains(.bold),
-                                  italic: seg.styles.contains(.italic)))
+    for seg in splitIndent(segs) {
+        let (pt, rise) = sized(seg.styles, seg.size)
+        let baseFont = base14(seg.family, bold: seg.styles.contains(.bold),
+                              italic: seg.styles.contains(.italic))
+        let font = res.ref(baseFont)
+        let scale: Double?
+        let w: Double
+        if seg.indent {
+            scale = nil
+            w = Double(seg.text.width) * Double(size) * 0.6      // document print columns
+        } else {
+            let target = spanTarget(seg.entry, pt, count: seg.text.width)
+            (scale, w) = tzScale(seg.text, baseFont, pt, target)
+        }
+        let want = hundredths(scale ?? tzDefault)
         var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
+        if want != tzState {
+            op += Array("\(fixedTwoDecimal(hundredths: want)) Tz ".utf8)
+            tzState = want
+        }
         op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
         op += esc(seg.text)
         op += Array(") Tj ET".utf8)
         ops.append(op)
-        // `len(text) * pt * 0.6`, mirroring Python's float arithmetic exactly (see the
-        // CRITICAL FLOAT DETAIL above) rather than the pre-2.0.0 integer-tenths trick.
-        let w = Double(seg.text.width) * Double(pt) * 0.6
         ops += rules(seg.styles, seg.text, x: x, y: y, w: w)
         x += w
     }
     return ops
 }
 
-/// One line carrying fonts that are not the document's Courier. Port of
-/// `pdf._line_ops_proportional`.
-///
-/// Character-count arithmetic is meaningless the moment a span is set in Times or Helvetica,
-/// so this path does NOT compute an x for each span. The whole line goes into ONE text
-/// object, positioned once, and each span is written with `Tj`: PDF's own natural advance
-/// then carries the pen, which is the only exact answer available without font metrics.
-/// Jon's ruling: "don't do per-column x math -- draw the span and let natural advance carry."
-///
-/// The one thing that still needs a coordinate is a decoration rule, which is a path and
-/// cannot live inside a text object. Those are placed from the `familyAdvance` estimate and
-/// drawn after the text — an underline may run a little long or short under a proportional
-/// face. Approximating the rule beats dropping it, and it is the only approximation on this
-/// path.
-private func lineOpsProportional(
-    _ segs: [LineSegment], left: Double, y: Double, size: Int, res: FontResources
-) -> [[UInt8]] {
-    var textOps: [[UInt8]] = [
-        Array("BT \(fixedOneDecimalDouble(left)) \(fixedOneDecimalDouble(y)) Td".utf8)
-    ]
-    var ruleOps: [[UInt8]] = []
-    var x = left
-    for seg in segs {
-        let (pt, rise) = sized(seg.styles, seg.size)
-        let font = res.ref(base14(seg.family, bold: seg.styles.contains(.bold),
-                                  italic: seg.styles.contains(.italic)))
-        var op = Array("/\(font) \(pt) Tf \(rise) Ts (".utf8)
-        op += esc(seg.text)
-        op += Array(") Tj".utf8)
-        textOps.append(op)
-        let w = Double(seg.text.width) * Double(pt) * familyAdvance(seg.family)
-        ruleOps += rules(seg.styles, seg.text, x: x, y: y, w: w)
-        x += w
-    }
-    textOps.append(Array("ET".utf8))
-    return textOps + ruleOps
-}
-
+/// - Parameter lead: the DOCUMENT DEFAULT baseline advance. A line that carries its own
+///   (`PageLine.lead`, from the `.lh` in force where it sat) advances by that instead — the
+///   stateful-`.lh` half of the same ruling.
 /// - Parameter fonts: `doc.fonts` in PRINTED mode and empty everywhere else (Modern is
-///   Courier by design), so a line only leaves the fixed-pitch path when the document itself
-///   asked for another face or another size.
+///   Courier by design), so a span only leaves the document's own fixed pitch when the file
+///   itself asked for another face, another size or another advance.
 /// - Parameter res: the document-wide font table. One instance is shared by every page, so
 ///   the `/Fn` numbering is stable across the whole file; a fresh one is made when a caller
 ///   (every test in `PDFWriterTests.swift`) renders a page in isolation.
+///
+/// A LINE'S LEAD IS THE SPACE ABOVE IT, not below it, and that is measured rather than
+/// assumed. `.lh` is a printer VMI: WordStar sets the vertical motion index and the line
+/// feeds that follow use it, so the command — which sits in the file before the line it was
+/// typed for — governs the feed that arrives ON that line. The reference archive's banner
+/// document proves it: it prints one 72pt word, sets `.lh.05"`, and prints the same word
+/// again, to overprint a shadow 0.05in (3.6pt) below the first. Read the other way round —
+/// each lead spending itself below its own line — the two copies land 14pt apart and the
+/// shadow is just a second, blurry banner. The first line of a page takes its position from
+/// `top` and no lead at all.
 func pageStream(
     _ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHeight,
     lead: Double = Double(PDFMetrics.lead), size: Int = PDFMetrics.size,
@@ -319,7 +451,13 @@ func pageStream(
     // The baseline of the first line: down from the top of the paper by the margin, then by
     // one line's height, because `Td` positions a baseline and not a line's top edge.
     var y = Double(pageHeight - top - size)
-    for line in pagelines {
+    // Horizontal scaling persists across text objects within a content stream; it starts at
+    // PDF's own default on every page. See `lineOpsPrinted`.
+    var tzState = hundredths(tzDefault)
+    for (n, line) in pagelines.enumerated() {
+        if n > 0 {
+            y -= line.lead ?? lead
+        }
         var segs: [LineSegment] = []
         // Coalesced FIRST (pdf.py:136): the wrapper leaves one segment per word and per
         // space-run, and each segment costs a text-showing operator. Merging runs that share
@@ -330,14 +468,10 @@ func pageStream(
             }
             let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
             segs.append(LineSegment(text: rendered.text, styles: span.styles,
-                                    family: rendered.family, size: rendered.size))
+                                    family: rendered.family, size: rendered.size,
+                                    entry: rendered.entry, indent: false))
         }
-        if segs.allSatisfy({ $0.family == .courier && $0.size == size }) {
-            ops += lineOpsCourier(segs, left: left, y: y, size: size, res: res)
-        } else {
-            ops += lineOpsProportional(segs, left: left, y: y, size: size, res: res)
-        }
-        y -= lead
+        ops += lineOpsPrinted(segs, left: left, y: y, size: size, res: res, tzState: &tzState)
     }
     return joined(ops, separator: 0x0A)                                 // Python's b'\n'.join
 }

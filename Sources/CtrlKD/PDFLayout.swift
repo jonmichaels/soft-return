@@ -47,11 +47,62 @@ public enum PDFMetrics {
     public static let maxCols = 65
 }
 
-/// One laid-out line: styled segments, wrapped and ready to place. Spans are the IR's
-/// text-plus-styles pair and are exactly what a segment is, so this is that type and not a
-/// second one — the difference is only that a `PageLine`'s spans have been through the
-/// wrapper and never contain a line break.
-public typealias PageLine = [Span]
+/// One laid-out line: styled segments, wrapped and ready to place, plus the line's own LEAD.
+///
+/// Spans are the IR's text-plus-styles pair and are exactly what a segment is, so the
+/// segments ARE `Span`s and not a second type — the difference is only that a `PageLine`'s
+/// spans have been through the wrapper and never contain a line break. This was a plain
+/// `[Span]` until the stateful-`.lh` work; it is a collection OF spans now, for the same
+/// reason Python's `PageLine` is a `list` subclass rather than a list: the line needs one
+/// attribute of its own and every existing use of it is still a use of the sequence.
+///
+/// `lead` (2026-08-05) is this line's baseline-to-baseline advance in POINTS, or `nil` for
+/// "the document's default". It is `Line.lead48` — the `.lh` in force where the line sat —
+/// converted once, at the layout boundary, so the writer's loop never has to know about
+/// 48ths. Lines this emitter MAKES rather than reads (footnote areas, wrapped Modern text,
+/// blank fillers) leave it `nil` by construction: they are the emitter's own furniture and
+/// belong on the document's default lead.
+public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplaceableCollection,
+                        ExpressibleByArrayLiteral, Hashable, Sendable {
+    public var spans: [Span]
+    public var lead: Double?
+
+    public init() {
+        spans = []
+        lead = nil
+    }
+
+    public init(_ spans: [Span], lead: Double? = nil) {
+        self.spans = spans
+        self.lead = lead
+    }
+
+    public init(arrayLiteral elements: Span...) {
+        self.init(elements)
+    }
+
+    public var startIndex: Int { spans.startIndex }
+    public var endIndex: Int { spans.endIndex }
+
+    public subscript(position: Int) -> Span {
+        get { spans[position] }
+        set { spans[position] = newValue }
+    }
+
+    public mutating func replaceSubrange<C: Collection>(
+        _ subrange: Range<Int>, with newElements: C
+    ) where C.Element == Span {
+        spans.replaceSubrange(subrange, with: newElements)
+    }
+}
+
+/// One `.lh` value (1/48in units) as points: a point is 1/72in, so `lh * 1.5`. `nil` or
+/// non-positive -> `nil`, meaning "no answer here, use the document's default". Port of
+/// `pdf._lead_pt`.
+func leadPt(_ lh48: Double?) -> Double? {
+    guard let lh48, lh48 > 0 else { return nil }
+    return lh48 * 1.5
+}
 
 /// One page of laid-out lines, top to bottom.
 public typealias Page = [PageLine]
@@ -117,7 +168,7 @@ public func wrapLine(_ spans: [Span], width: Int) -> [PageLine] {
 /// no font runs has `nil` on every span and is unaffected, which is why no fontless byte
 /// changed.
 public func coalesce(_ line: PageLine) -> PageLine {
-    var out: PageLine = []
+    var out = PageLine([], lead: line.lead)     // the merge changes segments, never the lead
     for span in line {
         if let last = out.last, last.styles == span.styles, last.font == span.font {
             out[out.count - 1].text += span.text
@@ -411,7 +462,10 @@ private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
                     due.append(note)
                 }
             }
-            items.append(.line(outSpans, due: due))
+            // A PageLine, not a bare list of spans, so the line's own `.lh` survives the
+            // footnote paginator too — body lines keep their lead whether or not the
+            // document has notes.
+            items.append(.line(PageLine(outSpans, lead: leadPt(line.lead48)), due: due))
         }
     }
     return items
@@ -493,6 +547,17 @@ private func resolvedPrintedPageHeight(_ doc: Document) -> Int {
 ///
 /// Clamped to at least `footnoteFloor + 1` lines either way, so a degenerate/tiny page can
 /// never divide the page-bottom math by, or loop over, too little room.
+///
+/// SECOND KNOWN LIMIT, added with stateful `.lh` (2026-08-05). Capacity is computed at the
+/// DOCUMENT-DEFAULT line height — `textLinesPerPage` on `page.lh48`, the file's first `.lh`.
+/// A document that changes leading mid-page therefore paginates at a fixed lines-per-page
+/// while its lines advance at their own leads, so a page of tightly-led text ends early and a
+/// page of banners can run long. Whether WordStar RECOMPUTED lines-per-page as `.lh` changed
+/// is UNMEASURED — register open question #15 — and the honest options (recompute per line,
+/// or accumulate points until the text height is used up) are different answers to a question
+/// no manual page settles. Guessing here would silently repaginate every multi-`.lh` document
+/// on an assumption; leaving capacity where the evidence is keeps the change to what was
+/// ruled: leads, not pagination.
 func printedCap(_ doc: Document) -> Int {
     if let page = doc.page {
         return max(footnoteFloor + 1, page.textLines)
@@ -541,9 +606,13 @@ func printedTop(_ doc: Document) -> Int {
 /// `_printed_lead` (pdf.py, ctrl-kd 1.3.0): `.lh` is 1/48in units, a point is 1/72in ->
 /// `lh48 * 1.5`. Default `.lh 8` IS the 12pt lead this emitter always used. Print streams
 /// (no `page` meta) keep the fixed lead.
+/// Only the DEFAULT: `.lh` is stateful and a line that was set at a different leading carries
+/// its own (`Line.lead48` -> `PageLine.lead`), which `pageStream` honours per line. This is
+/// what a line WITHOUT one falls back to, and what page CAPACITY is still computed at (see
+/// `printedCap`).
 func printedLead(_ doc: Document) -> Double {
-    guard let page = doc.page, page.lh48 > 0 else { return Double(PDFMetrics.lead) }
-    return page.lh48 * 1.5
+    guard let page = doc.page else { return Double(PDFMetrics.lead) }
+    return leadPt(page.lh48) ?? Double(PDFMetrics.lead)
 }
 
 /// Type size in points for printed mode, from `.cw`: character width in 1/120in units,

@@ -26,10 +26,28 @@ public struct Line: Hashable, Sendable {
     /// currently ends, including mid-paragraph.
     public var softpage: Bool
 
-    public init(spans: [Span] = [], soft: Bool = false, softpage: Bool = false) {
+    /// The line height IN FORCE ON THIS LINE, in `.lh`'s own 1/48in units — `nil` meaning
+    /// "the document's own default" (`Document.page?.lh48`), which is the overwhelmingly
+    /// common case and keeps the field free for every file that never changes leading.
+    ///
+    /// `.lh` is STATEFUL: it applies from where it appears onward, exactly like `.oc`/`.lm`,
+    /// and real documents switch it constantly (one archive file alternates `.lh10pt` and
+    /// `.lh16pt` around its banner headings). The page geometry's `lh48` is the FIRST
+    /// occurrence — one resolved answer per document, which is what a consumer needs for a
+    /// default and for `--diagnose` — and resolving ONLY that stacked 72pt banners on a
+    /// single 14pt lead, which is the bug this field exists to fix. Register C24.
+    ///
+    /// A LEAD IS THE SPACE ABOVE ITS LINE, not below it: `.lh` is a printer VMI, set before
+    /// the feed that lands on the line it was typed for. See `pageStream` for the archive
+    /// document that measures it.
+    public var lead48: Double?
+
+    public init(spans: [Span] = [], soft: Bool = false, softpage: Bool = false,
+                lead48: Double? = nil) {
         self.spans = spans
         self.soft = soft
         self.softpage = softpage
+        self.lead48 = lead48
     }
 
     /// All span text joined, e.g. for search or format-agnostic display.

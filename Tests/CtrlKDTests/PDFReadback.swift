@@ -119,6 +119,17 @@ func baseFonts(_ pdf: [UInt8]) -> [String: String] {
     return out
 }
 
+/// A coordinate as the writer will PRINT it — `'%.1f'` — so a test compares the number that
+/// is actually in the file rather than the one before rounding.
+func tenth(_ value: Double) -> Double {
+    Double(fixedOneDecimalDouble(value))!
+}
+
+/// A `Tz` percentage as the writer will PRINT it — `'%.2f'`, i.e. Python's `round(x, 2)`.
+func hundredth(_ value: Double) -> Double {
+    Double(hundredths(value)) / 100.0
+}
+
 /// The `/Fn` name a face was registered under in this PDF.
 func fontName(for baseFont: String, in pdf: [UInt8]) -> String? {
     baseFonts(pdf).first { $0.value == baseFont }?.key

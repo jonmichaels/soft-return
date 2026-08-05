@@ -42,6 +42,17 @@ struct FormatState {
     var paranumFormat: String? = nil        // `.p#`
     var condCol: [String] = []              // `.cc`
     var tabStops: [Double]? = nil           // `.tb`
+    /// `.lh` — line height in 1/48in, as RUNNING state. Register C24.
+    ///
+    /// Also read (first occurrence only) by `parsePageDot` into the page geometry, which is
+    /// the DOCUMENT-LEVEL default — page capacity, the emitters' baseline lead, `--diagnose`.
+    /// That reading is not wrong; it is incomplete. `.lh` is stateful like every other
+    /// command in this struct, and a document that sets `.lh10pt` before its body and
+    /// `.lh16pt` before each banner heading means both, in order. Carried per LINE
+    /// (`Line.lead48`) because that is the granularity it acts at — a lead is the distance
+    /// between baselines, not a property of a paragraph, which is also why it is NOT part of
+    /// `blockFormat` and therefore never closes a block.
+    var lead48: Double? = nil
 
     /// Everything stamped onto a `Block` when it opens. A change to ANY of these has to
     /// close the current block, because a single block cannot hold two values of it:
@@ -196,6 +207,12 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
             if a[3] == 0x6C { state.orientation = .landscape }      // 'l'
             else if a[3] == 0x70 { state.orientation = .portrait }  // 'p'
         }
+    case "LH":
+        // Line height, 1/48in units — RUNNING state, unlike the page geometry's first-wins
+        // read of the same command. See `FormatState.lead48`. Junk or a non-positive height
+        // is rejected by `resolveLhArg` and the state stands, exactly as `.lm` does.
+        guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
+        if let resolved = resolveLhArg(value, unit) { state.lead48 = resolved }
     case "LM", "RM", "PM":
         // Print columns at 10 CPI, matching `.po`; a unit suffix converts, since the
         // archive writes both `.rm 65` and `.rm 6.5"`.

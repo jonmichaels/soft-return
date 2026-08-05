@@ -332,6 +332,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // core.py:275-286 — empty lines and empty blocks are never appended.
     func closeLine() {
         if !curLine.spans.isEmpty {
+            // The `.lh` in force AS THIS LINE ENDS — a dot command sits on its own line, so
+            // `fmt` cannot change part-way through a text line. Absolute here (WordStar's
+            // own 8/48 until the file says otherwise); normalised against the document
+            // default once that is known, below.
+            curLine.lead48 = fmt.lead48 ?? defaultLh48
             cur.lines.append(curLine)
         }
         curLine = Line()
@@ -559,7 +564,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // `soft` records which kind it was: `.ls` filler versus the author's own
             // return.
             closeLine()
-            let blank = Line(spans: [], soft: physical.separator == .blankSoft)
+            let blank = Line(spans: [], soft: physical.separator == .blankSoft,
+                             lead48: fmt.lead48 ?? defaultLh48)
             if cur.lines.isEmpty, let last = blocks.indices.last,
                blocks[last].kind == .para {
                 // The text line before this one carried `.para` and already closed
@@ -620,6 +626,30 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // deliberate exclusions). Defaults -> 55, NOT the 60 a naive 1in-margin Letter
     // computation gives.
     pageGeometry.textLines = textLinesPerPage(pl: plLines, mt: mtLines, mb: mbLines, lh48: lh48)
+
+    // `Line.lead48` was recorded ABSOLUTELY; now that the document default is known, every
+    // line that simply agrees with it goes back to nil. The field then means what it says —
+    // "this line's lead DIFFERS" — so the common case (one `.lh`, or none) leaves the whole
+    // document clean and an emitter can test one optional instead of comparing floats on
+    // every line.
+    //
+    // Note the asymmetry this deliberately preserves: the default is the FIRST `.lh` in the
+    // file, so lines BEFORE it keep an explicit 8.0 (WordStar's own 6 LPI, which is what
+    // they really printed at) rather than being back-dated to a setting that had not
+    // happened yet.
+    var lhVaries = false
+    for b in blocks.indices {
+        for l in blocks[b].lines.indices {
+            if blocks[b].lines[l].lead48 == lh48 {
+                blocks[b].lines[l].lead48 = nil
+            } else if blocks[b].lines[l].lead48 != nil {
+                lhVaries = true
+            }
+        }
+    }
+    // One flag so a consumer (and the diagnostics) can say "this document changes its
+    // leading" without walking every line.
+    pageGeometry.lhVaries = lhVaries
 
     return Document(
         blocks: blocks,
@@ -893,7 +923,7 @@ func resolveColsArg(_ value: Double, _ unit: [UInt8]?) -> Double {
 /// match it, so it stays default + verbatim (in `Document.dotCommands`). A non-positive
 /// height is meaningless: rejected (`nil`), default stands. Direct port of
 /// `_resolve_lh_arg`.
-private func resolveLhArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
+func resolveLhArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
     let resolved = dotArgInches(value, unit).map { $0 * 48.0 } ?? value
     return resolved > 0 ? resolved : nil
 }
