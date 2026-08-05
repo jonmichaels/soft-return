@@ -72,7 +72,7 @@ public func wrapLine(_ spans: [Span], width: Int) -> [PageLine] {
     var tokens: [Span] = []
     for span in spans {
         for piece in splitKeepingSpaceRuns(span.text) {
-            tokens.append(Span(text: piece, styles: span.styles))
+            tokens.append(Span(text: piece, styles: span.styles, font: span.font))
         }
     }
 
@@ -175,7 +175,8 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
             let extra = (block.heading != 0 ? Style.bold : []).union(block.styleAttrs)
             let spans = extra.isEmpty
                 ? line.spans
-                : line.spans.map { Span(text: $0.text, styles: $0.styles.union(extra)) }
+                : line.spans.map { Span(text: $0.text, styles: $0.styles.union(extra),
+                                        font: $0.font) }
             items.append(contentsOf: wrapLine(spans, width: PDFMetrics.maxCols)
                 .map(LayoutItem.line))
         }
@@ -384,7 +385,8 @@ private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
             let extra = (block.heading != 0 ? Style.bold : []).union(block.styleAttrs)
             let baseSpans = extra.isEmpty
                 ? line.spans
-                : line.spans.map { Span(text: $0.text, styles: $0.styles.union(extra)) }
+                : line.spans.map { Span(text: $0.text, styles: $0.styles.union(extra),
+                                        font: $0.font) }
 
             var outSpans: [Span] = []
             var due: [Note] = []
@@ -395,7 +397,8 @@ private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
                 }
                 let note = referenced[cursor]
                 cursor += 1
-                outSpans.append(Span(text: noteMarker(note, doc: doc), styles: span.styles))
+                outSpans.append(Span(text: noteMarker(note, doc: doc), styles: span.styles,
+                                     font: span.font))
                 if note.kind == .footnote || note.kind == .annotation {
                     due.append(note)
                 }
