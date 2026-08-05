@@ -54,10 +54,19 @@ public struct EmitOptions: Hashable, Sendable {
     /// consumer can attach its own typography downstream.
     public var styles: Bool
 
+    /// Which importer the RTF `\fonttbl` names are chosen for (ctrl-kd's `fonts_target=`
+    /// and `--fonts`). Read by `emitRTF` alone: the HTML stack carries the era name and
+    /// every alternate, so it needs no target, and the flat formats carry no font at all.
+    ///
+    /// Default `.office` because it is the widest single answer — Word AND Google Docs
+    /// both resolve the Microsoft names (Jon's ruling, 2026-08-04 night).
+    public var fontsTarget: FontsTarget
+
     public init(title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes,
-                styles: Bool = true) {
+                styles: Bool = true, fontsTarget: FontsTarget = .office) {
         self.title = title
         self.notes = notes
         self.styles = styles
+        self.fontsTarget = fontsTarget
     }
 }

@@ -369,6 +369,29 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
     #expect(message.contains("ignored explicit argument"))
 }
 
+// MARK: - Render target (--fonts)
+
+@Test func fontsTargetDefaultsToOfficeAndValidatesItsChoices() {
+    // Jon's ruling, 2026-08-04 night: office is the DEFAULT because it is the widest
+    // single answer — Word and Google Docs both resolve the Microsoft names.
+    guard case .run(let byDefault) = parseArguments(["A.WS"]),
+          case .run(let mac) = parseArguments(["--fonts", "mac", "A.WS"]),
+          case .run(let attached) = parseArguments(["--fonts=google", "A.WS"]) else {
+        Issue.record("expected a run")
+        return
+    }
+    #expect(byDefault.fontsTarget == .office)
+    #expect(mac.fontsTarget == .mac)
+    #expect(attached.fontsTarget == .google)
+
+    guard case .usageError(let message) = parseArguments(["--fonts", "libreoffice", "A.WS"]) else {
+        Issue.record("expected a usage error")
+        return
+    }
+    #expect(message.contains("invalid choice: 'libreoffice'"))
+    #expect(message.contains("'office', 'mac', 'google'"))
+}
+
 // MARK: - Note selection (--no-notes / --comments)
 
 @Test func defaultNotesOmitCommentsOnly() {

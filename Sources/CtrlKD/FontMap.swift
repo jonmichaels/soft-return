@@ -68,6 +68,87 @@ private let genericCSS: [GenericStyle: String] = [
     .sans: "sans-serif", .serif: "serif", .script: "cursive", .display: "fantasy",
 ]
 
+// ---- render targets (Jon's ruling, 2026-08-04 night) -----------------------
+// One RTF file cannot serve every importer (Office-private fonts, Cocoa's
+// falt-blindness, Docs' web catalog), so the CALLER picks a target:
+//   office  Word-first (default): Microsoft names, resolved by Word AND Docs
+//   mac     Cocoa-native names -- TextEdit/Pages/Soft Return.app world
+//   google  Docs' own catalog where it has something Office lacks (chancery)
+// Coverage rule: a family with no entry in FONT_ALTS still gets a USEFUL face
+// from its font block's own generic-style bits -- never nothing.
+
+/// Which importer the RTF font names are chosen FOR. Python spells this as the string
+/// `fonts_target='office'` and lets argparse's `choices` police it; here the closed
+/// vocabulary is the type, so `GENERIC_PRIMARY.get(target, GENERIC_PRIMARY['office'])`'s
+/// unknown-target arm is unreachable by construction and is not written below.
+public enum FontsTarget: String, Hashable, Sendable, CaseIterable {
+    case office
+    case mac
+    case google
+}
+
+/// `GENERIC_PRIMARY` (fontmap.py) — the target's face for each of the font block's own
+/// generic-style bits, which is what an unmapped (or unnamed) font lands on.
+let genericPrimary: [FontsTarget: [GenericStyle: String]] = [
+    .office: [.sans: "Arial", .serif: "Times New Roman",
+              .script: "Monotype Corsiva", .display: "Impact"],
+    .mac:    [.sans: "Helvetica", .serif: "Georgia",
+              .script: "Apple Chancery", .display: "Futura"],
+    .google: [.sans: "Arial", .serif: "Times New Roman",
+              .script: "Dancing Script", .display: "Impact"],
+]
+
+/// `TARGET_OVERRIDES` (fontmap.py) — where a target's best name differs from the head of
+/// `fontAlternates`, which is Office-first.
+let targetOverrides: [FontsTarget: [String: String]] = [
+    .office: [:],
+    // macOS-native stand-ins for the Office-private set: Futura carries the
+    // Avant Garde geometry; Iowan Old Style is the closest native to
+    // Bookman's warmth; Georgia was DESIGNED as a screen Schoolbook-alike.
+    .mac: [
+        "avant garde": "Futura",
+        "bookman": "Iowan Old Style",
+        "cntry schlbk": "Georgia",
+        "newcntschlbk": "Georgia",
+        "new century schoolbook": "Georgia",
+        "century": "Georgia",
+        "american classic": "Iowan Old Style",
+        "helv": "Helvetica",
+        "helvetica": "Helvetica",
+        "univers": "Helvetica Neue",
+    ],
+    // Docs resolves the Microsoft names natively; its one real gap is a
+    // chancery script -- Dancing Script is the stock calligraphic answer.
+    .google: [
+        "zapfchancery": "Dancing Script",
+        "zapf chancery": "Dancing Script",
+        "coronet": "Dancing Script",
+    ],
+]
+
+/// `(primary, falt_or_nil)` for an RTF fonttbl entry. The primary is the target's best
+/// AVAILABLE name; the falt is the next-best MODERN name -- never the era name (Jon: 'no
+/// use keeping the ALT font that crazy title' -- nothing modern resolves 'PS SansSer
+/// Qual'; the verbatim era name stays first-class in `Document.fonts` and the HTML
+/// stacks). A family with no table entry gets the target's generic primary from the font
+/// block's own style bits, so EVERY font run lands on a usable face.
+///
+/// Python's `rtf_fonts` (fontmap.py). `generic` is optional here as it is there, even
+/// though `FontChange.genericStyle` always has one: the falsy-`generic_style` arm is what
+/// makes the "no primary at all" return reachable, and dropping it would drop that.
+func rtfFonts(_ family: String, generic: GenericStyle? = nil,
+              target: FontsTarget = .office) -> (primary: String?, falt: String?) {
+    let key = asciiLowercased(family)
+    let alts = fontAlternates[key] ?? []
+    let primary = targetOverrides[target]?[key]
+        ?? alts.first
+        ?? generic.flatMap { genericPrimary[target]?[$0] }
+    guard let primary else { return (family.isEmpty ? nil : family, nil) }
+    // Python's `next((a for a in alts if a != primary), None)`: the FIRST alternate that
+    // isn't already the primary — a second modern name, or nothing.
+    return (primary, alts.first { $0 != primary })
+}
+
 /// CSS-style ordered list: original family first, then modern alternates, then the
 /// generic from the font block's own style bits.
 func fontStack(_ family: String, generic: GenericStyle? = nil) -> [String] {
