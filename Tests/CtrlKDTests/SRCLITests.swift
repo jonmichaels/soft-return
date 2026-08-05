@@ -349,12 +349,12 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 }
 
 @Test func versionLineNamesBothTheCLIAndTheReference() {
-    #expect(versionLine == "sr 2.0.0 (ctrl-kd parity 3.0.0)")
+    #expect(versionLine == "sr 2.1.0 (ctrl-kd parity 3.0.0)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
     #expect(recorder.out == [versionOutput])
-    #expect(versionOutput.hasSuffix("sr 2.0.0 (ctrl-kd parity 3.0.0)"))
+    #expect(versionOutput.hasSuffix("sr 2.1.0 (ctrl-kd parity 3.0.0)"))
     #expect(versionOutput.contains("_____       ______     ____"))  // the SOFT RETURN Slant banner leads
     #expect(recorder.written.isEmpty)
 }

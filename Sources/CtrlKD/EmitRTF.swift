@@ -88,7 +88,15 @@ private func rtfDestination(_ note: Note, label: String) -> String {
 /// which already renders a stray sentinel as `{\super 1}` (fnref contributes no control
 /// word of its own, only whatever `sup` it also carries).
 private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions,
-                         fontControl: [Int: String] = [:]) -> String {
+                         fontControl: [Int: String] = [:], printed: Bool = false) -> String {
+    // A 0x0F print control's display string is SCREEN-ONLY: on paper WordStar sent the
+    // raw printer payload and advanced by the block's HMI word. The printed facsimile
+    // does the same -- the declared width of blank space (0 for LJ6DTP's rule-drawing
+    // controls), in the 10-CPI print columns the rest of printed layout uses.
+    if printed, let hmi = span.pctlHMI {
+        let pad = roundHalfToEven(Double(hmi) / 180.0)
+        return pad > 0 ? "{" + String(repeating: " ", count: pad) + "}" : ""
+    }
     // The font control follows the style control words: Python joins `_RTF_ON` over the
     // sorted style codes (a `fontN` contributes nothing there) and only then appends the
     // font's own `\fK\fsN`.
@@ -214,7 +222,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         var lines = (printed ? block.lines : mergedLines(block)).map { line in
             line.spans
                 .map { rtfBodySpan($0, refNotes: refNotes, doc: doc, options: options,
-                                   fontControl: fontTable.control) }
+                                   fontControl: fontTable.control, printed: printed) }
                 .joined()
         }
         if block.heading != 0 {

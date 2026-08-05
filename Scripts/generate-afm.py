@@ -84,13 +84,12 @@ HEADER = '''\
 /// deduplicates by VALUE, so that sharing is a measured fact about the tables, not an
 /// assumption written into the script.
 ///
-/// Known and deliberate limit: the font objects this emitter writes carry no `/Encoding`, so
-/// a viewer draws the faces' built-in StandardEncoding. Over 0x20-0x7E that agrees with
-/// Latin-1 for every code but 0x27 and 0x60 (quote forms); above 0x7E it does not. Widths for
-/// accented Latin-1 are therefore what the AUTHOR's bytes mean, not what an un-re-encoded
-/// viewer draws. Fixing that means adding `/Encoding` to every font object, which would change
-/// every PDF this project has ever produced — a separate decision, recorded here rather than
-/// made in passing.
+/// Since 2026-08-05 the text font objects declare `/Encoding /WinAnsiEncoding` (which IS
+/// cp1252) and the writer's `esc` encodes cp1252 instead of Latin-1, so bytes, glyphs and
+/// these widths agree over the WHOLE range — including the 0x80-0x9F typographic row
+/// (curly quotes, en/em dashes, ellipsis, bullet, dagger, trademark, ligatures), which
+/// Latin-1 has no glyphs for at all. The generator overlays real Adobe AFM widths for that
+/// row onto the Latin-1-named base tables below, exactly as ctrl-kd's own `afm.py` does.
 ///
 /// A code with no glyph in a face gets 0. Callers must treat a zero-width string as "no metric
 /// available" rather than dividing by it (`tzScale` does).
@@ -104,9 +103,12 @@ let afmCourierWidth = 600
 FOOTER = '''
 /// Natural width of `text` set in `baseFont`, in 1/1000 em.
 ///
-/// `text` is measured as the writer will WRITE it — encoded Latin-1, with anything outside
-/// that repertoire replaced by `?`, which is exactly what `esc` does. Measuring the string
-/// directly would count a character the PDF never receives.
+/// `text` is measured as the writer will WRITE it — encoded cp1252 (the declared
+/// `/WinAnsiEncoding`), with anything outside that repertoire replaced by `?`, which is
+/// exactly what `esc` does (modulo `esc`'s own lookalike-degradation pass — see
+/// `PDFWriter.swift`; this measures the text as GIVEN, matching ctrl-kd's
+/// `string_width_1000`, which does not apply that pass either). Measuring the string
+/// directly (as Unicode scalars) would count a character the PDF never receives.
 ///
 /// An unknown base font falls back to Courier's fixed 600: a face this table does not carry
 /// cannot be measured, and 600 is this emitter's own default pitch, not a guess at the
@@ -114,8 +116,8 @@ FOOTER = '''
 func stringWidth1000(_ text: String, _ baseFont: String) -> Int {
     let table = afmWidths[baseFont] ?? afmCourier
     var total = 0
-    for scalar in text.unicodeScalars {
-        total += table[scalar.value <= 0xFF ? Int(scalar.value) : 0x3F]   // 0x3F = '?'
+    for byte in cp1252Encode(text) {
+        total += table[Int(byte)]
     }
     return total
 }

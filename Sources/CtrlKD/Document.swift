@@ -209,6 +209,38 @@ public struct PageGeometry: Hashable, Sendable {
     }
 }
 
+/// Whether a `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` event sets a header or a footer line.
+public enum HFKind: Hashable, Sendable {
+    case header
+    case footer
+}
+
+/// One `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` occurrence, IN DOCUMENT ORDER, with the block it
+/// precedes. WordStar applies a running head/foot from the PAGE where it is defined — on
+/// that page itself only if no text has printed there yet, else from the next page.
+/// `Document.headers`/`.footers` (the FINAL state) cannot express that: a manuscript that
+/// defines its head after page 1's title block gets no running head on page 1, which the
+/// final-state dicts alone cannot distinguish from "defined from the very start." The
+/// paginator replays these events instead — see `PDFLayout.swift`'s `Page`.
+public struct HFEvent: Hashable, Sendable {
+    public var kind: HFKind
+    /// 1-5 — `.he`/`.fo` are line 1, the numbered forms select their own.
+    public var line: Int
+    /// The text as `parseHeadFoot` decoded it (an empty string CLEARS that line).
+    public var text: String
+    /// The index into `Document.blocks` this event precedes: the block still open (if it
+    /// has content) or the next one to open. Mirrors the `blockIndex`/`pointsAt` convention
+    /// `parseCollectDot` already uses for TOC/index entries.
+    public var blockAnchor: Int
+
+    public init(kind: HFKind, line: Int, text: String, blockAnchor: Int) {
+        self.kind = kind
+        self.line = line
+        self.text = text
+        self.blockAnchor = blockAnchor
+    }
+}
+
 /// COMMENT.BUG: a documented WordStar bug (Sawyer, WS archive REF notes, 2013) — see
 /// `ParsePrintstream.swift`'s `detectCommentBug` for the full writeup. Detection is
 /// necessarily a heuristic; read this as "this signature is present", not "this file
@@ -344,6 +376,10 @@ public struct Document: Hashable, Sendable {
     /// Running foot text by line number (1-5). `.fo` is line 1; `.f1`-`.f5` select
     /// their own. See `headers` for the measured geometry.
     public var footers: [Int: String]
+    /// Every `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` occurrence, in document order, with the
+    /// block it precedes — see `HFEvent`. `headers`/`footers` above are the FINAL state,
+    /// a convenience view kept for callers that don't need per-page replay.
+    public var hfEvents: [HFEvent]
     /// Name of the `Era` whose rules were applied (`Era.swift`) — so a caller can see
     /// WHICH release's behaviour this document was parsed under, not just which variant
     /// was detected. Mirrors Python's `meta['era']`.
@@ -367,6 +403,7 @@ public struct Document: Hashable, Sendable {
         era: String? = nil,
         headers: [Int: String] = [:],
         footers: [Int: String] = [:],
+        hfEvents: [HFEvent] = [],
         formatting: Formatting = Formatting(),
         graphics: [String] = [],
         colours: [ColourChange] = [],
@@ -397,6 +434,7 @@ public struct Document: Hashable, Sendable {
         self.era = era
         self.headers = headers
         self.footers = footers
+        self.hfEvents = hfEvents
         self.formatting = formatting
         self.graphics = graphics
         self.colours = colours

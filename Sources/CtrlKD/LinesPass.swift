@@ -21,6 +21,10 @@ public enum LineSeparator: String, Hashable, Sendable {
     case blankSoft = "blank-soft"
     /// A blank physical line whose terminator was HARD — the author's own Return.
     case blankHard = "blank-hard"
+    /// A BARE CR terminator (WS documents only, `overprintCr`): `^PM` Overprint Line —
+    /// the NEXT physical line prints at THIS line's own baseline. No blank-counting, no
+    /// wrap inference: this is its own thing.
+    case over
 }
 
 /// One physical line and the break that followed it. `text` is the RAW bytes as they
@@ -73,9 +77,13 @@ public struct LinesPassResult: Hashable, Sendable {
 ///   paragraph (204 spurious `\line` breaks in one story's RTF — found by Jon reading the
 ///   export, 2026-08-04). In WS5+ the editor re-wraps paragraphs dynamically, so a
 ///   surviving soft return IS wrap by construction; deliberate breaks are hard returns.
+/// - Parameter overprintCr: WS documents only (`parseWS`). A BARE CR (WSFORMAT and the
+///   WS4 manual agree) is `^PM` Overprint Line: the next line prints at THIS line's own
+///   baseline. Gated so a CR-only text file (classic Mac line endings, reaching this via
+///   `parsePrintstream`) never has every line overprint.
 public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
-                      marks: [Int: StructuralMark] = [:],
-                      softIsWrap: Bool = false) -> LinesPassResult {
+                      marks: [Int: [StructuralMark]] = [:],
+                      softIsWrap: Bool = false, overprintCr: Bool = false) -> LinesPassResult {
     // core.py:108-110 — truncate at the first ^Z before anything else. The first BARE
     // one: a 0x1A wrapped in `<1B 1A 1C>` is a character to display, not end of file.
     var body = data
@@ -83,7 +91,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
         body = Array(data[..<cut])
     }
 
-    let lines = splitIntoRawLines(body, tabAt: tabAt, marks: marks)
+    let lines = splitIntoRawLines(body, tabAt: tabAt, marks: marks, overprintCr: overprintCr)
 
     // core.py:120-122 — margin is the 90th percentile of soft-wrapped line lengths
     // (outliers from hanging punctuation sit 1-2 past the true margin), floor 65.
@@ -125,6 +133,14 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
                                         separator: kind == .soft ? .blankSoft : .blankHard,
                                         markPairs: lines[i].marks))
             }
+            i += 1
+            continue
+        }
+
+        if kind == .over {
+            // An overprint separator is its own thing: no blank-counting, no wrap
+            // inference -- the next physical line shares this baseline.
+            out.append(PhysicalLine(text: text, separator: .over, markPairs: lines[i].marks))
             i += 1
             continue
         }
@@ -229,6 +245,8 @@ private enum BreakKind {
     case soft
     case hard
     case eof
+    /// A BARE CR (WS documents only) — `^PM` Overprint Line.
+    case over
 }
 
 /// Hand-rolled equivalent of
@@ -251,7 +269,8 @@ private enum BreakKind {
 /// TAB, not typed by the author — see the wrap test, where the difference decides whether
 /// a paragraph reflows at all. A3.
 private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
-                               marks: [Int: StructuralMark] = [:])
+                               marks: [Int: [StructuralMark]] = [:],
+                               overprintCr: Bool = false)
     -> [(text: [UInt8], kind: BreakKind, machineIndent: Bool,
          marks: [(Int, StructuralMark)])] {
     var result: [(text: [UInt8], kind: BreakKind, machineIndent: Bool,
@@ -291,7 +310,11 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
             emit(.hard, 2); i += 2
         } else if b == 0x8d || b == 0x8a {
             emit(.soft, 1); i += 1
-        } else if b == 0x0d || b == 0x0a {
+        } else if b == 0x0d {
+            // A BARE CR (not paired above with a following LF) is `^PM` Overprint Line
+            // in a WS document; a CR-only text file (classic Mac endings) never opts in.
+            emit(overprintCr ? .over : .hard, 1); i += 1
+        } else if b == 0x0a {
             emit(.hard, 1); i += 1
         } else {
             text.append(b)
@@ -305,13 +328,15 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
     // soft page break sits between two lines, not within one — belongs to the line
     // that FOLLOWS it, at relative offset 0. Otherwise it would be silently dropped,
     // which is the failure the sentinels were replaced to end.
-    for (off, m) in marks.sorted(by: { $0.key < $1.key }) {
-        if let s = starts.first(where: { off >= $0.at && off < $0.at + $0.len }) {
-            result[s.idx].marks.append((off - s.at, m))
-        } else if let n = starts.first(where: { $0.at >= off }) {
-            result[n.idx].marks.append((0, m))
-        } else if let last = starts.last {
-            result[last.idx].marks.append((last.len, m))
+    for (off, mlist) in marks.sorted(by: { $0.key < $1.key }) {
+        for m in mlist {
+            if let s = starts.first(where: { off >= $0.at && off < $0.at + $0.len }) {
+                result[s.idx].marks.append((off - s.at, m))
+            } else if let n = starts.first(where: { $0.at >= off }) {
+                result[n.idx].marks.append((0, m))
+            } else if let last = starts.last {
+                result[last.idx].marks.append((last.len, m))
+            }
         }
     }
     for i in result.indices { result[i].marks.sort { $0.0 < $1.0 } }
