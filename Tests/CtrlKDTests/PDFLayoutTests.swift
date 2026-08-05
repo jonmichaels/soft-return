@@ -275,7 +275,7 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     #expect(coalesce([]) == [])
     // Same styles merge however many segments there are; a different style breaks the run,
     // and an identical style AFTER it starts a new one rather than rejoining the first.
-    let line = [
+    let line: PageLine = [
         Span(text: "a", styles: .bold), Span(text: "b", styles: .bold),
         Span(text: "c"),
         Span(text: "d", styles: .bold),

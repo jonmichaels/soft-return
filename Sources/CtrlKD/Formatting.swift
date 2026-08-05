@@ -66,6 +66,43 @@ func fixedOneDecimalDouble(_ value: Double) -> String {
     return (negative ? "-" : "") + "\(tenths / 10).\(tenths % 10)"
 }
 
+/// A `Double` rounded to hundredths, AS AN INTEGER of hundredths — Python's `round(x, 2)`
+/// with the result kept exact instead of being handed back to binary floating point.
+///
+/// The `Tz` horizontal-scaling operator needs this twice and for two different jobs: it is
+/// written `'%.2f'`, and it is written ONLY WHEN THE VALUE CHANGES, which means the emitter
+/// compares one scaling to the next. Comparing `Double`s rounded to two places is a float
+/// equality test on values that are not exactly representable; comparing hundredths is
+/// integer equality and cannot disagree with the digits actually printed.
+///
+/// Round-half-to-even, Python's tie-break, by the same truncate-and-compare technique as
+/// `fixedOneDecimalDouble` (no libm, see there).
+func hundredths(_ value: Double) -> Int {
+    let negative = value < 0
+    let scaled = (negative ? -value : value) * 100.0
+    let whole = Int(scaled)
+    let fraction = scaled - Double(whole)
+    let rounded: Int
+    if fraction < 0.5 {
+        rounded = whole
+    } else if fraction > 0.5 {
+        rounded = whole + 1
+    } else {
+        rounded = whole % 2 == 0 ? whole : whole + 1
+    }
+    return negative ? -rounded : rounded
+}
+
+/// Python's `'%.2f' % value`, for a value already reduced to exact hundredths by
+/// `hundredths(_:)`.
+func fixedTwoDecimal(hundredths value: Int) -> String {
+    let negative = value < 0
+    let magnitude = negative ? -value : value
+    let fraction = magnitude % 100
+    let tens = fraction / 10
+    return (negative ? "-" : "") + "\(magnitude / 100).\(tens)\(fraction % 10)"
+}
+
 /// Python's `'%0<width>d' % value` — the xref table's `'%010d'`, whose column is fixed
 /// width and whose offsets a reader takes on faith.
 ///

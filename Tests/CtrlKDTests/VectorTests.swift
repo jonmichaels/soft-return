@@ -856,7 +856,7 @@ private func assertPageLine(_ got: PageLine, _ want: [SpanVector], label: String
     let vectors = try loadJob011Vectors().coalesce
     #expect(vectors.count == 1)
     for (i, v) in vectors.enumerated() {
-        assertPageLine(coalesce(spans(v.line)), v.expected, label: "coalesce \(i)")
+        assertPageLine(coalesce(PageLine(spans(v.line))), v.expected, label: "coalesce \(i)")
     }
 }
 
@@ -1084,7 +1084,7 @@ private func loadJob013Vectors() throws -> Job013VectorFile {
     let vectors = try loadJob012Vectors().pageStream
     #expect(vectors.count == 6)
     for v in vectors {
-        let page: Page = v.pagelines.map { spans($0) }
+        let page: Page = v.pagelines.map { PageLine(spans($0)) }
         let got = pageStream(page, top: v.top)
         #expect(hexFromBytes(got) == v.expectedHex, "page_stream \(v.name)")
         // On a mismatch the hex is unreadable; show the operators.
