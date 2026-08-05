@@ -272,7 +272,8 @@ import Testing
     #expect(!spans.contains { $0.text.contains("Before") && $0.font != nil })
 
     let rtf = emitRTF(doc, mode: .modern)
-    #expect(rtf.contains(#"{\f2 Courier{\*\falt Courier New};}"#))   // era name + RTF fallback
+    // modern primary (TextEdit ignores falt), era name preserved in the falt
+    #expect(rtf.contains(#"{\f2 Courier New{\*\falt Courier};}"#))
     #expect(rtf.contains(#"\f2\fs28 "#))                     // 14pt = \fs28
 
     let html = emitHTML(doc, mode: .modern)
