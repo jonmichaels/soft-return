@@ -116,6 +116,12 @@ public func diagnose(path: String, data: [UInt8]) -> JSONValue {
                 "fm_source": .string(page.fmSource.rawValue),
                 "lh_48": .double(page.lh48),
                 "lh_source": .string(page.lhSource.rawValue),
+                // `.lh` is STATEFUL: `lh_48` above is the document DEFAULT (the file's
+                // first occurrence, and what `text_lines` is computed at) and every line
+                // additionally carries the lead in force where it sat. This says whether
+                // any line differs, so a reader of this report knows whether the one
+                // figure above describes the whole document.
+                "lh_varies": .bool(page.lhVaries),
                 "ls": .double(page.ls),
                 "ls_source": .string(page.lsSource.rawValue),
                 // ctrl-kd 2.0.0: `.cw` (character width, 1/120in units — 12 is 10 CPI, the

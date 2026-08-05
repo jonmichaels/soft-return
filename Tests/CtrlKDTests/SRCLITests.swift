@@ -171,6 +171,26 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
     #expect(page["mb_source"] == .string("file"))
     #expect(page["po_cols"] == .double(8.0))
     #expect(page["po_source"] == .string("file"))
+    // `.lh` never changes here, so the one `lh_48` figure describes the whole document.
+    #expect(page["lh_varies"] == .bool(false))
+}
+
+/// `.lh` is stateful, so the single `lh_48` figure is the document DEFAULT and can be an
+/// incomplete description of the file. `lh_varies` is what tells a reader of this report
+/// which of the two it is looking at — the diagnosis of the banner document that switches
+/// leading fifteen times said "8" and stopped there.
+@Test func diagnoseSaysWhenTheDocumentChangesItsLeading() throws {
+    // staged: 6.2.4's type-checker times out on the one-expression form
+    var data = ws7Block(0x00)
+    data += bytes(".lh 8") + HARD
+    data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
+    data += bytes(".lh 16") + HARD
+    data += bytes("A tall line that must sit on its own sixteen forty-eighths lead.") + HARD
+    let page = try #require(normalize(diagnose(path: "/tmp/banner", data: data))
+        .object?["page"]?.object)
+    #expect(page["lh_48"] == .double(8.0))        // still the first occurrence
+    #expect(page["lh_source"] == .string("file"))
+    #expect(page["lh_varies"] == .bool(true))
 }
 
 /// Nothing in the file sets page geometry, so every figure and source falls back to the
