@@ -251,3 +251,35 @@ import Testing
     #expect(!emitRTF(doc, mode: .modern, options: EmitOptions(styles: false))
         .contains(#"\stylesheet"#))
 }
+
+@Test func fontChangesRenderAsRuns() {
+    // Jon's export review: every RTF was Times New Roman -- the font blocks were
+    // recorded and never rendered. A font block is a RUN BOUNDARY: following spans
+    // carry the run, RTF gets a real fonttbl entry + \fN\fs, HTML gets a class plus
+    // generated CSS from the block's own words. Typestyle 3 is 'Courier' in the spec's
+    // table; height 280 VMI = 14pt.
+    // staged: 6.2.4's type-checker times out on the one-expression form
+    var payload = le16(180) + le16(280)
+    payload += le16(3) + [UInt8](repeating: 0, count: 6)
+    var data = ws7Block(0x00) + bytes("Before the change. ")
+    data += ws7Block(0x02, payload: payload)
+    data += bytes("After the change.") + HARD
+    let doc = parseWS(data)
+    let spans = doc.blocks.flatMap(\.lines).flatMap(\.spans)
+    let tagged = spans.filter { $0.font != nil }
+    #expect(!tagged.isEmpty)
+    #expect(tagged.map(\.text).joined().contains("After the change."))
+    #expect(!spans.contains { $0.text.contains("Before") && $0.font != nil })
+
+    let rtf = emitRTF(doc, mode: .modern)
+    #expect(rtf.contains(#"{\f2 Courier;}"#))
+    #expect(rtf.contains(#"\f2\fs28 "#))                     // 14pt = \fs28
+
+    let html = emitHTML(doc, mode: .modern)
+    #expect(html.contains(#"class="ws-font-0""#))
+    #expect(html.contains(".ws-font-0 { font-family:'Courier'; font-size:14pt }"))
+    // --no-styles leaves the class inert: the rule is gone from the head, the class
+    // itself still rides on the span.
+    let bare = emitHTML(doc, mode: .modern, options: EmitOptions(styles: false))
+    #expect(!bare.components(separatedBy: "<body>")[0].contains("ws-font-0"))
+}

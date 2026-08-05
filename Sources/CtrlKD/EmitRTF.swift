@@ -87,9 +87,14 @@ private func rtfDestination(_ note: Note, label: String) -> String {
 /// the `no_notes` vectors); an invalid one (task item 3) falls back to the ordinary group,
 /// which already renders a stray sentinel as `{\super 1}` (fnref contributes no control
 /// word of its own, only whatever `sup` it also carries).
-private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions) -> String {
+private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions,
+                         fontControl: [Int: String] = [:]) -> String {
+    // The font control follows the style control words: Python joins `_RTF_ON` over the
+    // sorted style codes (a `fontN` contributes nothing there) and only then appends the
+    // font's own `\fK\fsN`.
+    let controls = rtfStyleControls(span.styles) + (span.font.flatMap { fontControl[$0] } ?? "")
     guard span.styles.contains(.fnref) else {
-        return "{" + rtfStyleControls(span.styles) + rtfEscape(span.text) + "}"
+        return "{" + controls + rtfEscape(span.text) + "}"
     }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
     case .note(let note, let label):
@@ -97,8 +102,46 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options:
     case .excluded:
         return ""
     case .invalid:
-        return "{" + rtfStyleControls(span.styles) + rtfEscape(span.text) + "}"
+        return "{" + controls + rtfEscape(span.text) + "}"
     }
+}
+
+/// The `\fonttbl` entries and the per-run control words for a document's font runs:
+/// one `\fK` per DISTINCT named family (numbering starts at 2, after the emitter's own
+/// `\f0` Times and `\f1` Courier), plus `\fsN` from the block's own height word. A run
+/// whose typestyle number the spec's table doesn't name still carries its size.
+/// Python's `_font_ctl_rtf` (emit.py).
+func fontControlRTF(_ doc: Document) -> (fontTable: String, control: [Int: String]) {
+    var extra = ""
+    var control: [Int: String] = [:]
+    var familyToK: [String: Int] = [:]
+    var nextK = 2
+    for (index, font) in doc.fonts.enumerated() {
+        var parts = ""
+        let family = font.family
+        if !family.isEmpty {
+            if familyToK[family] == nil {
+                familyToK[family] = nextK
+                // The three characters that would break out of the group, removed —
+                // not `rtfEscape`, since a font name is a name (as in `rtfStylesheet`).
+                var safe = ""
+                for character in family where character != "\\" && character != "{" && character != "}" {
+                    safe.append(character)
+                }
+                extra += "{\\f\(nextK) \(safe);}"
+                nextK += 1
+            }
+            parts += "\\f\(familyToK[family]!)"
+        }
+        // Python tests the float's own truthiness: a zero height is not a size.
+        if font.points != 0 {
+            parts += "\\fs\(roundHalfToEven(font.points * 2.0))"
+        }
+        if !parts.isEmpty {
+            control[index] = parts + " "
+        }
+    }
+    return (fontTable: extra, control: control)
 }
 
 /// A comment (opt-in only): WordStar's own annotation construct, `\chatn`/`\*\atnid`/
@@ -135,6 +178,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     var rtfAlign: Alignment = .left      // RTF alignment persists across \par
     var parts: [String] = []
     let stylesheet = options.styles ? rtfStylesheet(doc) : ""
+    let fontTable = options.styles ? fontControlRTF(doc) : (fontTable: "", control: [:])
     let styledSlots: Set<Int> = options.styles
         ? Set(doc.styles.filter { $0.record != nil }.map(\.slot))
         : []
@@ -152,7 +196,8 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         // logical lines only (`mergedLines`, ctrl-kd 2.0.0).
         var lines = (printed ? block.lines : mergedLines(block)).map { line in
             line.spans
-                .map { rtfBodySpan($0, refNotes: refNotes, doc: doc, options: options) }
+                .map { rtfBodySpan($0, refNotes: refNotes, doc: doc, options: options,
+                                   fontControl: fontTable.control) }
                 .joined()
         }
         if block.heading != 0 {
@@ -197,7 +242,8 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     }
 
     let body = parts.joined(separator: "\n")
-    var out = #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
+    var out = #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}"#
+    out += fontTable.fontTable + "}"
     out += stylesheet
     out += "\n" + font + #"\fs24 "# + "\n"
     out += body
