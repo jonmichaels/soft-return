@@ -1,10 +1,11 @@
 /// The PDF emitter's writer half: laid-out pages -> PDF bytes. Port of `pdf.py`'s `_esc`
 /// (pdf.py:32-34), `_page_stream` (pdf.py:131-152) and `emit_pdf` (pdf.py:154-207).
 ///
-/// Hand-written PDF 1.4 with no dependencies, which is what the base-14 Courier family buys:
-/// four fonts that every reader already has, with fixed metrics, so nothing is embedded and
-/// the layout is exact. `PDFLayout` decided what goes where in characters and line counts;
-/// this file is the only part that knows what a PDF looks like.
+/// Hand-written PDF 1.4 with no dependencies, which is what the base-14 set buys: fonts that
+/// every reader already has, so nothing is embedded and the layout is exact. Modern mode is
+/// Courier-only typewriter setting, by ruling; PRINTED mode also selects the faces the
+/// document's own font blocks chose (`PDFFonts.swift`). `PDFLayout` decided what goes where
+/// in characters and line counts; this file is the only part that knows what a PDF looks like.
 ///
 /// EVERY COORDINATE IS CARRIED IN INTEGER TENTHS OF A POINT. Python does this arithmetic in
 /// binary floats and lets `'%.1f'` round the accumulated error away — see `Formatting.swift`
@@ -201,21 +202,125 @@ func runningOps(
     return ops
 }
 
+/// One coalesced segment of a line, resolved to the face and size it will be set in.
+/// Python's `segs` tuple in `_page_stream`.
+private struct LineSegment {
+    let text: String
+    let styles: Style
+    let family: PDFFamily
+    let size: Int
+}
+
+/// `(point size, baseline rise)` for a span set at `size`. Port of `pdf._sized`.
+///
+/// Superscript and subscript are both SET SMALLER, not just moved: one size test covering
+/// either, then the rise chooses the direction. `sup` wins if a span somehow carries both,
+/// matching Python's nested conditional. Reduced to 2/3 — 8pt at the default 12, the ratio
+/// this emitter has always used.
+private func sized(_ styles: Style, _ size: Int) -> (points: Int, rise: Int) {
+    if styles.contains(.sup) { return (max(1, roundHalfToEven(Double(size * 2) / 3.0)), 3) }
+    if styles.contains(.sub) { return (max(1, roundHalfToEven(Double(size * 2) / 3.0)), -2) }
+    return (size, 0)
+}
+
+/// Underline / strikethrough as stroked paths (PDF has no text attribute for either), for a
+/// span occupying `w` points from `x`. Port of `pdf._rules`.
+private func rules(_ styles: Style, _ text: String, x: Double, y: Double, w: Double) -> [[UInt8]] {
+    // A rule under a run of pure whitespace would be a stray dash, so Python guards both
+    // with `text.strip()` — non-empty after stripping, i.e. the run has ink.
+    guard text.contains(where: { !$0.isWhitespace }) else { return [] }
+    var ops: [[UInt8]] = []
+    if styles.contains(.underline) { ops.append(rule(xFrom: x, xTo: x + w, y: y - 1.5)) }
+    if styles.contains(.strike) { ops.append(rule(xFrom: x, xTo: x + w, y: y + 3)) }
+    return ops
+}
+
+/// One line of the typewriter: every span Courier at the document's own size, so 0.6em per
+/// character positions each span EXACTLY and each gets its own text object at an absolute x.
+/// Port of `pdf._line_ops_courier`.
+///
+/// This is the path this emitter has always taken and its bytes are unchanged — see
+/// `FontResources` for why that matters.
+private func lineOpsCourier(
+    _ segs: [LineSegment], left: Double, y: Double, size: Int, res: FontResources
+) -> [[UInt8]] {
+    var ops: [[UInt8]] = []
+    var x = left
+    for seg in segs {
+        let (pt, rise) = sized(seg.styles, size)
+        let font = res.ref(base14(.courier, bold: seg.styles.contains(.bold),
+                                  italic: seg.styles.contains(.italic)))
+        var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
+        op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+        op += esc(seg.text)
+        op += Array(") Tj ET".utf8)
+        ops.append(op)
+        // `len(text) * pt * 0.6`, mirroring Python's float arithmetic exactly (see the
+        // CRITICAL FLOAT DETAIL above) rather than the pre-2.0.0 integer-tenths trick.
+        let w = Double(seg.text.width) * Double(pt) * 0.6
+        ops += rules(seg.styles, seg.text, x: x, y: y, w: w)
+        x += w
+    }
+    return ops
+}
+
+/// One line carrying fonts that are not the document's Courier. Port of
+/// `pdf._line_ops_proportional`.
+///
+/// Character-count arithmetic is meaningless the moment a span is set in Times or Helvetica,
+/// so this path does NOT compute an x for each span. The whole line goes into ONE text
+/// object, positioned once, and each span is written with `Tj`: PDF's own natural advance
+/// then carries the pen, which is the only exact answer available without font metrics.
+/// Jon's ruling: "don't do per-column x math -- draw the span and let natural advance carry."
+///
+/// The one thing that still needs a coordinate is a decoration rule, which is a path and
+/// cannot live inside a text object. Those are placed from the `familyAdvance` estimate and
+/// drawn after the text — an underline may run a little long or short under a proportional
+/// face. Approximating the rule beats dropping it, and it is the only approximation on this
+/// path.
+private func lineOpsProportional(
+    _ segs: [LineSegment], left: Double, y: Double, size: Int, res: FontResources
+) -> [[UInt8]] {
+    var textOps: [[UInt8]] = [
+        Array("BT \(fixedOneDecimalDouble(left)) \(fixedOneDecimalDouble(y)) Td".utf8)
+    ]
+    var ruleOps: [[UInt8]] = []
+    var x = left
+    for seg in segs {
+        let (pt, rise) = sized(seg.styles, seg.size)
+        let font = res.ref(base14(seg.family, bold: seg.styles.contains(.bold),
+                                  italic: seg.styles.contains(.italic)))
+        var op = Array("/\(font) \(pt) Tf \(rise) Ts (".utf8)
+        op += esc(seg.text)
+        op += Array(") Tj".utf8)
+        textOps.append(op)
+        let w = Double(seg.text.width) * Double(pt) * familyAdvance(seg.family)
+        ruleOps += rules(seg.styles, seg.text, x: x, y: y, w: w)
+        x += w
+    }
+    textOps.append(Array("ET".utf8))
+    return textOps + ruleOps
+}
+
+/// - Parameter fonts: `doc.fonts` in PRINTED mode and empty everywhere else (Modern is
+///   Courier by design), so a line only leaves the fixed-pitch path when the document itself
+///   asked for another face or another size.
+/// - Parameter res: the document-wide font table. One instance is shared by every page, so
+///   the `/Fn` numbering is stable across the whole file; a fresh one is made when a caller
+///   (every test in `PDFWriterTests.swift`) renders a page in isolation.
 func pageStream(
     _ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHeight,
     lead: Double = Double(PDFMetrics.lead), size: Int = PDFMetrics.size,
     left: Double = Double(PDFMetrics.margin),
-    running: [[UInt8]] = []
+    running: [[UInt8]] = [], fonts: [FontChange] = [], res: FontResources? = nil
 ) -> [UInt8] {
+    let res = res ?? FontResources()
     var ops: [[UInt8]] = running
-    // sup/sub size, derived once — Python: `max(1, round(size * 2 / 3))`. 8 at the
-    // default size 12, same figure the writer hardcoded before ctrl-kd 2.0.0.
-    let supSize = max(1, roundHalfToEven(Double(size * 2) / 3.0))
     // The baseline of the first line: down from the top of the paper by the margin, then by
     // one line's height, because `Td` positions a baseline and not a line's top edge.
     var y = Double(pageHeight - top - size)
     for line in pagelines {
-        var x = left
+        var segs: [LineSegment] = []
         // Coalesced FIRST (pdf.py:136): the wrapper leaves one segment per word and per
         // space-run, and each segment costs a text-showing operator. Merging runs that share
         // styles changes nothing on paper and divides the stream size by roughly ten.
@@ -223,34 +328,14 @@ func pageStream(
             if span.text.isEmpty {
                 continue                       // no operator, and no advance either
             }
-            let styles = span.styles
-            // Superscript and subscript are both SET SMALLER, not just moved: one size test
-            // covering either, then the rise chooses the direction. `sup` wins if a span
-            // somehow carries both, matching Python's nested conditional.
-            let reduced = styles.contains(.sup) || styles.contains(.sub)
-            let sizeHere = reduced ? supSize : size
-            let rise = styles.contains(.sup) ? 3 : (styles.contains(.sub) ? -2 : 0)
-            let font = pdfFont(bold: styles.contains(.bold), italic: styles.contains(.italic))
-
-            var op = Array("BT /\(font) \(sizeHere) Tf \(rise) Ts ".utf8)
-            op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-            op += esc(span.text)
-            op += Array(") Tj ET".utf8)
-            ops.append(op)
-
-            // `len(text) * sizeHere * 0.6`, mirroring Python's float arithmetic exactly (see
-            // the CRITICAL FLOAT DETAIL above) rather than the pre-2.0.0 integer-tenths trick.
-            let w = Double(span.text.width) * Double(sizeHere) * 0.6
-            // A rule under a run of pure whitespace would be a stray dash, so Python guards
-            // both with `text.strip()` — non-empty after stripping, i.e. the run has ink.
-            let hasInk = span.text.contains { !$0.isWhitespace }
-            if styles.contains(.underline), hasInk {
-                ops.append(rule(xFrom: x, xTo: x + w, y: y - 1.5))      // 1.5pt below
-            }
-            if styles.contains(.strike), hasInk {
-                ops.append(rule(xFrom: x, xTo: x + w, y: y + 3))        // 3pt above
-            }
-            x += w
+            let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
+            segs.append(LineSegment(text: rendered.text, styles: span.styles,
+                                    family: rendered.family, size: rendered.size))
+        }
+        if segs.allSatisfy({ $0.family == .courier && $0.size == size }) {
+            ops += lineOpsCourier(segs, left: left, y: y, size: size, res: res)
+        } else {
+            ops += lineOpsProportional(segs, left: left, y: y, size: size, res: res)
         }
         y -= lead
     }
@@ -275,7 +360,10 @@ private func joined(_ chunks: [[UInt8]], separator: UInt8) -> [UInt8] {
 /// `EmitOutput.data`, and the reason that type exists.
 ///
 /// Object layout, which the xref table pins by absolute file offset: catalog 1, page tree 2,
-/// the four fonts 3-6, then a page/contents pair per page from 7 up.
+/// the fonts from 3 up — the Courier four ALWAYS, plus whatever base-14 faces a WS5+
+/// document's own font runs reached for in printed mode — then a page/contents pair per page.
+/// The Courier four are unconditional precisely so that numbering never moves for a document
+/// without font runs; see `FontResources`.
 @Sendable
 public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> [UInt8] {
@@ -301,21 +389,44 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     // resolved capacity but still declares a Letter-size MediaBox would be internally
     // inconsistent: the right number of lines, drawn on the wrong-size sheet of paper.
     let pageHeight = resolvedPageHeight(doc, printed: printed)
+    // Font runs are a PRINTED-mode facsimile feature: Modern mode is Courier by ruling, so
+    // it is handed no fonts at all and every span stays on the fixed-pitch path. WS4
+    // documents and print streams have no font blocks, so `doc.fonts` is empty for them and
+    // this is a no-op.
+    let fonts = printed ? doc.fonts : []
 
     // (number, body) — the body WITHOUT the `N 0 obj` wrapper, which the writer adds while
     // recording offsets.
     var objs: [(number: Int, body: [UInt8])] = []
     var nextNum = 3                                   // 1 and 2 are reserved, inserted below
 
+    // `.pn n` sets the number of the page it appears on, so a chapter file in a larger
+    // manuscript numbers from where the previous one stopped.
+    let startNo = doc.page?.pnStart ?? 1
+
+    // THE STREAMS ARE WRITTEN FIRST: which base-14 fonts the document actually uses is only
+    // known once every span has been laid out, and the resource table has to name them all.
+    let res = FontResources()
+    var streams: [[UInt8]] = []
+    for (i, page) in pages.enumerated() {
+        let running = runningOps(doc, pageNo: startNo + i, pageHeight: pageHeight,
+                                 lead: lead, size: size, left: left, printed: printed)
+        streams.append(pageStream(page, top: top, pageHeight: pageHeight, lead: lead,
+                                  size: size, left: left, running: running,
+                                  fonts: fonts, res: res))
+    }
+
     var fontNums: [(name: String, number: Int)] = []
-    for font in pdfFonts {
+    for font in res.fonts {
         fontNums.append((font.name, nextNum))
         objs.append((nextNum, Array(
             "<< /Type /Font /Subtype /Type1 /BaseFont /\(font.baseFont) >>".utf8)))
         nextNum += 1
     }
-    // Every page's /Resources names all four fonts whether it uses them or not — four
-    // indirect references cost less than tracking which styles a page turned out to contain.
+    // Every page's /Resources names every font the DOCUMENT reached for, whether this page
+    // used it or not — a handful of indirect references cost less than tracking which faces
+    // a page turned out to contain, and a per-page table would renumber nothing but would
+    // still have to be built twice.
     let fontDict = fontNums.map { "/\($0.name) \($0.number) 0 R" }.joined(separator: " ")
 
     var pageNums: [Int] = []
@@ -330,19 +441,12 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     objs.insert((2, Array(
         "<< /Type /Pages /Kids [\(kids)] /Count \(pages.count) >>".utf8)), at: 1)
 
-    for (i, page) in pages.enumerated() {
+    for (i, stream) in streams.enumerated() {
         objs.append((pageNums[i], Array("""
         << /Type /Page /Parent 2 0 R /MediaBox [0 0 \(PDFMetrics.pageWidth) \
         \(pageHeight)] /Resources << /Font << \(fontDict) >> >> \
         /Contents \(contentNums[i]) 0 R >>
         """.utf8)))
-        // `.pn n` sets the number of the page it appears on, so a chapter file in a
-        // larger manuscript numbers from where the previous one stopped.
-        let startNo = doc.page?.pnStart ?? 1
-        let running = runningOps(doc, pageNo: startNo + i, pageHeight: pageHeight,
-                                 lead: lead, size: size, left: left, printed: printed)
-        let stream = pageStream(page, top: top, pageHeight: pageHeight, lead: lead,
-                                size: size, left: left, running: running)
         var body = Array("<< /Length \(stream.count) >>\nstream\n".utf8)
         body += stream
         body += Array("\nendstream".utf8)
