@@ -535,3 +535,19 @@ let italicOn: [UInt8] = [0x19]
     #expect(!between.contains("\\line"))
     #expect(emitText(doc, mode: .modern).contains("Short line even though"))
 }
+
+@Test func rulersAreNotColumnsInWS5Plus() {
+    // The columnar heuristic read any ruler with tab stops as "fixed-width table" and
+    // forced every modern emitter into physical-line rendering. That inference is
+    // WS4-truth -- a tab table's alignment exists only in monospace. In WS5+ a `.rr`
+    // ruler is just the editor's tab settings, riding along in practically every styled
+    // document: NOVEL.WS and LJ6DTP.WS are fully reflowable prose that carry one, and
+    // this is where Jon's "line wrapping is still broken" screenshots came from (the
+    // wrap classifier itself was correct).
+    // staged: 6.2.4's type-checker times out on the one-expression form
+    var data = ws7Block(0x00) + bytes(".rr----!----!----R") + HARD
+    data += bytes("Ordinary reflowable prose, not a table at all.") + HARD
+    let doc = parseWS(data)
+    #expect(doc.detection?.variant == .ws5plus)
+    #expect(!doc.columnar)
+}

@@ -272,12 +272,15 @@ import Testing
     #expect(!spans.contains { $0.text.contains("Before") && $0.font != nil })
 
     let rtf = emitRTF(doc, mode: .modern)
-    #expect(rtf.contains(#"{\f2 Courier;}"#))
+    #expect(rtf.contains(#"{\f2 Courier{\*\falt Courier New};}"#))   // era name + RTF fallback
     #expect(rtf.contains(#"\f2\fs28 "#))                     // 14pt = \fs28
 
     let html = emitHTML(doc, mode: .modern)
     #expect(html.contains(#"class="ws-font-0""#))
-    #expect(html.contains(".ws-font-0 { font-family:'Courier'; font-size:14pt }"))
+    // CSS stack: original first (pass-through), modern alternate, then the generic
+    // from the font block's own style bits
+    #expect(html.contains("font-family:'Courier', 'Courier New', sans-serif"))
+    #expect(html.contains("font-size:14pt"))
     // --no-styles leaves the class inert: the rule is gone from the head, the class
     // itself still rides on the span.
     let bare = emitHTML(doc, mode: .modern, options: EmitOptions(styles: false))

@@ -603,7 +603,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
         marginEstimate: pass.margin,
         dotCommands: dots,
         unknownCodes: unknown,
-        columnar: ruler,
+        // Ruler lines mean "fixed-width table" only in the pre-symseq eras: a WS4 tab
+        // table's alignment exists solely in monospace. In WS5+ a `.rr` ruler is just the
+        // editor's tab settings and rides along in practically every styled document —
+        // treating it as columnar forced NOVEL.WS and LJ6DTP.WS (both fully reflowable
+        // prose) into physical-line rendering in EVERY modern emitter, which is where
+        // Jon's "line wrapping isn't working" screenshots actually came from (the wrap
+        // classifier itself was correct).
+        columnar: ruler && !ws5,
         notes: notes,
         unknownBlocks: unknownBlocks,
         page: pageGeometry,

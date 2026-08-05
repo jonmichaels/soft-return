@@ -355,7 +355,16 @@ func styleCSS(_ doc: Document) -> String {
         var props: [String] = []
         let family = font.family
         if !family.isEmpty {
-            props.append("font-family:'\(family)'")
+            // The whole stack: the era name first (pass-through), then the modern
+            // alternates, then the generic from the block's own style bits — CSS
+            // fallback is real fallback, so the original never loses its chance.
+            let stack = fontStack(family, generic: font.genericStyle)
+            let css = stack.map { name in
+                // Python's `n if ' ' not in n and n.islower() else f"'{n}'"`: the bare
+                // CSS generics go unquoted, every family name is quoted.
+                !name.contains(" ") && name.isLowercaseCased ? name : "'\(name)'"
+            }
+            props.append("font-family:" + css.joined(separator: ", "))
         }
         // Python tests the float's own truthiness: a zero height is not a size.
         if font.points != 0 {
