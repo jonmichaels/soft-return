@@ -439,6 +439,7 @@ private func styleCodes(_ style: Style) -> [String] {
     if style.contains(.sub) { codes.append("sub") }
     if style.contains(.strike) { codes.append("strike") }
     if style.contains(.fnref) { codes.append("fnref") }
+    if style.contains(.altFont) { codes.append("altfont") }
     return codes.sorted()
 }
 
@@ -792,6 +793,7 @@ private func styleFromCodes(_ codes: [String]) -> Style {
         case "sub": style.insert(.sub)
         case "strike": style.insert(.strike)
         case "fnref": style.insert(.fnref)
+        case "altfont": style.insert(.altFont)
         default: Issue.record("unknown style code \(code) in a job-011 vector")
         }
     }

@@ -29,8 +29,13 @@ private let wsToggles: [UInt8: Style] = [
 /// is never to go quiet. Composing the overprinted pair properly is a separate job;
 /// being able to SEE that a document contains overprints is the prerequisite for it.
 private let wsDrop: Set<UInt8> = [
-    0x01, 0x03, 0x0B, 0x0E, 0x10, 0x11, 0x12, 0x15, 0x17, 0x1C,
+    0x03, 0x0B, 0x10, 0x11, 0x12, 0x15, 0x17, 0x1C,
 ]
+// 0x01/0x0E left `wsDrop` 2026-08-04 (Jon: 'Store that ws4 font switch
+// flag. Don't lose it.'): ^PA alternate font / ^PN normal -- the ONLY
+// typeface signal a WS4 file can carry (the face itself lived in the
+// printer: a daisy wheel, a cartridge). Carried as the `.altFont` span
+// style; no emitter renders it yet.
 
 /// Dot commands that force an UNCONDITIONAL page break (core.py:166), compared
 /// uppercased.
@@ -153,6 +158,16 @@ private func decodeSpans(
             } else {
                 active.insert(style)
             }
+        } else if b == 0x01 {
+            // ^PA: the printer's ALTERNATE font. Ahead of the control-range arm below,
+            // as in Python, so it is neither dropped nor tallied as unknown.
+            flush()
+            active.insert(.altFont)
+        } else if b == 0x0E {
+            // ^PN: back to the normal font. `remove` on an OptionSet is Python's
+            // `discard`, not `set.remove` — a ^PN with no ^PA before it is a no-op.
+            flush()
+            active.remove(.altFont)
         } else if b == 0x0F {
             buf.append(0x20)                    // binding space (core.py:196-197)
         } else if b == 0x1E {
