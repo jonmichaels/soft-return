@@ -273,6 +273,25 @@ func documentWithStyleLibrary(header: [UInt8] = [0x70] + [UInt8](repeating: 0, c
     return doc
 }
 
+/// One WS5+ font block (symmetrical sequence 0x02): width word (HMI, 1/1800in — the
+/// per-character advance WordStar laid the document out on; 180 = 10 CPI, the default pica),
+/// height word (VMI = points * 20), typestyle word, then the six bytes the spec reserves.
+/// Style bits ride in the typestyle word's high half. Port of Python's `_font_block` test
+/// helper.
+func fontBlock(_ number: Int, points: Double = 12.0, styleBits: Int = 0,
+               width: Int = 180) -> [UInt8] {
+    let typestyle = (number & 0x01FF) | styleBits
+    var payload = le16(width) + le16(roundHalfToEven(points * 20))
+    payload += le16(typestyle) + [UInt8](repeating: 0, count: 6)
+    return ws7Block(0x02, payload: payload)
+}
+
+/// A typestyle number the base-14 mapping resolves to Helvetica — read out of the spec's own
+/// name table rather than written down, so a table edit can never silently retarget a test.
+func helvTypestyle() -> Int {
+    typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("helv") }!
+}
+
 /// A WS5+ note block (3=footnote, 4=endnote, 5=annotation, 6=comment) carrying `text`.
 /// Content layout per the WordStar 7.0 spec's Notes section: line-count word, number
 /// word, conversion-flag byte (high nybble = numbering format), then the text.

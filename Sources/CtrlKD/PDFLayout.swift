@@ -108,10 +108,18 @@ public func wrapLine(_ spans: [Span], width: Int) -> [PageLine] {
 /// text-showing operator per segment. Merging first is the difference between a page of a
 /// few hundred operators and a page of a few thousand, and changes nothing on paper because
 /// Courier's advance width is the same either way.
+///
+/// THE FONT RUN IS PART OF THE MERGE TEST, added with printed-mode base-14 fonts
+/// (`PDFFonts.swift`): two adjacent spans set in different faces are not the same run, and
+/// merging them would set the second one in the first one's font. Python gets this free —
+/// its font index rides in the same `frozenset` as the style codes, so its `styles ==
+/// styles` covers both — and this comparison is that equality written out. A document with
+/// no font runs has `nil` on every span and is unaffected, which is why no fontless byte
+/// changed.
 public func coalesce(_ line: PageLine) -> PageLine {
     var out: PageLine = []
     for span in line {
-        if let last = out.last, last.styles == span.styles {
+        if let last = out.last, last.styles == span.styles, last.font == span.font {
             out[out.count - 1].text += span.text
         } else {
             out.append(span)

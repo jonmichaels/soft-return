@@ -70,8 +70,10 @@ consequences of that:
 
 Two output modes. `.modern` reflows to a clean text column, which is what you want for
 reading. `.printed` reproduces the typescript line for line, which is what you want when the
-layout was the point — the PDF emitter renders Courier at 10 CPI and 6 LPI on US Letter,
-because that is the machine the file was written for.
+layout was the point — the PDF emitter renders on a viewer's built-in base-14 fonts, nothing
+embedded: Modern mode is Courier at 10 CPI and 6 LPI on US Letter, because that is the
+machine the file was written for, and Printed mode additionally follows the document's own
+font blocks (Times, Helvetica, Courier, Symbol, ZapfDingbats).
 
 Formats: `text`, `markdown`, `html`, `rtf`, `pdf`, plus `txt` and `md` as aliases.
 
