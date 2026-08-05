@@ -189,10 +189,12 @@ import Testing
     // corrupts every operator after it. No vector case puts the two characters adjacent.
     #expect(latin1(esc(#"\("#)) == #"\\\("#)
     #expect(latin1(esc(#"a\(b)c"#)) == #"a\\\(b\)c"#)
-    // The other ordering — Latin-1 before escaping — is NOT observable, and this says why:
+    // The other ordering — cp1252 before escaping — is NOT observable, and this says why:
     // the replacement character is `?`, which can neither create nor consume an escape. So
-    // there is no test for it; there is nothing to catch.
-    #expect(latin1(esc("(\u{2014})")) == #"\(?\)"#)
+    // there is no test for it; there is nothing to catch. (U+0141 Ł, not U+2014 em dash: an
+    // em dash IS cp1252-representable since 2026-08-05 — see `escMatchesPythonVectors` —
+    // so it no longer demonstrates a `?` replacement at all.)
+    #expect(latin1(esc("(\u{0141})")) == #"\(?\)"#)
 }
 
 @Test func escLeavesOtherBytesAlone() {
@@ -320,8 +322,10 @@ import Testing
     }
     #expect(numbers == Array(1...10).map { Optional($0) }, "two pages -> objects 1...10")
     // The fonts are where the page/contents pairs start counting from.
-    #expect(text.contains("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>"))
-    #expect(text.contains("6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier-BoldOblique >>"))
+    #expect(text.contains("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier"
+        + " /Encoding /WinAnsiEncoding >>"))
+    #expect(text.contains("6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont"
+        + " /Courier-BoldOblique /Encoding /WinAnsiEncoding >>"))
     #expect(text.contains("/Kids [7 0 R 9 0 R] /Count 2"))
     #expect(text.contains("/Contents 8 0 R"))
     #expect(text.contains("/Contents 10 0 R"))

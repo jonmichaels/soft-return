@@ -478,6 +478,43 @@ let italicOn: [UInt8] = [0x19]
     #expect(segments.contains { $0.text == "Plain" && !$0.styles.contains(.bold) })
 }
 
+@Test func styleFontFieldChangesTheActiveFont() {
+    // A style record's font field is the SAME (width, height, typestyle) triple as an
+    // inline type-2 Font block, and selecting the style CHANGES THE ACTIVE FONT. Left
+    // unapplied, the last inline block bled across every style-governed paragraph:
+    // LJ6DTP's proportional body copy rendered at Courier's 7.2pt fixed pitch, pushing
+    // its 93-character soft-wrapped lines 10 inches wide (Jon's page-width finding,
+    // 2026-08-05).
+    var rec = styleRecord()
+    // Overwrite the font triple (bytes 0-6): 12pt Univers, width 155 HMI.
+    for (k, v) in (le16(155) + le16(240) + le16(49710)).enumerated() { rec[k] = v }
+    let lib = styleLibrary([
+        (name: "WordStar Defaults", record: nil),
+        (name: "WordStar Defaults", record: nil),
+        (name: "Univers copy font", record: rec),
+    ])
+    let courier = ws7Block(0x02, payload: le16(180) + le16(240) + le16(17411)
+        + [UInt8](repeating: 0, count: 6))
+    let doc = parseWS(documentWithStyleLibrary(
+        body: courier + bytes("Fixed pitch opening paragraph of prose.") + HARD
+            + styleRef(2) + bytes("Styled proportional paragraph.") + HARD,
+        library: lib))
+    // the style's font joined doc.fonts, decoded like any inline block
+    #expect(doc.fonts.contains {
+        $0.width1800 == 155 && ($0.typestyleName?.hasPrefix("Univers") ?? false)
+    })
+    let spans = doc.blocks.flatMap(\.lines).flatMap(\.spans)
+    func fontOf(_ sp: Span) -> FontChange? {
+        guard let idx = sp.font, idx >= 0, idx < doc.fonts.count else { return nil }
+        return doc.fonts[idx]
+    }
+    let opening = try! #require(spans.first { $0.text.hasPrefix("Fixed") })
+    let styled = try! #require(spans.first { $0.text.hasPrefix("Styled") })
+    #expect(fontOf(opening)?.typestyleName == "Courier")
+    #expect(fontOf(styled)?.width1800 == 155)
+    #expect(fontOf(styled)?.proportional == true)
+}
+
 @Test func flaggedControlBytesAreControlsNotCP437Glyphs() {
     // MEASURED on WordStar 7 (2026-08-04): a real document's bare 0x8A (flagged ^J)
     // performed a line advance in the printed PCL — zero glyphs — and an injected 0x94

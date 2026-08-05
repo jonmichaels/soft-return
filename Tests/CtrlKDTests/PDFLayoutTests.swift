@@ -202,9 +202,13 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // machine margin — so a single-page print stream loses all its top blanks. Every
     // multi-page vector proves the `min(...)` half; this proves the fallback, which a port
     // could just as easily have written as "strip nothing".
+    //
+    // The machine-margin strip applies ONLY to a print stream (`.detection.variant ==
+    // .printstream`): a parsed WS document's own leading blanks are authorial, not the
+    // machine's, and are never stripped -- see `finalizePages`.
     let doc = Document(blocks: [Block(lines: [
         Line(), Line(), Line(spans: [Span(text: "text")]),
-    ])])
+    ])], detection: Detection(variant: .printstream))
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.count == 1)
     #expect(pages[0].count == 1)
@@ -219,9 +223,12 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
         [Block(lines: Array(repeating: Line(), count: blanks)
             + [Line(spans: [Span(text: text)])])]
     }
+    // A print stream: its own leading blanks on pages 2+ are the machine's uniform top
+    // margin (see `finalizePages`); a parsed WS document's are never stripped at all.
     let doc = Document(blocks: page(blanks: 5, text: "Chapter One")
         + [Block(kind: .pagebreak)]
-        + page(blanks: 2, text: "continues"))
+        + page(blanks: 2, text: "continues"),
+        detection: Detection(variant: .printstream))
 
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.count == 2)
@@ -404,7 +411,7 @@ private let fakeBinary = Emitter(name: "fake", ext: ".fake") { doc, _, _ in
         blk(blanks: 1, text: "first"), Block(kind: .pagebreak),
         blk(blanks: 3, text: "second"), Block(kind: .pagebreak),
         blk(blanks: 4, text: "third"),
-    ])
+    ], detection: Detection(variant: .printstream))
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.map(\.count) == [1, 1, 2])
     #expect(pages[0][0].first?.text == "first")
@@ -419,11 +426,14 @@ private let fakeBinary = Emitter(name: "fake", ext: ".fake") { doc, _, _ in
     // single space-only span is blank and gets stripped like an empty one. Every vector
     // document's blanks are empty lines, so none of them can tell the two apart — but a real
     // print capture is full of space-padded lines.
+    // A print stream, so the leading space-only line is the machine margin and strips
+    // along with the trailing one -- a parsed WS document would keep its leading blank
+    // (authorial) and only lose the trailing one. See `finalizePages`.
     let doc = Document(blocks: [Block(lines: [
         Line(spans: [Span(text: "  ")]),
         Line(spans: [Span(text: "text")]),
         Line(spans: [Span(text: "   ")]),
-    ])])
+    ])], detection: Detection(variant: .printstream))
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.count == 1)
     #expect(pages[0].count == 1)                    // leading AND trailing space-lines gone
@@ -558,4 +568,41 @@ private func pageTexts(_ page: Page) -> [String] {
     // running head is the exemption, not the target. This asserted the opposite until
     // 2026-08-03, and passed against a backwards implementation.
     #expect(footerText(".op\r\n.fo Page #\r\nBody.\r\n", page: 3).contains("(Page 3)"))
+}
+
+@Test func headerAppliesFromThePageWhereItIsDefinedNotBefore() {
+    // WordStar applies a running head from the page where its dot command sits -- on
+    // that page itself only if no text has printed there yet, else from the NEXT page.
+    // A manuscript that defines its `.h1` after page 1's title block (OLDTIMES's own
+    // shape) therefore has NO running head on page 1 -- the final-state `doc.headers`
+    // dict cannot express that distinction; only replaying `doc.hfEvents` through
+    // pagination can (`Page.headers`, `layoutPrintedPagesPlain`).
+    let data = bytes("Title paragraph text on page one.\r\n\r\n")
+        + bytes(".h1 Running Head\r\n")
+        + bytes(".pa\r\n")
+        + bytes("Second page body text.\r\n")
+    let doc = parseWS(data)
+    #expect(doc.headers[1] == "Running Head")     // final state: still true document-wide
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages.count == 2)
+    #expect(pages[0].headers.isEmpty, "page 1 predates the .h1 -- no running head yet")
+    #expect(pages[1].headers[1] == "Running Head")
+
+    let pdf = emitPDF(doc, mode: .printed)
+    // The header text reaches page 2's content stream...
+    #expect(contains(pdf, bytes("(Running Head)")))
+    // ...but page 1's own stream (before the FIRST `endstream`, i.e. page 1's own
+    // content) never shows it.
+    func firstIndex(of needle: [UInt8], in haystack: [UInt8]) -> Int? {
+        guard !needle.isEmpty, haystack.count >= needle.count else { return nil }
+        for i in 0...(haystack.count - needle.count) where Array(haystack[i..<(i + needle.count)]) == needle {
+            return i
+        }
+        return nil
+    }
+    if let streamEnd = firstIndex(of: bytes("endstream"), in: pdf) {
+        #expect(!contains(Array(pdf[..<streamEnd]), bytes("Running Head")))
+    } else {
+        Issue.record("could not locate page 1's content stream boundary")
+    }
 }

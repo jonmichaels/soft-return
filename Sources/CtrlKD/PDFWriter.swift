@@ -34,8 +34,21 @@ func pdfFont(bold: Bool, italic: Bool) -> String {
     pdfFonts[(bold ? 1 : 0) + (italic ? 2 : 0)].name
 }
 
-/// Encode text for a PDF string literal: Latin-1 with `?` for anything that doesn't fit,
-/// then backslash and parentheses escaped. Port of `_esc` (pdf.py:32-34).
+/// Lookalike degradations for glyphs cp1252 cannot carry — applied BEFORE encoding so a
+/// middle dot from a header triple or a box glyph in a fontless span degrades to its
+/// nearest visible relative, not to `?`. Port of Python's `_ESC_FALLBACK`.
+private let escFallback: [Unicode.Scalar: Unicode.Scalar] = [
+    "\u{2219}": "\u{00B7}",   // ∙ -> ·
+    "\u{2022}": "\u{00B7}",   // • -> ·
+    "\u{203C}": "!",          // ‼ -> !
+    "\u{2502}": "|",          // │ -> |
+    "\u{2500}": "-",          // ─ -> -
+    "\u{2550}": "=",          // ═ -> =
+]
+
+/// Encode text for a PDF string literal: cp1252 (the declared `/WinAnsiEncoding`) with `?`
+/// for anything that doesn't fit, then backslash and parentheses escaped. Port of `_esc`
+/// (pdf.py).
 ///
 /// THE TWO ORDERINGS HERE ARE NOT EQUALLY LOAD-BEARING, and the difference is worth writing
 /// down because both look like "order matters":
@@ -45,21 +58,23 @@ func pdfFont(bold: Bool, italic: Bool) -> String {
 ///   backslash followed by an unescaped paren, which unbalances the string and corrupts the
 ///   rest of the content stream. Checked against the reference: of 584 strings drawn from
 ///   `a \ ( ) é — Ł ?`, 326 come out differently if the passes are swapped.
-/// - Latin-1 BEFORE escaping is not observable at all. The two orders agree on every one of
+/// - cp1252 BEFORE escaping is not observable at all. The two orders agree on every one of
 ///   those 584 strings, and must: the encoder's replacement character is `?`, which is
 ///   neither a backslash nor a parenthesis, so it can never create or consume an escape.
 ///
 /// So the passes below are three separate replacements rather than one combined loop —
 /// mutating any one of them, or their order, changes the output and the vectors say so.
+///
+/// cp1252, not Latin-1 (since 2026-08-05): the declared `/WinAnsiEncoding` IS cp1252, and
+/// it is what gives the base-14 faces curly quotes, en/em dashes, ellipsis and the rest of
+/// the typographic range the LJ6DTP substitutions produce (`ljSubstitute`).
 func esc(_ text: String) -> [UInt8] {
-    // Python's `text.encode('latin-1', 'replace')`. Latin-1 is the identity map on 0x00-0xFF,
-    // so a scalar fits exactly when it is in that range; everything above becomes one `?`
-    // per CHARACTER, which is what the `replace` error handler does.
-    var raw: [UInt8] = []
-    raw.reserveCapacity(text.unicodeScalars.count)
+    var degraded = String.UnicodeScalarView()
+    degraded.reserveCapacity(text.unicodeScalars.count)
     for scalar in text.unicodeScalars {
-        raw.append(scalar.value <= 0xFF ? UInt8(scalar.value) : 0x3F)   // 0x3F = '?'
+        degraded.append(escFallback[scalar] ?? scalar)
     }
+    let raw = cp1252Encode(String(degraded))
     var out = replacingEach(raw, 0x5C, with: [0x5C, 0x5C])              // \  -> \\
     out = replacingEach(out, 0x28, with: [0x5C, 0x28])                  // (  -> \(
     out = replacingEach(out, 0x29, with: [0x5C, 0x29])                  // )  -> \)
@@ -152,11 +167,20 @@ private func rule(xFrom: Double, xTo: Double, y: Double) -> [UInt8] {
 /// suppresses the substitution, leaving the token out rather than printing a literal `#`.
 ///
 /// Printed mode only: Modern mode reflows and has no running heads.
+///
+/// - Parameters:
+///   - headers: the running head text IN FORCE on this page — `nil` (the default)
+///     falls back to `doc.headers`, the document's final state. A per-page dict comes
+///     from replaying `doc.hfEvents` through pagination (`Page.headers`); the
+///     notes-aware paginator never replays them and so always passes `nil`.
+///   - footers: same, for `doc.footers`/`Page.footers`.
 func runningOps(
     _ doc: Document, pageNo: Int, pageHeight: Int, lead: Double, size: Int,
-    left: Double, printed: Bool
+    left: Double, printed: Bool, headers: [Int: String]? = nil, footers: [Int: String]? = nil
 ) -> [[UInt8]] {
-    guard printed, !(doc.headers.isEmpty && doc.footers.isEmpty) else { return [] }
+    let headers = headers ?? doc.headers
+    let footers = footers ?? doc.footers
+    guard printed, !(headers.isEmpty && footers.isEmpty) else { return [] }
     // `.op` does NOT suppress a `#` in a header or footer. WSFORMAT.TXT is explicit:
     // ".OP  Omit page number.  At print time no page numbers are printed UNLESS THE
     // '#' HAS BEEN USED IN FOOTERS OR HEADERS." It suppresses the AUTOMATIC page
@@ -179,8 +203,8 @@ func runningOps(
         }
         return out
     }
-    func op(_ txt: String, line: Int) -> [UInt8]? {
-        let y = Double(pageHeight) - Double(line) * lead - Double(size)
+    func op(_ txt: String, line: Double) -> [UInt8]? {
+        let y = Double(pageHeight) - line * lead - Double(size)
         guard y >= 0 else { return nil }
         var out = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
         out += Array("\(fixedOneDecimalDouble(left)) \(fixedOneDecimalDouble(y)) Td (".utf8)
@@ -189,23 +213,35 @@ func runningOps(
         return out
     }
 
+    // The header block is anchored to the BODY, not the paper edge: its last line sits
+    // `.hm` lines above the first body line, inside `.mt` (".MT ... The header is
+    // printed within this margin"; ".HM ... the distance between the header and the
+    // text"). At WordStar's defaults (.mt 3, .hm 2, one header line) that IS paper line
+    // 0 -- which is why rendering headers at the literal top of the sheet looked right
+    // for years -- but a document that widens .mt moves its header DOWN with the body,
+    // where a laser printer can physically print it (no printer lays ink at y = 0).
+    let mt = doc.page?.mtLines ?? 3.0
+    let hm = doc.page?.hmLines ?? 2.0
+    let topHead = Double(headers.keys.max() ?? 1)
+    let headBase = max(0.0, mt - hm - topHead)
+
     var ops: [[UInt8]] = []
-    for n in doc.headers.keys.sorted() {
-        guard let txt = doc.headers[n], !txt.isEmpty else { continue }
-        if let o = op(txt, line: n - 1) { ops.append(o) }
+    for n in headers.keys.sorted() {
+        guard let txt = headers[n], !txt.isEmpty else { continue }
+        if let o = op(txt, line: headBase + Double(n - 1)) { ops.append(o) }
     }
     let footLine = pl - mb + fm
-    for n in doc.footers.keys.sorted() {
-        guard let txt = doc.footers[n], !txt.isEmpty else { continue }
-        if let o = op(txt, line: footLine + n - 1) { ops.append(o) }
+    for n in footers.keys.sorted() {
+        guard let txt = footers[n], !txt.isEmpty else { continue }
+        if let o = op(txt, line: Double(footLine + n - 1)) { ops.append(o) }
     }
     return ops
 }
 
 /// One coalesced segment of a line, resolved to the face and size it will be set in.
 /// Python's `segs` tuple in `_page_stream`.
-private struct LineSegment {
-    let text: String
+struct LineSegment {
+    var text: String
     let styles: Style
     let family: PDFFamily
     let size: Int
@@ -216,6 +252,31 @@ private struct LineSegment {
     /// This segment is a line's LEADING WHITESPACE and is measured in the document's print
     /// columns rather than in its font. Set by `splitIndent`.
     let indent: Bool
+    /// The active COLOUR (palette index), or `nil` for Black/no explicit colour — see
+    /// `Span.colour`. Carried through layout the same way `entry`/`font` is.
+    let colour: Int?
+    /// A 0x0F user print control's declared HMI width, or `nil` — see `Span.pctlHMI`.
+    let pctlHMI: Int?
+
+    init(text: String, styles: Style, family: PDFFamily, size: Int, entry: FontChange?,
+        indent: Bool, colour: Int? = nil, pctlHMI: Int? = nil) {
+        self.text = text
+        self.styles = styles
+        self.family = family
+        self.size = size
+        self.entry = entry
+        self.indent = indent
+        self.colour = colour
+        self.pctlHMI = pctlHMI
+    }
+
+    /// A copy with different text — everything else (styles, font, colour, pctl) carried
+    /// over. Used by `splitGraphics`/`splitIndent`, which break one segment into several
+    /// pieces of the same run.
+    func withText(_ newText: String) -> LineSegment {
+        LineSegment(text: newText, styles: styles, family: family, size: size, entry: entry,
+                   indent: indent, colour: colour, pctlHMI: pctlHMI)
+    }
 }
 
 /// `(point size, baseline rise)` for a span set at `size`. Port of `pdf._sized`.
@@ -318,7 +379,13 @@ func tzScale(_ text: String, _ baseFont: String, _ pt: Int, _ targetW: Double)
 ///
 /// A span with NO font block is never flagged: the run's own pitch already IS the document's
 /// there, so the flag would change nothing — and not raising it keeps every fontless line's
-/// arithmetic, and therefore its bytes, untouched.
+/// arithmetic, and therefore its bytes, untouched. A FIXED-PITCH font block is never flagged
+/// either: its space advances at its own pitch on the printer, full stop — a fixed-pitch
+/// face's leading spaces measured in 10-CPI document columns instead shoves a border/box out
+/// of alignment with its own sides (LJ6DTP's PC-8 chart, drawn in 11.9-CPI COURIER PC 12).
+/// For 10-CPI Courier the two measures are the same number, so nothing else moves. The
+/// document-column rule is for PROPORTIONAL runs only, where WordStar re-stamps tab/margin
+/// positioning as 10-CPI machine spaces.
 private func splitIndent(_ segs: [LineSegment]) -> [LineSegment] {
     var out: [LineSegment] = []
     var leading = true
@@ -328,18 +395,20 @@ private func splitIndent(_ segs: [LineSegment]) -> [LineSegment] {
             continue
         }
         let pad = seg.text.count - seg.text.drop(while: { $0 == " " }).count
-        if seg.entry != nil, pad > 0 {
+        if let entry = seg.entry, entry.proportional, pad > 0 {
             if pad < seg.text.count {
                 out.append(LineSegment(text: String(seg.text.prefix(pad)), styles: seg.styles,
                                        family: seg.family, size: seg.size, entry: seg.entry,
-                                       indent: true))
+                                       indent: true, colour: seg.colour, pctlHMI: seg.pctlHMI))
                 out.append(LineSegment(text: String(seg.text.dropFirst(pad)),
                                        styles: seg.styles, family: seg.family, size: seg.size,
-                                       entry: seg.entry, indent: false))
+                                       entry: seg.entry, indent: false, colour: seg.colour,
+                                       pctlHMI: seg.pctlHMI))
                 leading = false
             } else {
                 out.append(LineSegment(text: seg.text, styles: seg.styles, family: seg.family,
-                                       size: seg.size, entry: seg.entry, indent: true))
+                                       size: seg.size, entry: seg.entry, indent: true,
+                                       colour: seg.colour, pctlHMI: seg.pctlHMI))
             }
             continue
         }
@@ -387,21 +456,91 @@ private func splitIndent(_ segs: [LineSegment]) -> [LineSegment] {
 /// already IS the document's, so it cannot change a fontless byte.)
 private func lineOpsPrinted(
     _ segs: [LineSegment], left: Double, y: Double, size: Int, res: FontResources,
-    tzState: inout Int
+    tzState: inout Int, colState: inout Double, colourMap: [Int: Double] = [:]
 ) -> [[UInt8]] {
     var ops: [[UInt8]] = []
     var x = left
-    for seg in splitIndent(segs) {
+    // `colourMap` is non-empty exactly when the document declares driver LJ6DTP — the
+    // same gate covers its character substitutions.
+    let segs = colourMap.isEmpty ? segs : ljSubstitute(segs)
+    for seg in splitIndent(splitGraphics(segs)) {
+        // A 0x0F user print control's display string is SCREEN-ONLY: on paper WordStar
+        // sent the raw printer payload and advanced by the block's own HMI word (0 for
+        // LJ6DTP's rule-drawing controls, whose payload draws with no character advance
+        // at all). The facsimile does the same: no text, the declared width of empty
+        // space.
+        if let hmi = seg.pctlHMI {
+            x += Double(hmi) / hmiPerPoint
+            continue
+        }
         let (pt, rise) = sized(seg.styles, seg.size)
         let baseFont = base14(seg.family, bold: seg.styles.contains(.bold),
                               italic: seg.styles.contains(.italic))
         let font = res.ref(baseFont)
+        // Driver-aware colour: a span tagged with a colour under a driver whose palette
+        // we know renders at that palette's gray. Emitted only when the value CHANGES
+        // (fill gray is graphics state, like Tz), so every all-black document — and
+        // every driver we cannot read — writes not one extra byte. This is what makes
+        // LJ6DTP's knockouts work: white (15) text overprinted onto a black bar punches
+        // out of it exactly as the LaserJet printed it.
+        if !colourMap.isEmpty {
+            let gray = seg.colour.flatMap { colourMap[$0] } ?? 0.0
+            if gray != colState {
+                ops.append(Array("\(fixedTwoDecimals(gray)) g".utf8))
+                colState = gray
+            }
+        }
+        // cp437 graphics (blocks, shades, box-drawing) draw as vectors at the span's own
+        // advance. `splitGraphics` guarantees a span reaching here is either all-graphics
+        // or has none. In a PROPORTIONAL face a block advances at the EM, not the face's
+        // nominal average width (LJ6DTP's own two-part flush-right bar only closes at
+        // 24 x em per segment); fixed-pitch blocks stay on the pitch.
+        if let entry = seg.entry, seg.text.contains(where: { graphicChars.contains($0) }) {
+            let pitch = entry.proportional ? Double(pt) : spanPitch(entry, pt)
+            ops += graphicOps(seg.text, x: x, y: y, pitch: pitch, pt: pt)
+            x += Double(seg.text.width) * pitch
+            continue
+        }
+        if let entry = seg.entry, entry.proportional, !seg.indent {
+            // PROPORTIONAL runs advance at NATURAL widths, face-scaled. Every piece
+            // (word or space run) occupies its own AFM width times the FACE-constant
+            // Tz — the scale that lands the face's AVERAGE character on its HMI grid,
+            // so a line's total comes out on the author's measure while every glyph and
+            // every space keeps its true proportion. One op per word bounds a viewer's
+            // substitute-metric drift to a single word; spaces advance with no operator
+            // at all.
+            let pitch = spanPitch(entry, pt)
+            let want = hundredths(faceTz(baseFont, pitch, pt))
+            let factor = Double(want) / 10000.0
+            for piece in splitKeepingSpaceRuns(seg.text) {
+                let nat = stringWidthPt(piece, baseFont, pt)
+                let pw = nat > 0 ? nat * factor : Double(piece.width) * pitch
+                if piece.first != " " {
+                    var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
+                    if want != tzState {
+                        op += Array("\(fixedTwoDecimal(hundredths: want)) Tz ".utf8)
+                        tzState = want
+                    }
+                    op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                    op += esc(piece)
+                    op += Array(") Tj ET".utf8)
+                    ops.append(op)
+                }
+                ops += rules(seg.styles, piece, x: x, y: y, w: pw)
+                x += pw
+            }
+            continue
+        }
         let scale: Double?
         let w: Double
         if seg.indent {
             scale = nil
             w = Double(seg.text.width) * Double(size) * 0.6      // document print columns
         } else {
+            // Fixed-pitch (and metric-less) runs: width-matched onto the font block's
+            // own HMI grid with Tz — for Courier the ratio is 100 by construction and no
+            // operator is ever written, which is what keeps every fontless PDF
+            // byte-identical.
             let target = spanTarget(seg.entry, pt, count: seg.text.width)
             (scale, w) = tzScale(seg.text, baseFont, pt, target)
         }
@@ -444,7 +583,8 @@ func pageStream(
     _ pagelines: Page, top: Int, pageHeight: Int = PDFMetrics.pageHeight,
     lead: Double = Double(PDFMetrics.lead), size: Int = PDFMetrics.size,
     left: Double = Double(PDFMetrics.margin),
-    running: [[UInt8]] = [], fonts: [FontChange] = [], res: FontResources? = nil
+    running: [[UInt8]] = [], fonts: [FontChange] = [], res: FontResources? = nil,
+    colourMap: [Int: Double] = [:]
 ) -> [UInt8] {
     let res = res ?? FontResources()
     var ops: [[UInt8]] = running
@@ -454,10 +594,14 @@ func pageStream(
     // Horizontal scaling persists across text objects within a content stream; it starts at
     // PDF's own default on every page. See `lineOpsPrinted`.
     var tzState = hundredths(tzDefault)
+    // Fill gray likewise: graphics state, reset per page.
+    var colState = 0.0
+    var prevOverprint = false
     for (n, line) in pagelines.enumerated() {
-        if n > 0 {
+        if n > 0, !prevOverprint {
             y -= line.lead ?? lead
         }
+        prevOverprint = line.overprint
         var segs: [LineSegment] = []
         // Coalesced FIRST (pdf.py:136): the wrapper leaves one segment per word and per
         // space-run, and each segment costs a text-showing operator. Merging runs that share
@@ -469,9 +613,11 @@ func pageStream(
             let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
             segs.append(LineSegment(text: rendered.text, styles: span.styles,
                                     family: rendered.family, size: rendered.size,
-                                    entry: rendered.entry, indent: false))
+                                    entry: rendered.entry, indent: false,
+                                    colour: span.colour, pctlHMI: span.pctlHMI))
         }
-        ops += lineOpsPrinted(segs, left: left, y: y, size: size, res: res, tzState: &tzState)
+        ops += lineOpsPrinted(segs, left: left, y: y, size: size, res: res, tzState: &tzState,
+                             colState: &colState, colourMap: colourMap)
     }
     return joined(ops, separator: 0x0A)                                 // Python's b'\n'.join
 }
@@ -501,6 +647,24 @@ private func joined(_ chunks: [[UInt8]], separator: UInt8) -> [UInt8] {
 @Sendable
 public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> [UInt8] {
+    var doc = doc
+    // `options.pageDefaults`: replacement DEFAULTS for geometry the document does not
+    // declare itself (a field is overridden only when its own resolved value is still
+    // this project's built-in default — a document's own dot commands always win). This
+    // exists because WordStar's stock defaults are not what a given machine printed:
+    // WSCHANGE patches them per installation. Applied to a local COPY of `doc` — a value
+    // type, so there is nothing to restore afterward, unlike Python's save/try/finally
+    // dance around a shared mutable `doc.meta['page']`.
+    if let pageDefaults = options.pageDefaults, var page = doc.page {
+        if let mt = pageDefaults.mtLines, page.mtSource == .default { page.mtLines = mt }
+        if let mb = pageDefaults.mbLines, page.mbSource == .default { page.mbLines = mb }
+        if let po = pageDefaults.poCols, page.poSource == .default { page.poCols = po }
+        if let hm = pageDefaults.hmLines, page.hmSource == .default { page.hmLines = hm }
+        if let fm = pageDefaults.fmLines, page.fmSource == .default { page.fmLines = fm }
+        page.textLines = textLinesPerPage(pl: page.plLines, mt: page.mtLines,
+                                          mb: page.mbLines, lh48: page.lh48)
+        doc.page = page
+    }
     let printed = mode == .printed || isPrinted(doc)
     let pages = docToPagelines(doc, printed: printed)
     // ctrl-kd 1.3.0: both figures are per-document in Printed mode now — `printedTop`/
@@ -528,6 +692,12 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     // documents and print streams have no font blocks, so `doc.fonts` is empty for them and
     // this is a no-op.
     let fonts = printed ? doc.fonts : []
+    // Colour is DRIVER-DEFINED: the palette indices a document records mean whatever its
+    // printer description file says. LJ6DTP's table is known (recovered from the driver
+    // file's own string table and confirmed against the document's sample rows): 0
+    // Black, 1-7 grays of decreasing ink, 15 White — the knockout that lets white text
+    // punch out of a black bar. Any other driver: indices stay opaque, nothing rendered.
+    let colourMap = (printed && doc.printerDriver == "LJ6DTP") ? colourGrayLJ6DTP : [:]
 
     // (number, body) — the body WITHOUT the `N 0 obj` wrapper, which the writer adds while
     // recording offsets.
@@ -543,18 +713,34 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     let res = FontResources()
     var streams: [[UInt8]] = []
     for (i, page) in pages.enumerated() {
+        // Per-page header/footer state, replayed from `doc.hfEvents` through pagination
+        // (`Page.headers`/`.footers`) — populated for every page regardless of which
+        // paginator built it (the notes-aware one stamps the document's final state on
+        // every page instead, matching Python's `getattr` fallback for a plain list).
         let running = runningOps(doc, pageNo: startNo + i, pageHeight: pageHeight,
-                                 lead: lead, size: size, left: left, printed: printed)
+                                 lead: lead, size: size, left: left, printed: printed,
+                                 headers: page.headers, footers: page.footers)
         streams.append(pageStream(page, top: top, pageHeight: pageHeight, lead: lead,
                                   size: size, left: left, running: running,
-                                  fonts: fonts, res: res))
+                                  fonts: fonts, res: res, colourMap: colourMap))
     }
 
     var fontNums: [(name: String, number: Int)] = []
     for font in res.fonts {
         fontNums.append((font.name, nextNum))
-        objs.append((nextNum, Array(
-            "<< /Type /Font /Subtype /Type1 /BaseFont /\(font.baseFont) >>".utf8)))
+        // `/WinAnsiEncoding` on the ALPHABETIC faces: without a declared encoding a Type1
+        // font falls back to its built-in StandardEncoding, where the cp1252 bytes `esc`
+        // writes for curly quotes, dashes and © name the WRONG glyphs. Symbol and
+        // ZapfDingbats keep their built-in encodings — their bytes are glyph indices by
+        // design (`SymbolTranslit.swift`).
+        if font.baseFont == "Symbol" || font.baseFont == "ZapfDingbats" {
+            objs.append((nextNum, Array(
+                "<< /Type /Font /Subtype /Type1 /BaseFont /\(font.baseFont) >>".utf8)))
+        } else {
+            objs.append((nextNum, Array(
+                ("<< /Type /Font /Subtype /Type1 /BaseFont /\(font.baseFont)"
+                + " /Encoding /WinAnsiEncoding >>").utf8)))
+        }
         nextNum += 1
     }
     // Every page's /Resources names every font the DOCUMENT reached for, whether this page

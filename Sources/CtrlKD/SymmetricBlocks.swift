@@ -44,6 +44,14 @@ public enum StructuralMark: Hashable, Sendable {
     /// (2026-08-04) found every RTF in Times because `fonts` was recorded and never
     /// rendered. Same offset mechanism as every other mark.
     case font(index: Int)
+    /// A COLOUR CHANGE (0x01), carrying the palette index. Also a run boundary — a
+    /// driver-aware renderer (LJ6DTP) honours it as a fill gray. Register C2.
+    case colour(index: Int)
+    /// A 0x0F user print control's DISPLAY STRING, decoded as ONE span carrying the
+    /// block's declared HMI width and its byte length in the cleaned stream — screen-only
+    /// content that a printed renderer replaces with blank space of that width. See
+    /// `Span.pctlHMI`.
+    case pctl(hmi: Int, byteLen: Int)
 }
 
 /// Symmetrical-sequence "Notes" types (WordStar 7.0 file format spec, WordStar
@@ -83,14 +91,17 @@ public struct SymmetricBlocksResult: Hashable, Sendable {
     /// tell a program-emitted indent from one the author typed. A3.
     public let tabAt: Set<Int>
     /// Structural events by offset into `bytes` — what the sentinel bytes used to be.
-    public let marks: [Int: StructuralMark]
+    /// MULTI-VALUED per offset: adjacent 0x1D blocks add no text between them, so a
+    /// colour change and a font block (LJ6DTP, offset 178) — or a style and a font — can
+    /// legitimately mark the very same offset.
+    public let marks: [Int: [StructuralMark]]
 
     public init(bytes: [UInt8], notes: [Note], unknownBlocks: [UnknownBlock],
                 graphics: [String] = [], colours: [ColourChange] = [],
                 fonts: [FontChange] = [], includes: [String] = [],
                 shiftRuns: [ShiftRun] = [], printerDriver: String? = nil,
                 header: WSHeader? = nil,
-                tabAt: Set<Int> = [], marks: [Int: StructuralMark] = [:]) {
+                tabAt: Set<Int> = [], marks: [Int: [StructuralMark]] = [:]) {
         self.header = header
         self.tabAt = tabAt
         self.marks = marks
@@ -121,7 +132,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var headerRelease: String? = nil
     var headerLibOffset: Int? = nil
     var tabAt: Set<Int> = []
-    var marks: [Int: StructuralMark] = [:]
+    var marks: [Int: [StructuralMark]] = [:]
     var i = 0
     while i < data.count {
         if data[i] == 0x1b && i + 1 < data.count {
@@ -164,7 +175,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 let content = blockContent(block)
                 notes.append(parseNote(kind: kind, cmd: cmd, content: content, offset: start))
                 if cmd != 0x06 {                                   // comments: never printed inline
-                    marks[out.count] = .fnref
+                    marks[out.count, default: []].append(.fnref)
                 }
             } else if cmd == 0x09 {                                // tab (and dot leaders)
                 // Remember that this padding came from a TAB, not from typed spaces.
@@ -183,7 +194,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 // block is still parsed (it is real structure, and a viewer may want the
                 // editor's last-seen pagination), but NO renderer may treat it as a page
                 // break: honouring them changed the page count of 43 archive documents.
-                marks[out.count] = .softpage
+                marks[out.count, default: []].append(.softpage)
             } else if cmd == 0x0D {                                // paragraph number
                 // WordStar's AUTOMATIC outline/legal numbering (`.p#`) — "2.1.3" and
                 // the like. Documented layout (WSFORMAT.TXT, "0Dh Paragraph number"):
@@ -233,6 +244,10 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                     colours.append(ColourChange(offset: out.count,
                                                 colour: Int(content[0]),
                                                 previous: Int(content[1])))
+                    // A colour change is a RUN BOUNDARY too: spans carry the active
+                    // colour so a driver-aware renderer can honour it (LJ6DTP maps the
+                    // palette to grayscale/white knockouts).
+                    marks[out.count, default: []].append(.colour(index: Int(content[0])))
                 }
             } else if cmd == 0x02 || cmd == 0x15 {                 // font change
                 // WSFORMAT.TXT, type 2 Font — six little-endian words:
@@ -262,7 +277,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                     // every RTF came out in Times because `fonts` was recorded and never
                     // rendered (Jon's export review, 2026-08-04). Same offset mechanism
                     // as every other mark.
-                    marks[out.count] = .font(index: fonts.count - 1)
+                    marks[out.count, default: []].append(.font(index: fonts.count - 1))
                 }
             } else if cmd == 0x0F {                                // user print control
                 // WSFORMAT.TXT, "0Fh User print control":
@@ -286,7 +301,16 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 if content.count >= 3 {
                     let nch = Int(content[2])
                     let split = Swift.min(3 + nch, content.count)
-                    let shown = printableASCII(Array(content[3..<split]))
+                    // The display string is CP437 SCREEN TEXT -- LJ6DTP's rule-drawing
+                    // controls label themselves with box-drawing art ("Empty
+                    // Z00.300"hx..."). Bit-7 masking turned that into ASCII noise, and
+                    // worse: a leading « (0xAE) masked to '.' (0x2E), so the whole line
+                    // was later swallowed as a dot command -- 33 of LJ6DTP's 41 controls
+                    // vanished. `out` is a raw single-byte-per-character cp437 stream
+                    // throughout this pass, so the filtered bytes are appended AS BYTES,
+                    // with no decode/re-encode round trip needed (cp437 is a total,
+                    // lossless 256-slot codec: decoding then re-encoding is the identity).
+                    let shown = Array(content[3..<split]).filter { $0 >= 0x20 && $0 != 0x7F }
                     let ptext = printableASCII(Array(content[split...]))
                     var name: [UInt8] = []
                     if let mark = indexOfPercentF(ptext) {
@@ -304,7 +328,16 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                         handled = true
                     } else if !stripASCII(shown, of: 0x20).isEmpty {
                         // No file reference, but a display string the editor shows.
-                        out += Array(decodeCP437(shown).utf8)
+                        // SCREEN-ONLY: on paper WordStar sends the raw printer payload
+                        // instead and advances by the block's own HMI word ("number of
+                        // hmis this sequence uses on the printed page" -- 0 for
+                        // LJ6DTP's rule-drawing controls). The mark carries (hmi, byte
+                        // count) so printed renderers can swap the string for its
+                        // declared width; reading modes keep the string, the only
+                        // human-visible trace of what the control does.
+                        let hmi = Int(content[0]) | (Int(content[1]) << 8)
+                        marks[out.count, default: []].append(.pctl(hmi: hmi, byteLen: shown.count))
+                        out += shown
                         handled = true
                     }
                 }
@@ -441,7 +474,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 // from the RESOLVED entry (see `parseWS`), never from the slot.
                 let content = blockContent(block)
                 if content.count == 8 {
-                    marks[out.count] = .style(handle: Int(content[0]) | (Int(content[1]) << 8))
+                    marks[out.count, default: []].append(.style(handle: Int(content[0]) | (Int(content[1]) << 8)))
                 } else {
                     unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
                 }

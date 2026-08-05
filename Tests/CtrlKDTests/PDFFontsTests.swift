@@ -11,17 +11,20 @@ import Testing
 @Test func pdfFontlessDocumentsAreByteIdenticalToPreFontsOutput() {
     // THE regression that guards the whole feature: a document with no font runs -- every
     // WS4 file, every print stream, and most WS5+ documents -- must come out of emitPDF byte
-    // for byte as it did before base-14 fonts existed here. These digests were taken from
-    // THIS engine as it stood at de50744, the commit before the font work, and are the
-    // proof, not a description of it: nothing about the new path may perturb a Courier page,
-    // including the object numbering (which is why the Courier four are always emitted, used
-    // or not -- see `FontResources`).
+    // for byte across unrelated feature work. First pinned at de50744 (pre-font emitter);
+    // re-pinned ONCE on 2026-08-05 when `/Encoding /WinAnsiEncoding` was added to every text
+    // font object -- a deliberate, global, single-line change to the font dictionaries
+    // (cp1252 strings need the declared encoding; without it the base-14 built-in
+    // StandardEncoding renders curly quotes and dashes as the wrong glyphs). Nothing else
+    // about the fonts/colour/graphics work may perturb a Courier page, including the object
+    // numbering (which is why the Courier four are always emitted, used or not -- see
+    // `FontResources`).
     //
-    // They are also, as it happens, the same four digests the Python suite pins. Soft Return
-    // and ctrl-kd are not obliged to agree byte for byte -- the cross-check compares text
-    // formats and asserts PDF EQUIVALENCE, not identity -- so the agreement is an
-    // observation about these four fixtures, not a contract. The pin is on this engine's own
-    // output either way.
+    // They are also, as it happens, the same four digests the Python suite pins (re-taken
+    // there the same day, for the same reason). Soft Return and ctrl-kd are not obliged to
+    // agree byte for byte -- the cross-check compares text formats and asserts PDF
+    // EQUIVALENCE, not identity -- so the agreement is an observation about these four
+    // fixtures, not a contract. The pin is on this engine's own output either way.
     // staged: 6.2.4's type-checker times out on the one-expression form
     var styled = bytes("Plain ") + [0x02] + bytes("bold") + [0x02] + bytes(" ")
     styled += [0x13] + bytes("under") + [0x13] + bytes(" ")
@@ -30,13 +33,13 @@ import Testing
     let stream: [UInt8] = bytes("Line one of printed page\r\nLine two\r\nLine three\r\n") + [0x1a]
 
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .printed))
-        == "ca74410ce6cdf27def1cc293b860b695b1745025505bf8af29c84acd322a08b8")
+        == "d8f6c993a645c735df77a78f58e4dd44464219685e49403e69359d5ff0641e3b")
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .modern))
-        == "1e97def80007bd6578a0ab0910eeabcd883d7115b3369fb0660729280c18f69a")
+        == "a78b6655ab04698ed1b1b3b550a0d734aa4c713ab74e9c41cf8304b0881c05d8")
     #expect(sha256Hex(emitPDF(parseWS(styled), mode: .printed))
-        == "734aca69d48ddb539dcbd3699f9f3ddf9f46e8039508b7692a1680787fa7408f")
+        == "a9ffc0cb6a78d7c145306d3a22c1b210d04f1b87b6d38ff7fb7936c969908d39")
     #expect(sha256Hex(emitPDF(parsePrintstream(stream), mode: .printed))
-        == "cd63c39b705acff2d8b2df84fde2f0a6ac28f9e2bcfed01ac75cfd9de9a98717")
+        == "6d6555d63a003a276e67c8291ab31b653cc526e4ec47bf6f6cc5da50849d7e98")
 }
 
 @Test func sha256HelperMatchesTheStandardsOwnVectors() {

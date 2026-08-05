@@ -47,13 +47,12 @@
 /// deduplicates by VALUE, so that sharing is a measured fact about the tables, not an
 /// assumption written into the script.
 ///
-/// Known and deliberate limit: the font objects this emitter writes carry no `/Encoding`, so
-/// a viewer draws the faces' built-in StandardEncoding. Over 0x20-0x7E that agrees with
-/// Latin-1 for every code but 0x27 and 0x60 (quote forms); above 0x7E it does not. Widths for
-/// accented Latin-1 are therefore what the AUTHOR's bytes mean, not what an un-re-encoded
-/// viewer draws. Fixing that means adding `/Encoding` to every font object, which would change
-/// every PDF this project has ever produced — a separate decision, recorded here rather than
-/// made in passing.
+/// Since 2026-08-05 the text font objects declare `/Encoding /WinAnsiEncoding` (which IS
+/// cp1252) and the writer's `esc` encodes cp1252 instead of Latin-1, so bytes, glyphs and
+/// these widths agree over the WHOLE range — including the 0x80-0x9F typographic row
+/// (curly quotes, en/em dashes, ellipsis, bullet, dagger, trademark, ligatures), which
+/// Latin-1 has no glyphs for at all. The generator overlays real Adobe AFM widths for that
+/// row onto the Latin-1-named base tables below, exactly as ctrl-kd's own `afm.py` does.
 ///
 /// A code with no glyph in a face gets 0. Callers must treat a zero-width string as "no metric
 /// available" rather than dividing by it (`tzScale` does).
@@ -75,8 +74,8 @@ private let afmHelvetica: [Int] = [
      667,  778,  722,  667,  611,  722,  667,  944,  667,  667,  611,  278,  278,  278,  469,  556,
      333,  556,  556,  500,  556,  556,  278,  556,  556,  222,  222,  500,  222,  833,  556,  556,
      556,  556,  333,  500,  278,  556,  500,  722,  500,  500,  500,  334,  260,  334,  584,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,  222,  556,  333, 1000,  556,  556,  333, 1000,  667,  333, 1000,    0,  611,    0,
+       0,  222,  222,  333,  333,  350,  556, 1000,  333, 1000,  500,  333,  944,    0,  500,  667,
      278,  333,  556,  556,  556,  556,  260,  556,  333,  737,  370,  556,  584,  333,  737,  333,
      400,  584,  333,  333,  333,  556,  537,  278,  333,  333,  365,  556,  834,  834,  834,  611,
      667,  667,  667,  667,  667,  667, 1000,  722,  667,  667,  667,  667,  278,  278,  278,  278,
@@ -94,8 +93,8 @@ private let afmHelveticaBold: [Int] = [
      667,  778,  722,  667,  611,  722,  667,  944,  667,  667,  611,  333,  278,  333,  584,  556,
      333,  556,  611,  556,  611,  556,  333,  611,  611,  278,  278,  556,  278,  889,  611,  611,
      611,  611,  389,  556,  333,  611,  556,  778,  556,  556,  500,  389,  280,  389,  584,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,  278,  556,  500, 1000,  556,  556,  333, 1000,  667,  333, 1000,    0,  611,    0,
+       0,  278,  278,  500,  500,  350,  556, 1000,  333, 1000,  556,  333,  944,    0,  500,  667,
      278,  333,  556,  556,  556,  556,  280,  556,  333,  737,  370,  556,  584,  333,  737,  333,
      400,  584,  333,  333,  333,  611,  556,  278,  333,  333,  365,  556,  834,  834,  834,  611,
      722,  722,  722,  722,  722,  722, 1000,  722,  667,  667,  667,  667,  278,  278,  278,  278,
@@ -113,8 +112,8 @@ private let afmTimesRoman: [Int] = [
      556,  722,  667,  556,  611,  722,  722,  944,  722,  722,  611,  333,  278,  333,  469,  500,
      333,  444,  500,  444,  500,  444,  333,  500,  500,  278,  278,  500,  278,  778,  500,  500,
      500,  500,  333,  389,  278,  500,  500,  722,  500,  500,  444,  480,  200,  480,  541,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,  333,  500,  444, 1000,  500,  500,  333, 1000,  556,  333,  889,    0,  611,    0,
+       0,  333,  333,  444,  444,  350,  500, 1000,  333,  980,  389,  333,  722,    0,  444,  722,
      250,  333,  500,  500,  500,  500,  200,  500,  333,  760,  276,  500,  564,  333,  760,  333,
      400,  564,  300,  300,  333,  500,  453,  250,  333,  300,  310,  500,  750,  750,  750,  444,
      722,  722,  722,  722,  722,  722,  889,  667,  611,  611,  611,  611,  333,  333,  333,  333,
@@ -132,8 +131,8 @@ private let afmTimesBold: [Int] = [
      611,  778,  722,  556,  667,  722,  722, 1000,  722,  722,  667,  333,  278,  333,  581,  500,
      333,  500,  556,  444,  556,  444,  333,  500,  556,  278,  333,  556,  278,  833,  556,  500,
      556,  556,  444,  389,  333,  556,  500,  722,  500,  500,  444,  394,  220,  394,  520,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,  333,  500,  500, 1000,  500,  500,  333, 1000,  556,  333, 1000,    0,  667,    0,
+       0,  333,  333,  500,  500,  350,  500, 1000,  333, 1000,  389,  333,  722,    0,  444,  722,
      250,  333,  500,  500,  500,  500,  220,  500,  333,  747,  300,  500,  570,  333,  747,  333,
      400,  570,  300,  300,  333,  556,  540,  250,  333,  300,  330,  500,  750,  750,  750,  500,
      722,  722,  722,  722,  722,  722, 1000,  722,  667,  667,  667,  667,  389,  389,  389,  389,
@@ -151,8 +150,8 @@ private let afmTimesItalic: [Int] = [
      611,  722,  611,  500,  556,  722,  611,  833,  611,  556,  556,  389,  278,  389,  422,  500,
      333,  500,  500,  444,  500,  444,  278,  500,  500,  278,  278,  444,  278,  722,  500,  500,
      500,  500,  389,  389,  278,  500,  444,  667,  444,  444,  389,  400,  275,  400,  541,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,  333,  500,  556,  889,  500,  500,  333, 1000,  500,  333,  944,    0,  556,    0,
+       0,  333,  333,  556,  556,  350,  500,  889,  333,  980,  389,  333,  667,    0,  389,  556,
      250,  389,  500,  500,  500,  500,  275,  500,  333,  760,  276,  500,  675,  333,  760,  333,
      400,  675,  300,  300,  333,  500,  523,  250,  333,  300,  310,  500,  750,  750,  750,  500,
      611,  611,  611,  611,  611,  611,  889,  667,  611,  611,  611,  611,  333,  333,  333,  333,
@@ -170,8 +169,8 @@ private let afmTimesBoldItalic: [Int] = [
      611,  722,  667,  556,  611,  722,  667,  889,  667,  611,  611,  333,  278,  333,  570,  500,
      333,  500,  500,  444,  500,  444,  333,  500,  556,  278,  278,  500,  278,  778,  556,  500,
      500,  500,  389,  389,  278,  556,  444,  667,  500,  444,  389,  348,  220,  348,  570,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,  333,  500,  500, 1000,  500,  500,  333, 1000,  556,  333,  944,    0,  611,    0,
+       0,  333,  333,  500,  500,  350,  500, 1000,  333, 1000,  389,  333,  722,    0,  389,  611,
      250,  389,  500,  500,  500,  500,  220,  500,  333,  747,  266,  500,  606,  333,  747,  333,
      400,  570,  300,  300,  333,  576,  500,  250,  333,  300,  300,  500,  750,  750,  750,  500,
      667,  667,  667,  667,  667,  667,  944,  667,  667,  667,  667,  667,  389,  389,  389,  389,
@@ -183,12 +182,12 @@ private let afmTimesBoldItalic: [Int] = [
 private let afmSymbol: [Int] = [
        0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
        0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-     250,  333,  713,  500,  549,  833,  778,  439,  333,  333,  500,  549,  250,  549,  250,  278,
+     250,  333,  713,  500,  549,  833,  778,  631,  333,  333,  500,  549,  250,  549,  250,  278,
      500,  500,  500,  500,  500,  500,  500,  500,  500,  500,  278,  278,  549,  549,  549,  444,
      549,  722,  667,  722,  612,  611,  763,  603,  722,  333,  631,  722,  686,  889,  722,  722,
-     768,  741,  556,  592,  611,  690,  439,  768,  645,  795,  611,  333,  863,  333,  658,  500,
-     500,  631,  549,  549,  494,  439,  521,  411,  603,  329,  603,  549,  549,  576,  521,  549,
-     549,  521,  549,  603,  439,  576,  713,  686,  493,  686,  494,  480,  200,  480,  549,    0,
+     768,  741,  556,  592,  611,  690,  631,  768,  645,  795,  611,  333,  863,  333,  658,  500,
+     500,  631,  549,  549,  494,  631,  521,  411,  603,  329,  603,  549,  549,  576,  521,  549,
+     549,  521,  549,  603,  631,  576,  713,  686,  493,  686,  494,  480,  200,  480,  549,    0,
      790,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
        0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
      750,  620,  247,  549,  167,  713,  500,  753,  753,  753,  753, 1042,  987,  603,  987,  603,
@@ -240,9 +239,12 @@ let afmWidths: [String: [Int]] = [
 
 /// Natural width of `text` set in `baseFont`, in 1/1000 em.
 ///
-/// `text` is measured as the writer will WRITE it — encoded Latin-1, with anything outside
-/// that repertoire replaced by `?`, which is exactly what `esc` does. Measuring the string
-/// directly would count a character the PDF never receives.
+/// `text` is measured as the writer will WRITE it — encoded cp1252 (the declared
+/// `/WinAnsiEncoding`), with anything outside that repertoire replaced by `?`, which is
+/// exactly what `esc` does (modulo `esc`'s own lookalike-degradation pass — see
+/// `PDFWriter.swift`; this measures the text as GIVEN, matching ctrl-kd's
+/// `string_width_1000`, which does not apply that pass either). Measuring the string
+/// directly (as Unicode scalars) would count a character the PDF never receives.
 ///
 /// An unknown base font falls back to Courier's fixed 600: a face this table does not carry
 /// cannot be measured, and 600 is this emitter's own default pitch, not a guess at the
@@ -250,8 +252,8 @@ let afmWidths: [String: [Int]] = [
 func stringWidth1000(_ text: String, _ baseFont: String) -> Int {
     let table = afmWidths[baseFont] ?? afmCourier
     var total = 0
-    for scalar in text.unicodeScalars {
-        total += table[scalar.value <= 0xFF ? Int(scalar.value) : 0x3F]   // 0x3F = '?'
+    for byte in cp1252Encode(text) {
+        total += table[Int(byte)]
     }
     return total
 }

@@ -110,7 +110,8 @@ private func convertAll(
             let output = emitter.emit(doc, options.mode,
                                       EmitOptions(title: base, notes: options.notes,
                                                   styles: options.styles,
-                                                  fontsTarget: options.fontsTarget))
+                                                  fontsTarget: options.fontsTarget,
+                                                  pageDefaults: options.pageDefaults))
 
             let destination: String
             if let explicit = options.output {

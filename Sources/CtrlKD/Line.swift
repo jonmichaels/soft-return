@@ -26,6 +26,13 @@ public struct Line: Hashable, Sendable {
     /// currently ends, including mid-paragraph.
     public var softpage: Bool
 
+    /// True when this line ends in a BARE CR — `^PM` Overprint Line (WSFORMAT and the
+    /// WS4 manual agree): the NEXT line prints at THIS line's own baseline, additively —
+    /// LJ6DTP's white-on-black knockouts and strikeover composites both work this way.
+    /// Printed renderers re-use the y; reflow modes treat it as a plain break (the field
+    /// is simply never consulted there).
+    public var overprint: Bool
+
     /// The line height IN FORCE ON THIS LINE, in `.lh`'s own 1/48in units — `nil` meaning
     /// "the document's own default" (`Document.page?.lh48`), which is the overwhelmingly
     /// common case and keeps the field free for every file that never changes leading.
@@ -43,11 +50,12 @@ public struct Line: Hashable, Sendable {
     public var lead48: Double?
 
     public init(spans: [Span] = [], soft: Bool = false, softpage: Bool = false,
-                lead48: Double? = nil) {
+                lead48: Double? = nil, overprint: Bool = false) {
         self.spans = spans
         self.soft = soft
         self.softpage = softpage
         self.lead48 = lead48
+        self.overprint = overprint
     }
 
     /// All span text joined, e.g. for search or format-agnostic display.

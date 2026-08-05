@@ -192,10 +192,15 @@ import Testing
     // 0.1in shadow, threw its second copy off the right edge of the paper.
     let helv = helvTypestyle()
     let tab = ws7Block(0x09, payload: le16(2502) + le16(2502) + bytes(" \r"))    // 1.39in
+    // 0x8000: the proportional bit -- the evidence font (the archive banner's Antique
+    // Olive) is proportional, and the document-column indent rule is scoped to
+    // proportional runs (a fixed-pitch font's spaces advance at its own pitch instead:
+    // LJ6DTP's PC-8 chart border).
     // staged: 6.2.4's type-checker times out on the one-expression form
     var data = ws7Block(0x00)
     data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
-    data += fontBlock(helv, points: 72.0, width: 1064) + tab + bytes("X") + HARD
+    data += fontBlock(helv, points: 72.0, styleBits: 0x8000, width: 1064) + tab
+        + bytes("X") + HARD
     data += bytes("A closing line of ordinary prose keeps the byte ratio honest.") + HARD
     let doc = parseWS(data)
     let left = printedLeft(doc, size: 12)
@@ -203,4 +208,46 @@ import Testing
         .first { $0.text == "X" }?.x)
     // 14 columns at 10 CPI, not 14 x the 72pt font's 42.6pt.
     #expect(x == tenth(left + 14 * 12 * 0.6))
+}
+
+@Test func proportionalFontKeepsItsOwnHMIGridViaTz() {
+    // Every font run is width-matched onto ITS OWN font block's HMI grid with Tz --
+    // proportional faces included. PS.TST's faces declare distinct per-character HMIs
+    // (Helv Narrow 4.80pt, Univ. Roman 10.08pt): the grid is what preserves each face's
+    // true measure and keeps text registered with tabs, rules and vector graphics (Jon's
+    // review, 2026-08-05, after a natural-width detour flattened them all to the
+    // substitute's uniform average). Words are placed ONE OP EACH (word-anchored
+    // natural widths, face-scaled Tz), so the text appears word by word, never as a
+    // single phrase.
+    let univers = ws7Block(0x02, payload: le16(155) + le16(240) + le16(49710)
+        + [UInt8](repeating: 0, count: 6))
+    let body = ws7Block(0x00) + univers
+        + bytes("iiii mmmm a proportional line of prose.") + HARD
+    let pdf = emitPDF(parseWS(body), mode: .printed)
+    #expect(contains(pdf, bytes(" Tz ")))               // scaled onto the face's grid
+    #expect(contains(pdf, bytes("(proportional)")))
+    #expect(contains(pdf, bytes("(prose.)")))
+}
+
+@Test func printControlDisplayStringIsScreenOnlyInPrintedPDF() {
+    // 0x0F user print control: the display string is what WordStar SHOWS on screen; on
+    // paper it sends the raw printer payload and advances by the block's own HMI word (0
+    // for LJ6DTP's rule-drawing controls). Reading modes keep the string -- it is the
+    // only human-visible trace of what the control does -- but the printed facsimile
+    // drops it, exactly as the printout did.
+    let note = bytes("EMPTY 3-dot rule")
+    let ctl = ws7Block(0x0F, payload: le16(0) + [UInt8(note.count)] + note
+        + [0x1B] + bytes("*c2370a0003b0P"))
+    let body = ws7Block(0x00) + bytes("Heading before the control") + ctl + HARD
+        + bytes("Plain paragraph of ordinary prose padding for detection.") + HARD
+    let doc = parseWS(body)
+    #expect(emitText(doc, mode: .modern).contains("EMPTY 3-dot rule"))
+    #expect(emitRTF(doc, mode: .modern).contains("EMPTY 3-dot rule"))
+    let pdf = emitPDF(doc, mode: .printed)
+    #expect(!contains(pdf, bytes("EMPTY 3-dot rule")))
+    #expect(contains(pdf, bytes("Heading before the control")))
+    // Printed RTF drops the same screen-only span (padded to round(hmi/180) spaces --
+    // 0 here, LJ6DTP's own rule-drawing HMI).
+    #expect(!emitRTF(doc, mode: .printed).contains("EMPTY 3-dot rule"))
+    #expect(emitRTF(doc, mode: .printed).contains("Heading before the control"))
 }

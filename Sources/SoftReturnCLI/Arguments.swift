@@ -10,17 +10,24 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 2.0.0 is the spec-audit wave (paragraph styles parsed,
-/// applied, and passed through to HTML/RTF with --no-styles to opt out; heading levels
-/// from resolved style names; flagged-control model; wrapped-character opacity; detection
-/// that believes the header block; tab HMI correction; FAQ/ERAS documentation);
-/// 1.3.0 added physical lines + horizontal geometry (printed
-/// mode now shows every line where WordStar broke it, `.po`/`.cw`-derived left margin and
-/// type size in the PDF writer, `.po`'s default changes from 0 to 8 columns); 1.2.0 adds
-/// WordStar's own page-geometry model (printed capacity/top/lead from `.pl`/`.mt`/`.mb`/
-/// `.lh`, with `.hm`/`.fm`/`.ls` in --diagnose); 1.1.0 added the note-selection flags and
-/// the expanded --diagnose fields; 1.0.0 was the first CLI release.
-public let srVersion = "2.0.0"
+/// CLI's user-visible contract. 2.1.0 is the LJ6DTP page-width batch (style-record fonts
+/// activate on selection; proportional runs advance at natural per-word widths times a
+/// face-constant Tz; 0x0F print controls are screen-only in printed mode; bare CR is
+/// `^PM` overprint; driver-aware colour (LJ6DTP) and cp437 blocks/shades/box-drawing as
+/// printed vectors; `/WinAnsiEncoding` + cp1252 on text fonts; running heads/feet apply
+/// from the page where their dot command sits, replayed per page from `hfEvents`;
+/// `--page-defaults` for a machine's own patched geometry); 2.0.0 is the spec-audit wave
+/// (paragraph styles parsed, applied, and passed through to HTML/RTF with --no-styles to
+/// opt out; heading levels from resolved style names; flagged-control model;
+/// wrapped-character opacity; detection that believes the header block; tab HMI
+/// correction; FAQ/ERAS documentation); 1.3.0 added physical lines + horizontal geometry
+/// (printed mode now shows every line where WordStar broke it, `.po`/`.cw`-derived left
+/// margin and type size in the PDF writer, `.po`'s default changes from 0 to 8 columns);
+/// 1.2.0 adds WordStar's own page-geometry model (printed capacity/top/lead from
+/// `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose); 1.1.0 added the
+/// note-selection flags and the expanded --diagnose fields; 1.0.0 was the first CLI
+/// release.
+public let srVersion = "2.1.0"
 
 /// The `ctrl-kd` release this port is verified against. A constant, updated by hand when a
 /// sync job pins the port to a new Python release — it is a claim about which reference the
@@ -68,6 +75,9 @@ public struct Options: Equatable, Sendable {
     /// Which importer the RTF font names target (`--fonts`, ctrl-kd's `--fonts`).
     /// `.office` by default: Word and Google Docs both resolve the Microsoft names.
     public var fontsTarget: FontsTarget = .office
+    /// `--page-defaults` (ctrl-kd's `--page-defaults`/`page_defaults=`), parsed into
+    /// `PageGeometryDefaults`. `nil` when the flag was never given.
+    public var pageDefaults: PageGeometryDefaults?
 
     public init() {}
 }
@@ -90,6 +100,68 @@ let modeChoices = ["modern", "printed"]
 /// `--fonts`. `FontsTarget` has exactly these four cases, so — as with `--mode` — the
 /// initializer IS the validation and this list only spells the error message.
 let fontsChoices = ["office", "mac", "google", "linux"]
+
+/// `--page-defaults` parse outcome: the resolved geometry, or a usage-error message.
+enum PageDefaultsParseResult {
+    case success(PageGeometryDefaults)
+    case failure(String)
+}
+
+/// Parse `--page-defaults mt=0.83in,mb=1in,po=0.7in` into `PageGeometryDefaults`. Port of
+/// cli.py's inline parse (ctrl-kd's `--page-defaults`).
+///
+/// `mt`/`mb`/`hm`/`fm` convert at 6 LPI (lines), `po` at 10 CPI (columns). A value ending
+/// in `in` (case-insensitively, matched on the LOWERCASED string) converts from inches;
+/// a bare number is already NATIVE units (lines, or columns for `po`) — same trap as the
+/// dot commands themselves.
+func parsePageDefaults(_ arg: String) -> PageDefaultsParseResult {
+    var result = PageGeometryDefaults()
+    for part in arg.split(separator: ",", omittingEmptySubsequences: false) {
+        let pieces = part.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+        let key = pieces.count > 0 ? pieces[0].trimmingASCIIWhitespace().lowercased() : ""
+        let rawValue = pieces.count > 1 ? pieces[1].trimmingASCIIWhitespace().lowercased() : ""
+        guard !rawValue.isEmpty else {
+            return .failure("--page-defaults: unknown or empty entry '\(part)'")
+        }
+        let perInch: Double
+        switch key {
+        case "mt", "mb", "hm", "fm": perInch = 6.0
+        case "po": perInch = 10.0
+        default: return .failure("--page-defaults: unknown or empty entry '\(part)'")
+        }
+        let value: Double
+        if rawValue.hasSuffix("in") {
+            guard let inches = Double(rawValue.dropLast(2)) else {
+                return .failure("--page-defaults: bad value in '\(part)'")
+            }
+            value = inches * perInch
+        } else {
+            guard let v = Double(rawValue) else {
+                return .failure("--page-defaults: bad value in '\(part)'")
+            }
+            value = v
+        }
+        switch key {
+        case "mt": result.mtLines = value
+        case "mb": result.mbLines = value
+        case "hm": result.hmLines = value
+        case "fm": result.fmLines = value
+        case "po": result.poCols = value
+        default: break
+        }
+    }
+    return .success(result)
+}
+
+private extension Substring {
+    /// Python's `str.strip()`: ASCII whitespace trimmed from both ends.
+    func trimmingASCIIWhitespace() -> String {
+        var s = self
+        while let f = s.first, f == " " || f == "\t" { s = s.dropFirst() }
+        while let l = s.last, l == " " || l == "\t" { s = s.dropLast() }
+        return String(s)
+    }
+}
 
 public func parseArguments(
     _ argv: [String],
@@ -222,6 +294,16 @@ public func parseArguments(
                 return .usageError("argument \(flag): ignored explicit argument '\(attached!)'")
             }
             options.styles = false
+        case "--page-defaults":
+            guard let value = takeValue(flag, attached: attached) else {
+                return .usageError("argument \(flag): expected one argument")
+            }
+            switch parsePageDefaults(value) {
+            case .success(let parsed):
+                options.pageDefaults = parsed
+            case .failure(let message):
+                return .usageError(message)
+            }
         case "--encoding":
             // Dropped, not forgotten — see the help text. Named explicitly so anyone porting a
             // ctrl-kd command line gets an answer instead of "unrecognized option".
@@ -299,6 +381,14 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             choices: \(fontsChoices.joined(separator: ", "))
       --no-styles           omit paragraph-style pass-through (HTML classes +
                             generated CSS, RTF stylesheet) from the output
+      --page-defaults L     replacement DEFAULTS for page geometry a document does
+                            not declare (its own dot commands always win). Keys:
+                            mt, mb (top/bottom margin), po (page offset), hm, fm
+                            (header/footer margin), comma-separated, e.g.
+                            mt=0.83in,mb=1in,po=0.7in -- an "in" suffix converts
+                            from inches, else native units (lines at 6 LPI; po in
+                            10-CPI columns). Use when the printing machine's
+                            WSCHANGE-patched defaults are known
       --no-notes            omit footnotes, endnotes and annotations from the output
       --comments            include WordStar comments, which it never printed
                             (author's asides, hidden since the file was written)

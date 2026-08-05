@@ -18,6 +18,36 @@
 /// `frob: 1` to `emitText`, and shouldn't want to. An emitter needing options of its own
 /// closes over them at registration time (see `EmitterRegistry.register`) rather than
 /// smuggling them through here.
+/// Replacement DEFAULTS for page geometry a document does not declare itself — a field is
+/// overridden only when the document's own resolved value came from THIS project's
+/// built-in default (`Provenance.default`), never when the document's own dot commands
+/// set it. Read by `emitPDF` alone (ctrl-kd's `--page-defaults`/`page_defaults=`).
+///
+/// This exists because WordStar's stock defaults are not what a given machine printed:
+/// WSCHANGE patches them per installation, and a machine's own default-geometry manuscripts
+/// print on whatever page ITS patched defaults describe, not WordStar's factory ones.
+public struct PageGeometryDefaults: Hashable, Sendable {
+    /// `.mt` replacement, in LINES (6 LPI).
+    public var mtLines: Double?
+    /// `.mb` replacement, in LINES (6 LPI).
+    public var mbLines: Double?
+    /// `.po` replacement, in print COLUMNS (10 CPI).
+    public var poCols: Double?
+    /// `.hm` replacement, in LINES (6 LPI).
+    public var hmLines: Double?
+    /// `.fm` replacement, in LINES (6 LPI).
+    public var fmLines: Double?
+
+    public init(mtLines: Double? = nil, mbLines: Double? = nil, poCols: Double? = nil,
+               hmLines: Double? = nil, fmLines: Double? = nil) {
+        self.mtLines = mtLines
+        self.mbLines = mbLines
+        self.poCols = poCols
+        self.hmLines = hmLines
+        self.fmLines = fmLines
+    }
+}
+
 public struct EmitOptions: Hashable, Sendable {
     /// Goes in `<title>`, escaped. Read by `emitHTML`; the other three built-ins ignore it,
     /// exactly as in Python (emit.py:156 takes `title=''`, its three siblings do not).
@@ -62,11 +92,17 @@ public struct EmitOptions: Hashable, Sendable {
     /// both resolve the Microsoft names (Jon's ruling, 2026-08-04 night).
     public var fontsTarget: FontsTarget
 
+    /// Read by `emitPDF` alone (ctrl-kd's `--page-defaults`/`page_defaults=`) — see
+    /// `PageGeometryDefaults`. `nil` (the default) applies no override at all.
+    public var pageDefaults: PageGeometryDefaults?
+
     public init(title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes,
-                styles: Bool = true, fontsTarget: FontsTarget = .office) {
+                styles: Bool = true, fontsTarget: FontsTarget = .office,
+                pageDefaults: PageGeometryDefaults? = nil) {
         self.title = title
         self.notes = notes
         self.styles = styles
         self.fontsTarget = fontsTarget
+        self.pageDefaults = pageDefaults
     }
 }

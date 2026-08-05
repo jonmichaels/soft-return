@@ -66,15 +66,22 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
                         ExpressibleByArrayLiteral, Hashable, Sendable {
     public var spans: [Span]
     public var lead: Double?
+    /// Bare-CR `^PM` Overprint Line: the NEXT `PageLine` prints at THIS one's own
+    /// baseline. `false` by construction for every line this emitter MAKES (footnote
+    /// areas, wrapped Modern text, blank fillers) — only a printed-mode body line
+    /// carries WordStar's own flag.
+    public var overprint: Bool
 
     public init() {
         spans = []
         lead = nil
+        overprint = false
     }
 
-    public init(_ spans: [Span], lead: Double? = nil) {
+    public init(_ spans: [Span], lead: Double? = nil, overprint: Bool = false) {
         self.spans = spans
         self.lead = lead
+        self.overprint = overprint
     }
 
     public init(arrayLiteral elements: Span...) {
@@ -104,8 +111,67 @@ func leadPt(_ lh48: Double?) -> Double? {
     return lh48 * 1.5
 }
 
-/// One page of laid-out lines, top to bottom.
-public typealias Page = [PageLine]
+/// One paginated page: a collection of `PageLine`s, plus the running head and foot IN
+/// FORCE when this page printed (replayed from `Document.hfEvents`). Port of Python's
+/// `Page(list)`.
+///
+/// A struct that behaves as a collection of `PageLine` for the same reason `PageLine`
+/// itself is one: every existing consumer iterates a page as a sequence of lines and
+/// keeps working untouched, while new code can ask for `.headers`/`.footers`.
+public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableCollection,
+                    ExpressibleByArrayLiteral, Hashable, Sendable {
+    public var lines: [PageLine]
+    /// Running head/foot text by line number (1-5), IN FORCE when this page printed —
+    /// only non-empty entries (an empty string CLEARS a line, so it never renders).
+    /// Empty on every page from a layout path that doesn't replay `hfEvents` (the
+    /// footnote/annotation/endnote-aware paginator, unchanged since before this port):
+    /// those pages carry the DOCUMENT'S final-state `headers`/`footers` instead, which
+    /// is the fallback `runningOps` applies when a page's own dict is empty — matching
+    /// Python's `getattr(pl, 'headers', None)` on a plain list (no attribute at all).
+    public var headers: [Int: String]
+    public var footers: [Int: String]
+
+    public init() {
+        lines = []
+        headers = [:]
+        footers = [:]
+    }
+
+    public init(_ lines: [PageLine], headers: [Int: String] = [:], footers: [Int: String] = [:]) {
+        self.lines = lines
+        self.headers = headers
+        self.footers = footers
+    }
+
+    public init(arrayLiteral elements: PageLine...) {
+        self.init(elements)
+    }
+
+    public var startIndex: Int { lines.startIndex }
+    public var endIndex: Int { lines.endIndex }
+
+    public subscript(position: Int) -> PageLine {
+        get { lines[position] }
+        set { lines[position] = newValue }
+    }
+
+    public mutating func replaceSubrange<C: Collection>(
+        _ subrange: Range<Int>, with newElements: C
+    ) where C.Element == PageLine {
+        lines.replaceSubrange(subrange, with: newElements)
+    }
+}
+
+/// Whether the document has any note that gets a PLACE on the printed page (a footnote
+/// or annotation footer entry, or an endnote's end-of-document entry) — comments never
+/// print. Port of Python's `_has_placeable_notes`. Documents with none of these go
+/// through the plain points-based paginator (`layoutPrintedPagesPlain`); documents WITH
+/// them keep the dedicated footnote/annotation-area paginator (`layoutPrintedPages`,
+/// unchanged by this port) that grows a page-bottom area and floors body at 3 lines —
+/// exactly the split Python's own `_doc_to_pagelines` makes.
+func hasPlaceableNotes(_ doc: Document) -> Bool {
+    doc.notes.contains { $0.kind == .footnote || $0.kind == .endnote || $0.kind == .annotation }
+}
 
 /// Wrap one IR line's spans to `width` columns, preserving styles. Port of `_wrap_line`
 /// (pdf.py:36-55).
@@ -170,7 +236,8 @@ public func wrapLine(_ spans: [Span], width: Int) -> [PageLine] {
 public func coalesce(_ line: PageLine) -> PageLine {
     var out = PageLine([], lead: line.lead)     // the merge changes segments, never the lead
     for span in line {
-        if let last = out.last, last.styles == span.styles, last.font == span.font {
+        if let last = out.last, last.styles == span.styles, last.font == span.font,
+           last.colour == span.colour, last.pctlHMI == span.pctlHMI {
             out[out.count - 1].text += span.text
         } else {
             out.append(span)
@@ -192,10 +259,16 @@ public func coalesce(_ line: PageLine) -> PageLine {
 ///     so the layout can be tested both ways against one document.
 /// - Returns: at least one page, possibly a single empty one.
 public func docToPagelines(_ doc: Document, printed: Bool) -> [Page] {
+    let isPrintStream = doc.detection?.variant == .printstream
     if printed {
-        return finalizePages(layoutPrintedPages(doc), printed: true)
+        if hasPlaceableNotes(doc) {
+            return finalizePages(layoutPrintedPages(doc), printed: true,
+                                 isPrintStream: isPrintStream)
+        }
+        return finalizePages(layoutPrintedPagesPlain(doc), printed: true,
+                             isPrintStream: isPrintStream)
     }
-    return finalizePages(layoutModernPages(doc), printed: false)
+    return finalizePages(layoutModernPages(doc), printed: false, isPrintStream: isPrintStream)
 }
 
 /// Modern mode: unchanged from the original Python-parity port. Reflows every line to
@@ -288,10 +361,20 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
 /// double up. But deliberate spacing (a chapter-drop on page 1) must survive: the MACHINE
 /// margin is uniform on every page, so strip only the minimum leading-blank count seen on
 /// pages 2+ — anything beyond it on any page is the author's layout. Trailing blanks are
-/// always machine. Shared by both modes' page-building functions; Modern's own layout never
-/// leaves a leading blank behind (it did the reflow itself), so `machine` is `nil` there and
-/// this reduces to the trailing-blank strip plus the empty-trailing-page pop.
-private func finalizePages(_ rawPages: [Page], printed: Bool) -> [Page] {
+/// always machine.
+///
+/// ...but ONLY for a PRINT STREAM (`isPrintStream`). This repair was written for
+/// print-to-disk output, where WordStar physically emitted its top margin as blank
+/// lines. A WS4/WS5+ DOCUMENT has no machine margin in it at all — `.mt` is a dot
+/// command the emitter applies as paper margin — so every leading blank in one is the
+/// author's. Running the stripper on a document deletes an author's chapter drop
+/// outright, and on any SINGLE-page document it deletes every leading blank, because the
+/// `len(pages) > 1` fallback measures the only page against itself.
+///
+/// Shared by both modes' page-building functions; Modern's own layout (`!printed`) always
+/// strips each page's own leading blanks (it never faithfulness-matches machine margin at
+/// all), matching Python's own three-way branch in `_doc_to_pagelines` exactly.
+private func finalizePages(_ rawPages: [Page], printed: Bool, isPrintStream: Bool) -> [Page] {
     var pages = rawPages
     if pages.isEmpty {
         return [[]]                                           // Python's `pages or [[]]`
@@ -305,15 +388,21 @@ private func finalizePages(_ rawPages: [Page], printed: Bool) -> [Page] {
         return n
     }
 
-    // `min` runs over pages 2+, falling back to page 1's own count when there is no page 2:
-    // `min()` of an empty sequence is `nil` on exactly that case, which is Python's
-    // `if len(pages) > 1 else` written as one expression.
-    let machine: Int? = printed
-        ? (pages.dropFirst().map(leading).min() ?? leading(pages[0]))
-        : nil
+    if printed, isPrintStream {
+        // `min` runs over pages 2+, falling back to page 1's own count when there is no
+        // page 2: Python's `if len(pages) > 1 else`.
+        let machine = pages.dropFirst().map(leading).min() ?? leading(pages[0])
+        for i in pages.indices {
+            pages[i].removeFirst(min(machine, leading(pages[i])))
+        }
+    } else if !printed {
+        for i in pages.indices {
+            pages[i].removeFirst(leading(pages[i]))
+        }
+    }
+    // else (printed, a DOCUMENT not a print stream): keep every leading blank -- it is
+    // authorial, not the machine's -- and fall straight through to the trailing strip.
     for i in pages.indices {
-        let blanks = leading(pages[i])
-        pages[i].removeFirst(machine.map { min($0, blanks) } ?? blanks)
         while let last = pages[i].last, isBlank(last) {
             pages[i].removeLast()
         }
@@ -465,7 +554,8 @@ private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
             // A PageLine, not a bare list of spans, so the line's own `.lh` survives the
             // footnote paginator too — body lines keep their lead whether or not the
             // document has notes.
-            items.append(.line(PageLine(outSpans, lead: leadPt(line.lead48)), due: due))
+            items.append(.line(PageLine(outSpans, lead: leadPt(line.lead48),
+                                        overprint: line.overprint), due: due))
         }
     }
     return items
@@ -783,7 +873,11 @@ private func layoutPrintedPages(_ doc: Document) -> [Page] {
 
         let remaining = max(0, capacity - body.count)
         let footer = fitFooter(queue: &queue, room: remaining, leadingBlank: true)
-        pages.append(body + footer)
+        // This paginator never replays `hfEvents` (unchanged since before this port,
+        // matching Python's dedicated `_paginate_printed_notes`, also untouched): every
+        // page instead carries the document's FINAL-state headers/footers, the same
+        // fallback `runningOps` applies when a page's own dict is empty.
+        pages.append(Page(body + footer, headers: doc.headers, footers: doc.footers))
     }
 
     // Rule 5: whatever the last body page's bottom footer couldn't hold prints at the TOP
@@ -808,17 +902,19 @@ private func layoutPrintedPages(_ doc: Document) -> [Page] {
         if linesAfter >= linesBefore {
             // No progress. Emit the page we just built, then flush the rest verbatim so
             // nothing is lost, and leave the loop.
-            if !page.isEmpty { pages.append(page) }
+            if !page.isEmpty { pages.append(Page(page, headers: doc.headers, footers: doc.footers)) }
             var flushed: [PageLine] = []
             for entry in queue {
                 if !flushed.isEmpty { flushed.append([]) }
                 flushed.append(contentsOf: entry.remaining)
             }
             queue.removeAll()
-            if !flushed.isEmpty { pages.append(flushed) }
+            if !flushed.isEmpty {
+                pages.append(Page(flushed, headers: doc.headers, footers: doc.footers))
+            }
             break
         }
-        pages.append(page)
+        pages.append(Page(page, headers: doc.headers, footers: doc.footers))
     }
 
     // Endnotes: the true end of the document, no heading, no separator — plain pagination,
@@ -831,11 +927,11 @@ private func layoutPrintedPages(_ doc: Document) -> [Page] {
             if i > 0 { lines.append([]) }
             lines.append(contentsOf: endnoteEntryLines(note, doc: doc, width: width))
         }
-        var page: Page = []
+        var page = Page([], headers: doc.headers, footers: doc.footers)
         for line in lines {
             if page.count >= capacity {
                 pages.append(page)
-                page = []
+                page = Page([], headers: doc.headers, footers: doc.footers)
             }
             page.append(line)
         }
@@ -844,6 +940,137 @@ private func layoutPrintedPages(_ doc: Document) -> [Page] {
         }
     }
 
+    return pages
+}
+
+/// One body item for the PLAIN (no placeable notes) printed paginator.
+private enum PlainBodyItem {
+    case pageBreak
+    /// `.cp n` — resolved by the pagination loop below, the only thing that knows how
+    /// full the page is.
+    case condPage(Int)
+    case line(PageLine)
+    /// A `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` occurrence, replayed at the block it precedes.
+    case hf(kind: HFKind, line: Int, text: String)
+}
+
+/// Blocks -> plain body items, with `doc.hfEvents` replayed at the block each one
+/// precedes. Port of the printed-mode half of Python's `_doc_to_pagelines` block walk —
+/// used only when `hasPlaceableNotes(doc)` is false (the notes-aware paginator above
+/// handles the other case, and never replays `hfEvents` — see `Page`).
+private func resolvePlainBody(_ doc: Document) -> [PlainBodyItem] {
+    var hfByBlock: [Int: [(HFKind, Int, String)]] = [:]
+    for event in doc.hfEvents {
+        hfByBlock[event.blockAnchor, default: []].append((event.kind, event.line, event.text))
+    }
+    var items: [PlainBodyItem] = []
+    for (bi, block) in doc.blocks.enumerated() {
+        for (kind, line, text) in hfByBlock[bi] ?? [] {
+            items.append(.hf(kind: kind, line: line, text: text))
+        }
+        if block.kind == .pagebreak {
+            items.append(.pageBreak)
+            continue
+        }
+        if block.kind == .condpage {
+            items.append(.condPage(max(1, block.heading)))
+            continue
+        }
+        // Printed mode renders PHYSICAL lines verbatim — a soft return broke the line
+        // on paper, so it stays broken here.
+        let extra = (block.heading != 0 ? Style.bold : []).union(block.styleAttrs)
+        for line in block.lines {
+            let spans = extra.isEmpty
+                ? line.spans
+                : line.spans.map {
+                    Span(text: $0.text, styles: $0.styles.union(extra), font: $0.font,
+                        colour: $0.colour, pctlHMI: $0.pctlHMI)
+                }
+            items.append(.line(PageLine(spans, lead: leadPt(line.lead48),
+                                        overprint: line.overprint)))
+        }
+    }
+    return items
+}
+
+/// Points-based printed pagination for documents with NO placeable notes — the plain
+/// half of Python's `_doc_to_pagelines`. Port of ctrl-kd 17e4ea0/8b902ff.
+///
+/// Paper is physical: WordStar advances each line by the `.lh` in force and starts a
+/// new page when the next advance would leave the text area, so a document that varies
+/// its leading fits more or fewer lines than the default-lead COUNT says. The budget is
+/// `(cap - 1)` leads at the document default — the first line sits at the top, each
+/// following line spends its own lead — which makes a uniform-lead document paginate
+/// EXACTLY as the old line-count did, so no fontless byte moves. Overprint lines spend
+/// no lead at all, on paper and here.
+///
+/// The running head/foot IN FORCE on a page is replayed from `doc.hfEvents` rather than
+/// read from the document's final state: WordStar applies a running head from the page
+/// where it is defined — on that page itself only if no text has printed there yet,
+/// else from the next page.
+private func layoutPrintedPagesPlain(_ doc: Document) -> [Page] {
+    let items = resolvePlainBody(doc)
+    let capacity = printedCap(doc)
+    let defaultLead = printedLead(doc)
+    let budget = Double(capacity - 1) * defaultLead
+
+    var pages: [Page] = []
+    var page: [PageLine] = []
+    var spent = 0.0
+    var curHeaders: [Int: String] = [:]
+    var curFooters: [Int: String] = [:]
+    var pageHeaders: [Int: String] = [:]     // state at the OPEN page's start
+    var pageFooters: [Int: String] = [:]
+
+    func cost(_ line: PageLine) -> Double {
+        guard let last = page.last else { return 0.0 }     // first line on page is free
+        if last.overprint { return 0.0 }                   // this line shares a baseline
+        return line.lead ?? defaultLead
+    }
+    func closePage() {
+        pages.append(Page(page,
+                          headers: pageHeaders.filter { !$0.value.isEmpty },
+                          footers: pageFooters.filter { !$0.value.isEmpty }))
+    }
+    func openNewPage() {
+        page = []
+        spent = 0.0
+        pageHeaders = curHeaders
+        pageFooters = curFooters
+    }
+
+    for item in items {
+        switch item {
+        case .hf(let kind, let line, let text):
+            if kind == .header { curHeaders[line] = text } else { curFooters[line] = text }
+            if page.isEmpty {          // nothing printed on this page yet
+                pageHeaders = curHeaders
+                pageFooters = curFooters
+            }
+        case .condPage(let n):
+            // Strictly fewer than n lines left -> break; exactly n is enough room.
+            let room = (budget - spent) / defaultLead
+            if room < Double(n), !page.isEmpty {
+                closePage()
+                openNewPage()
+            }
+        case .pageBreak:
+            // Always closes -- even an empty page, which IS a blank sheet (`.pa .pa`).
+            closePage()
+            openNewPage()
+        case .line(let line):
+            let full = spent + cost(line) > budget + 1e-6
+            if full, !page.isEmpty {
+                closePage()
+                openNewPage()
+            }
+            spent += cost(line)
+            page.append(line)
+        }
+    }
+    if !page.isEmpty {
+        closePage()
+    }
     return pages
 }
 
@@ -869,7 +1096,7 @@ private func isSpaceRun(_ text: String) -> Bool {
 ///
 /// Literal spaces only, matching the regex: a tab is part of the word it sits in, and gets
 /// counted as one column like every other character.
-private func splitKeepingSpaceRuns(_ text: String) -> [String] {
+func splitKeepingSpaceRuns(_ text: String) -> [String] {
     var pieces: [String] = []
     var run = ""
     var runIsSpace = false
