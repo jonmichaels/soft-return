@@ -107,44 +107,46 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options:
 }
 
 /// The `\fonttbl` entries and the per-run control words for a document's font runs:
-/// one `\fK` per DISTINCT named family (numbering starts at 2, after the emitter's own
-/// `\f0` Times and `\f1` Courier), plus `\fsN` from the block's own height word. A run
-/// whose typestyle number the spec's table doesn't name still carries its size.
+/// one `\fK` per DISTINCT RESOLVED PRIMARY (numbering starts at 2, after the emitter's
+/// own `\f0` Times and `\f1` Courier), plus `\fsN` from the block's own height word.
+///
+/// Primary + falt come from `rtfFonts` for the chosen render TARGET (office/mac/google —
+/// Jon's ruling, 2026-08-04 night): the primary is the target's best available name, the
+/// falt the next-best MODERN name — never the era name, which nothing modern resolves
+/// ('PS SansSer Qual'). Unmapped and even UNNAMED fonts land on the target's generic
+/// primary from the font block's own style bits, so every run gets a usable face. The
+/// verbatim era name stays first-class in `Document.fonts` and leads the HTML stacks,
+/// where CSS fallback works properly.
+///
+/// Dedupe is by PRIMARY, not by era family: two era names that resolve to the same face
+/// share one `\fK`, which is what the file is actually asking the renderer for.
 /// Python's `_font_ctl_rtf` (emit.py).
-func fontControlRTF(_ doc: Document) -> (fontTable: String, control: [Int: String]) {
+func fontControlRTF(_ doc: Document,
+                    target: FontsTarget = .office) -> (fontTable: String, control: [Int: String]) {
     var extra = ""
     var control: [Int: String] = [:]
-    var familyToK: [String: Int] = [:]
+    var primaryToK: [String: Int] = [:]
     var nextK = 2
     for (index, font) in doc.fonts.enumerated() {
         var parts = ""
-        let family = font.family
-        if !family.isEmpty {
-            if familyToK[family] == nil {
-                familyToK[family] = nextK
+        let (primary, falt) = rtfFonts(font.family, generic: font.genericStyle, target: target)
+        if let primary {
+            if primaryToK[primary] == nil {
+                primaryToK[primary] = nextK
                 // The three characters that would break out of the group, removed —
                 // not `rtfEscape`, since a font name is a name (as in `rtfStylesheet`).
                 var safe = ""
-                for character in family where character != "\\" && character != "{" && character != "}" {
+                for character in primary where character != "\\" && character != "{" && character != "}" {
                     safe.append(character)
                 }
-                // PRIMARY is the modern equivalent, the era name rides in {\*\falt}:
-                // TextEdit — and every Cocoa RTF importer, including the future Soft
-                // Return.app — ignores \falt entirely and silently substitutes
-                // Helvetica for an unknown primary (Jon's PS.TST render, 2026-08-04:
-                // every unmapped row in Helvetica, while Courier and Palatino landed
-                // only because those exact names exist on macOS). Word honours whichever
-                // name it finds first, so a machine that carries the era font still
-                // reaches it via the falt. The VERBATIM era name always remains in
-                // Document.fonts and leads the HTML stacks, where CSS fallback works.
-                if let alt = rtfAlternate(family), alt != family {
-                    extra += "{\\f\(nextK) \(alt){\\*\\falt \(safe)};}"
+                if let falt, falt != primary {
+                    extra += "{\\f\(nextK) \(safe){\\*\\falt \(falt)};}"
                 } else {
                     extra += "{\\f\(nextK) \(safe);}"
                 }
                 nextK += 1
             }
-            parts += "\\f\(familyToK[family]!)"
+            parts += "\\f\(primaryToK[primary]!)"
         }
         // Python tests the float's own truthiness: a zero height is not a size.
         if font.points != 0 {
@@ -191,7 +193,9 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     var rtfAlign: Alignment = .left      // RTF alignment persists across \par
     var parts: [String] = []
     let stylesheet = options.styles ? rtfStylesheet(doc) : ""
-    let fontTable = options.styles ? fontControlRTF(doc) : (fontTable: "", control: [:])
+    let fontTable = options.styles
+        ? fontControlRTF(doc, target: options.fontsTarget)
+        : (fontTable: "", control: [:])
     let styledSlots: Set<Int> = options.styles
         ? Set(doc.styles.filter { $0.record != nil }.map(\.slot))
         : []

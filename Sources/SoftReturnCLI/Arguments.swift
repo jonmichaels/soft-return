@@ -50,6 +50,9 @@ public struct Options: Equatable, Sendable {
     /// Paragraph-style pass-through (HTML classes + generated CSS, RTF stylesheet).
     /// `--no-styles` turns it off; on by default, like ctrl-kd's `styles=`.
     public var styles = true
+    /// Which importer the RTF font names target (`--fonts`, ctrl-kd's `--fonts`).
+    /// `.office` by default: Word and Google Docs both resolve the Microsoft names.
+    public var fontsTarget: FontsTarget = .office
 
     public init() {}
 }
@@ -68,6 +71,10 @@ public enum ParsedCommand: Equatable, Sendable {
 let variantChoices = ["ws4", "ws5+", "printstream", "text"]
 
 let modeChoices = ["modern", "printed"]
+
+/// `--fonts`. `FontsTarget` has exactly these three cases, so — as with `--mode` — the
+/// initializer IS the validation and this list only spells the error message.
+let fontsChoices = ["office", "mac", "google"]
 
 public func parseArguments(
     _ argv: [String],
@@ -158,6 +165,16 @@ public func parseArguments(
                         + "(choose from \(quotedList(modeChoices)))")
             }
             options.mode = mode
+        case "--fonts":
+            guard let value = takeValue(flag, attached: attached) else {
+                return .usageError("argument \(flag): expected one argument")
+            }
+            guard let target = FontsTarget(rawValue: value) else {
+                return .usageError(
+                    "argument \(flag): invalid choice: '\(value)' "
+                        + "(choose from \(quotedList(fontsChoices)))")
+            }
+            options.fontsTarget = target
         case "--variant":
             guard let value = takeValue(flag, attached: attached) else {
                 return .usageError("argument \(flag): expected one argument")
@@ -233,8 +250,8 @@ private func quotedList(_ items: [String]) -> String {
 public func helpText(registry: EmitterRegistry = .standard) -> String {
     """
     usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] [--mode MODE]
-              [--variant VARIANT] [--no-styles] [--no-notes] [--comments] [--diagnose]
-              FILE [FILE ...]
+              [--variant VARIANT] [--fonts TARGET] [--no-styles] [--no-notes]
+              [--comments] [--diagnose] FILE [FILE ...]
 
     Convert WordStar 4-7 documents and print-to-disk files to text, Markdown, HTML,
     RTF, or PDF. ^KD: save and done.
@@ -255,6 +272,10 @@ public func helpText(registry: EmitterRegistry = .standard) -> String {
                             printed)
       --variant VARIANT     override detection
                             choices: \(variantChoices.joined(separator: ", "))
+      --fonts TARGET        RTF font-name target: office (Word/Docs, default),
+                            mac (Cocoa-native: TextEdit/Pages), google (Docs
+                            catalog incl. its chancery script)
+                            choices: \(fontsChoices.joined(separator: ", "))
       --no-styles           omit paragraph-style pass-through (HTML classes +
                             generated CSS, RTF stylesheet) from the output
       --no-notes            omit footnotes, endnotes and annotations from the output
@@ -274,6 +295,7 @@ public func helpText(registry: EmitterRegistry = .standard) -> String {
       sr --mode printed LETTER          # as it came off the printer
       sr --diagnose MYSTERY.FIL         # what IS this file?
       sr -t text -t html -d out/ *.WS   # batch, multiple formats
+      sr -t rtf --fonts mac LETTER.WS   # font names TextEdit and Pages resolve
       sr --comments MEMO.WS             # include the author's hidden comments
       sr --no-notes PAPER.WS            # body text only, no notes
     """

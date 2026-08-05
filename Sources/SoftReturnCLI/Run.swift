@@ -54,8 +54,8 @@ public func run(
         return ExitStatus.ok
     case .usageError(let message):
         environment.writeErr("usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] "
-            + "[--mode MODE]\n          [--variant VARIANT] [--no-notes] [--comments] "
-            + "[--diagnose] FILE [FILE ...]")
+            + "[--mode MODE]\n          [--variant VARIANT] [--fonts TARGET] [--no-notes] "
+            + "[--comments] [--diagnose] FILE [FILE ...]")
         environment.writeErr("sr: error: \(message)")
         return ExitStatus.usage
     case .run(let options):
@@ -107,7 +107,10 @@ private func convertAll(
                 status = ExitStatus.fileFailure
                 continue
             }
-            let output = emitter.emit(doc, options.mode, EmitOptions(title: base, notes: options.notes, styles: options.styles))
+            let output = emitter.emit(doc, options.mode,
+                                      EmitOptions(title: base, notes: options.notes,
+                                                  styles: options.styles,
+                                                  fontsTarget: options.fontsTarget))
 
             let destination: String
             if let explicit = options.output {

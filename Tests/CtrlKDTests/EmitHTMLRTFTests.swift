@@ -272,8 +272,10 @@ import Testing
     #expect(!spans.contains { $0.text.contains("Before") && $0.font != nil })
 
     let rtf = emitRTF(doc, mode: .modern)
-    // modern primary (TextEdit ignores falt), era name preserved in the falt
-    #expect(rtf.contains(#"{\f2 Courier New{\*\falt Courier};}"#))
+    // modern primary; the falt appears only when a SECOND modern alternate exists —
+    // era names are never the falt (Jon's ruling, 2026-08-04 night), and 'Courier'
+    // maps to the single alternate 'Courier New'.
+    #expect(rtf.contains(#"{\f2 Courier New;}"#))
     #expect(rtf.contains(#"\f2\fs28 "#))                     // 14pt = \fs28
 
     let html = emitHTML(doc, mode: .modern)
@@ -286,4 +288,70 @@ import Testing
     // itself still rides on the span.
     let bare = emitHTML(doc, mode: .modern, options: EmitOptions(styles: false))
     #expect(!bare.components(separatedBy: "<body>")[0].contains("ws-font-0"))
+}
+
+@Test func fontsTargetSelectsPrimariesAndGenericCoverage() {
+    // Port of test_fonts_target_selects_primaries_and_generic_coverage.
+    //
+    // Jon's ruling, 2026-08-04 night: --fonts {office,mac,google}. mac gets Cocoa-native
+    // primaries (Futura for Avant Garde); google gets Docs' chancery (Dancing Script);
+    // an UNMAPPED family lands on the target's generic primary from the font block's own
+    // style bits -- every run a usable face, era names never the falt.
+    //
+    // The typestyle numbers are looked up in the spec's own table rather than written as
+    // literals, exactly as Python does: the table is the source of truth for which number
+    // is which name, and a hand-copied 52 would rot silently if it were ever corrected.
+    guard let ag = typestyleNames.firstIndex(where: { $0.lowercased().hasPrefix("avant garde") }),
+          let zc = typestyleNames.firstIndex(where: { $0.lowercased().hasPrefix("zapfchancery") })
+    else {
+        Issue.record("the spec typestyle table lost Avant Garde or ZapfChancery")
+        return
+    }
+    // 240 VMI = 12pt; the width is a plausible proportional pitch and is not asserted on.
+    func fontBlock(_ number: Int, styleBits: Int = 0) -> [UInt8] {
+        let typestyle = (number & 0x01FF) | styleBits
+        // staged: 6.2.4's type-checker times out on the one-expression form
+        var payload = le16(180) + le16(240)
+        payload += le16(typestyle) + [UInt8](repeating: 0, count: 6)
+        return ws7Block(0x02, payload: payload)
+    }
+    // The prose padding is load-bearing: detection reads the text-to-control byte ratio,
+    // and a fixture that is mostly font blocks is not recognised as a document at all.
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding for detection, a perfectly ordinary sentence.") + HARD
+    data += fontBlock(ag) + bytes("Geometric. ")
+    data += fontBlock(zc) + bytes("Scripted.") + HARD
+    data += bytes("Closing prose line keeps the byte ratio looking like text.") + HARD
+    let doc = parseWS(data)
+
+    let office = emitRTF(doc, mode: .modern)
+    #expect(office.contains(#"{\f2 Century Gothic{\*\falt ITC Avant Garde Gothic};}"#))
+    let mac = emitRTF(doc, mode: .modern, options: EmitOptions(fontsTarget: .mac))
+    #expect(mac.contains(#"{\f2 Futura{\*\falt Century Gothic};}"#))
+    let google = emitRTF(doc, mode: .modern, options: EmitOptions(fontsTarget: .google))
+    #expect(google.contains("Dancing Script"))
+    // Never the era name, in any target: nothing modern resolves 'Avant Garde'.
+    #expect(!office.contains(#"\*\falt Avant Garde"#))
+    #expect(!mac.contains(#"\*\falt Avant Garde"#))
+
+    // Universal coverage, the arm the Python fixture names but does not reach: an
+    // UNNAMED typestyle number (the spec's table stops at 244) still resolves, from the
+    // block's own script bits alone -- office's chancery answer is Monotype Corsiva,
+    // Google's is Dancing Script, which is also what its ZapfChancery override yields, so
+    // the two share ONE \fK (dedupe is by resolved primary, not by era family).
+    var unnamed = ws7Block(0x00)
+    unnamed += bytes("Prose padding for detection, a perfectly ordinary sentence.") + HARD
+    unnamed += fontBlock(300, styleBits: 0x0800) + bytes("Nameless. ")
+    unnamed += fontBlock(zc) + bytes("Scripted.") + HARD
+    unnamed += bytes("Closing prose line keeps the byte ratio looking like text.") + HARD
+    let unnamedDoc = parseWS(unnamed)
+    #expect(unnamedDoc.fonts.first?.family == "")            // the table has no name for 300
+    #expect(unnamedDoc.fonts.first?.genericStyle == .script)
+    let unnamedOffice = emitRTF(unnamedDoc, mode: .modern)
+    #expect(unnamedOffice.contains(#"{\f2 Monotype Corsiva;}"#))
+    #expect(unnamedOffice.contains(#"{\f3 Apple Chancery{\*\falt Monotype Corsiva};}"#))
+    let unnamedGoogle = emitRTF(unnamedDoc, mode: .modern,
+                                options: EmitOptions(fontsTarget: .google))
+    #expect(unnamedGoogle.contains(#"{\f2 Dancing Script;}"#))
+    #expect(!unnamedGoogle.contains(#"\f3 "#))               // one primary, one \fK
 }
