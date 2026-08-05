@@ -551,3 +551,33 @@ let italicOn: [UInt8] = [0x19]
     #expect(doc.detection?.variant == .ws5plus)
     #expect(!doc.columnar)
 }
+
+@Test func symbolAndDingbatFontsTransliterateToUnicode() {
+    // A byte in Symbol/ZapfDingbats is a GLYPH INDEX, not styled text: 'a' in Symbol IS
+    // alpha; '!' in Dingbats IS U+2701 (Unicode's 2700 block is ITC Zapf Dingbats by
+    // name and order). Transliterated at decode time, the output needs no font at all.
+    // The typestyle numbers come from the spec's own table, never a guess.
+    let symbolN = typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("symbol") }
+    let dingbatN = typestyleNames.firstIndex { asciiContains(asciiLowercased($0), "dingbat") }
+    let sym = try! #require(symbolN)
+    let ding = try! #require(dingbatN)
+    func fontBlock(_ n: Int) -> [UInt8] {
+        var payload = le16(180) + le16(240)
+        payload += le16(n) + [UInt8](repeating: 0, count: 6)
+        return ws7Block(0x02, payload: payload)
+    }
+    // Prose padding: the documented small-fixture trap -- without it the detector reads
+    // the control-heavy fixture as something other than a WS5+ document.
+    // staged: 6.2.4's type-checker times out on the one-expression form
+    var data = ws7Block(0x00)
+    data += bytes("Plain prose padding so the detector reads this as a document.") + HARD
+    data += bytes("Plain. ") + fontBlock(sym) + bytes("abG ")
+    data += fontBlock(ding) + bytes("!\"#") + HARD
+    data += bytes("And a closing line of ordinary prose keeps the ratio honest.") + HARD
+    let doc = parseWS(data)
+    #expect(doc.detection?.variant == .ws5plus)
+    let txt = emitText(doc, mode: .printed)
+    #expect(txt.contains("αβΓ"))                 // Symbol run -> Greek
+    #expect(txt.contains("✁✂✃"))                 // Dingbats run -> U+2701..
+    #expect(txt.contains("Plain. "))             // untouched outside the runs
+}

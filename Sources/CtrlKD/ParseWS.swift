@@ -66,7 +66,8 @@ private func decodeSpans(
     unknown: inout [UInt8: Int],
     fnCounter: inout Int?,
     fnrefAt: [Int] = [],
-    fontAt: [(offset: Int, index: Int)] = []
+    fontAt: [(offset: Int, index: Int)] = [],
+    fonts: [FontChange] = []
 ) -> [Span] {
     var spans: [Span] = []
     var buf: [UInt8] = []
@@ -81,7 +82,15 @@ private func decodeSpans(
     // explicit `frozenset(active)`.
     func flush() {
         if !buf.isEmpty {
-            spans.append(Span(text: decodeCP437(buf), styles: active, font: font))
+            var text = decodeCP437(buf)
+            // A byte set in Symbol/ZapfDingbats is a GLYPH INDEX, not styled text:
+            // transliterate through the font's own encoding into real Unicode
+            // (`SymbolTranslit.swift`), after which no font is required at all.
+            if let index = font, index < fonts.count,
+               let kind = fontTranslitKind(fonts[index]) {
+                text = transliterate(text, kind)
+            }
+            spans.append(Span(text: text, styles: active, font: font))
             buf.removeAll()
         }
     }
@@ -505,7 +514,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             unknown: &unknown,
             fnCounter: &fnCounter,
             fnrefAt: fnrefAt,
-            fontAt: fontAt
+            fontAt: fontAt,
+            fonts: fonts
         )
         curLine.spans.append(contentsOf: spans)
 
