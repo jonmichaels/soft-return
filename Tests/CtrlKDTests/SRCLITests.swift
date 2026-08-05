@@ -340,12 +340,20 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 
 /// The dropped flag answers for itself rather than falling through to "unrecognized" —
 /// somebody with a ctrl-kd command line in their shell history deserves the reason.
-@Test func encodingFlagIsRefusedWithAnExplanation() {
-    guard case .usageError(let message) = parseArguments(["--encoding", "latin-1", "A.WS"]) else {
-        Issue.record("expected a usage error")
+@Test func encodingAcceptsOnlyCP437() {
+    // Standardized with ctrl-kd (2026-08-05): the flag exists, cp437 is the
+    // one accepted value (a no-op), anything else is refused with the
+    // no-corpus-to-validate-against reasoning.
+    guard case .run = parseArguments(["--encoding", "cp437", "A.WS"]) else {
+        Issue.record("--encoding cp437 must be accepted as a no-op")
         return
     }
-    #expect(message.contains("CP437"))
+    guard case .usageError(let message) = parseArguments(["--encoding", "latin-1", "A.WS"]) else {
+        Issue.record("expected a usage error for a non-437 encoding")
+        return
+    }
+    #expect(message.contains("cp437"))
+    #expect(message.contains("corpus"))
 }
 
 @Test func versionLineNamesBothTheCLIAndTheReference() {
@@ -362,8 +370,8 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 @Test func helpPromisesOnlyWhatExists() {
     let help = helpText()
     #expect(!help.lowercased().contains("plugin"))
-    #expect(!help.contains("--encoding"))
-    #expect(help.contains("CP437"))
+    #expect(help.contains("--encoding"))
+    #expect(help.contains("cp437"))
     #expect(help.contains("--diagnose"))
     #expect(help.contains("--no-notes"))
     #expect(help.contains("--no-styles"))
