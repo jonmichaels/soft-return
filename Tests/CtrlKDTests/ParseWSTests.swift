@@ -514,3 +514,24 @@ let italicOn: [UInt8] = [0x19]
     let txt = emitText(doc, mode: .printed)
     #expect(txt.contains("A second paragraph proves nothing was truncated."))
 }
+
+@Test func ws5SoftReturnsAlwaysWrapInModern() {
+    // The would-it-have-fit heuristic is a WS4 fixed-pitch inference; WS5+ documents
+    // use proportional fonts where byte length says nothing about printed width, and a
+    // real story's modern RTF carried 204 spurious \line breaks (found by Jon reading
+    // the export). In WS5+, a surviving soft return IS wrap by construction.
+    // staged: 6.2.4's type-checker times out on the one-expression form
+    var data = ws7Block(0x00)
+    data += bytes("     Short line") + SOFT
+    data += bytes("even though the next word fits.") + HARD
+    data += bytes("     Second paragraph here.") + HARD
+    let doc = parseWS(data)
+    #expect(doc.blocks.map { mergedLines($0).count } == [2])
+    #expect(mergedLines(doc.blocks[0])[0].text()
+            == "     Short line even though the next word fits.")
+    let rtf = emitRTF(doc, mode: .modern)
+    // no break inside the wrap
+    let between = rtf.components(separatedBy: "Short")[1].components(separatedBy: "fits.")[0]
+    #expect(!between.contains("\\line"))
+    #expect(emitText(doc, mode: .modern).contains("Short line even though"))
+}

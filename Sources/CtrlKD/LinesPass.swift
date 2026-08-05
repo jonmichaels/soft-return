@@ -66,8 +66,16 @@ public struct LinesPassResult: Hashable, Sendable {
     }
 }
 
+/// - Parameter softIsWrap: WS5+. A soft return is ALWAYS wrap, with no heuristic. The
+///   would-it-have-fit test below is a WS4-era inference over FIXED-PITCH byte lengths;
+///   WS5+ documents use proportional fonts, where byte length says nothing about printed
+///   width, and the archive's own documents misread as ~5 "deliberate" breaks per
+///   paragraph (204 spurious `\line` breaks in one story's RTF — found by Jon reading the
+///   export, 2026-08-04). In WS5+ the editor re-wraps paragraphs dynamically, so a
+///   surviving soft return IS wrap by construction; deliberate breaks are hard returns.
 public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
-                      marks: [Int: StructuralMark] = [:]) -> LinesPassResult {
+                      marks: [Int: StructuralMark] = [:],
+                      softIsWrap: Bool = false) -> LinesPassResult {
     // core.py:108-110 — truncate at the first ^Z before anything else. The first BARE
     // one: a 0x1A wrapped in `<1B 1A 1C>` is a character to display, not end of file.
     var body = data
@@ -164,6 +172,13 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
                 // as deliberate stopped whole paragraphs from ever reflowing in Modern —
                 // they rendered as physical lines with the wrong margins. A3.
                 sep = .line                                 // indented continuation = deliberate
+            } else if softIsWrap {
+                // WS5+: a surviving soft return IS wrap by construction (the editor
+                // re-wraps dynamically; deliberate breaks are hard returns). The fit
+                // heuristic below is a WS4 fixed-pitch inference that misfires on
+                // proportional text — 204 spurious breaks in one story's RTF (Jon's
+                // export review, 2026-08-04).
+                sep = .wrap
             } else {
                 let L = rstrippingSpaces(vis).count
                 let W = firstWordLength(nextVis)
