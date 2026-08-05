@@ -128,7 +128,13 @@ func fontControlRTF(_ doc: Document) -> (fontTable: String, control: [Int: Strin
                 for character in family where character != "\\" && character != "{" && character != "}" {
                     safe.append(character)
                 }
-                extra += "{\\f\(nextK) \(safe);}"
+                // `{\*\falt X}` is RTF's native fallback — the era name travels first
+                // (pass-through), Word substitutes when the font is absent.
+                if let alt = rtfAlternate(family), alt != family {
+                    extra += "{\\f\(nextK) \(safe){\\*\\falt \(alt)};}"
+                } else {
+                    extra += "{\\f\(nextK) \(safe);}"
+                }
                 nextK += 1
             }
             parts += "\\f\(familyToK[family]!)"
