@@ -240,7 +240,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
             .map { [Span(text: $0.text)] }
     }
 
-    let pass = linesPass(body, tabAt: tabAt, marks: wsMarks)
+    let pass = linesPass(body, tabAt: tabAt, marks: wsMarks, softIsWrap: ws5)
 
     var active: Style = []
     var unknown: [UInt8: Int] = [:]
