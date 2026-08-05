@@ -142,6 +142,83 @@ private func dingbat(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
     return scalar                               // pass through, never guess
 }
 
+// MARK: - The way back: Unicode -> the font's own byte codes
+//
+// Transliteration is the right answer for text formats, which have no font at all. The PDF
+// emitter is the one consumer that CAN show the real glyph: the PDF base-14 set includes
+// Symbol and ZapfDingbats themselves, so selecting that font and writing the ORIGINAL byte
+// gives the true face with nothing embedded. That needs the inverse of the map above.
+//
+// Round-trip rule, symmetric with `transliterate`: a character the forward map never touched
+// (digits, space, punctuation -- all of which sit at their ASCII positions in both faces)
+// passes back through as itself. Anything else has no code point in the face at all and
+// becomes '?', the same degradation the rest of the PDF emitter uses for characters it
+// cannot write.
+
+/// `symbolEncoding` read backwards: real Unicode -> the Symbol byte that draws it.
+///
+/// Python builds this with `setdefault` over the forward map, so the FIRST key wins on a
+/// collision; there are none (81 entries, 81 distinct glyphs — checked). Swift's dictionary
+/// iteration order is not insertion order, so the loop runs over SORTED codes instead: with
+/// no duplicates the two agree exactly, and if a duplicate is ever added this stays
+/// deterministic rather than varying per run.
+let symbolReverse: [UInt32: Unicode.Scalar] = {
+    var out: [UInt32: Unicode.Scalar] = [:]
+    for code in symbolEncoding.keys.sorted() {
+        guard let uni = symbolEncoding[code] else { continue }
+        if out[uni.value] == nil { out[uni.value] = Unicode.Scalar(code)! }
+    }
+    return out
+}()
+
+/// The four cross-block residents, read backwards — the card suits Unicode already had at
+/// U+2660 before it absorbed the rest of Zapf's sheet at U+2700.
+private let dingbatReverse: [UInt32: Unicode.Scalar] = {
+    var out: [UInt32: Unicode.Scalar] = [:]
+    for code in dingbatExceptions.keys.sorted() {
+        guard let uni = dingbatExceptions[code] else { continue }
+        if out[uni.value] == nil { out[uni.value] = Unicode.Scalar(code)! }
+    }
+    return out
+}()
+
+/// Inverse of `dingbat(_:)`: the ZapfDingbats byte for a Unicode glyph, or `nil` if this
+/// face never carried it.
+private func dingbatCode(_ scalar: Unicode.Scalar) -> Unicode.Scalar? {
+    if let exception = dingbatReverse[scalar.value] { return exception }
+    let cp = scalar.value
+    if cp >= 0x2701 && cp <= 0x275E {                // the block `dingbat(_:)` emits
+        return Unicode.Scalar(cp - 0x2700 + 0x20)!
+    }
+    return nil
+}
+
+/// Inverse of `transliterate`: real Unicode -> the bytes to set in the Symbol/ZapfDingbats
+/// font itself. Unmappable characters -> `?`.
+///
+/// `nil` for `kind` is Python's "this is an ordinary text font" case (`kind not in ('math',
+/// 'symbols')`), and returns the text untouched — so a caller can hand it whatever
+/// `fontTranslitKind` said without testing first.
+func untransliterate(_ text: String, _ kind: SymbolTranslit?) -> String {
+    guard let kind else { return text }
+    var view = String.UnicodeScalarView()
+    for scalar in text.unicodeScalars {
+        let code: Unicode.Scalar?
+        switch kind {
+        case .math: code = symbolReverse[scalar.value]
+        case .symbols: code = dingbatCode(scalar)
+        }
+        if let code {
+            view.append(code)
+        } else {
+            // ASCII rode through the forward map untouched and rides back the same way
+            // (both faces keep ASCII punctuation and digits in place).
+            view.append(scalar.value >= 0x20 && scalar.value <= 0x7E ? scalar : "?")
+        }
+    }
+    return String(view)
+}
+
 /// Transliterate one decoded string through a font's own encoding.
 ///
 /// Iterates unicode scalars, as Python iterates code points: the mapping is per code
