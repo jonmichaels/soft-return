@@ -39,6 +39,11 @@ public enum StructuralMark: Hashable, Sendable {
     /// handle is resolved against the document's own style library in `parseWS` -- this
     /// pass has no library to resolve against.
     case style(handle: Int)
+    /// A FONT CHANGE (0x02/0x15), carrying its index into `Document.fonts`. A font change
+    /// is a RUN BOUNDARY in the text, not only metadata: Jon's export review
+    /// (2026-08-04) found every RTF in Times because `fonts` was recorded and never
+    /// rendered. Same offset mechanism as every other mark.
+    case font(index: Int)
 }
 
 /// Symmetrical-sequence "Notes" types (WordStar 7.0 file format spec, WordStar
@@ -253,6 +258,11 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                         width1800: Int(content[0]) | (Int(content[1]) << 8),
                         height1440: Int(content[2]) | (Int(content[3]) << 8),
                         typestyle: Int(content[4]) | (Int(content[5]) << 8)))
+                    // A font change is a RUN BOUNDARY in the text, not only metadata:
+                    // every RTF came out in Times because `fonts` was recorded and never
+                    // rendered (Jon's export review, 2026-08-04). Same offset mechanism
+                    // as every other mark.
+                    marks[out.count] = .font(index: fonts.count - 1)
                 }
             } else if cmd == 0x0F {                                // user print control
                 // WSFORMAT.TXT, "0Fh User print control":

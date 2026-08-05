@@ -402,6 +402,25 @@ public struct FontChange: Hashable, Sendable {
         let n = typestyleNumber
         return n < typestyleNames.count ? typestyleNames[n] : nil
     }
+
+    /// The RENDERABLE family from the spec typestyle name: `Helv (also Helvetica, CG
+    /// Triumvirate, and Swiss)` -> `Helv`. The verbatim name stays in `typestyleName`
+    /// (pass-through); this is presentation only, and empty when the table carries no
+    /// name for this number. Python's `_font_family` (emit.py), which lives in the
+    /// emitter there only because a Python font is a dict.
+    public var family: String {
+        guard let name = typestyleName else { return "" }
+        var out = ""
+        let scalars = Array(name.unicodeScalars)
+        // Python's `name.split(' (')[0]` — everything before the FIRST " (".
+        var i = 0
+        while i < scalars.count {
+            if scalars[i] == " " && i + 1 < scalars.count && scalars[i + 1] == "(" { break }
+            out.unicodeScalars.append(scalars[i])
+            i += 1
+        }
+        return out.trimmed()
+    }
 }
 
 /// WSFORMAT.TXT, type 0 Header — 128 bytes in total:

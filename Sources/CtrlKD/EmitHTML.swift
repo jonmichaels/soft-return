@@ -65,6 +65,12 @@ func htmlSpan(_ span: Span, keepWS: Bool = false) -> String {
     for entry in htmlTags where span.styles.contains(entry.style) {
         text = "<\(entry.tag)>" + text + "</\(entry.tag)>"
     }
+    // The font run wraps OUTSIDE the style tags: Python appends this after the `_TAG`
+    // loop, and each wrap encloses everything built so far. Class only — the matching
+    // `.ws-font-N` rule comes from `styleCSS`, so `--no-styles` leaves the class inert.
+    if let font = span.font {
+        text = "<span class=\"ws-font-\(font)\">" + text + "</span>"
+    }
     return text
 }
 
@@ -340,6 +346,23 @@ func styleCSS(_ doc: Document) -> String {
         }
         if !props.isEmpty {
             rules.append(".\(styleSlug(entry)) { " + props.joined(separator: "; ") + " }")
+        }
+    }
+    // One rule per FONT RUN, from the font block's own words: the family up to the
+    // spec's parenthetical and the height word as points. A run with neither a named
+    // family nor a size gets no rule, and its class stays inert.
+    for (index, font) in doc.fonts.enumerated() {
+        var props: [String] = []
+        let family = font.family
+        if !family.isEmpty {
+            props.append("font-family:'\(family)'")
+        }
+        // Python tests the float's own truthiness: a zero height is not a size.
+        if font.points != 0 {
+            props.append("font-size:\(fourSignificantDigits(font.points))pt")
+        }
+        if !props.isEmpty {
+            rules.append(".ws-font-\(index) { " + props.joined(separator: "; ") + " }")
         }
     }
     return rules.joined(separator: "\n")

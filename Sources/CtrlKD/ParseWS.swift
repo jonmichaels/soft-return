@@ -53,16 +53,27 @@ private let dotCondpage: [UInt8] = Array("CP".utf8)
 /// WordStar control code — `SENT_FNREF` sat on `0x00`, which the spec assigns to ^@
 /// "fix the print position" and which occurs 2328 times in five archive documents. A
 /// literal one was read as a reference to a note that does not exist.
+///
+/// `fontAt` holds `(offset, fonts index)` for each font change falling in this line: a
+/// change flushes the current span and swaps the active font, so every following span
+/// carries its font until the next change. `activeFont` persists across lines exactly as
+/// `active` does — in Python both live in the one `active` set.
 private func decodeSpans(
     _ raw: [UInt8],
     stripHibit: Bool,
     active: inout Style,
+    activeFont: inout Int?,
     unknown: inout [UInt8: Int],
     fnCounter: inout Int?,
-    fnrefAt: [Int] = []
+    fnrefAt: [Int] = [],
+    fontAt: [(offset: Int, index: Int)] = []
 ) -> [Span] {
     var spans: [Span] = []
     var buf: [UInt8] = []
+    // `flush` needs to read the font, but `activeFont` is `inout` and a nested function
+    // may not capture an `inout` parameter that outlives the call. A local mirror,
+    // written back before returning, is the idiom the rest of this file would use.
+    var font = activeFont
 
     // core.py:175-178 — the span captures `active` as it stands right now; later
     // toggles must not retroactively restyle already-flushed text. `Style` is an
@@ -70,14 +81,20 @@ private func decodeSpans(
     // explicit `frozenset(active)`.
     func flush() {
         if !buf.isEmpty {
-            spans.append(Span(text: decodeCP437(buf), styles: active))
+            spans.append(Span(text: decodeCP437(buf), styles: active, font: font))
             buf.removeAll()
         }
     }
 
     var pending = fnrefAt.sorted()
+    var pendingFonts = fontAt.sorted { $0.offset < $1.offset }
     var i = 0
-    while i < raw.count || !pending.isEmpty {
+    while i < raw.count || !pending.isEmpty || !pendingFonts.isEmpty {
+        while let first = pendingFonts.first, first.offset <= i {
+            pendingFonts.removeFirst()
+            flush()
+            font = first.index
+        }
         // A note reference sits BETWEEN bytes, so emit any that fall here before
         // decoding the byte at this offset.
         while let first = pending.first, first <= i {
@@ -86,7 +103,8 @@ private func decodeSpans(
                 flush()
                 let n = current + 1
                 fnCounter = n
-                spans.append(Span(text: String(n), styles: active.union([.sup, .fnref])))
+                spans.append(Span(text: String(n), styles: active.union([.sup, .fnref]),
+                                  font: font))
             }
         }
         if i >= raw.count { break }
@@ -110,7 +128,7 @@ private func decodeSpans(
             let x = raw[i + 1]
             if let glyph = cp437Graphics[x] {
                 flush()
-                spans.append(Span(text: glyph, styles: active))
+                spans.append(Span(text: glyph, styles: active, font: font))
             } else {
                 buf.append(x)
             }
@@ -146,6 +164,7 @@ private func decodeSpans(
         i += 1
     }
     flush()
+    activeFont = font
     return spans
 }
 
@@ -243,6 +262,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
     let pass = linesPass(body, tabAt: tabAt, marks: wsMarks, softIsWrap: ws5)
 
     var active: Style = []
+    /// The FONT RUN in force, index into `fonts`. Persists across lines and blocks just
+    /// like `active` — a font change stays in effect until the next one.
+    var activeFont: Int? = nil
     var unknown: [UInt8: Int] = [:]
     var dots: [String] = []
     var fnCounter: Int? = ws5 ? 0 : nil
@@ -385,7 +407,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             func decodeSegment() {
                 if !segment.isEmpty {
                     curLine.spans += decodeSpans(segment, stripHibit: stripHibit,
-                                                 active: &active, unknown: &unknown,
+                                                 active: &active, activeFont: &activeFont,
+                                                 unknown: &unknown,
                                                  fnCounter: &fnCounter)
                     segment = []
                 }
@@ -421,6 +444,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         // code that occurs in real documents, so a literal one was read as a page break,
         // a heading, or a note reference the author never wrote. See `StructuralMark`.
         var fnrefAt: [Int] = []
+        var fontAt: [(offset: Int, index: Int)] = []
         for (rel, mark) in physical.marks {
             switch mark {
             case .softpage:
@@ -468,6 +492,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 closeBlock()
             case .fnref:
                 fnrefAt.append(rel)
+            case .font(let index):
+                fontAt.append((offset: rel, index: index))
             }
         }
 
@@ -475,9 +501,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
             raw,
             stripHibit: stripHibit,
             active: &active,
+            activeFont: &activeFont,
             unknown: &unknown,
             fnCounter: &fnCounter,
-            fnrefAt: fnrefAt
+            fnrefAt: fnrefAt,
+            fontAt: fontAt
         )
         curLine.spans.append(contentsOf: spans)
 
