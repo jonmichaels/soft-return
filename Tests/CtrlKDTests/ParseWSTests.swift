@@ -582,6 +582,25 @@ let italicOn: [UInt8] = [0x19]
     #expect(txt.contains("Plain. "))             // untouched outside the runs
 }
 
+@Test func symbolUntransliterationRoundTrips() {
+    // Port of test_symbol_untransliteration_round_trips. The reverse maps are the forward
+    // maps read backwards, and the pair has to survive the trip: transliterate then
+    // untransliterate is identity for every byte the faces carry. Characters neither face
+    // has degrade to '?', the same way the rest of the PDF emitter degrades what it cannot
+    // write.
+    let greek = "ABCDE abcde 12345 !@#$%"
+    #expect(untransliterate(transliterate(greek, .math), .math) == greek)
+    let dings = "!\"#$% ABCDE abcde"
+    #expect(untransliterate(transliterate(dings, .symbols), .symbols) == dings)
+    #expect(transliterate("a", .math) == "α")
+    #expect(untransliterate("α", .math) == "a")            // back to 0x61
+    #expect(untransliterate("♣", .symbols) == "\u{00A8}")  // the cross-block four
+    #expect(untransliterate("é", .math) == "?")            // no such glyph there
+    // Python's `kind not in ('math', 'symbols')` early return, which `nil` spells here:
+    // an ordinary text font's bytes were never transliterated and must not be touched.
+    #expect(untransliterate("é", nil) == "é")
+}
+
 @Test func ws4AlternateFontFlagIsStoredNotLost() {
     // Port of test_ws4_alternate_font_flag_is_stored_not_lost. Jon, 2026-08-04:
     // "Store that ws4 font switch flag. Don't lose it." ^PA (0x01) / ^PN (0x0E) is the
