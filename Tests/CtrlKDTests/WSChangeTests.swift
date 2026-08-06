@@ -14,7 +14,10 @@ import Testing
 
 /// The ONE place the archive path lives (private-local; keep it a single constant for
 /// future scrubbing). Shared with the round-trip census tests.
-let archiveWSPath = "/mnt/md0/archives/preservation-tools/sawyer-ws7/WS"
+// The private corpus never appears in the repo (standing rule): the path
+// arrives via environment; unset means every corpus test skips cleanly.
+let archiveWSPath = (ProcessInfo.processInfo.environment["CTRLKD_PRIVATE_CORPUS"]
+    .map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }).map { "\($0)/WS" } ?? ""
 
 private func patFixture(_ name: String) -> [UInt8]? {
     let path = archiveWSPath + "/" + name + ".PAT"
