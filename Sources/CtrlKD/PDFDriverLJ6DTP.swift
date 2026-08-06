@@ -109,6 +109,9 @@ let shadeGray: [Character: Double] = [
 let partBlocks: [Character: (x: Double, y: Double, w: Double, h: Double)] = [
     "\u{2580}": (0, 0.5, 1, 0.5), "\u{2584}": (0, 0, 1, 0.5),
     "\u{258C}": (0, 0, 0.5, 1), "\u{2590}": (0.5, 0, 0.5, 1),
+    // cp437 0xFE: the PC-8 black square, WordStar-era bullet of choice (Sawyer's
+    // -README list markers). Centered small block, per the IBM glyph. (M11)
+    "\u{25A0}": (0.12, 0.18, 0.72, 0.55),
 ]
 let fullBlock: Character = "\u{2588}"
 let graphicChars: Set<Character> =

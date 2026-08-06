@@ -112,11 +112,14 @@ func modernTokFont(_ text: String, font: Int?, fonts: [FontChange])
 func modernTokenWidth(_ text: String, styles: Style, family: PDFFamily, pt: Int, entry: FontChange?) -> Double {
     let (spt, _) = sized(styles, pt)
     let basefont = base14(family, bold: styles.contains(.bold), italic: styles.contains(.italic))
-    if let entry, text.contains(where: { graphicChars.contains($0) }) {
+    if text.contains(where: { graphicChars.contains($0) }) {
         // mixed tokens split into graphic runs (cell advance) and text (natural), same
-        // rule as printed's `splitGraphics`.
+        // rule as printed's `splitGraphics`. FONTLESS spans take this path too under
+        // Modern (round 3, 2026-08-06 M11): a cp437 box/block glyph has no cp1252 slot,
+        // and '?' is nobody's take -- the geometry IS the glyph. Printed keeps its
+        // fontless-untouched doctrine; Modern draws the shape at the em advance.
         var total = 0.0
-        let pitch = entry.proportional ? Double(spt) : spanPitch(entry, spt)
+        let pitch = (entry == nil || entry!.proportional) ? Double(spt) : spanPitch(entry, spt)
         let chars = Array(text)
         var pos = 0
         for range in graphicRunRanges(chars) {
@@ -421,10 +424,12 @@ func modernLineOps(
         let basefont = base14(tok.family, bold: tok.styles.contains(.bold),
                               italic: tok.styles.contains(.italic))
         let font = res.ref(basefont)
-        if let entry = tok.entry, tok.text.contains(where: { graphicChars.contains($0) }) {
+        if tok.text.contains(where: { graphicChars.contains($0) }) {
             // split mixed tokens: graphic runs draw as vectors at the cell advance,
-            // interleaved text renders through the normal (recursive) path
-            let pitch = entry.proportional ? Double(spt) : spanPitch(entry, spt)
+            // interleaved text renders through the normal (recursive) path (fontless
+            // spans included under Modern -- round 3, 2026-08-06 M11)
+            let entry = tok.entry
+            let pitch = (entry == nil || entry!.proportional) ? Double(spt) : spanPitch(entry, spt)
             let chars = Array(tok.text)
             var pos = 0
             var gx = x
