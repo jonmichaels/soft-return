@@ -10,7 +10,11 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 3.0.0 is the wholesale defaults batch (CLI-Defaults-Audit,
+/// CLI's user-visible contract. 3.1.0 is the Modern-rounds + v4-engine-queue batch
+/// (2026-08-06): `--note-refs word|prefixed`, `--page-settings size=letter|legal|a4`, the
+/// `layout` output format (`-t layout`), the `--comments`+printed and LJ6DTP-modern
+/// stderr notices, and refusals that explain themselves (ParseError kinds) -- new surface,
+/// no changed defaults, so MINOR. 3.0.0 is the wholesale defaults batch (CLI-Defaults-Audit,
 /// 2026-08-05) -- a MAJOR bump because the repo's own versioning contract says so ("CLI
 /// defaults changed"): bare invocation is now Modern RTF (not markdown); `--mode printed`
 /// alone now defaults to PDF; `--page-defaults` is renamed `--page-settings` everywhere
@@ -38,11 +42,13 @@ import CtrlKD
 /// capacity/top/lead from `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose);
 /// 1.1.0 added the note-selection flags and the expanded --diagnose fields; 1.0.0 was the
 /// first CLI release.
-public let srVersion = "3.0.0"
+public let srVersion = "3.1.0"
 
 /// The `ctrl-kd` release this port is verified against. A constant, updated by hand when a
 /// sync job pins the port to a new Python release — it is a claim about which reference the
-/// vectors came from, so it must never be derived or guessed.
+/// vectors came from, so it must never be derived or guessed. 4.0.0 here means ctrl-kd at
+/// commit abb9d3c (the Modern rounds M1-M11 plus the v4 engine queue, tasks #15-#22 --
+/// ctrl-kd's own __version__ stayed 4.0.0 through that batch).
 public let ctrlKDParity = "4.0.0"
 
 /// `sr 2.0.0 (ctrl-kd parity 3.0.0)`.
