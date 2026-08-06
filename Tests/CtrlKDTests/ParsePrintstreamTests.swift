@@ -69,14 +69,22 @@ import Testing
     #expect(doc?.blocks[0].lines.map { $0.text() } == ["just one line", ""])
 }
 
-@Test func frontDoorRefusesBinaryWithDetectedVariant() {
-    // Python raises ValueError('not a convertible file (detected: binary)'); the Swift
-    // analog carries the variant on the error so a GUI can explain the refusal.
+@Test func frontDoorRefusesBinaryWithDetectedVariant() throws {
+    // ParseError carries the WHY (task #18): the variant, the evidence sentence, and the
+    // full detection — so a GUI's error alert and the CLI message can say
+    // "detected: binary -- <reason>" instead of just "no".
     let byteRange = (0...255).map { UInt8($0) }
     let binary = byteRange + byteRange + byteRange + byteRange
-    #expect(throws: ParseError.notConvertible(variant: .binary)) {
-        _ = try parse(binary)
+    let error = #expect(throws: ParseError.self) { _ = try parse(binary) }
+    guard case .notConvertible(let variant, let reason, let detection) = try #require(error) else {
+        Issue.record("expected .notConvertible")
+        return
     }
+    #expect(variant == .binary)
+    #expect(!reason.isEmpty)
+    #expect(detection?.variant == .binary)
+    // an EMPTY file has its own machine-readable kind (Python's 'empty')
+    #expect(throws: ParseError.empty) { _ = try parse([]) }
 }
 
 @Test func frontDoorHonoursVariantOverride() {

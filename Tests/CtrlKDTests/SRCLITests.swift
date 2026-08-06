@@ -609,7 +609,9 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 
     #expect(status == ExitStatus.fileFailure)
     #expect(recorder.written.isEmpty)
-    #expect(recorder.err.first?.contains("not a convertible file (detected: binary)") == true)
+    // the refusal explains itself since task #18: the detection's own evidence sentence
+    // rides after the variant ("detected: binary -- <reason>")
+    #expect(recorder.err.first?.contains("not a convertible file (detected: binary -- ") == true)
     #expect(recorder.err.first?.contains("--variant to force") == true)
 }
 
