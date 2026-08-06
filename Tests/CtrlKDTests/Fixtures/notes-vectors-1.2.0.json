@@ -199,9 +199,9 @@
      "no_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{max-width:42rem;margin:2rem auto;padding:0 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\npre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}}</style></head>\n<body>\n<p>Body.</p>\n</body></html>\n"
     },
     "rtf": {
-     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n",
-     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n",
-     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n"
+     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh20160\\margl1152\\margr1152\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n",
+     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh20160\\margl1152\\margr1152\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n",
+     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh20160\\margl1152\\margr1152\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n"
     }
    },
    "printed_pagelines": [
@@ -305,9 +305,9 @@
      "no_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{max-width:42rem;margin:2rem auto;padding:0 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\npre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}}</style></head>\n<body>\n<p>Ref end.</p>\n</body></html>\n"
     },
     "rtf": {
-     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Ref}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29}{ end.}\\par \n}\n",
-     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Ref}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29}{ end.}\\par \n}\n",
-     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Ref}{ end.}\\par \n}\n"
+     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh1440\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Ref}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29}{ end.}\\par \n}\n",
+     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh1440\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Ref}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29}{ end.}\\par \n}\n",
+     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh1440\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Ref}{ end.}\\par \n}\n"
     }
    },
    "printed_pagelines": [

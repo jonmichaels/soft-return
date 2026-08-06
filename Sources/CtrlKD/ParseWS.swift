@@ -760,7 +760,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // resolved figure, not just the page size. Computed regardless of variant: page
     // geometry is a dot-command concern, not a symmetric-block (ws5+-only) one.
     let plLines = page.plLines ?? defaultPlLines
-    let (heightIn, sizeName) = resolvePageSize(plLines)
+    let (heightIn, sizeName, pwIn) = resolvePageSize(plLines)
     let mtLines = page.mtLines ?? defaultMtLines
     let mbLines = page.mbLines ?? defaultMbLines
     let lh48 = page.lh48 ?? defaultLh48
@@ -768,6 +768,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         plLines: plLines,
         heightIn: heightIn,
         sizeName: sizeName,
+        pwIn: pwIn,
         sizeSource: page.plLines != nil ? .file : .default,
         mtLines: mtLines,
         mtSource: page.mtLines != nil ? .file : .default,
@@ -933,11 +934,15 @@ private struct PageAccumulator {
 
 /// Named page sizes at 6 LPI (WordStar 7.0 file format spec: ".PL ... assuming 6
 /// lines per inch. An eleven inch page contains 66 lines."): 66 lines/11in Letter, 84
-/// lines/14in Legal, 81 lines/13.5in Foolscap Folio (the pre-ISO UK long sheet). All
-/// three share the same 8.5in width, so only page HEIGHT is resolved here -- there is
-/// no dot command for physical page width.
-private let namedPageHeights: [(name: String, heightIn: Double)] = [
-    ("Letter", 11.0), ("Legal", 14.0), ("Foolscap Folio", 13.5),
+/// lines/14in Legal, 81 lines/13.5in Foolscap Folio (the pre-ISO UK long sheet), and
+/// A4 (297mm = 11.693in, ~70 lines -- ruled into the model 2026-08-06: "the 3 main
+/// page sizes" are Letter, Legal, A4). There is no dot command for physical page
+/// WIDTH, so width rides on the height inference: a page tall enough to be A4 is
+/// 210mm wide, everything else is the 8.5in American sheet -- and a Custom height
+/// keeps 8.5in, the only honest default the format allows.
+private let namedPageSizes: [(name: String, heightIn: Double, widthIn: Double)] = [
+    ("Letter", 11.0, 8.5), ("Legal", 14.0, 8.5), ("Foolscap Folio", 13.5, 8.5),
+    ("A4", 11.693, 8.268),
 ]
 /// "Close" isn't spec-given -- a judgment call, not a reading. 0.25in is a bit over a
 /// line and a half at 6 LPI: near enough to call it the named size; farther out,
@@ -1249,14 +1254,16 @@ func cpLines(_ cmd: [UInt8]) -> Int {
     return Swift.max(1, Int(bounded))
 }
 
-/// `pl_lines` -> (height_in, size_name). Snaps to a named size when close; otherwise
-/// reports the raw geometry under "Custom" rather than forcing a label that doesn't
-/// fit. Direct port of `_resolve_page_size`.
-private func resolvePageSize(_ plLines: Double) -> (heightIn: Double, sizeName: String) {
+/// `pl_lines` -> (height_in, size_name, width_in). Snaps to a named size when close;
+/// otherwise reports the raw geometry under "Custom" (at the 8.5in width -- see
+/// `namedPageSizes`) rather than forcing a label that doesn't fit. Direct port of
+/// `_resolve_page_size`. Not private since `effectivePage`'s size override recomputes
+/// the trio through it (EmitOptions.swift).
+func resolvePageSize(_ plLines: Double) -> (heightIn: Double, sizeName: String, widthIn: Double) {
     let heightIn = plLines / 6.0
-    var best = namedPageHeights[0]
+    var best = namedPageSizes[0]
     var bestDiff = abs(best.heightIn - heightIn)
-    for candidate in namedPageHeights.dropFirst() {
+    for candidate in namedPageSizes.dropFirst() {
         let diff = abs(candidate.heightIn - heightIn)
         if diff < bestDiff {
             best = candidate
@@ -1264,9 +1271,9 @@ private func resolvePageSize(_ plLines: Double) -> (heightIn: Double, sizeName: 
         }
     }
     if bestDiff <= pageSizeSnapIn {
-        return (best.heightIn, best.name)
+        return (best.heightIn, best.name, best.widthIn)
     }
-    return (heightIn, "Custom")
+    return (heightIn, "Custom", 8.5)
 }
 
 /// Try to interpret one dot-command line as page geometry (`.pl`/`.po`/`.mt`/`.mb`/

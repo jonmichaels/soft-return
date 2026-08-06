@@ -480,9 +480,13 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         margt = mtDeclared ? twipsLines(page?.mtLines, default: 6.0) : 1440
         margb = mbDeclared ? twipsLines(page?.mbLines, default: 6.0) : 1440
         margl = poDeclared ? roundHalfToEven((page?.poCols ?? 10.0) * 144.0) : 1440
-        paperh = 15840
+        paperh = (page?.sizeSource ?? .default) != .default
+            ? roundHalfToEven((page?.heightIn ?? 11.0) * 1440.0) : 15840
     }
-    let pageSetup = #"\paperw12240\paperh\#(paperh)\margl\#(margl)\margr\#(margl)"#
+    // width joined the page model 2026-08-06: A4-tall documents get the 210mm sheet;
+    // everything else (and every default) stays 12240 twips
+    let paperw = roundHalfToEven((page?.pwIn ?? 8.5) * 1440.0)
+    let pageSetup = #"\paperw\#(paperw)\paperh\#(paperh)\margl\#(margl)\margr\#(margl)"#
         + #"\margt\#(margt)\margb\#(margb)"#
 
     let running = printed ? "" : rtfRunningHeads(doc)

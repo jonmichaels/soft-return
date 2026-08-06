@@ -138,6 +138,11 @@ public struct PageGeometry: Hashable, Sendable {
     public var plLines: Double
     public var heightIn: Double
     public var sizeName: String
+    /// Physical page WIDTH in inches — INFERRED from the height (there is no dot
+    /// command for width; ruled 2026-08-06, "the 3 main page sizes"): A4-tall pages
+    /// are 210mm (8.268in) wide, everything else is the 8.5in American sheet. Its
+    /// provenance is therefore the size's provenance (`sizeSource`).
+    public var pwIn: Double
     public var sizeSource: Provenance
     public var mtLines: Double
     public var mtSource: Provenance
@@ -188,6 +193,7 @@ public struct PageGeometry: Hashable, Sendable {
         plLines: Double,
         heightIn: Double,
         sizeName: String,
+        pwIn: Double = 8.5,
         sizeSource: Provenance,
         mtLines: Double,
         mtSource: Provenance,
@@ -215,6 +221,7 @@ public struct PageGeometry: Hashable, Sendable {
         self.plLines = plLines
         self.heightIn = heightIn
         self.sizeName = sizeName
+        self.pwIn = pwIn
         self.sizeSource = sizeSource
         self.mtLines = mtLines
         self.mtSource = mtSource

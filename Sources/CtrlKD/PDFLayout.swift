@@ -623,11 +623,11 @@ func roundHalfToEven(_ x: Double) -> Int {
 /// this same figure drives, or a custom-geometry page paginates correctly but still gets
 /// drawn on/labeled as a Letter-size sheet) so this is `internal`, not `private`.
 ///
-/// Modern mode always renders at the fixed US Letter height regardless of file geometry —
-/// Printed is the faithfulness mode; Modern's whole point is a page that's simply pleasant
-/// to read, not a facsimile of the original's paper size.
+/// Modern renders on the document's declared sheet (Letter/Legal/A4 -- ruled
+/// 2026-08-06); silence is Letter, exactly as before.
 func resolvedPageHeight(_ doc: Document, printed: Bool) -> Int {
-    printed ? resolvedPrintedPageHeight(doc) : PDFMetrics.pageHeight
+    printed ? resolvedPrintedPageHeight(doc)
+        : roundHalfToEven((doc.page?.heightIn ?? 11.0) * 72.0)
 }
 
 /// Resolved PRINTED-page height, in points. Port of `_resolved_page_height(doc, printed:

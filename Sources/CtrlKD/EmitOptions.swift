@@ -41,14 +41,20 @@ public struct PageSettings: Hashable, Sendable {
     public var hmLines: Double?
     /// `.fm` replacement, in LINES (6 LPI).
     public var fmLines: Double?
+    /// `.pl` replacement, in LINES (6 LPI) — the `--page-settings size=letter|legal|a4`
+    /// override for files that declare no page length (the document's own `.pl` always
+    /// wins). A size override carries the whole trio: height, name, and width recompute
+    /// from the new `.pl` (ruled 2026-08-06, "the 3 main page sizes").
+    public var plLines: Double?
 
     public init(mtLines: Double? = nil, mbLines: Double? = nil, poCols: Double? = nil,
-               hmLines: Double? = nil, fmLines: Double? = nil) {
+               hmLines: Double? = nil, fmLines: Double? = nil, plLines: Double? = nil) {
         self.mtLines = mtLines
         self.mbLines = mbLines
         self.poCols = poCols
         self.hmLines = hmLines
         self.fmLines = fmLines
+        self.plLines = plLines
     }
 }
 
@@ -144,6 +150,13 @@ public struct EmitOptions: Hashable, Sendable {
 /// any test either.
 public func effectivePage(_ page: PageGeometry, settings: PageSettings) -> PageGeometry {
     var eff = page
+    if let pl = settings.plLines, eff.sizeSource == .default {
+        // a page-size override (--page-settings size=...) carries the whole trio:
+        // height, name, width recompute from the new .pl (ruled 2026-08-06)
+        eff.plLines = pl
+        (eff.heightIn, eff.sizeName, eff.pwIn) = resolvePageSize(pl)
+        eff.sizeSource = .file
+    }
     if let mt = settings.mtLines, eff.mtSource == .default {
         eff.mtLines = mt
         eff.mtSource = .file

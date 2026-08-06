@@ -437,10 +437,10 @@ import Testing
     // 72.0 this emitter used to guess (see `emitPDFHonoursPrintedModeAndTheDocumentsOwnVerdict`).
     #expect(text.contains("57.6 552.0 Td"))
 
-    // Modern mode on the SAME document ignores the file's geometry entirely and stays at
-    // the fixed Letter height -- Printed is the faithfulness mode, Modern's isn't.
+    // Modern mode on the SAME document renders on the file's declared sheet too since
+    // page size joined the model (2026-08-06, task #16) -- the custom 50-line page.
     let modernText = latin1(emitPDF(doc, mode: .modern))
-    #expect(modernText.contains("/MediaBox [0 0 612 792]"))
+    #expect(modernText.contains("/MediaBox [0 0 612 600]"))
 }
 
 // MARK: - byte-oriented test helpers
