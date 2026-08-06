@@ -97,6 +97,9 @@ private func markdownReferenceKey(_ kind: NoteKind, label: String) -> String {
 private func markdownReferenceSpan(
     _ span: Span, refNotes: [Note], doc: Document, options: EmitOptions
 ) -> String {
+    if span.pctlHMI != nil {
+        return ""                  // screen-only print-control display string (M10)
+    }
     guard span.styles.contains(.fnref) else { return markdownSpan(span) }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
     case .note(let note, let label, _): return "[^\(markdownReferenceKey(note.kind, label: label))]"

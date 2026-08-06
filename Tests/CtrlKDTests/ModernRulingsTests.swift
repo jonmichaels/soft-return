@@ -132,7 +132,7 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     data += bytes(".oc off") + HARD
     data += bytes("Plain closing prose, quite ordinary and long.") + HARD
     let rtf = emitRTF(parseWS(data), mode: .modern)
-    #expect(rtf.contains(#"{\header \pard\plain \f0\fs22 Chapter / {\chpgn }\par}"#))
+    #expect(rtf.contains(#"{\header \pard\plain \f0\fs22 {Chapter / {\chpgn }}\par}"#))
     #expect(rtf.contains("A Centered Title"))
     #expect(!rtf.contains("  A Centered Title"))          // the tag does the work
 }
@@ -281,4 +281,31 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
         + bytes("First paragraph line of plain prose, long enough to matter.") + HARD + HARD
         + bytes("Second paragraph line of plain prose, also long enough.") + HARD)
     #expect(emitPDF(withComment, mode: .printed) == emitPDF(without, mode: .printed))
+}
+
+@Test func runningHeadToggleBytesBecomeStylesNotGlyphs() throws {
+    // Round 3 (2026-08-06, M10): LJ6DTP's `.h1` carries raw ^B bold toggles and a U+2219
+    // dot; measuring toggles as glyphs made header letters overlap. hfRuns interprets
+    // them as styles, maps the dot to the cp1252 bullet, and a control-bytes-only head
+    // (LJ6DTP's `.f1` = two 0x0F bytes) empties out entirely.
+    let runs = hfRuns("  \u{02}\u{02}Title \u{2219} #\u{02} tail")
+    #expect(runs.first?.text == "  " && runs.first?.styles == [])   // baked spaces survive
+    let texts = runs.map(\.text).joined()
+    #expect(!texts.contains("\u{02}") && !texts.contains("\u{2219}") && texts.contains("\u{2022}"))
+    #expect(runs.contains { $0.styles.contains(.bold) })            // bold recognized
+    #expect(hfRuns("\u{0F}\u{0F}").isEmpty)                         // junk head -> nothing
+    // end-to-end: a doc with a toggle-carrying head renders overlap-free (words strictly
+    // ordered, no negative advance) in the modern PDF
+    var data = ws7Block(0x00)
+    data += bytes(".he ") + [0x02] + bytes("Big Bold Header") + [0x02] + bytes(" / #") + HARD
+    data += bytes("Page one prose, plain and ordinary and long enough.") + HARD
+    data += bytes(".pa") + HARD
+    data += bytes("Page two prose, also plain, ordinary, long enough.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .modern)
+    let first = try #require(pdfContentStreams(pdf).first)
+    let hdr = contentSpans(first).filter { ($0.y ?? 0) > 720 }
+    let words = hdr.map(\.text)
+    #expect(words.contains("Big") && !words.contains("\u{02}Big"))
+    let xs = hdr.compactMap(\.x)
+    #expect(xs == xs.sorted())                                      // strictly left-to-right
 }

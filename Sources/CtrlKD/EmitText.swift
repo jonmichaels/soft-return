@@ -29,7 +29,14 @@ public func isPrinted(_ doc: Document) -> Bool {
 /// becomes `[label]` when its note is included, vanishes entirely when the note's kind is
 /// opted out, and degrades to its own raw digits when it isn't actually a reference at all
 /// (task item 3 — a stray `0x07` byte has nothing behind it to bracket).
-private func textSpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions) -> String {
+private func textSpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions,
+                      printed: Bool) -> String {
+    if let hmi = span.pctlHMI {
+        // screen-only display string: printed pads the declared width, modern shows
+        // nothing (M4 extended, 2026-08-06 M10)
+        guard printed else { return "" }
+        return String(repeating: " ", count: max(0, roundHalfToEven(Double(hmi) / 180.0)))
+    }
     guard span.styles.contains(.fnref) else { return span.text }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
     case .note(let note, let label, _):
@@ -97,7 +104,8 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
         // printed: PHYSICAL lines (soft returns broke the line on paper); modern:
         // logical lines, soft runs joined back (`mergedLines`, ctrl-kd 2.0.0).
         let rendered = (printed ? block.lines : mergedLines(block))
-            .map { line in line.spans.map { textSpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
+            .map { line in line.spans.map { textSpan($0, refNotes: refNotes, doc: doc,
+                                                     options: options, printed: printed) }.joined() }
         let para = alignLines(rendered, block).joined(separator: "\n")
         // emit.py:69 — in printed mode an all-whitespace paragraph is still a printed
         // paragraph and is kept.

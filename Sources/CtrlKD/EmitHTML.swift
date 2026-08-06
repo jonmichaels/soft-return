@@ -126,6 +126,12 @@ private func htmlBodySpan(
     _ span: Span, keepWS: Bool = false, refNotes: [Note], doc: Document, options: EmitOptions,
     shownMap: [Int: String]? = nil
 ) -> String {
+    if let hmi = span.pctlHMI {
+        // screen-only print-control display string: the printed physical layer
+        // (`keepWS`) pads the declared width; every reading mode shows nothing (M10)
+        guard keepWS else { return "" }
+        return String(repeating: " ", count: max(0, roundHalfToEven(Double(hmi) / 180.0)))
+    }
     guard span.styles.contains(.fnref) else { return htmlSpan(span, keepWS: keepWS) }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
     case .note(let note, let label, let index):
