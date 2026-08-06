@@ -399,6 +399,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
               leftMargin: styleFmt.leftMargin ?? fmt.leftMargin,
               rightMargin: styleFmt.rightMargin ?? fmt.rightMargin,
               paraMargin: styleFmt.paraMargin ?? fmt.paraMargin,
+              tabStops: (fmt.tabStops?.isEmpty ?? true) ? nil : fmt.tabStops,
               columns: fmt.columns, columnGutter: fmt.columnGutter,
               styleID: styleFmt.styleID, styleName: styleFmt.styleName,
               styleAttrs: styleFmt.attrs)

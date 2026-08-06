@@ -415,3 +415,29 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     let effOwn = effectivePage(try #require(own.page), settings: PageSettings(plLines: 70.157))
     #expect(effOwn.sizeName == "Legal" && effOwn.pwIn == 8.5)
 }
+
+@Test func tabStopsAreEditorTimeStateCarriedNotRendered() throws {
+    // .tb (task #19, measured 2026-08-06): the stops are ruler state the Tab key
+    // resolves against at EDIT time — type-9 sequences carry their own baked positions,
+    // and zero archive files pair .tb with a bare 0x09. So the stops change no rendered
+    // byte; they are stamped per block and surface as 'tabs' items in the layout
+    // contract for Show Invisibles and a future editor.
+    var data = ws7Block(0x00)
+    data += bytes("Prose before the stops change, plain and long enough here.") + HARD
+    data += bytes(".tb 12 27 41") + HARD
+    data += bytes("Prose after the stops change, also plain and long enough.") + HARD
+    let doc = parseWS(data)
+    let blocks = doc.blocks.filter { $0.kind == .para }
+    #expect(blocks[0].tabStops == nil)                    // ruler default
+    #expect(blocks[1].tabStops == [12.0, 27.0, 41.0])     // stateful, per block
+    var tabItems: [[Double]?] = []
+    for item in modernSemanticFlow(doc).items {
+        if case .tabs(let stops) = item { tabItems.append(stops) }
+    }
+    #expect(tabItems.last == [12.0, 27.0, 41.0])
+    // and the rendered PDF is identical with or without the .tb line
+    var without = ws7Block(0x00)
+    without += bytes("Prose before the stops change, plain and long enough here.") + HARD
+    without += bytes("Prose after the stops change, also plain and long enough.") + HARD
+    #expect(emitPDF(doc, mode: .modern) == emitPDF(parseWS(without), mode: .modern))
+}

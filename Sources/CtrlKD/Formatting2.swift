@@ -59,9 +59,14 @@ struct FormatState {
     /// `.oc on` mid-paragraph means the lines after it are centred and the ones before
     /// are not, and `.lm 5` mid-paragraph means the same about the indent.
     var blockFormat: BlockFormat {
+        // `.tb` mid-paragraph means the lines after it were typed against different
+        // stops (2026-08-06) — rendering doesn't change, but per-block fidelity of the
+        // carried state does. Empty stops count as none, mirroring Python's
+        // `tuple(...) if state.get('tab_stops') else None`.
         BlockFormat(align: alignment, wrap: wrap ?? true, leftMargin: leftMargin,
                     rightMargin: rightMargin, paraMargin: paraMargin,
-                    columns: columns, columnGutter: columnGutter)
+                    columns: columns, columnGutter: columnGutter,
+                    tabStops: (tabStops?.isEmpty ?? true) ? nil : tabStops)
     }
 
     /// The alignment in force.
@@ -81,6 +86,7 @@ struct BlockFormat: Equatable {
     var paraMargin: Double?
     var columns: Int?
     var columnGutter: Double?
+    var tabStops: [Double]?
 }
 
 public enum Orientation: String, Hashable, Sendable {
@@ -283,12 +289,16 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // fill state to test n against. Zero archive documents use it.
         state.condCol.append(decodeCP437(trimmed(arg)))
     case "TB":
-        // `.tb` sets the stops a plain ASCII 0x09 tab expands to. RECORDED; ASCII-tab
-        // expansion stays at the spec's own default ("At print time the number of hard
-        // spaces required to reach a modulus 8 print position is generated" — WSFORMAT
-        // control-code table; HORTAB concurs "as though tab stops were set every .8
-        // inches"). Whether `.tb` overrides that at print time is UNMEASURED, and zero
-        // archive documents use `.tb` — symseq tabs carry their own positions.
+        // `.tb` sets the RULER's tab stops (WSFORMAT: "E P ... Sets multiple tab stops
+        // for further editing/printing"). Their real mechanism is EDITOR-time (measured
+        // 2026-08-06, third confirmation of the doctrine): the Tab key resolves against
+        // the stops and bakes a type-9 sequence carrying its own HMI position, so the
+        // stops change no rendered byte — 46 archive files use `.tb` and ZERO of them
+        // contain a bare 0x09 (the intersection is empty, corpus-wide). A bare 0x09's
+        // print expansion stays at the spec's own fixed rule ("modulus 8 print
+        // position"); whether `.tb` would override THAT is unmeasured and unreachable
+        // in this corpus. Stops are carried per-block for the layout contract and a
+        // future editor. Task #19.
         var stops: [Double] = []
         for token in splitOnDotSpace(arg.map { $0 == 0x2C ? 0x20 : $0 }) {
             if let (value, unit) = parseDotNumber(token), value.isFinite {
