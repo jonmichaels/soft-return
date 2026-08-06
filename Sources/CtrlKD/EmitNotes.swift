@@ -24,8 +24,10 @@ func inlineReferenceNotes(_ doc: Document) -> [Note] {
 /// to see it?).
 enum NoteReference {
     /// A real reference to a note whose kind the caller wants rendered. `label` is already
-    /// the resolved, 1-based-and-per-kind display string — see `noteLabel`.
-    case note(Note, label: String)
+    /// the resolved, 1-based-and-per-kind display string — see `noteLabel`. `index` is the
+    /// note's position in `inlineReferenceNotes(doc)` — the stable per-note identity
+    /// Python's `id(note)` provides (the `noteRefLabels` map is keyed by it).
+    case note(Note, label: String, index: Int)
     /// A real reference, but to a note whose kind is NOT in `options.notes` — render
     /// nothing at all, not even a bare marker (task item 1).
     case excluded
@@ -45,7 +47,35 @@ func resolveReference(
     guard let n = Int(span.text), n >= 1, n <= refNotes.count else { return .invalid }
     let note = refNotes[n - 1]
     guard options.notes.contains(note.kind) else { return .excluded }
-    return .note(note, label: noteLabel(note, doc: doc))
+    return .note(note, label: noteLabel(note, doc: doc), index: n - 1)
+}
+
+/// The `prefixed` note-reference display labels, keyed by the note's index in `refNotes`
+/// (`inlineReferenceNotes(doc)`) — footnotes bare (1, 2, 3), endnotes e1 e2, annotations
+/// a1 a2: the SAME labels the Markdown emitter has always written, so a document's
+/// reference marks match across every Modern format (ruling 2026-08-06 M8). Under `word`
+/// (the default) this returns the stored labels unchanged and each format applies its
+/// own Word-standard display on top (arabic footnotes, roman endnotes in the PDF,
+/// WordStar tags for annotations). Port of `note_ref_labels`.
+func noteRefLabels(_ refNotes: [Note], doc: Document, scheme: NoteRefs) -> [Int: String] {
+    var shown: [Int: String] = [:]
+    var ords: [NoteKind: Int] = [:]
+    for (i, note) in refNotes.enumerated() {
+        let k = (ords[note.kind] ?? 0) + 1
+        ords[note.kind] = k
+        let label = noteLabel(note, doc: doc)
+        if scheme == .prefixed {
+            switch note.kind {
+            case .endnote: shown[i] = "e" + label
+            case .annotation: shown[i] = "a" + String(k)
+            case .comment: shown[i] = "c" + String(k)
+            case .footnote: shown[i] = label
+            }
+        } else {
+            shown[i] = label
+        }
+    }
+    return shown
 }
 
 /// This note's 1-based position among ALL of `doc.notes` sharing its `kind`, in document

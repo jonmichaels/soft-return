@@ -73,8 +73,8 @@ public func run(
     case .usageError(let message):
         environment.writeErr("usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] "
             + "[--mode MODE]\n          [--variant VARIANT] [--fonts TARGET] "
-            + "[--page-settings P] [--force] [--no-notes]\n          [--comments] "
-            + "[--diagnose] FILE [FILE ...]")
+            + "[--note-refs SCHEME] [--page-settings P]\n          [--force] [--no-notes] "
+            + "[--comments] [--diagnose] FILE [FILE ...]")
         environment.writeErr("sr: error: \(message)")
         return ExitStatus.usage
     case .run(let options):
@@ -163,7 +163,8 @@ private func convertAll(
             let output = emitter.emit(doc, options.mode,
                                       EmitOptions(title: base, notes: options.notes,
                                                   styles: options.styles,
-                                                  fontsTarget: options.fontsTarget))
+                                                  fontsTarget: options.fontsTarget,
+                                                  noteRefs: options.noteRefs))
 
             let destination: String
             if let explicit = options.output {

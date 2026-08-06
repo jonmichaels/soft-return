@@ -108,6 +108,9 @@ public struct Options: Equatable, Sendable {
     /// "page defaults" at every layer, ruling 2026-08-05), a preset name or raw values,
     /// parsed into `PageSettings`. `nil` when the flag was never given.
     public var pageSettings: PageSettings?
+    /// `--note-refs word|prefixed` (ctrl-kd's `--note-refs`, ruling 2026-08-06 M8):
+    /// note reference-mark display in Modern output. See `NoteRefs`.
+    public var noteRefs: NoteRefs = .word
     /// `--force`: accepted for compatibility with ctrl-kd (where it is a documented
     /// no-op — ctrl-kd always overwrites). Here it does real work: it bypasses `sr`'s own
     /// overwrite prompt/refusal (D4, the sanctioned Mac-vs-Unix platform divergence — "it's
@@ -135,6 +138,9 @@ let modeChoices = ["modern", "printed"]
 /// `--fonts`. `FontsTarget` has exactly these four cases, so — as with `--mode` — the
 /// initializer IS the validation and this list only spells the error message.
 let fontsChoices = ["office", "mac", "google", "linux"]
+
+/// `--note-refs`. Same pattern: `NoteRefs` has exactly these two cases.
+let noteRefsChoices = ["word", "prefixed"]
 
 /// `--page-settings` presets (ruling 2026-08-05, D8): `default` is the explicit no-op —
 /// WordStar factory geometry IS what an empty settings value means, since a document's own
@@ -324,6 +330,16 @@ public func parseArguments(
                         + "(choose from \(quotedList(fontsChoices)))")
             }
             options.fontsTarget = target
+        case "--note-refs":
+            guard let value = takeValue(flag, attached: attached) else {
+                return .usageError("argument \(flag): expected one argument")
+            }
+            guard let scheme = NoteRefs(rawValue: value) else {
+                return .usageError(
+                    "argument \(flag): invalid choice: '\(value)' "
+                        + "(choose from \(quotedList(noteRefsChoices)))")
+            }
+            options.noteRefs = scheme
         case "--variant":
             guard let value = takeValue(flag, attached: attached) else {
                 return .usageError("argument \(flag): expected one argument")
@@ -468,6 +484,14 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             DEFAULT -- sr is the Mac tool; note ctrl-kd
                             defaults to office instead), office (Word/Docs),
                             google (Docs catalog), linux (URW base-35)
+      --note-refs SCHEME    note reference-mark display in Modern output.
+                            "word" (default): the Word standard -- arabic
+                            footnotes, lowercase-roman endnotes, WordStar
+                            tags for annotations. "prefixed": footnotes 1 2
+                            3, endnotes e1 e2, annotations a1 a2 -- the same
+                            labels the markdown output always uses, matched
+                            across formats. Printed output is a facsimile
+                            and ignores this.
       --page-settings P     page geometry for everything the document does not
                             declare itself (its own dot commands always win).
                             Presets: "default" (WordStar factory: mt 0.5in,

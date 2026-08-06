@@ -32,7 +32,7 @@ public func isPrinted(_ doc: Document) -> Bool {
 private func textSpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions) -> String {
     guard span.styles.contains(.fnref) else { return span.text }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
-    case .note(_, let label): return "[\(label)]"
+    case .note(_, let label, _): return "[\(label)]"
     case .excluded: return ""
     case .invalid: return span.text
     }
