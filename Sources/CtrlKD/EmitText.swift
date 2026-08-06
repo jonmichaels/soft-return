@@ -50,7 +50,9 @@ private func textSpan(_ span: Span, refNotes: [Note], doc: Document, options: Em
 /// to column 5 with a right margin at 60 centres about column 32, not column 30.
 func textWidth(_ block: Block) -> Int {
     let rm = (block.rightMargin ?? 0) > 0 ? block.rightMargin! : Double(PDFMetrics.maxCols)
-    return Int(rm + (block.leftMargin ?? 0))
+    // leftMargin is OFFSET columns (normalised 2026-08-06): text occupies columns
+    // lm+1 .. rm, so WordStar's centre line is (lm + 1 + rm) / 2.
+    return Int(rm + (block.leftMargin ?? 0) + 1)
 }
 
 /// Centre or right-align a block's lines within the text width. Register C16/C17.

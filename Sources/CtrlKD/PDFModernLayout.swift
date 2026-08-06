@@ -35,18 +35,45 @@ struct ModernToken {
 }
 
 /// One item in the document's Modern flow, before pagination. Python's tagged tuples
-/// (`('line', ...)` never actually used — see `_modern_flow`'s only real arms —
-/// `('para', toks, align, notes)`, `('blank', height)`, `('break',)`, `('cond', n)`).
+/// (`('para', toks, align, notes, indent, cut)`, `('blank', height)`, `('break',)`,
+/// `('cond', n)`, `('hf', kind, line, text)`).
 enum ModernFlowItem {
     case pageBreak
     /// `.cp n` — resolved by the paginator, the only thing that knows how full the page is.
     case cond(Int)
     case blank(Double)
+    /// A running-head/foot change, replayed by the paginator so each page carries the
+    /// state in force when it took content (ruling 2026-08-06 M5: Modern keeps headers).
+    case hf(kind: HFKind, line: Int, text: String)
     /// One logical (already soft-wrap-merged) line's tokens, ready for real-measure wrap.
-    /// `notes` are the footnote/endnote/annotation notes this line's `fnref` markers
-    /// reference — carried with the line so the paginator can reserve their page-bottom
-    /// room the moment the line that first names them is placed.
-    case para(toks: [ModernToken], align: Alignment, notes: [(note: Note, label: String)])
+    /// `notes` are the FOOTNOTES this line's `fnref` markers reference — carried with the
+    /// line so the paginator can reserve their page-bottom room the moment the line that
+    /// first names them is placed (endnotes/annotations collect at the document end
+    /// instead — M1). `index` is the note's position in `inlineReferenceNotes(doc)`, the
+    /// stable identity Python's `id(note)` provides for dedup. `indent`/`cut` carry the
+    /// block's own `.lm`/`.rm` in points — the document's explicit margins win in Modern
+    /// exactly as its fonts do (M2).
+    case para(toks: [ModernToken], align: Alignment,
+              notes: [(index: Int, note: Note, label: String)],
+              indent: Double, cut: Double)
+}
+
+/// Endnote display label under Modern: lowercase roman, Word's own default for `\ftnalt`
+/// endnotes — the PDF matches the RTF it mirrors, and a page can carry footnote [1] and
+/// endnote [i] without collision (ruling 2026-08-06 M1). Port of `_endnote_label`.
+func endnoteRomanLabel(_ label: String) -> String {
+    guard let n = Int(label), n > 0 else { return label }
+    var remaining = n
+    var out = ""
+    for (v, s) in [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
+                   (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
+                   (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")] {
+        while remaining >= v {
+            out += s
+            remaining -= v
+        }
+    }
+    return out
 }
 
 /// `(left, topMargin, bottomMargin, textWidth)` in points. The document's declared
@@ -124,9 +151,24 @@ func modernTokenWidth(_ text: String, styles: Style, family: PDFFamily, pt: Int,
 /// keep: continue`, both `continue`s with no token appended either.
 func modernFlow(_ doc: Document, keep: Set<NoteKind>) -> [ModernFlowItem] {
     let refNotes = inlineReferenceNotes(doc)
-    let refOptions = EmitOptions(notes: keep)
+    // LJ6DTP substitutions apply in Modern too (ruling 2026-08-06 M7): the driver's
+    // patched slots are CONTENT — an em dash is an em dash in any century — while its
+    // page art (colour, rules, boxes) stays print-time.
+    let lj = doc.printerDriver == "LJ6DTP"
+    // one WordStar column in points, at the document's own `.cw`
+    let colPt = (doc.page?.cw120 ?? 12.0) * 0.6
+    var hfByBlock: [Int: [(kind: HFKind, line: Int, text: String)]] = [:]
+    for event in doc.hfEvents {
+        hfByBlock[event.blockAnchor, default: []].append((event.kind, event.line, event.text))
+    }
     var flow: [ModernFlowItem] = []
-    for block in doc.blocks {
+    var endPairs: [(index: Int, note: Note, shown: String)] = []
+    var endSeen: Set<Int> = []            // endnotes/annotations, document order
+    let blankH = modernLine * Double(modernBodyPt)
+    for (bi, block) in doc.blocks.enumerated() {
+        for event in hfByBlock[bi] ?? [] {
+            flow.append(.hf(kind: event.kind, line: event.line, text: event.text))
+        }
         if block.kind == .pagebreak {
             flow.append(.pageBreak)
             continue
@@ -135,39 +177,116 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>) -> [ModernFlowItem] {
             flow.append(.cond(max(1, block.heading)))
             continue
         }
+        let lm = block.leftMargin ?? 0
+        let indent = lm * colPt
+        let rm = block.rightMargin ?? 0
+        // `.rm` narrows the measure from the document's full line (`maxCols`, the same
+        // 65 columns the era page gives); a block at the default 65 cuts nothing
+        let cut = rm != 0 ? max(0.0, Double(PDFMetrics.maxCols) - rm) * colPt : 0.0
         for line in mergedLines(block) {
+            if line.spans.isEmpty {
+                flow.append(.blank(blankH))
+                continue
+            }
+            var spans = line.spans
+            if lm != 0 {
+                // WordStar stamps `.lm` onto every line it writes; the indent is carried
+                // by the BLOCK now, so the stamped spaces come off the front (whatever
+                // indent remains past `.lm` is the author's own tab and stays)
+                var drop = lm
+                while drop > 0, !spans.isEmpty {
+                    let chars = Array(spans[0].text)
+                    var take = 0
+                    while take < chars.count, Double(take) < drop, chars[take] == " " {
+                        take += 1
+                    }
+                    if take == 0 { break }
+                    drop -= Double(take)
+                    if take < chars.count {
+                        spans[0].text = String(chars[take...])
+                        break
+                    }
+                    spans.removeFirst()
+                }
+            }
             var toks: [ModernToken] = []
-            var notes: [(note: Note, label: String)] = []
-            for span in line.spans {
+            var notes: [(index: Int, note: Note, label: String)] = []
+            for span in spans {
                 var styles = span.styles
                 if block.heading != 0 { styles.insert(.bold) }
                 styles.formUnion(block.styleAttrs)
                 if span.styles.contains(.fnref) {
-                    switch resolveReference(span, refNotes: refNotes, doc: doc, options: refOptions) {
-                    case .note(let note, let label):
-                        let width = modernTokenWidth(label, styles: styles, family: .times,
-                                                     pt: modernBodyPt, entry: nil)
-                        toks.append(ModernToken(text: label, styles: styles, family: .times,
-                                                pt: modernBodyPt, entry: nil, width: width))
-                        notes.append((note, label))
-                    case .excluded, .invalid:
-                        break
+                    // Python's `except (ValueError, IndexError): continue` / kind-filter
+                    // `continue` — a stray sentinel or excluded kind contributes NOTHING.
+                    guard let n = Int(span.text), n >= 1, n <= refNotes.count else { continue }
+                    let note = refNotes[n - 1]
+                    guard keep.contains(note.kind) else { continue }
+                    let label = noteLabel(note, doc: doc)
+                    let shown = note.kind == .endnote ? endnoteRomanLabel(label) : label
+                    let width = modernTokenWidth(shown, styles: styles, family: .times,
+                                                 pt: modernBodyPt, entry: nil)
+                    toks.append(ModernToken(text: shown, styles: styles, family: .times,
+                                            pt: modernBodyPt, entry: nil, width: width))
+                    if note.kind == .footnote {
+                        notes.append((n - 1, note, label))
+                    } else if !endSeen.contains(n - 1) {
+                        endSeen.insert(n - 1)
+                        endPairs.append((n - 1, note, shown))
                     }
                     continue
                 }
                 for piece in splitKeepingSpaceRuns(span.text) {
                     let resolved = modernTokFont(piece, font: span.font, fonts: doc.fonts)
-                    let width = modernTokenWidth(resolved.written, styles: styles,
+                    var written = resolved.written
+                    if lj, let entry = resolved.entry, entry.proportional {
+                        written = ljSubstituteText(written, entry: entry)
+                    }
+                    let width = modernTokenWidth(written, styles: styles,
                                                  family: resolved.family, pt: resolved.pt,
                                                  entry: resolved.entry)
-                    toks.append(ModernToken(text: resolved.written, styles: styles,
+                    toks.append(ModernToken(text: written, styles: styles,
                                             family: resolved.family, pt: resolved.pt,
                                             entry: resolved.entry, width: width))
                 }
             }
-            flow.append(.para(toks: toks, align: block.align, notes: notes))
+            if block.align == .center || block.align == .right {
+                // WordStar 5+ aligned at EDITOR time — the centering is already in the
+                // file as spaces (the same fact the WS4 `.oj` DOSBox probe proved for
+                // justification). Applying the stored tag on top of the baked spaces
+                // aligned twice; the spaces come off and the tag does the work (ruling
+                // 2026-08-06 M3 — no per-document exceptions).
+                while let first = toks.first, first.text.trimmed().isEmpty {
+                    toks.removeFirst()
+                }
+                while let last = toks.last, last.text.trimmed().isEmpty {
+                    toks.removeLast()
+                }
+            }
+            flow.append(.para(toks: toks, align: block.align, notes: notes,
+                              indent: indent, cut: cut))
         }
-        flow.append(.blank(modernLine * Double(modernBodyPt)))
+        // Only the author's own blank lines make space (ruling 2026-08-06 M4): a block
+        // boundary is often just a dot command, and command codes are invisible.
+        // `mergedLines` buffered these away; count them back.
+        for _ in 0..<trailingBlankLines(block) {
+            flow.append(.blank(blankH))
+        }
+    }
+    if !endPairs.isEmpty {
+        // Endnotes and annotations at the true end, after the last body line — flowing,
+        // not bottom-anchored — behind the same 20-dash separator the page-bottom notes
+        // use. No heading: WordStar never printed one (any "Notes" heading in a period
+        // document was typed).
+        flow.append(.blank(blankH))
+        let separator = String(repeating: "-", count: 20)
+        let sepW = stringWidthPt(separator, "Times-Roman", modernNotePt)
+        flow.append(.para(toks: [ModernToken(text: separator, styles: [], family: .times,
+                                             pt: modernNotePt, entry: nil, width: sepW)],
+                          align: .left, notes: [], indent: 0.0, cut: 0.0))
+        for pair in endPairs {
+            flow.append(.para(toks: modernNoteToks(pair.note, label: pair.shown),
+                              align: .left, notes: [], indent: 0.0, cut: 0.0))
+        }
     }
     return flow
 }
@@ -198,9 +317,8 @@ func modernWrap(_ toks: [ModernToken], width: Double) -> [[ModernToken]] {
     return lines
 }
 
-/// A page-bottom note as wrapped visual lines of Times `modernNotePt`. Port of
-/// `_modern_note_lines`.
-func modernNoteLines(_ note: Note, label: String, width: Double) -> [[ModernToken]] {
+/// One note as `[label] text` tokens of Times `modernNotePt`. Port of `_modern_note_toks`.
+func modernNoteToks(_ note: Note, label: String) -> [ModernToken] {
     let text = "[\(label)] \(note.text)"
     var toks: [ModernToken] = []
     for piece in splitKeepingSpaceRuns(text) {
@@ -208,7 +326,31 @@ func modernNoteLines(_ note: Note, label: String, width: Double) -> [[ModernToke
         toks.append(ModernToken(text: piece, styles: [], family: .times, pt: modernNotePt,
                                 entry: nil, width: width))
     }
-    return modernWrap(toks, width: width)
+    return toks
+}
+
+/// A page-bottom note as wrapped visual lines of Times `modernNotePt`. Port of
+/// `_modern_note_lines`.
+func modernNoteLines(_ note: Note, label: String, width: Double) -> [[ModernToken]] {
+    modernWrap(modernNoteToks(note, label: label), width: width)
+}
+
+/// One modern running-head/foot line: Times `modernNotePt` in the margin zone, WordStar's
+/// `#` token as the page number (same rule as printed: `.op` never suppresses an explicit
+/// `#`). The header keeps its own baked spaces — that is how a 1990 head positioned its
+/// parts, and a running head is a page fixture, not reflowing text. Port of
+/// `_modern_hf_ops`.
+func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Double,
+                 res: FontResources, tzState: inout Int) -> [[UInt8]] {
+    let text = txt.replacingAll("#", with: String(pageNo))
+    var toks: [ModernToken] = []
+    for piece in splitKeepingSpaceRuns(text) {
+        let w = stringWidthPt(piece, "Times-Roman", modernNotePt)
+        toks.append(ModernToken(text: piece, styles: [], family: .times, pt: modernNotePt,
+                                entry: nil, width: w))
+    }
+    return modernLineOps(toks, left: left, y: y, width: width, align: .left,
+                         res: res, tzState: &tzState)
 }
 
 /// Content-stream ops for one modern visual line. One op per word keeps a viewer's
@@ -315,27 +457,48 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
     let noteLead = modernLine * Double(modernNotePt)
     let sepH = noteLead
 
-    var pages: [(body: [(y: Double, toks: [ModernToken], align: Alignment)], notes: [[ModernToken]])] = []
-    var body: [(y: Double, toks: [ModernToken], align: Alignment)] = []
+    typealias BodyLine = (y: Double, toks: [ModernToken], align: Alignment,
+                          indent: Double, cut: Double)
+    var pages: [(body: [BodyLine], notes: [[ModernToken]],
+                 headers: [Int: String], footers: [Int: String])] = []
+    var body: [BodyLine] = []
     var notesLines: [[ModernToken]] = []
-    // Dedup by source offset, not object identity (Python's `id(note)`): `Note` is a
-    // value type here, and `.offset` is the field this codebase already uses elsewhere
-    // to tell two field-for-field-identical notes apart (`noteLabel`'s `notePosition`).
+    // Dedup by the note's index in `inlineReferenceNotes` — the stable identity Python's
+    // `id(note)` provides (`Note` is a value type here).
     var seenNotes: Set<Int> = []
     var y = Double(PDFMetrics.pageHeight) - margt
+    var curH: [Int: String] = [:]          // running-head state as events replay
+    var curF: [Int: String] = [:]
+    var pageH: [Int: String] = [:]         // state when the OPEN page took content
+    var pageF: [Int: String] = [:]
+    var opened = false
 
     func noteBlockH() -> Double {
         notesLines.isEmpty ? 0.0 : sepH + noteLead * Double(notesLines.count)
     }
+    func openPage() {
+        // the page's running heads are the state in force when it takes its first
+        // content — OLDTIMES defines .h1 after page 1's title, and a manuscript has no
+        // running head on page 1 (same rule as printed)
+        if !opened {
+            pageH = curH
+            pageF = curF
+            opened = true
+        }
+    }
     func close() {
-        pages.append((body, notesLines))
+        openPage()
+        pages.append((body, notesLines, pageH, pageF))
         body = []
         notesLines = []
         y = Double(PDFMetrics.pageHeight) - margt
+        opened = false
     }
 
     for item in flow {
         switch item {
+        case .hf(let kind, let line, let text):
+            if kind == .header { curH[line] = text } else { curF[line] = text }
         case .pageBreak:
             close()
         case .cond(let n):
@@ -350,10 +513,11 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
                 continue
             }
             y -= h
-        case .para(let toks, let align, let notes):
-            let vis = modernWrap(toks, width: width)
+        case .para(let toks, let align, let notes, let indent, let cut):
+            let lineW = max(36.0, width - indent - cut)
+            let vis = modernWrap(toks, width: lineW)
             var newNoteLines: [[ModernToken]] = []
-            for entry in notes where !seenNotes.contains(entry.note.offset) {
+            for entry in notes where !seenNotes.contains(entry.index) {
                 newNoteLines += modernNoteLines(entry.note, label: entry.label, width: width)
             }
             for (vi, vline) in vis.enumerated() {
@@ -368,11 +532,12 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
                 if !body.isEmpty, y - h < margb + noteBlockH() + extra {
                     close()
                 }
+                openPage()
                 y -= h
-                body.append((y, vline, align))
+                body.append((y, vline, align, indent, cut))
                 if vi == 0, !newNoteLines.isEmpty {
                     notesLines.append(contentsOf: newNoteLines)
-                    for entry in notes { seenNotes.insert(entry.note.offset) }
+                    for entry in notes { seenNotes.insert(entry.index) }
                     newNoteLines = []
                 }
             }
@@ -383,12 +548,30 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
         pages.removeLast()
     }
 
+    let startNo = doc.page?.pnStart ?? 1
     var streams: [[UInt8]] = []
-    for page in pages {
+    for (pi, page) in pages.enumerated() {
         var tzState = hundredths(tzDefault)
         var ops: [[UInt8]] = []
+        let pageNo = startNo + pi
+        // running heads live in the margin zones: header lines walk down from ~0.6in off
+        // the top edge, footer lines sit ~0.6in off the bottom — inside Modern's 1in
+        // margins, clear of the body
+        for lno in page.headers.keys.sorted() {
+            guard let txt = page.headers[lno], !txt.isEmpty else { continue }
+            let hy = Double(PDFMetrics.pageHeight) - 44.0 - Double(lno - 1) * noteLead
+            ops += modernHFOps(txt, pageNo: pageNo, left: margl, y: hy, width: width,
+                               res: res, tzState: &tzState)
+        }
+        for lno in page.footers.keys.sorted() {
+            guard let txt = page.footers[lno], !txt.isEmpty else { continue }
+            let fy = max(8.0, 44.0 - Double(lno - 1) * noteLead)
+            ops += modernHFOps(txt, pageNo: pageNo, left: margl, y: fy, width: width,
+                               res: res, tzState: &tzState)
+        }
         for line in page.body {
-            ops += modernLineOps(line.toks, left: margl, y: line.y, width: width,
+            ops += modernLineOps(line.toks, left: margl + line.indent, y: line.y,
+                                 width: max(36.0, width - line.indent - line.cut),
                                  align: line.align, res: res, tzState: &tzState)
         }
         let nlines = page.notes

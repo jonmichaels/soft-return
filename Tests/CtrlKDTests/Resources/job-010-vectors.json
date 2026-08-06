@@ -19,7 +19,7 @@
   {
    "input_hex": "0252656769737472f920546573f4020d0a0d0a4f6ee5207061726167726170e82069f320656e6f7567e82074ef2070726f76e520776972696e67ae0d0a",
    "to": "rtf",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{\\b Registry Test}\\par \n\\par \n{One paragraph is enough to prove wiring.}\\par \n\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{\\b Registry Test}\\par \n\\par \n{One paragraph is enough to prove wiring.}\\par \n}\n"
   },
   {
    "input_hex": "0252656769737472f920546573f4020d0a0d0a4f6ee5207061726167726170e82069f320656e6f7567e82074ef2070726f76e520776972696e67ae0d0a",

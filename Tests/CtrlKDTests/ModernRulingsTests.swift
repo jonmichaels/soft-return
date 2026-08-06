@@ -1,0 +1,170 @@
+import Testing
+@testable import CtrlKD
+
+/// The Modern layout rulings (2026-08-06) — Jon's second Modern review round, all six
+/// rulings: endnotes to the document end, block margins honored, editor-time alignment
+/// de-duplicated, only the author's blank lines make space, running heads kept, and
+/// driver character substitutions are content. Ports of the tests under
+/// `tests/test_ctrlkd.py`'s "Modern layout rulings" banner. The printed digests must
+/// NOT move (pinned elsewhere).
+
+/// The raw content streams of a PDF, in order — Python's
+/// `re.findall(rb'stream\r?\n(.*?)endstream', pdf, re.S)`.
+func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
+    let open = bytes("stream\n")
+    let close = bytes("endstream")
+    var out: [[UInt8]] = []
+    var i = 0
+    while i + open.count <= pdf.count {
+        if Array(pdf[i..<i + open.count]) == open {
+            var j = i + open.count
+            while j + close.count <= pdf.count, Array(pdf[j..<j + close.count]) != close {
+                j += 1
+            }
+            out.append(Array(pdf[(i + open.count)..<j]))
+            i = j + close.count
+        } else {
+            i += 1
+        }
+    }
+    return out
+}
+
+@Test func modernPDFEndnotesCollectAtDocumentEnd() throws {
+    // Ruling 1 (M1): Word sends \ftnalt notes to the back, and Modern PDF is the printed
+    // Modern RTF — so endnotes flow after the last body line (never the page-bottom
+    // footnote area), inline-marked in Word's own lowercase roman so footnote [1] and
+    // endnote [i] cannot collide.
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
+    data += bytes("The referenced line")
+    data += ws7Note(bytes("The endnote text itself."), cmd: 0x04, number: 0)
+    data += bytes(" continues after.") + HARD
+    data += bytes("A closing line of ordinary prose keeps the byte ratio honest.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .modern)
+    let shown = contentSpans(pdf)
+    #expect(shown.contains { $0.text == "i" })            // inline roman marker
+    let labelY = try #require(shown.first { $0.text == "[i]" }?.y)
+    let lastBodyY = try #require(shown.first { $0.text == "honest." }?.y)
+    #expect(lastBodyY - labelY > 0 && lastBodyY - labelY < 80)   // flows just below body
+    #expect(labelY > 300)                                        // not bottom-anchored
+}
+
+@Test func modernPDFBlockMarginsIndentAndNarrowTheMeasure() throws {
+    // Ruling 2 (M2): a block's own .lm/.rm are the document's explicit choices and win
+    // in Modern exactly as its fonts do. WordStar's stamped .lm spaces come off the
+    // front so the indent isn't applied twice.
+    var data = ws7Block(0x00)
+    data += bytes("Full width prose before the quotation, ordinary and plain.") + HARD
+    data += bytes(".lm 8") + HARD + bytes(".rm 58") + HARD
+    data += bytes("       An indented quotation, with enough words in it that the "
+        + "line has to wrap inside its own narrowed measure to pass.") + HARD
+    data += bytes(".lm 1") + HARD + bytes(".rm 65") + HARD
+    data += bytes("Back to the full measure after the quotation ends here.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .modern)
+    let shown = contentSpans(pdf)
+    let xQuote = try #require(shown.first { $0.text == "An" }?.x)
+    let xBack = try #require(shown.first { $0.text == "Back" }?.x)
+    #expect(abs(xQuote - (72.0 + 7.0 * 7.2)) < 0.1)       // .lm 8 = 7 columns in
+    #expect(abs(xBack - 72.0) < 0.1)
+}
+
+@Test func modernAlignmentTagStripsTheSpacesThatImplementedIt() throws {
+    // Ruling 3 (M3): WordStar 5+ aligned at EDITOR time — the file carries both the tag
+    // and the spaces that implemented it. The spaces come off and the tag does the work;
+    // the visible text lands dead center of the measure.
+    var data = ws7Block(0x00)
+    data += bytes("Padding prose line one, entirely ordinary text, for balance.") + HARD
+    data += bytes(".oc on") + HARD
+    data += bytes("                    Centered Headline") + HARD
+    data += bytes(".oc off") + HARD
+    data += bytes("More plain prose to close the document, again fully ordinary.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .modern)
+    let x = try #require(contentSpans(pdf).first { $0.text == "Centered" }?.x)
+    let w = stringWidthPt("Centered Headline", "Times-Roman", 14)
+    #expect(abs(x - (72.0 + (468.0 - w) / 2)) < 0.5)
+}
+
+@Test func modernDotCommandBlockSplitInventsNoBlank() throws {
+    // Ruling 4 (M4): command codes are invisible — a block boundary made by a dot
+    // command adds no space; the author's own blank line still does.
+    func gap(_ mid: [UInt8]) throws -> Double {
+        var data = ws7Block(0x00)
+        data += bytes("First paragraph line of plain prose, long enough to matter.") + HARD
+        data += mid
+        data += bytes("Second paragraph line of plain prose, also long enough.") + HARD
+        let shown = contentSpans(emitPDF(parseWS(data), mode: .modern))
+        let y1 = try #require(shown.first { $0.text == "First" }?.y)
+        let y2 = try #require(shown.first { $0.text == "Second" }?.y)
+        return y1 - y2
+    }
+    #expect(abs((try gap(bytes(".cp 4") + HARD)) - 16.8) < 0.1)   // dot command: one lead
+    #expect(abs((try gap(HARD)) - 33.6) < 0.1)                    // author blank: two
+}
+
+@Test func modernRunningHeadsReplayWithPageNumbers() throws {
+    // Ruling 5 (M5): Modern keeps headers. They replay per page (state in force when the
+    // page takes content), live in the top margin zone, and WordStar's # token becomes
+    // the page number.
+    var data = ws7Block(0x00)
+    data += bytes(".he Chapter / #") + HARD
+    data += bytes("Page one prose, plain and ordinary, enough for the detector.") + HARD
+    data += bytes(".pa") + HARD
+    data += bytes("Page two prose, also plain and ordinary, and long enough too.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .modern)
+    let streams = pdfContentStreams(pdf)
+    #expect(streams.count >= 2)
+    for (pi, stream) in streams.prefix(2).enumerated() {
+        let shown = contentSpans(stream)
+        #expect(shown.contains { $0.text == "Chapter" && ($0.y ?? 0) > 720 })
+        #expect(shown.contains { $0.text == String(pi + 1) && ($0.y ?? 0) > 720 })
+    }
+}
+
+@Test func modernRTFCarriesRunningHeadsAndStripsAlignSpaces() {
+    // Rulings 3 and 5 on the RTF side: a real \header destination with Word's own
+    // \chpgn page number, and center/right paragraphs shed the spaces that implemented
+    // their alignment.
+    var data = ws7Block(0x00)
+    data += bytes(".he Chapter / #") + HARD
+    data += bytes(".oc on") + HARD
+    data += bytes("          A Centered Title") + HARD
+    data += bytes(".oc off") + HARD
+    data += bytes("Plain closing prose, quite ordinary and long.") + HARD
+    let rtf = emitRTF(parseWS(data), mode: .modern)
+    #expect(rtf.contains(#"{\header \pard\plain \f0\fs22 Chapter / {\chpgn }\par}"#))
+    #expect(rtf.contains("A Centered Title"))
+    #expect(!rtf.contains("  A Centered Title"))          // the tag does the work
+}
+
+@Test func modernRTFDotCommandSplitInventsNoPar() throws {
+    // Ruling 4 on the RTF side: \par count between paragraphs follows the author's
+    // blank lines, never the block structure.
+    func parCount(_ mid: [UInt8]) throws -> Int {
+        var data = ws7Block(0x00)
+        data += bytes("First paragraph line of plain prose, long enough to matter.") + HARD
+        data += mid
+        data += bytes("Second paragraph line of plain prose, also long enough.") + HARD
+        let rtf = emitRTF(parseWS(data), mode: .modern)
+        let from = try #require(rtf.range(of: "matter."))
+        let to = try #require(rtf.range(of: "Second"))
+        let seg = rtf[from.lowerBound..<to.lowerBound]
+        return seg.components(separatedBy: #"\par"#).count - 1
+    }
+    #expect(try parCount(bytes(".cp 4") + HARD) == 1)
+    #expect(try parCount(HARD) == 2)
+}
+
+@Test func modernAppliesLJ6DTPCharacterSubstitutions() {
+    // Ruling 7 (M7): the driver's patched slots are CONTENT — an em dash is an em dash
+    // in any century — so Modern applies them (proportional faces only, the driver's own
+    // rule). The page art stays print-time.
+    var data = ws7Block(0x00, payload: bytes("pLJ6DTP") + [0x00, 0x00, 0x00, 0x80])
+    data += fontBlock(helvTypestyle(), points: 12.0, styleBits: 0x8000)
+    data += bytes("word_word") + HARD
+    data += bytes("Plain padding prose, ordinary and long enough to balance it.") + HARD
+    let doc = parseWS(data)
+    #expect(doc.printerDriver == "LJ6DTP")
+    let pdf = emitPDF(doc, mode: .modern)
+    #expect(contains(pdf, bytes("word") + [0x97] + bytes("word")))   // '_' -> em dash (cp1252)
+}

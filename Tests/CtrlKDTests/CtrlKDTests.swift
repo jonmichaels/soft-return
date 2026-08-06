@@ -114,8 +114,10 @@ import Testing
     // C9. `.lm`/`.rm`/`.pm` are stateful, and emphatically not first-occurrence the way
     // page geometry is — one archive file sets `.pm` seven hundred times.
     let doc = parseWS(bytes(".lm 5\r\n.rm 60\r\nIndented.\r\n.pm 4\r\nPara margin.\r\n"))
+    // leftMargin is stored as OFFSET columns (`.lm 5` = text at column 5 = 4 columns in),
+    // matching the style-block hmi path — see the LM handler (ruling 2026-08-06)
     #expect(doc.blocks.map { [$0.leftMargin, $0.rightMargin, $0.paraMargin] }
-            == [[5.0, 60.0, nil], [5.0, 60.0, 4.0]])
+            == [[4.0, 60.0, nil], [4.0, 60.0, 4.0]])
     // never set -> nil, so a consumer applies its own default rather than a fabricated one
     let plain = parseWS(bytes("Plain.\r\n")).blocks[0]
     #expect(plain.leftMargin == nil && plain.rightMargin == nil && plain.paraMargin == nil)

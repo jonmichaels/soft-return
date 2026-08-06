@@ -40,6 +40,20 @@ private let ljSubstUnivers: [Character: Character] = [
     "\u{2660}": "\u{2518}",   // ♠ -> ┘
 ]
 
+/// The LJ6DTP substitutions for one run of TEXT in a given font entry — the shared core
+/// `ljSubstitute` applies per printed segment, exposed separately because Modern applies
+/// the same rule at the token level (ruling 2026-08-06 M7: the driver's patched slots are
+/// CONTENT — an em dash is an em dash in any century — while its page art stays
+/// print-time). Proportional faces only, Univers corners only, per the driver's own chart.
+func ljSubstituteText(_ text: String, entry: FontChange) -> String {
+    guard entry.proportional else { return text }
+    var out = String(text.map { ljSubst[$0] ?? $0 })
+    if (entry.typestyleName ?? "").hasPrefix("Univers") {
+        out = String(out.map { ljSubstUnivers[$0] ?? $0 })
+    }
+    return out
+}
+
 /// Apply the LJ6DTP print-time substitutions to one line's segments. Port of
 /// `_lj_substitute`.
 func ljSubstitute(_ segs: [LineSegment]) -> [LineSegment] {
