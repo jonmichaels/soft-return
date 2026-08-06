@@ -199,3 +199,86 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     #expect(html.contains(">e1</a></sup>"))
     #expect(html.contains("id=\"enref1\""))                   // ids stay structural
 }
+
+// ================= Comments become first-class (2026-08-06, M9) =================
+//
+// Both WordStar comment forms — ^ON note blocks and '..'/'.ig' dot lines — unify into
+// Note(kind: .comment) with `origin` provenance, each emitting a reference mark at its
+// position (position, not ink). --comments stays the visibility gate; printed is always
+// silent about them.
+
+@Test func bothCommentOriginsUnifyAndRefsStayAligned() {
+    var data = ws7Block(0x00)
+    data += bytes(".. a disabled command lives here") + HARD
+    data += bytes("First line of prose, referencing")
+    data += ws7Note(bytes("The footnote text."), cmd: 0x03, number: 0)
+    data += bytes(" a note.") + HARD
+    data += bytes(".ig the long-form comment syntax") + HARD
+    data += bytes("Second line of prose to close the document, quite plainly.") + HARD
+    let doc = parseWS(data)
+    let comments = doc.notes.filter { $0.kind == .comment }
+    #expect(comments.map(\.origin) == [.dotDot, .dotIG])
+    #expect(comments.first?.text == "a disabled command lives here")
+    // the mark BEFORE the footnote must not derail its resolution: the footnote still
+    // renders as footnote 1 in every format
+    let md = emitMarkdown(doc, mode: .modern)
+    #expect(md.contains("[^1]") && md.contains("[^1]: The footnote text."))
+    let texts = contentSpans(emitPDF(doc, mode: .modern)).map(\.text)
+    #expect(texts.contains("[1]"))                    // page-bottom footnote
+}
+
+@Test func commentsHiddenByDefaultAndPrintedAlwaysSilent() {
+    var data = ws7Block(0x00)
+    data += bytes("Visible prose line one, plain and ordinary for the detector.") + HARD
+    data += bytes(".. the hidden aside") + HARD
+    data += bytes("Visible prose line two, also plain and entirely ordinary.") + HARD
+    let doc = parseWS(data)
+    for out in [emitText(doc, mode: .modern), emitMarkdown(doc, mode: .modern),
+                emitHTML(doc, mode: .modern), emitRTF(doc, mode: .modern)] {
+        #expect(!out.contains("hidden aside"))        // gate stays closed
+    }
+    let keep = EmitOptions(notes: EmitOptions.allNotes)
+    for out in [emitText(doc, mode: .printed, options: keep),
+                emitRTF(doc, mode: .printed, options: keep)] {
+        #expect(!out.contains("hidden aside"))        // printed: never
+    }
+    #expect(!contains(emitPDF(doc, mode: .printed, options: keep), bytes("hidden aside")))
+}
+
+@Test func commentsOptedInRenderPositionedWithOrigin() throws {
+    var data = ws7Block(0x00)
+    data += bytes("Alpha prose line, plain and ordinary, before the comment.") + HARD
+    data += bytes(".. the surfaced aside") + HARD
+    data += bytes("Omega prose line, plain and ordinary, after the comment.") + HARD
+    let doc = parseWS(data)
+    let keep = EmitOptions(notes: EmitOptions.allNotes)
+    var texts = contentSpans(emitPDF(doc, mode: .modern, options: keep)).map(\.text)
+    #expect(texts.contains("[c1]"))                   // end block, c-labeled
+    #expect(!texts.contains("c1"))                    // word scheme: markless
+    let prefixed = EmitOptions(notes: EmitOptions.allNotes, noteRefs: .prefixed)
+    texts = contentSpans(emitPDF(doc, mode: .modern, options: prefixed)).map(\.text)
+    #expect(texts.contains("c1"))                     // prefixed: visible mark
+    let md = emitMarkdown(doc, mode: .modern, options: keep)
+    #expect(md.contains("[^c1]") && md.contains("[^c1]: the surfaced aside"))
+    let rtf = emitRTF(doc, mode: .modern, options: keep)
+    let alpha = try #require(rtf.range(of: "Alpha"))
+    let aside = try #require(rtf.range(of: "the surfaced aside"))
+    let omega = try #require(rtf.range(of: "Omega"))
+    #expect(alpha.lowerBound < aside.lowerBound && aside.lowerBound < omega.lowerBound)
+    let html = emitHTML(doc, mode: .modern, options: keep)
+    #expect(html.contains("data-note-kind=\"comment\""))
+}
+
+@Test func dotCommentBeforeBlankCreatesNoPhantomLine() {
+    // The mark defers to the next CONTENT line: a '..' line followed by the author's
+    // blank must not close a phantom line holding only the mark — printed line structure
+    // is identical with and without the comment.
+    let withComment = parseWS(ws7Block(0x00)
+        + bytes("First paragraph line of plain prose, long enough to matter.") + HARD
+        + bytes(".. noise") + HARD + HARD
+        + bytes("Second paragraph line of plain prose, also long enough.") + HARD)
+    let without = parseWS(ws7Block(0x00)
+        + bytes("First paragraph line of plain prose, long enough to matter.") + HARD + HARD
+        + bytes("Second paragraph line of plain prose, also long enough.") + HARD)
+    #expect(emitPDF(withComment, mode: .printed) == emitPDF(without, mode: .printed))
+}

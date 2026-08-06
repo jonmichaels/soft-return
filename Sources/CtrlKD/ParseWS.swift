@@ -48,6 +48,9 @@ private let dotPagebreak: Set<[UInt8]> = [Array("PA".utf8)]
 /// the break it was there to prevent.
 private let dotCondpage: [UInt8] = Array("CP".utf8)
 
+/// `.ig` — the long-form comment syntax (`..` is the short form). Ruling 2026-08-06 M9.
+private let dotIgnore: [UInt8] = Array("IG".utf8)
+
 /// One physical line of bytes -> `[Span]`. `active` persists across lines (WordStar
 /// styles span line breaks) and `unknown` accumulates for the whole document, so both
 /// are `inout`. `fnCounter` is non-nil only for ws5+ documents, where it numbers the
@@ -333,7 +336,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var activeColour: Int? = nil
     var unknown: [UInt8: Int] = [:]
     var dots: [String] = []
-    var fnCounter: Int? = ws5 ? 0 : nil
+    var dotPositions: [DotPosition] = []
+    // Always live, not ws5-only: dot-line comments ('..'/'.ig') exist in WS4 files too
+    // and now emit reference marks (ruling 2026-08-06 M9).
+    var fnCounter: Int? = 0
+    // Dot-line comment marks awaiting a content line — DEFERRED attachment: appending at
+    // the dot line would let a following blank close a phantom line holding only the
+    // mark, one extra printed line WordStar never had (M9).
+    var pendingMarks: [Span] = []
     var ruler = false
     var page = PageAccumulator()
     var producer: String? = nil
@@ -435,7 +445,29 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // core.py:290-298 — captured as metadata; the line itself never becomes text.
             let cmd = rstrippingASCIIWhitespace(stripped)
             dots.append(decodeCP437(cmd))
+            // Where in the document this command sat: the coarsest anchor that is
+            // actually stable (it survives reflow, which a byte offset does not).
+            dotPositions.append(DotPosition(blockIndex: blocks.count,
+                                            lineIndex: cur.lines.count,
+                                            text: decodeCP437(cmd)))
             let head2 = Array(cmd.dropFirst().prefix(2)).map(asciiUppercased)
+            // '..' and '.ig' are COMMENT lines (ruling 2026-08-06 M9): both WordStar
+            // comment syntaxes unify into Note(kind: .comment), each emitting a
+            // reference mark at its own position — the text is kept verbatim after the
+            // syntax (a commented-out `..rm 60` is still a comment; `origin` says which
+            // syntax carried it). `notes` must stay in reference-emission order, so the
+            // note is INSERTED at the count of marks already numbered.
+            if cmd.count >= 2, cmd[1] == 0x2E || head2 == dotIgnore {
+                let isDotDot = cmd[1] == 0x2E
+                let body = Array(cmd.dropFirst(isDotDot ? 2 : 3))
+                let note = Note(kind: .comment,
+                                text: decodeCP437(body).trimmed(),
+                                origin: isDotDot ? .dotDot : .dotIG)
+                notes.insert(note, at: fnCounter ?? 0)
+                fnCounter = (fnCounter ?? 0) + 1
+                pendingMarks.append(Span(text: String(fnCounter ?? 0),
+                                         styles: [.sup, .fnref]))
+            }
             if dotPagebreak.contains(head2) {
                 closeBlock()
                 blocks.append(Block(kind: .pagebreak))
@@ -523,11 +555,16 @@ public func parseWS(_ data: [UInt8]) -> Document {
             var k = 0
             func decodeSegment() {
                 if !segment.isEmpty {
-                    curLine.spans += decodeSpans(segment, stripHibit: stripHibit,
-                                                 active: &active, activeFont: &activeFont,
-                                                 unknown: &unknown,
-                                                 fnCounter: &fnCounter,
-                                                 activeColour: &activeColour)
+                    let spans = decodeSpans(segment, stripHibit: stripHibit,
+                                            active: &active, activeFont: &activeFont,
+                                            unknown: &unknown,
+                                            fnCounter: &fnCounter,
+                                            activeColour: &activeColour)
+                    if !pendingMarks.isEmpty, !spans.isEmpty {
+                        curLine.spans += pendingMarks
+                        pendingMarks = []
+                    }
+                    curLine.spans += spans
                     segment = []
                 }
             }
@@ -647,6 +684,12 @@ public func parseWS(_ data: [UInt8]) -> Document {
             colourAt: colourAt,
             pctlAt: pctlAt
         )
+        if !pendingMarks.isEmpty, !spans.isEmpty {
+            // a content line arrived: deferred dot-comment marks land at its head, the
+            // position the comment line occupied (M9)
+            curLine.spans.append(contentsOf: pendingMarks)
+            pendingMarks = []
+        }
         curLine.spans.append(contentsOf: spans)
 
         switch physical.separator {
@@ -696,6 +739,21 @@ public func parseWS(_ data: [UInt8]) -> Document {
         }
     }
     closeBlock()
+
+    if !pendingMarks.isEmpty {
+        // trailing dot comments with no content line after them: the marks attach to the
+        // END of the last content line (never a phantom line). A comment-only document
+        // has no line to anchor to; the notes exist in doc.notes regardless, marks are
+        // dropped. (M9)
+        outer: for bi in blocks.indices.reversed() {
+            if blocks[bi].kind == .para, let li = blocks[bi].lines.indices.last,
+               !blocks[bi].lines[li].spans.isEmpty {
+                blocks[bi].lines[li].spans.append(contentsOf: pendingMarks)
+                break outer
+            }
+        }
+        pendingMarks = []
+    }
 
     // Exposed per the IR contract: a consumer must be able to distinguish "Legal
     // (from file)" from "Letter (default)" — provenance lives alongside every
@@ -772,6 +830,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         detection: detection,
         marginEstimate: pass.margin,
         dotCommands: dots,
+        dotPositions: dotPositions,
         unknownCodes: unknown,
         // Ruler lines mean "fixed-width table" only in the pre-symseq eras: a WS4 tab
         // table's alignment exists solely in monospace. In WS5+ a `.rr` ruler is just the

@@ -173,6 +173,17 @@ func hasPlaceableNotes(_ doc: Document) -> Bool {
     doc.notes.contains { $0.kind == .footnote || $0.kind == .endnote || $0.kind == .annotation }
 }
 
+/// A comment's reference mark is POSITION, not ink — it renders nowhere on this path
+/// (printed facsimile, or the plain line layer). Port of `_doc_to_pagelines`'s
+/// `_keep_span` (ruling 2026-08-06 M9).
+func keepSpanOnPageline(_ span: Span, refNotes: [Note]) -> Bool {
+    if span.styles.contains(.fnref), let k = Int(span.text),
+       k >= 1, k <= refNotes.count, refNotes[k - 1].kind == .comment {
+        return false
+    }
+    return true
+}
+
 /// Wrap one IR line's spans to `width` columns, preserving styles. Port of `_wrap_line`
 /// (pdf.py:36-55).
 ///
@@ -285,6 +296,7 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
         case condPage(Int)
     }
 
+    let refNotes = inlineReferenceNotes(doc)
     var items: [LayoutItem] = []
     for block in doc.blocks {
         if block.kind == .pagebreak {
@@ -305,10 +317,10 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
             // bold-italic, which is why this is a union and not an assignment. The active
             // paragraph style's own attributes merge the same way.
             let extra = (block.heading != 0 ? Style.bold : []).union(block.styleAttrs)
-            let spans = extra.isEmpty
-                ? line.spans
-                : line.spans.map { Span(text: $0.text, styles: $0.styles.union(extra),
-                                        font: $0.font) }
+            let spans = line.spans
+                .filter { keepSpanOnPageline($0, refNotes: refNotes) }
+                .map { extra.isEmpty ? $0 : Span(text: $0.text, styles: $0.styles.union(extra),
+                                                 font: $0.font) }
             items.append(contentsOf: wrapLine(spans, width: PDFMetrics.maxCols)
                 .map(LayoutItem.line))
         }
@@ -514,7 +526,10 @@ private func endnoteEntryLines(_ note: Note, doc: Document, width: Int) -> [Page
 /// notes — malformed input, or a stray control byte the parser mistook for one) is left as
 /// found rather than crashing or dropping it; `stray_sentinel` is exactly this case.
 private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
-    let referenced = doc.notes.filter { $0.kind != .comment }
+    // ALL kinds are numbered by the parser's shared counter since M9 (comments
+    // included), so the cursor walks all of `doc.notes`; a comment consumes its
+    // position and renders NOTHING — never printed: no ink, no ref.
+    let referenced = inlineReferenceNotes(doc)
     var cursor = 0
     var items: [PrintedBodyItem] = []
 
@@ -545,6 +560,9 @@ private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
                 }
                 let note = referenced[cursor]
                 cursor += 1
+                if note.kind == .comment {
+                    continue                     // never printed: no ink, no ref (M9)
+                }
                 outSpans.append(Span(text: noteMarker(note, doc: doc), styles: span.styles,
                                      font: span.font))
                 if note.kind == .footnote || note.kind == .annotation {
@@ -959,6 +977,7 @@ private enum PlainBodyItem {
 /// used only when `hasPlaceableNotes(doc)` is false (the notes-aware paginator above
 /// handles the other case, and never replays `hfEvents` — see `Page`).
 private func resolvePlainBody(_ doc: Document) -> [PlainBodyItem] {
+    let refNotes = inlineReferenceNotes(doc)
     var hfByBlock: [Int: [(HFKind, Int, String)]] = [:]
     for event in doc.hfEvents {
         hfByBlock[event.blockAnchor, default: []].append((event.kind, event.line, event.text))
@@ -980,11 +999,12 @@ private func resolvePlainBody(_ doc: Document) -> [PlainBodyItem] {
         // on paper, so it stays broken here.
         let extra = (block.heading != 0 ? Style.bold : []).union(block.styleAttrs)
         for line in block.lines {
-            let spans = extra.isEmpty
-                ? line.spans
-                : line.spans.map {
-                    Span(text: $0.text, styles: $0.styles.union(extra), font: $0.font,
-                        colour: $0.colour, pctlHMI: $0.pctlHMI)
+            let spans = line.spans
+                .filter { keepSpanOnPageline($0, refNotes: refNotes) }
+                .map {
+                    extra.isEmpty ? $0
+                        : Span(text: $0.text, styles: $0.styles.union(extra), font: $0.font,
+                               colour: $0.colour, pctlHMI: $0.pctlHMI)
                 }
             items.append(.line(PageLine(spans, lead: leadPt(line.lead48),
                                         overprint: line.overprint)))

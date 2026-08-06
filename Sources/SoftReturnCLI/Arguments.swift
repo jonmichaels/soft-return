@@ -111,6 +111,10 @@ public struct Options: Equatable, Sendable {
     /// `--note-refs word|prefixed` (ctrl-kd's `--note-refs`, ruling 2026-08-06 M8):
     /// note reference-mark display in Modern output. See `NoteRefs`.
     public var noteRefs: NoteRefs = .word
+    /// Whether `--comments` itself was given (Python's `a.comments`) — read by the
+    /// `--comments` + printed contradiction notice, which keys on the FLAG, not on the
+    /// resolved note set (`--no-notes` wins the set but the notice still explains).
+    public var commentsRequested = false
     /// `--force`: accepted for compatibility with ctrl-kd (where it is a documented
     /// no-op — ctrl-kd always overwrites). Here it does real work: it bypasses `sr`'s own
     /// overwrite prompt/refusal (D4, the sanctioned Mac-vs-Unix platform divergence — "it's
@@ -429,6 +433,7 @@ public func parseArguments(
     } else if comments {
         options.notes = EmitOptions.allNotes
     }
+    options.commentsRequested = comments
 
     // cli.py:48-49, verbatim in spirit and in message: one output path cannot name the
     // results of several conversions.

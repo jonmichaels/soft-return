@@ -10,13 +10,15 @@
 /// comments last (opt-in — WordStar itself never printed them).
 let noteKindOrder: [NoteKind] = [.footnote, .endnote, .annotation, .comment]
 
-/// `doc.notes`, filtered to the three kinds `ParseWS.swift`'s `decodeSpans` ever inserts an
-/// `0x07` sentinel for. The Nth (1-based) `fnref`-styled span in document order names the
-/// Nth entry here — comments never get a sentinel (WordStar never referenced one inline),
-/// so they're absent from both the count and the list. Compute this ONCE per document
-/// (it's what every `fnref` span's lookup is checked against) rather than per span.
+/// `doc.notes`, in the exact order the parser's shared reference counter numbered them:
+/// the Nth (1-based) `fnref`-styled span in document order names the Nth entry here.
+/// ALL FOUR kinds emit reference marks since 2026-08-06 (M9) — comments included: the
+/// mark is POSITION, not ink (WordStar printed nothing for a comment and printed mode
+/// still renders nothing). This list must mirror exactly the kinds the parser numbers
+/// with the shared counter, or every reference after a comment resolves to the wrong
+/// note. Compute this ONCE per document rather than per span.
 func inlineReferenceNotes(_ doc: Document) -> [Note] {
-    doc.notes.filter { $0.kind != .comment }
+    doc.notes
 }
 
 /// What an `fnref`-styled span's sentinel names, resolved against both the document (does
