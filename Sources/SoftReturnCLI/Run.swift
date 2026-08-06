@@ -247,8 +247,11 @@ private func convertAll(
 /// already a readable sentence ("The file ... doesn't exist.").
 func message(for error: Error) -> String {
     switch error {
-    case ParseError.notConvertible(let variant):
-        return "not a convertible file (detected: \(variant.rawValue))"
+    case ParseError.empty:
+        return "empty file: nothing to convert"
+    case ParseError.notConvertible(let variant, let reason, _):
+        // the refusal explains itself (task #18): WHY, not just "no"
+        return "not a convertible file (detected: \(variant.rawValue) -- \(reason))"
     case EmitError.unknownFormat(let name, let known):
         return "unknown format '\(name)' (known: \(known.joined(separator: ", ")))"
     case EmitError.binaryFormat(let name, _):

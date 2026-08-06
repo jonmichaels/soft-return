@@ -185,9 +185,12 @@ import Testing
     // string or a partly-rendered document. Python propagates the same ValueError.
     var binary: [UInt8] = []
     for _ in 0..<4 { binary += (0...255).map { UInt8($0) } }
-    #expect(throws: ParseError.notConvertible(variant: .binary)) {
-        _ = try convert(binary)
+    let error = #expect(throws: ParseError.self) { _ = try convert(binary) }
+    guard case .notConvertible(let variant, _, _)? = error else {
+        Issue.record("expected .notConvertible")
+        return
     }
+    #expect(variant == .binary)
 }
 
 @Test func emitOptionsDefaultsToAnEmptyTitle() {
