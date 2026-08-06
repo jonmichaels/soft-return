@@ -102,6 +102,8 @@ public struct EmitterRegistry: Sendable {
             "html": Emitter(name: "html", ext: ".html", text: emitHTML),
             "rtf": Emitter(name: "rtf", ext: ".rtf", text: emitRTF),
             "pdf": Emitter(name: "pdf", ext: ".pdf") { .data(emitPDF($0, mode: $1, options: $2)) },
+            // The full viewer contract as JSON (task #15) — see `Layout.swift`.
+            "layout": Emitter(name: "layout", ext: ".json", text: emitLayout),
         ],
         aliases: ["txt": "text", "md": "markdown"]
     )

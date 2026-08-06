@@ -54,26 +54,8 @@ enum ModernFlowItem {
     /// block's own `.lm`/`.rm` in points — the document's explicit margins win in Modern
     /// exactly as its fonts do (M2).
     case para(toks: [ModernToken], align: Alignment,
-              notes: [(index: Int, note: Note, label: String)],
+              notes: [(index: Int, label: String, text: String)],
               indent: Double, cut: Double)
-}
-
-/// Endnote display label under Modern: lowercase roman, Word's own default for `\ftnalt`
-/// endnotes — the PDF matches the RTF it mirrors, and a page can carry footnote [1] and
-/// endnote [i] without collision (ruling 2026-08-06 M1). Port of `_endnote_label`.
-func endnoteRomanLabel(_ label: String) -> String {
-    guard let n = Int(label), n > 0 else { return label }
-    var remaining = n
-    var out = ""
-    for (v, s) in [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
-                   (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
-                   (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")] {
-        while remaining >= v {
-            out += s
-            remaining -= v
-        }
-    }
-    return out
 }
 
 /// `(left, topMargin, bottomMargin, textWidth)` in points. The document's declared
@@ -146,186 +128,66 @@ func modernTokenWidth(_ text: String, styles: Style, family: PDFFamily, pt: Int,
     return natural
 }
 
-/// The document as a flat list of layout items — Port of `_modern_flow`. A footnote
-/// reference resolves through the SAME plumbing the flat emitters use (`resolveReference`/
-/// `noteLabel`): a real reference to a kind not in `keep` or a stray/out-of-range sentinel
-/// contributes NOTHING at all (no token, unlike RTF/HTML's fallback to plain styled
-/// text) — Python's `except (ValueError, IndexError): continue` / `if note.kind not in
-/// keep: continue`, both `continue`s with no token appended either.
+/// The MEASURED Modern flow: `modernSemanticFlow`'s semantic items (the single
+/// implementation of the M-rules — see `Layout.swift`'s contract) converted to this
+/// emitter's tokens. This adapter adds exactly what a PDF needs — font resolution, AFM
+/// widths, points — and decides nothing about WHAT renders: that is the semantic layer's
+/// job, shared with the app's native text stack and the `layout` JSON emitter. Port of
+/// `_modern_flow` (post-facade, task #15).
 func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 noteRefs: NoteRefs = .word) -> [ModernFlowItem] {
-    let refNotes = inlineReferenceNotes(doc)
-    // Reference-mark display per scheme (ruling 2026-08-06 M8): `word` shows arabic
-    // footnotes / roman endnotes / annotation tags — what Word itself renders from our
-    // RTF; `prefixed` shows the Markdown emitter's own labels (1 2 3, e1 e2, a1 a2),
-    // matched across formats.
-    var shownByIndex: [Int: String]
-    if noteRefs == .prefixed {
-        shownByIndex = noteRefLabels(refNotes, doc: doc, scheme: .prefixed)
-    } else {
-        shownByIndex = [:]
-        var ords: [NoteKind: Int] = [:]
-        for (i, note) in refNotes.enumerated() {
-            let k = (ords[note.kind] ?? 0) + 1
-            ords[note.kind] = k
-            let label = noteLabel(note, doc: doc)
-            switch note.kind {
-            case .endnote:
-                shownByIndex[i] = endnoteRomanLabel(label)
-            case .comment:
-                // self-identifying in the end list either scheme; under `word` there
-                // is no inline mark to match anyway (M9)
-                shownByIndex[i] = "c" + String(k)
-            default:
-                shownByIndex[i] = label
-            }
-        }
-    }
-    // LJ6DTP substitutions apply in Modern too (ruling 2026-08-06 M7): the driver's
-    // patched slots are CONTENT — an em dash is an em dash in any century — while its
-    // page art (colour, rules, boxes) stays print-time.
-    let lj = doc.printerDriver == "LJ6DTP"
+    let sem = modernSemanticFlow(doc, notes: keep, noteRefs: noteRefs)
     // one WordStar column in points, at the document's own `.cw`
     let colPt = (doc.page?.cw120 ?? 12.0) * 0.6
-    var hfByBlock: [Int: [(kind: HFKind, line: Int, text: String)]] = [:]
-    for event in doc.hfEvents {
-        hfByBlock[event.blockAnchor, default: []].append((event.kind, event.line, event.text))
-    }
-    var flow: [ModernFlowItem] = []
-    var endPairs: [(index: Int, note: Note, shown: String)] = []
-    var endSeen: Set<Int> = []            // endnotes/annotations, document order
     let blankH = modernLine * Double(modernBodyPt)
-    for (bi, block) in doc.blocks.enumerated() {
-        for event in hfByBlock[bi] ?? [] {
-            flow.append(.hf(kind: event.kind, line: event.line, text: event.text))
-        }
-        if block.kind == .pagebreak {
+    var flow: [ModernFlowItem] = []
+    for item in sem.items {
+        switch item {
+        case .blank:
+            flow.append(.blank(blankH))
+        case .pageBreak:
             flow.append(.pageBreak)
-            continue
-        }
-        if block.kind == .condpage {
-            flow.append(.cond(max(1, block.heading)))
-            continue
-        }
-        let lm = block.leftMargin ?? 0
-        let indent = lm * colPt
-        let rm = block.rightMargin ?? 0
-        // `.rm` narrows the measure from the document's full line (`maxCols`, the same
-        // 65 columns the era page gives); a block at the default 65 cuts nothing
-        let cut = rm != 0 ? max(0.0, Double(PDFMetrics.maxCols) - rm) * colPt : 0.0
-        for line in mergedLines(block) {
-            if line.spans.isEmpty {
-                flow.append(.blank(blankH))
-                continue
-            }
-            var spans = line.spans
-            if lm != 0 {
-                // WordStar stamps `.lm` onto every line it writes; the indent is carried
-                // by the BLOCK now, so the stamped spaces come off the front (whatever
-                // indent remains past `.lm` is the author's own tab and stays)
-                var drop = lm
-                while drop > 0, !spans.isEmpty {
-                    let chars = Array(spans[0].text)
-                    var take = 0
-                    while take < chars.count, Double(take) < drop, chars[take] == " " {
-                        take += 1
-                    }
-                    if take == 0 { break }
-                    drop -= Double(take)
-                    if take < chars.count {
-                        spans[0].text = String(chars[take...])
-                        break
-                    }
-                    spans.removeFirst()
-                }
-            }
+        case .cond(let lines):
+            flow.append(.cond(lines))
+        case .hf(let which, let line, let text):
+            flow.append(.hf(kind: which, line: line, text: text))
+        case .noteSeparator:
+            let separator = String(repeating: "-", count: 20)
+            let sepW = stringWidthPt(separator, "Times-Roman", modernNotePt)
+            flow.append(.para(toks: [ModernToken(text: separator, styles: [], family: .times,
+                                                 pt: modernNotePt, entry: nil, width: sepW)],
+                              align: .left, notes: [], indent: 0.0, cut: 0.0))
+        case .note(_, let label, let text):
+            flow.append(.para(toks: modernNoteToks(label: label, text: text),
+                              align: .left, notes: [], indent: 0.0, cut: 0.0))
+        case .para(let align, let indentCols, let cutCols, let runs, let footnotes):
             var toks: [ModernToken] = []
-            var notes: [(index: Int, note: Note, label: String)] = []
-            for span in spans {
-                if span.pctlHMI != nil {
-                    // a 0x0F print control's display string is SCREEN-ONLY; the paper
-                    // got the raw payload. Printed pads its HMI width; Modern shows
-                    // nothing — command codes are invisible (M4, extended M10)
+            for run in runs {
+                var styles = run.styles
+                if run.ref != nil {
+                    // a reference mark: Times at the body size, measured as-is
+                    styles.insert(.fnref)
+                    let width = modernTokenWidth(run.text, styles: styles, family: .times,
+                                                 pt: modernBodyPt, entry: nil)
+                    toks.append(ModernToken(text: run.text, styles: styles, family: .times,
+                                            pt: modernBodyPt, entry: nil, width: width))
                     continue
                 }
-                var styles = span.styles
-                if block.heading != 0 { styles.insert(.bold) }
-                styles.formUnion(block.styleAttrs)
-                if span.styles.contains(.fnref) {
-                    // Python's `except (ValueError, IndexError): continue` / kind-filter
-                    // `continue` — a stray sentinel or excluded kind contributes NOTHING.
-                    guard let n = Int(span.text), n >= 1, n <= refNotes.count else { continue }
-                    let note = refNotes[n - 1]
-                    guard keep.contains(note.kind) else { continue }
-                    let label = noteLabel(note, doc: doc)
-                    let shown = shownByIndex[n - 1] ?? label
-                    if note.kind != .comment || noteRefs == .prefixed {
-                        // `word` comments are markless (Word's bubble convention);
-                        // `prefixed` shows the c-mark (M9)
-                        let width = modernTokenWidth(shown, styles: styles, family: .times,
-                                                     pt: modernBodyPt, entry: nil)
-                        toks.append(ModernToken(text: shown, styles: styles, family: .times,
-                                                pt: modernBodyPt, entry: nil, width: width))
-                    }
-                    if note.kind == .footnote {
-                        notes.append((n - 1, note, label))
-                    } else if !endSeen.contains(n - 1) {
-                        endSeen.insert(n - 1)
-                        endPairs.append((n - 1, note, shown))
-                    }
-                    continue
-                }
-                for piece in splitKeepingSpaceRuns(span.text) {
-                    let resolved = modernTokFont(piece, font: span.font, fonts: doc.fonts)
-                    var written = resolved.written
-                    if lj, let entry = resolved.entry, entry.proportional {
-                        written = ljSubstituteText(written, entry: entry)
-                    }
-                    let width = modernTokenWidth(written, styles: styles,
+                for piece in splitKeepingSpaceRuns(run.text) {
+                    let resolved = modernTokFont(piece, font: run.font, fonts: doc.fonts)
+                    let width = modernTokenWidth(resolved.written, styles: styles,
                                                  family: resolved.family, pt: resolved.pt,
                                                  entry: resolved.entry)
-                    toks.append(ModernToken(text: written, styles: styles,
+                    toks.append(ModernToken(text: resolved.written, styles: styles,
                                             family: resolved.family, pt: resolved.pt,
                                             entry: resolved.entry, width: width))
                 }
             }
-            if block.align == .center || block.align == .right {
-                // WordStar 5+ aligned at EDITOR time — the centering is already in the
-                // file as spaces (the same fact the WS4 `.oj` DOSBox probe proved for
-                // justification). Applying the stored tag on top of the baked spaces
-                // aligned twice; the spaces come off and the tag does the work (ruling
-                // 2026-08-06 M3 — no per-document exceptions).
-                while let first = toks.first, first.text.trimmed().isEmpty {
-                    toks.removeFirst()
-                }
-                while let last = toks.last, last.text.trimmed().isEmpty {
-                    toks.removeLast()
-                }
+            let notes = footnotes.map {
+                (index: $0.index, label: $0.label, text: sem.notes[$0.index].text)
             }
-            flow.append(.para(toks: toks, align: block.align, notes: notes,
-                              indent: indent, cut: cut))
-        }
-        // Only the author's own blank lines make space (ruling 2026-08-06 M4): a block
-        // boundary is often just a dot command, and command codes are invisible.
-        // `mergedLines` buffered these away; count them back.
-        for _ in 0..<trailingBlankLines(block) {
-            flow.append(.blank(blankH))
-        }
-    }
-    if !endPairs.isEmpty {
-        // Endnotes and annotations at the true end, after the last body line — flowing,
-        // not bottom-anchored — behind the same 20-dash separator the page-bottom notes
-        // use. No heading: WordStar never printed one (any "Notes" heading in a period
-        // document was typed).
-        flow.append(.blank(blankH))
-        let separator = String(repeating: "-", count: 20)
-        let sepW = stringWidthPt(separator, "Times-Roman", modernNotePt)
-        flow.append(.para(toks: [ModernToken(text: separator, styles: [], family: .times,
-                                             pt: modernNotePt, entry: nil, width: sepW)],
-                          align: .left, notes: [], indent: 0.0, cut: 0.0))
-        for pair in endPairs {
-            flow.append(.para(toks: modernNoteToks(pair.note, label: pair.shown),
-                              align: .left, notes: [], indent: 0.0, cut: 0.0))
+            flow.append(.para(toks: toks, align: align, notes: notes,
+                              indent: indentCols * colPt, cut: cutCols * colPt))
         }
     }
     return flow
@@ -358,8 +220,8 @@ func modernWrap(_ toks: [ModernToken], width: Double) -> [[ModernToken]] {
 }
 
 /// One note as `[label] text` tokens of Times `modernNotePt`. Port of `_modern_note_toks`.
-func modernNoteToks(_ note: Note, label: String) -> [ModernToken] {
-    let text = "[\(label)] \(note.text)"
+func modernNoteToks(label: String, text noteText: String) -> [ModernToken] {
+    let text = "[\(label)] \(noteText)"
     var toks: [ModernToken] = []
     for piece in splitKeepingSpaceRuns(text) {
         let width = stringWidthPt(piece, "Times-Roman", modernNotePt)
@@ -371,8 +233,8 @@ func modernNoteToks(_ note: Note, label: String) -> [ModernToken] {
 
 /// A page-bottom note as wrapped visual lines of Times `modernNotePt`. Port of
 /// `_modern_note_lines`.
-func modernNoteLines(_ note: Note, label: String, width: Double) -> [[ModernToken]] {
-    modernWrap(modernNoteToks(note, label: label), width: width)
+func modernNoteLines(label: String, text: String, width: Double) -> [[ModernToken]] {
+    modernWrap(modernNoteToks(label: label, text: text), width: width)
 }
 
 /// One modern running-head/foot line: Times `modernNotePt` in the margin zone, WordStar's
@@ -567,7 +429,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
             let vis = modernWrap(toks, width: lineW)
             var newNoteLines: [[ModernToken]] = []
             for entry in notes where !seenNotes.contains(entry.index) {
-                newNoteLines += modernNoteLines(entry.note, label: entry.label, width: width)
+                newNoteLines += modernNoteLines(label: entry.label, text: entry.text, width: width)
             }
             for (vi, vline) in vis.enumerated() {
                 let sizes = vline.map { sized($0.styles, $0.pt).points }

@@ -324,3 +324,58 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     #expect(contains(pdf, bytes("re f")))                 // a filled vector rect
     #expect(contentSpans(pdf).contains { $0.text == "First" })   // text continues after it
 }
+
+// ================= The layout facade (task #15, 2026-08-06) =================
+
+@Test func modernFlowIsThePublicSemanticContract() throws {
+    // modernSemanticFlow is the single implementation of the M-rules, consumed by the
+    // PDF's measuring adapter, the Mac app's text stack, and the `layout` JSON emitter.
+    // Items carry columns, not points — consumers convert with their own metrics.
+    var data = ws7Block(0x00)
+    data += bytes(".oc on") + HARD
+    data += bytes("     A Centered Heading") + HARD + bytes(".oc off") + HARD
+    data += bytes(".lm 8") + HARD
+    data += bytes("       An indented quotation line, plain prose and clear.") + HARD
+    data += bytes(".lm 1") + HARD
+    data += bytes("Body prose at the full measure")
+    data += ws7Note(bytes("A footnote."), cmd: 0x03, number: 0)
+    data += bytes(" continues.") + HARD
+    let sem = modernSemanticFlow(parseWS(data))
+    var paras: [(align: Alignment, indentCols: Double, runs: [SemanticRun],
+                 footnotes: [SemanticFootnote])] = []
+    for item in sem.items {
+        if case .para(let align, let indentCols, _, let runs, let footnotes) = item {
+            paras.append((align, indentCols, runs, footnotes))
+        }
+    }
+    let centered = try #require(paras.first { $0.align == .center })
+    #expect(centered.runs.first?.text.hasPrefix("A Centered") == true)   // M3 strip
+    let quote = try #require(paras.first { $0.indentCols == 7 })         // M2 margins
+    #expect(quote.runs.first?.text.hasPrefix("An indented") == true)     // lm stamp off
+    let body = try #require(paras.first { $0.runs.contains { $0.ref != nil } })
+    #expect(!body.footnotes.isEmpty)
+    #expect(sem.notes[body.footnotes[0].index].text == "A footnote.")
+}
+
+@Test func layoutEmitterSerializesTheViewerContract() throws {
+    // `-t layout`: format/version header, semantic modern flow, printed page-lines with
+    // soft flags, and the invisible layer — enough for a renderer in any language, no
+    // engine linked.
+    var data = ws7Block(0x00)
+    data += bytes(".. a hidden aside") + HARD
+    data += bytes("First line of prose, plain and long enough here.") + HARD
+    data += bytes("Second line of prose, also plain and long enough.") + HARD
+    let doc = parseWS(data)
+    let emitter = try #require(EmitterRegistry.standard.getEmitter("layout"))
+    let out = try #require(emitter.emit(doc, .modern, EmitOptions()).asText)
+    #expect(out.contains("\"format\": \"ctrl-kd-layout\""))
+    #expect(out.contains("\"version\": 1"))
+    #expect(out.contains("\"encoding\": \"cp437\""))
+    #expect(out.contains("\"size_name\": \"Letter\""))
+    #expect(out.contains("\"kind\": \"para\""))                 // semantic flow present
+    #expect(out.contains("\"soft\""))                           // printed layer present
+    #expect(out.contains("\"origin\": \"..\""))                 // dot-comment provenance
+    #expect(out.contains("\"dot_positions\""))                  // Show Invisibles anchors
+    #expect(EmitterRegistry.standard.formats().contains("layout"))   // CLI-reachable
+    #expect(emitter.ext == ".json")
+}

@@ -86,15 +86,15 @@ import Testing
 
 // MARK: - gap-closing tests (not discriminated by the job-010 vectors)
 
-@Test func standardRegistryFormatsAreExactlyTheSevenNames() {
-    // Pins the whole table in one assertion: five canonical names, Python's two seed aliases,
+@Test func standardRegistryFormatsAreExactlyTheEightNames() {
+    // Pins the whole table in one assertion: six canonical names, Python's two seed aliases,
     // sorted. A dropped alias, an extra format, or an unsorted return all fail here.
     //
-    // Seven is now Python's own count. `pdf` joined the table in job-012, closing the last
-    // gap this assertion was keeping a record of — Python gets it by importing `ctrlkd.pdf`
-    // (whose `@emitter('pdf')` registers on the way past), this gets it from a literal.
+    // Eight is Python's own count since `layout` joined the table (task #15) — Python gets
+    // `pdf` and `layout` by importing their modules (each `@emitter(...)` registers on the
+    // way past), this gets them from literals.
     #expect(EmitterRegistry.standard.formats()
-            == ["html", "markdown", "md", "pdf", "rtf", "text", "txt"])
+            == ["html", "layout", "markdown", "md", "pdf", "rtf", "text", "txt"])
 }
 
 @Test func bothSeedAliasesResolveToTheirCanonicalFormat() throws {
@@ -148,7 +148,7 @@ import Testing
         _ = try convert(bytes("some words here.\r\n"), to: "docx")
     }
     #expect(error == .unknownFormat(
-        name: "docx", known: ["html", "markdown", "md", "pdf", "rtf", "text", "txt"]
+        name: "docx", known: ["html", "layout", "markdown", "md", "pdf", "rtf", "text", "txt"]
     ))
     // An empty name is a miss like any other, not a crash or a default.
     #expect(EmitterRegistry.standard.getEmitter("") == nil)
