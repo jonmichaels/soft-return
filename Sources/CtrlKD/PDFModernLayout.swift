@@ -152,6 +152,8 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
             flow.append(.cond(lines))
         case .hf(let which, let line, let text):
             flow.append(.hf(kind: which, line: line, text: text))
+        case .tabs:
+            continue          // editor-time state: no rendered consequence (task #19)
         case .noteSeparator:
             let separator = String(repeating: "-", count: 20)
             let sepW = stringWidthPt(separator, "Times-Roman", modernNotePt)

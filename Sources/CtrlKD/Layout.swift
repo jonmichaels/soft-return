@@ -39,6 +39,11 @@
 ///   hf              running-head change: 'which' ('H'|'F'), 'line' (1-based
 ///                   slot), 'text' (raw — consumers pass it through hf_runs
 ///                   for toggle bytes, and replace '#' with the page number)
+///   tabs            ruler tab stops changed: 'stops' (10-CPI columns). Tab
+///                   stops are editor-time state (they bake type-9 positions
+///                   at the keyboard) and change no rendered byte; carried for
+///                   Show Invisibles and editors. Absent until the first
+///                   change; None stops = back to the ruler default.
 ///   note-separator  the 20-dash rule opening the end-notes section
 ///   note            one end-matter note: 'index' (into notes), 'label',
 ///                   'text' — endnotes/annotations/comments, document order
@@ -102,6 +107,7 @@ public enum SemanticItem: Hashable, Sendable {
     case pageBreak
     case cond(lines: Int)
     case hf(which: HFKind, line: Int, text: String)
+    case tabs(stops: [Double]?)
     case noteSeparator
     case note(index: Int, label: String, text: String)
 }
@@ -210,7 +216,12 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
     var items: [SemanticItem] = []
     var endRows: [Int] = []                 // end-matter note indices, doc order
     var endSeen: Set<Int> = []
+    var curTabs: [Double]? = nil            // ruler default until a block differs
     for (bi, block) in doc.blocks.enumerated() {
+        if block.kind == .para, block.tabStops != curTabs {
+            items.append(.tabs(stops: block.tabStops))
+            curTabs = block.tabStops
+        }
         for event in hfByBlock[bi] ?? [] {
             items.append(.hf(which: event.kind, line: event.line, text: event.text))
         }
@@ -538,6 +549,11 @@ private func jsonItem(_ item: SemanticItem) -> LayoutJSONValue {
             ("which", .string(which == .header ? "H" : "F")),
             ("line", .int(line)),
             ("text", .string(text)),
+        ])
+    case .tabs(let stops):
+        return .object([
+            ("kind", .string("tabs")),
+            ("stops", stops.map { LayoutJSONValue.array($0.map { .double($0) }) } ?? .null),
         ])
     case .noteSeparator:
         return .object([("kind", .string("note-separator"))])

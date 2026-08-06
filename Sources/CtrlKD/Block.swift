@@ -56,6 +56,14 @@ public struct Block: Hashable, Sendable {
     public var leftMargin: Double?
     public var rightMargin: Double?
     public var paraMargin: Double?
+    /// The ruler tab stops in force when this block opened (`.tb`, 10-CPI columns) —
+    /// stateful like the margins. Measured 2026-08-06 (46 archive files use `.tb`, ZERO
+    /// of them carry a bare 0x09): tab stops are EDITOR-time state — the Tab key
+    /// resolves against them and bakes a type-9 sequence with its own position — so
+    /// they change no rendered byte here; they are carried for the layout contract,
+    /// Show Invisibles, and a future editor. `nil` = the ruler default (factory: every
+    /// 5 cols). Task #19.
+    public var tabStops: [Double]?
     /// `.co <n>, <gutter>` — newspaper columns in force when this block opened, and the
     /// gutter between them in print columns. `nil` means the file never asked, which is
     /// not the same as asking for one column. Register C5.
@@ -77,9 +85,11 @@ public struct Block: Hashable, Sendable {
         kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0,
         align: Alignment = .left, wrap: Bool = true,
         leftMargin: Double? = nil, rightMargin: Double? = nil, paraMargin: Double? = nil,
+        tabStops: [Double]? = nil,
         columns: Int? = nil, columnGutter: Double? = nil, styleID: Int? = nil,
         styleName: String? = nil, styleAttrs: Style = []
     ) {
+        self.tabStops = tabStops
         self.leftMargin = leftMargin
         self.rightMargin = rightMargin
         self.paraMargin = paraMargin
