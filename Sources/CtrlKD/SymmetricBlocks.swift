@@ -96,6 +96,15 @@ public struct SymmetricBlocksResult: Hashable, Sendable {
     /// legitimately mark the very same offset.
     public let marks: [Int: [StructuralMark]]
 
+    /// Round-trip ledger (tasks #20/#21): every consumed sequence as (cleaned-stream
+    /// offset, length its expansion contributed there, verbatim source bytes 1D..1D) in
+    /// consumption order. Python's `raw_out['blocks']`.
+    public var rtBlocks: [RoundtripSym] = []
+    /// True when 0x17 Shift-In/Out rewrote the stream — the one transform whose offsets
+    /// cannot be replayed; the writer refuses rather than corrupt. Python's
+    /// `raw_out['shift']`.
+    public var rtShift: Bool = false
+
     public init(bytes: [UInt8], notes: [Note], unknownBlocks: [UnknownBlock],
                 graphics: [String] = [], colours: [ColourChange] = [],
                 fonts: [FontChange] = [], includes: [String] = [],
@@ -133,6 +142,8 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var headerLibOffset: Int? = nil
     var tabAt: Set<Int> = []
     var marks: [Int: [StructuralMark]] = [:]
+    var rtBlocks: [RoundtripSym] = []
+    var rtShift = false
     var i = 0
     while i < data.count {
         if data[i] == 0x1b && i + 1 < data.count {
@@ -171,6 +182,12 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
             let blockEnd = min(i + 3 + jump, data.count)
             let block = Array(data[(i + 1)..<blockEnd])
             let cmd: Int = block.count > 2 ? Int(block[2]) : -1
+            // Round-trip ledger (tasks #20/#21): the sequence's verbatim bytes and
+            // where its expansion (possibly empty) lands in the cleaned stream.
+            // Captured BEFORE dispatch: the 0x17 branch reassigns positions, and the
+            // shift-out rewrite is what `rtShift` flags.
+            let rtPre = out.count
+            let rtRaw = Array(data[i..<blockEnd])
             if let kind = noteKind(forCmd: cmd) {
                 let content = blockContent(block)
                 notes.append(parseNote(kind: kind, cmd: cmd, content: content, offset: start))
@@ -484,6 +501,11 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
             } else {
                 unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
             }
+            rtBlocks.append(RoundtripSym(offset: rtPre, expansion: out.count - rtPre,
+                                         raw: rtRaw))
+            if cmd == 0x17 {
+                rtShift = true                  // stream rewritten; see docstring
+            }
             i += jump + 3
         } else {
             out.append(data[i])
@@ -492,6 +514,9 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     }
     // An unterminated shift-in runs to the end of the document: the text is Japanese
     // from there on, and dropping the run would lose that fact entirely.
+    // An unterminated shift-in runs to the end of the document: the same rewrite, the
+    // same refusal (#20/#21).
+    if !shiftOpen.isEmpty { rtShift = true }
     while let start = shiftOpen.popLast() {
         let raw = Array(out[start...])
         out.removeSubrange(start...)
@@ -503,11 +528,14 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
         ? nil
         : WSHeader(versionBCD: headerVersionBCD, release: headerRelease,
                    styleLibraryOffset: headerLibOffset)
-    return SymmetricBlocksResult(bytes: out, notes: notes, unknownBlocks: unknownBlocks,
-                                 graphics: graphics, colours: colours, fonts: fonts,
-                                 includes: includes, shiftRuns: shiftRuns,
-                                 printerDriver: driver, header: header,
-                                 tabAt: tabAt, marks: marks)
+    var result = SymmetricBlocksResult(bytes: out, notes: notes, unknownBlocks: unknownBlocks,
+                                       graphics: graphics, colours: colours, fonts: fonts,
+                                       includes: includes, shiftRuns: shiftRuns,
+                                       printerDriver: driver, header: header,
+                                       tabAt: tabAt, marks: marks)
+    result.rtBlocks = rtBlocks
+    result.rtShift = rtShift
+    return result
 }
 
 /// Python's `bytes(c & 0x7F for c in b if 0x20 <= (c & 0x7F) < 0x7F)` — mask bit 7, keep

@@ -259,6 +259,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var styleSlots: [Int: StyleEntry] = [:]
     var tabAt: Set<Int> = []
     var wsMarks: [Int: [StructuralMark]] = [:]
+    // Round-trip ledger scaffolding (tasks #20/#21).
+    var rtFlagged: [RoundtripFlagged] = []
+    var rtSym: [RoundtripSym] = []
+    var rtShift = false
     if ws5 {
         let stripped = symmetricBlocks(data)
         body = stripped.bytes
@@ -279,6 +283,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
         }
         tabAt = stripped.tabAt
         wsMarks = stripped.marks
+        rtSym = stripped.rtBlocks
+        rtShift = stripped.rtShift
         // A bare high-bit byte whose low 7 bits are a CONTROL CODE is that control with
         // WordStar's soft/flag bit set, NOT a cp437 glyph. MEASURED on WordStar 7
         // (2026-08-04, two independent traces): a real document's 0x8A performed a line
@@ -308,7 +314,13 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 m += 3
                 continue
             }
-            masked.append(flaggedControls[body[m]] ?? body[m])
+            let translated = flaggedControls[body[m]] ?? body[m]
+            if translated != body[m] {
+                // ledger: which bytes the translation rewrote (length-preserving, so
+                // the offsets stay valid either side) — tasks #20/#21
+                rtFlagged.append(RoundtripFlagged(offset: masked.count, original: body[m]))
+            }
+            masked.append(translated)
             m += 1
         }
         body = masked
@@ -407,6 +419,27 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var cur = newBlock()
     var curLine = Line()
 
+    // Round-trip ledger (tasks #20/#21): a running count of EVENTS in emission order —
+    // Lines appended anywhere plus form-feed pagebreak blocks — and a locator for the
+    // last Line appended, so each physical entry's raw separator can be stamped onto
+    // the Line that actually closed it. Python holds the Line OBJECT (`_rt_last`);
+    // value semantics need a location instead: `bi == nil` means "in `cur`", rebased to
+    // the pushed block index when `closeBlock` moves `cur` into `blocks`. Dot lines are
+    // anchored by this same counter: "this dot line sits before event N", which
+    // survives every block split/drop that makes (block, line) anchors unstable.
+    var rtTally = 0
+    var rtContent = 0                    // Lines with spans specifically: fixups/togEnd
+    var rtLast: (bi: Int?, li: Int)? = nil
+    var rtLastC: (bi: Int?, li: Int)? = nil
+    var rtDots: [RoundtripDot] = []
+    func rtGetLine(_ ref: (bi: Int?, li: Int)) -> Line {
+        if let bi = ref.bi { return blocks[bi].lines[ref.li] }
+        return cur.lines[ref.li]
+    }
+    func rtSetLine(_ ref: (bi: Int?, li: Int), _ mutate: (inout Line) -> Void) {
+        if let bi = ref.bi { mutate(&blocks[bi].lines[ref.li]) } else { mutate(&cur.lines[ref.li]) }
+    }
+
     // core.py:275-286 — empty lines and empty blocks are never appended.
     func closeLine() {
         if !curLine.spans.isEmpty {
@@ -416,6 +449,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // default once that is known, below.
             curLine.lead48 = fmt.lead48 ?? defaultLh48
             cur.lines.append(curLine)
+            rtTally += 1
+            rtLast = (nil, cur.lines.count - 1)
+            rtContent += 1
+            rtLastC = (nil, cur.lines.count - 1)
         }
         curLine = Line()
     }
@@ -423,12 +460,27 @@ public func parseWS(_ data: [UInt8]) -> Document {
         closeLine()
         if !cur.lines.isEmpty {
             blocks.append(cur)
+            // rebase ledger locators that pointed into `cur` — see rtLast above
+            if rtLast != nil, rtLast!.bi == nil { rtLast!.bi = blocks.count - 1 }
+            if rtLastC != nil, rtLastC!.bi == nil { rtLastC!.bi = blocks.count - 1 }
         }
         cur = newBlock()
     }
 
-    for physical in pass.lines {
+    for (rtIdx, physical) in pass.lines.enumerated() {
         var raw = physical.text
+        // this entry's raw separator bytes, and the event count before it — tasks
+        // #20/#21, stamped onto whichever Line closes the entry below
+        let rtBrk: [UInt8]? = rtIdx < pass.rawBreaks.count ? pass.rawBreaks[rtIdx] : nil
+        let rtN0 = rtTally
+        let rtC0 = rtContent
+        let rtRaw0 = physical.text       // the FF branch consumes `raw`; capture first
+        let rtAct0 = active.intersection(rtTogglable)
+        // the transliteration (if any) of the font in force at line start — the same
+        // lookup decodeSpans makes at flush time
+        let rtKind0: SymbolTranslit? = activeFont.flatMap {
+            $0 < fonts.count ? fontTranslitKind(fonts[$0]) : nil
+        }
         // core.py:289 — masked unconditionally, NOT gated on stripHibit: a ws5+ dot line
         // is still recognized, and a ws4 dot whose '.' carries bit 7 (0xAE) still is too.
         let stripped = raw.map { $0 & 0x7F }
@@ -446,6 +498,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // core.py:290-298 — captured as metadata; the line itself never becomes text.
             let cmd = rstrippingASCIIWhitespace(stripped)
             dots.append(decodeCP437(cmd))
+            // Round-trip ledger (tasks #20/#21): the line's UNMASKED, UNSTRIPPED bytes
+            // and its own separator, anchored to the event counter. `cmd` above is
+            // bit-7-masked and rstripped — fine for interpretation, lossy for a
+            // writer — and mailmerge lines (.av/.dm/.df/.rv...) must come back
+            // byte-exact, never re-serialized from an interpretation (permanent
+            // ruling).
+            rtDots.append(RoundtripDot(anchor: rtTally, raw: physical.text,
+                                       brk: rtBrk ?? []))
             // Where in the document this command sat: the coarsest anchor that is
             // actually stable (it survives reflow, which a byte offset does not).
             dotPositions.append(DotPosition(blockIndex: blocks.count,
@@ -509,8 +569,12 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // of the document.
                 includes.append(inserted)
                 closeBlock()
+                // origin .fi: fabricated placeholder, no source bytes of its own (the
+                // `.fi` dot line carries them) — the round-trip writer skips it
+                // without counting (tasks #20/#21)
                 blocks.append(Block(kind: .para, lines: [
-                    Line(spans: [Span(text: "[insert: \(inserted)]")])]))
+                    Line(spans: [Span(text: "[insert: \(inserted)]")])],
+                    origin: .fi))
             }
             // A formatting change starts a NEW block: `.oc on` mid-paragraph means the
             // lines after it are centred and the ones before it are not, and a single
@@ -585,7 +649,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
                     // is-anything-open guard. A leading ^L is a deliberate blank first
                     // page; suppressing it dropped a page the author asked for.
                     closeBlock()
-                    blocks.append(Block(kind: .pagebreak))
+                    // origin .ff: this break IS a byte (0x0C), unlike a `.pa` pagebreak
+                    // whose bytes are its dot line. It also counts as an EVENT so dot
+                    // lines on either side of it keep their order (tasks #20/#21).
+                    blocks.append(Block(kind: .pagebreak, origin: .ff))
+                    rtTally += 1
                 } else {
                     segment.append(raw[k])
                 }
@@ -732,11 +800,76 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // paragraph — attach it there, so a paragraph block still starts
                 // with text and the linear order is unchanged.
                 blocks[last].lines.append(blank)
+                rtTally += 1
+                rtLast = (last, blocks[last].lines.count - 1)
             } else {
                 cur.lines.append(blank)
+                rtTally += 1
+                rtLast = (nil, cur.lines.count - 1)
             }
         case .para, .eof:
             closeBlock()
+        }
+        // Stamp this entry's raw separator on the Line that closed it (tasks #20/#21).
+        // Entries that appended no Line (a toggles-only invisible line whose softness
+        // folded into its predecessor) stamp nothing: their bytes are a known,
+        // census-counted loss, and overwriting the predecessor's own separator would
+        // corrupt a good one.
+        if rtTally > rtN0, let ref = rtLast, let brk = rtBrk {
+            rtSetLine(ref) { $0.brkRaw = brk }
+        }
+        // ... and the entry's lossy-decode record on the Line holding its TEXT (a
+        // phantom blank may follow it and own the separator), or on the blank Line
+        // itself for an invisible entry whose only bytes are controls (a lone ^P
+        // before a break was vanishing entirely). A form-feed-split entry anchors
+        // against its LAST part — the one whose Line closed last — because that is the
+        // offset space the last Line's bytes actually live in; earlier parts' losses
+        // are a census-counted tail.
+        var rtTarget: (bi: Int?, li: Int)? = nil
+        if rtContent > rtC0, let contentRef = rtLastC {
+            rtTarget = contentRef
+        } else if rtTally > rtN0, let anyRef = rtLast, rtGetLine(anyRef).spans.isEmpty {
+            rtTarget = anyRef
+        }
+        if let target = rtTarget {
+            var rtSrc = rtRaw0
+            var rtTrAt: [(Int, SymbolTranslit?)] = []
+            if rtRaw0.contains(0x0C) {
+                rtSrc = rtSplitBareFF(rtRaw0).last ?? []
+            } else {
+                // mid-line font changes move the transliteration boundary —
+                // fontcrib.ws switches to Symbol partway through a line, via a type-2
+                // Font block on one page and via a paragraph-style selection whose
+                // record carries a font on another. Both are replayed; a style with no
+                // font of its own changes nothing ('inherit' keeps what is in force).
+                // Offsets are entry-relative, so FF-split entries keep only line-start
+                // state.
+                for (rel, mark) in physical.markPairs {
+                    switch mark {
+                    case .font(let idx) where idx < fonts.count:
+                        rtTrAt.append((rel, fontTranslitKind(fonts[idx])))
+                    case .style(let handle) where (handle >> 8) == 0x02:
+                        if let entry = styleSlots[handle & 0xFF],
+                           let font = entry.record?.font,
+                           font.width != 0 || font.height != 0 || font.typestyle != 0 {
+                            rtTrAt.append((rel, fontTranslitKind(FontChange(
+                                offset: -1, width1800: font.width,
+                                height1440: font.height, typestyle: font.typestyle))))
+                        }
+                    default:
+                        break
+                    }
+                }
+            }
+            let capture = rtLineCapture(rtSrc, stripHibit: stripHibit, ws5: ws5,
+                                        active0: rtAct0, translit0: rtKind0,
+                                        translitAt: rtTrAt)
+            if !capture.togEnd.isEmpty {
+                rtSetLine(target) { $0.togEnd = capture.togEnd }
+            }
+            if !capture.fixups.isEmpty {
+                rtSetLine(target) { $0.fixups = capture.fixups }
+            }
         }
     }
     closeBlock()
@@ -826,7 +959,34 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // leading" without walking every line.
     pageGeometry.lhVaries = lhVaries
 
-    return Document(
+    // ---------------- round-trip ledger (tasks #20/#21) ----------------
+    // `body` here is the stream linesPass consumed (cleaned+translated for WS5+, the
+    // raw file for WS4), so this recomputes the same EOF cut it used. The tail is
+    // sliced from the ORIGINAL file: for WS5+ the cleaned cut is mapped back to a file
+    // offset by re-adding what each consumed block's raw bytes displaced (blocks copy
+    // nothing 1:1; everything else, wrapped triples included, does). Everything after
+    // that offset — the ^Z itself, DOS padding, the style library the header points
+    // into — comes back verbatim, which is also why blocks consumed BEYOND the cut are
+    // excluded from `sym`: their bytes already live inside the tail.
+    let rtCut = bareEOF(body)
+    let rtSpliceable = rtSym.filter {
+        rtCut == nil || $0.offset + max($0.expansion, 0) <= rtCut!
+    }
+    var rtTail: [UInt8] = []
+    if ws5 {
+        if let cut = rtCut {
+            let fileCut = cut + rtSpliceable.reduce(0) { $0 + ($1.raw.count - $1.expansion) }
+            rtTail = Array(data[min(fileCut, data.count)...])
+        }
+    } else if let cut = rtCut {
+        rtTail = Array(data[min(cut, data.count)...])
+    }
+    let roundtrip = RoundtripLedger(
+        era: era.name, encoding: "cp437", dots: rtDots, sym: rtSpliceable,
+        flaggedAt: rtFlagged, eofTail: pass.eofTail, tail: rtTail,
+        unsupported: rtShift ? "shift-jis" : nil)
+
+    var doc = Document(
         blocks: blocks,
         footnotes: footnotes,
         detection: detection,
@@ -863,6 +1023,34 @@ public func parseWS(_ data: [UInt8]) -> Document {
         shiftRuns: shiftRuns, printerDriver: printerDriver, wsHeader: wsHeader, styles: styles,
         tocEntries: tocEntries, indexEntries: indexEntries, lineNumbering: lineNumbering
     )
+    doc.roundtrip = roundtrip
+    return doc
+}
+
+/// Split raw line bytes on BARE form feeds only — a wrapped `<1B 0C 1C>` is the cp437
+/// glyph at 0x0C, never a page eject. Port of `_split_bare_ff`, for the round-trip
+/// capture (the inline FF branch above applies the same rule while decoding).
+func rtSplitBareFF(_ raw: [UInt8]) -> [[UInt8]] {
+    var parts: [[UInt8]] = []
+    var cur: [UInt8] = []
+    var k = 0
+    while k < raw.count {
+        if raw[k] == 0x1B, k + 2 < raw.count, raw[k + 2] == 0x1C {
+            cur.append(raw[k]); cur.append(raw[k + 1]); cur.append(raw[k + 2])
+            k += 3
+            continue
+        }
+        if raw[k] == 0x0C {
+            parts.append(cur)
+            cur = []
+            k += 1
+            continue
+        }
+        cur.append(raw[k])
+        k += 1
+    }
+    parts.append(cur)
+    return parts
 }
 
 // ---------------------------------------------------------------- internals

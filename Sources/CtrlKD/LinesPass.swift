@@ -63,10 +63,22 @@ public struct LinesPassResult: Hashable, Sendable {
     public let lines: [PhysicalLine]
     /// 90th percentile of soft-wrapped line lengths, floor 65 (the WS4 default).
     public let margin: Int
+    /// Raw separator bytes per entry of `lines`, parallel by index (tasks #20/#21,
+    /// round-trip writer): collected only, never classified, so the writer can re-emit
+    /// `<8D 8A>` and friends instead of a canonicalised guess. Empty for an `.eof` line
+    /// whose text simply ran out. Python's `raw_extras['breaks']`.
+    public let rawBreaks: [[UInt8]]
+    /// The verbatim bytes of the invisible trailing run this pass drops when a file
+    /// ends in blank lines before its 0x1A — text and separators both, so the writer
+    /// can put them back. Python's `raw_extras['eof_tail']`.
+    public let eofTail: [UInt8]
 
-    public init(lines: [PhysicalLine], margin: Int) {
+    public init(lines: [PhysicalLine], margin: Int, rawBreaks: [[UInt8]] = [],
+                eofTail: [UInt8] = []) {
         self.lines = lines
         self.margin = margin
+        self.rawBreaks = rawBreaks
+        self.eofTail = eofTail
     }
 }
 
@@ -112,6 +124,8 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
 
     // core.py:124-157
     var out: [PhysicalLine] = []
+    var rawBreaks: [[UInt8]] = []
+    var eofTail: [UInt8] = []
     var i = 0
     while i < lines.count {
         let (text, kind) = (lines[i].text, lines[i].kind)
@@ -132,6 +146,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
                 out.append(PhysicalLine(text: text,
                                         separator: kind == .soft ? .blankSoft : .blankHard,
                                         markPairs: lines[i].marks))
+                rawBreaks.append(lines[i].brk)
             }
             i += 1
             continue
@@ -141,6 +156,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
             // An overprint separator is its own thing: no blank-counting, no wrap
             // inference -- the next physical line shares this baseline.
             out.append(PhysicalLine(text: text, separator: .over, markPairs: lines[i].marks))
+            rawBreaks.append(lines[i].brk)
             i += 1
             continue
         }
@@ -162,6 +178,15 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
         // core.py:140-142 — nothing but blanks left: this line ends the document.
         if j >= lines.count {
             out.append(PhysicalLine(text: text, separator: .eof, markPairs: lines[i].marks))
+            // This line's own real break, and the invisible trailing run the classifier
+            // consumes without ever yielding (a file ending in blank lines before its
+            // ^Z lost them entirely) — verbatim, text and separators both, so the
+            // writer can put them back (#20/#21).
+            rawBreaks.append(lines[i].brk)
+            for b in (i + 1)..<lines.count {
+                eofTail += lines[b].text
+                eofTail += lines[b].brk
+            }
             break
         }
 
@@ -205,6 +230,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
             }
         }
         out.append(PhysicalLine(text: text, separator: sep, markPairs: lines[i].marks))
+        rawBreaks.append(lines[i].brk)
         // The blanks this run consumed, in document order, after the line they
         // follow. They were counted above to classify `sep` and are now also kept
         // as content — the counting and the keeping are separate jobs.
@@ -213,11 +239,13 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
                 out.append(PhysicalLine(text: lines[b].text,
                                         separator: lines[b].kind == .soft ? .blankSoft : .blankHard,
                                         markPairs: lines[b].marks))
+                rawBreaks.append(lines[b].brk)
             }
         }
         i = j
     }
-    return LinesPassResult(lines: out, margin: margin)
+    return LinesPassResult(lines: out, margin: margin, rawBreaks: rawBreaks,
+                           eofTail: eofTail)
 }
 
 // ---------------------------------------------------------------- internals
@@ -226,8 +254,9 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
 /// middle byte of a `<1B x 1C>` wrapped extended character. ASCIITAB.WS wraps every
 /// control code to print its chart, `<1B 1A 1C>` included, and cutting the document at
 /// that middle byte amputated 86% of the file. `nil` when no bare 0x1A exists. Direct
-/// port of `_bare_eof`.
-private func bareEOF(_ data: [UInt8]) -> Int? {
+/// port of `_bare_eof`. Internal, not private: `parseWS`'s round-trip ledger recomputes
+/// the same cut (#20/#21), and the writer appends a canonical 0x1A only when absent.
+func bareEOF(_ data: [UInt8]) -> Int? {
     var at = 0
     while at < data.count {
         if data[at] == 0x1a {
@@ -272,9 +301,9 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
                                marks: [Int: [StructuralMark]] = [:],
                                overprintCr: Bool = false)
     -> [(text: [UInt8], kind: BreakKind, machineIndent: Bool,
-         marks: [(Int, StructuralMark)])] {
+         marks: [(Int, StructuralMark)], brk: [UInt8])] {
     var result: [(text: [UInt8], kind: BreakKind, machineIndent: Bool,
-                  marks: [(Int, StructuralMark)])] = []
+                  marks: [(Int, StructuralMark)], brk: [UInt8])] = []
     var starts: [(at: Int, len: Int, idx: Int)] = []
     var text: [UInt8] = []
     var i = 0
@@ -284,7 +313,9 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
     var lineStart = 0
     func emit(_ kind: BreakKind, _ advance: Int) {
         starts.append((at: lineStart, len: text.count, idx: result.count))
-        result.append((text, kind, tabAt.contains(lineStart), []))
+        // this line's raw separator bytes, for the round-trip ledger (#20/#21)
+        let brk = advance > 0 ? Array(data[i..<(i + advance)]) : []
+        result.append((text, kind, tabAt.contains(lineStart), [], brk))
         lineStart += text.count + advance
         text = []
     }
