@@ -425,7 +425,7 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 
 // MARK: - Render target (--fonts)
 
-@Test func fontsTargetDefaultsToOfficeAndValidatesItsChoices() {
+@Test func fontsTargetDefaultsToMacAndValidatesItsChoices() {
     // Jon's ruling, 2026-08-04 night: office is the DEFAULT because it is the widest
     // single answer — Word and Google Docs both resolve the Microsoft names.
     guard case .run(let byDefault) = parseArguments(["A.WS"]),
@@ -435,7 +435,9 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
         Issue.record("expected a run")
         return
     }
-    #expect(byDefault.fontsTarget == .office)
+    // D7 ruling: sr is the Mac tool -- mac names by default
+    // (ctrl-kd defaults to office; a sanctioned platform difference)
+    #expect(byDefault.fontsTarget == .mac)
     #expect(mac.fontsTarget == .mac)
     #expect(linux.fontsTarget == .linux)
     #expect(attached.fontsTarget == .google)

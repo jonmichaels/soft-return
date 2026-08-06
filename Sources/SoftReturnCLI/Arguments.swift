@@ -99,7 +99,11 @@ public struct Options: Equatable, Sendable {
     public var styles = true
     /// Which importer the RTF font names target (`--fonts`, ctrl-kd's `--fonts`).
     /// `.office` by default: Word and Google Docs both resolve the Microsoft names.
-    public var fontsTarget: FontsTarget = .office
+    /// D7 ruling (2026-08-05): sr defaults to MAC font names -- it is the
+    /// Mac tool, and its bare RTF should open true in Pages/TextEdit.
+    /// ctrl-kd defaults to office. A sanctioned platform difference under
+    /// the standardization principle, documented loudly in --help.
+    public var fontsTarget: FontsTarget = .mac
     /// `--page-settings` (ctrl-kd's `--page-settings`/`page_settings=`; renamed from
     /// "page defaults" at every layer, ruling 2026-08-05), a preset name or raw values,
     /// parsed into `PageSettings`. `nil` when the flag was never given.
@@ -460,14 +464,10 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             printed (a notice is printed if you asked for modern)
       --variant VARIANT     override detection
                             choices: \(variantChoices.joined(separator: ", "))
-      --fonts TARGET        RTF font-name target: office (Word/Docs, default;
-                            these fonts ship with MS Office, not bare Windows),
-                            mac (Cocoa-native: TextEdit/Pages), google (Docs
-                            catalog incl. its chancery script), linux (URW
-                            base-35 -- free clones of exactly this era's faces)
-                            choices: \(fontsChoices.joined(separator: ", "))
-      --no-styles           omit paragraph-style pass-through (HTML classes +
-                            generated CSS, RTF stylesheet) from the output
+      --fonts TARGET        RTF font-name target: mac (Cocoa-native, the
+                            DEFAULT -- sr is the Mac tool; note ctrl-kd
+                            defaults to office instead), office (Word/Docs),
+                            google (Docs catalog), linux (URW base-35)
       --page-settings P     page geometry for everything the document does not
                             declare itself (its own dot commands always win).
                             Presets: "default" (WordStar factory: mt 0.5in,
