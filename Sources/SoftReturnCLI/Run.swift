@@ -130,6 +130,17 @@ private func convertAll(
                 + "rendering printed")
         }
 
+        // --comments + printed is a contradiction the CLI explains rather than silently
+        // resolving (ruling 2026-08-06 M9): WordStar printed nothing for a comment, and
+        // the facsimile doesn't either.
+        if options.commentsRequested,
+           options.mode == .printed || doc.detection?.variant == .printstream || doc.columnar,
+           doc.notes.contains(where: { $0.kind == .comment }) {
+            environment.writeErr("sr: \(path): comments are never part of the printed "
+                + "page -- WordStar did not print them, so the facsimile doesn't either; "
+                + "convert with --mode modern to see them")
+        }
+
         // A driver-art document reflowed under modern will look strange, and the log
         // should say why (ruling 2026-08-06): the driver's page art (colour knockouts,
         // rules, hand-laid boxes) exists only at print time. Its CHARACTER substitutions

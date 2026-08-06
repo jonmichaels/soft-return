@@ -129,6 +129,11 @@ private func htmlBodySpan(
     guard span.styles.contains(.fnref) else { return htmlSpan(span, keepWS: keepWS) }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
     case .note(let note, let label, let index):
+        if note.kind == .comment, shownMap == nil {
+            // word scheme: comments are markless (a bubble in Word, a section entry
+            // here) — an empty visible anchor would be noise, so none is emitted (M9)
+            return ""
+        }
         return htmlReferenceAnchor(note, label: label, shown: shownMap?[index])
     case .excluded: return ""
     case .invalid: return htmlSpan(span, keepWS: keepWS)
@@ -145,7 +150,7 @@ private func htmlBodySpan(
 /// than the kind) is what keeps this right if that ever isn't so. Its value is the RAW tag,
 /// HTML-escaped for display — not the slug used for the id below, which exists only to keep
 /// `id`/`href` syntactically valid and was never meant to be shown.
-private func htmlNoteListItem(_ entry: NoteListEntry) -> String {
+private func htmlNoteListItem(_ entry: NoteListEntry, linkComments: Bool = false) -> String {
     let kind = entry.note.kind
     let ids = htmlIDs(kind, label: entry.label)
     var li = "<li id=\"\(ids.target)\" data-note-kind=\"\(kind.rawValue)\""
@@ -153,7 +158,9 @@ private func htmlNoteListItem(_ entry: NoteListEntry) -> String {
         li += " data-note-tag=\"\(htmlEscape(tag))\""
     }
     li += ">" + htmlEscape(entry.note.text)
-    if kind != .comment {
+    // Comments backlink only under `prefixed`, which is when a visible inline anchor
+    // exists to link back to (word scheme is markless — M9).
+    if kind != .comment || linkComments {
         li += " <a href=\"#\(ids.ref)\" role=\"doc-backlink\">\u{21A9}</a>"
     }
     return li + "</li>"
@@ -191,6 +198,11 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                      options: EmitOptions = EmitOptions()) -> String {
     let title = options.title
     let printed = mode == .printed || isPrinted(doc)
+    var options = options
+    if printed {
+        // printed is always silent about comments (ruling 2026-08-06 M9)
+        options.notes.remove(.comment)
+    }
     let refNotes = inlineReferenceNotes(doc)
     // `prefixed` reference labels (ruling 2026-08-06 M8) change the visible mark text
     // only; ids and sections are structural and stay put.
@@ -266,7 +278,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
         let entries = noteListEntries(doc, kind: kind)
         guard !entries.isEmpty else { return nil }
         let labelID = "\(kind.rawValue)s-label"
-        let items = entries.map(htmlNoteListItem).joined()
+        let items = entries.map { htmlNoteListItem($0, linkComments: shownMap != nil) }.joined()
         return "<section role=\"doc-endnotes\" aria-labelledby=\"\(labelID)\">"
             + "<h2 id=\"\(labelID)\">\(noteSectionTitle(kind))</h2><ol>\(items)</ol></section>"
     }

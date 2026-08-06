@@ -118,6 +118,16 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options:
     }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
     case .note(let note, let label, let index):
+        if note.kind == .comment {
+            // Printed is a facsimile: WordStar printed nothing for a comment, so
+            // neither do we (the CLI explains on stderr). Modern anchors a real Word
+            // margin comment at the TRUE position (the end-of-document dump this
+            // replaces lost it); `prefixed` adds the visible c-mark, `word` stays
+            // markless — Word's own convention is a bubble, not a superscript. (M9)
+            if printed { return "" }
+            let mark = shownMap.flatMap { $0[index] }.map { "{\\super " + rtfEscape($0) + "}" } ?? ""
+            return mark + rtfComment(note)
+        }
         // `prefixed` (M8): endnotes/annotations anchor with literal e1/a1 custom marks
         // in place of \chftn/tags — the Markdown emitter's own labels, matched across
         // formats. Never printed: the facsimile shows what WordStar printed.
@@ -291,6 +301,11 @@ private func rtfRunningHeads(_ doc: Document) -> String {
 public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> String {
     let printed = mode == .printed || isPrinted(doc)
+    var options = options
+    if printed {
+        // printed is always silent about comments (ruling 2026-08-06 M9)
+        options.notes.remove(.comment)
+    }
     // \f0 Times, \f1 Courier — a printed document's alignment only survives in a
     // fixed-width font (emit.py:210).
     let font = printed ? #"\f1"# : #"\f0"#
@@ -365,12 +380,6 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             parts.append(contentsOf: Array(repeating: #"\par "#,
                                            count: trailingBlankLines(block)))
         }
-    }
-
-    // Comments (opt-in) trail the whole document as their own top-level groups, one per
-    // comment, in document order — never inline, since they have no reference to attach to.
-    if options.notes.contains(.comment) {
-        parts.append(contentsOf: doc.notes.filter { $0.kind == .comment }.map(rtfComment))
     }
 
     let body = parts.joined(separator: "\n")

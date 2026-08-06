@@ -10,6 +10,16 @@ public enum NoteKind: String, Hashable, Sendable {
     case comment
 }
 
+/// Where a note came from (ruling 2026-08-06 M9: both WordStar comment forms unify into
+/// `Note(kind: .comment)`; origin is the provenance that explains an odd-looking entry —
+/// a commented-out `..rm 60` is still a comment). `block` is a real ^ON/^FN symmetrical
+/// sequence; the other two are the dot-line comment syntaxes.
+public enum NoteOrigin: String, Hashable, Sendable {
+    case block
+    case dotDot = ".."
+    case dotIG = ".ig"
+}
+
 /// See `NoteKind` for the shared layout this decodes. Field-by-field provenance is in
 /// `SymmetricBlocks.swift`'s `parseNote`, which is the direct port of Python's
 /// `_parse_note`.
@@ -34,8 +44,11 @@ public struct Note: Hashable, Sendable {
     /// The note's OWN dot-command lines (a ruler or comment can live inside a note's
     /// text same as the body) — stripped from `text` but preserved verbatim, in order.
     public var dotCommands: [String]
-    /// Source byte offset of this block's opening `0x1D`.
+    /// Source byte offset of this block's opening `0x1D` (0 for dot-line comments, which
+    /// have no block — their stable anchor is `Document.dotPositions`).
     public var offset: Int
+    /// Where this note came from — see `NoteOrigin` (ruling 2026-08-06 M9).
+    public var origin: NoteOrigin
 
     public init(
         kind: NoteKind,
@@ -46,7 +59,8 @@ public struct Note: Hashable, Sendable {
         numberFormat: Int = 0,
         convertTo: Int = 0,
         dotCommands: [String] = [],
-        offset: Int = 0
+        offset: Int = 0,
+        origin: NoteOrigin = .block
     ) {
         self.kind = kind
         self.text = text
@@ -57,6 +71,24 @@ public struct Note: Hashable, Sendable {
         self.convertTo = convertTo
         self.dotCommands = dotCommands
         self.offset = offset
+        self.origin = origin
+    }
+}
+
+/// Where in the document one dot command sat: the index of the block it precedes and how
+/// many lines that block already held. The coarsest anchor that is actually STABLE — it
+/// survives reflow, which a byte offset does not — so a consumer that wants to SHOW a
+/// dot command in place (Soft Return.app's Show Invisibles) has one. Python's
+/// `meta['dot_positions']` entries.
+public struct DotPosition: Hashable, Sendable {
+    public var blockIndex: Int
+    public var lineIndex: Int
+    public var text: String
+
+    public init(blockIndex: Int, lineIndex: Int, text: String) {
+        self.blockIndex = blockIndex
+        self.lineIndex = lineIndex
+        self.text = text
     }
 }
 
@@ -279,6 +311,9 @@ public struct Document: Hashable, Sendable {
     public var marginEstimate: Int?
     /// Raw text of every dot-command line encountered (`.pa`, `.r!`, etc.), in order.
     public var dotCommands: [String]
+    /// Where each dot command sat — parallel in order to `dotCommands`, but anchored.
+    /// See `DotPosition`. Python's `meta['dot_positions']`.
+    public var dotPositions: [DotPosition]
     /// Control bytes below 0x20 (or 0x7F) that `_decode_spans` didn't recognize,
     /// counted by raw byte value rather than Python's `"0x07"`-formatted string key —
     /// hex formatting is a `--diagnose`-output concern, not part of the type.
@@ -391,6 +426,7 @@ public struct Document: Hashable, Sendable {
         detection: Detection? = nil,
         marginEstimate: Int? = nil,
         dotCommands: [String] = [],
+        dotPositions: [DotPosition] = [],
         unknownCodes: [UInt8: Int] = [:],
         columnar: Bool = false,
         notes: [Note] = [],
@@ -422,6 +458,7 @@ public struct Document: Hashable, Sendable {
         self.detection = detection
         self.marginEstimate = marginEstimate
         self.dotCommands = dotCommands
+        self.dotPositions = dotPositions
         self.unknownCodes = unknownCodes
         self.columnar = columnar
         self.notes = notes

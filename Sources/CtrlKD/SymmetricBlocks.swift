@@ -174,9 +174,12 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
             if let kind = noteKind(forCmd: cmd) {
                 let content = blockContent(block)
                 notes.append(parseNote(kind: kind, cmd: cmd, content: content, offset: start))
-                if cmd != 0x06 {                                   // comments: never printed inline
-                    marks[out.count, default: []].append(.fnref)
-                }
+                // Comments included (ruling 2026-08-06 M9): every note kind now emits a
+                // reference mark so consumers know WHERE it lives — Show Invisibles
+                // needs the position, RTF anchors its margin comment there. WordStar
+                // printed nothing for a comment and printed mode still renders nothing;
+                // the mark is position, not ink.
+                marks[out.count, default: []].append(.fnref)
             } else if cmd == 0x09 {                                // tab (and dot leaders)
                 // Remember that this padding came from a TAB, not from typed spaces.
                 // Recorded as an offset into the CLEANED stream, which is exactly what

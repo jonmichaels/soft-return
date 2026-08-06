@@ -32,7 +32,11 @@ public func isPrinted(_ doc: Document) -> Bool {
 private func textSpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions) -> String {
     guard span.styles.contains(.fnref) else { return span.text }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
-    case .note(_, let label, _): return "[\(label)]"
+    case .note(let note, let label, _):
+        // comments are never marked inline in plain text: the kind has no printed
+        // identity (word scheme = markless); opted-in comments appear in the Comments
+        // section (M9)
+        return note.kind == .comment ? "" : "[\(label)]"
     case .excluded: return ""
     case .invalid: return span.text
     }
@@ -78,6 +82,12 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
                      options: EmitOptions = EmitOptions()) -> String {
     let refNotes = inlineReferenceNotes(doc)
     let printed = mode == .printed || isPrinted(doc)
+    var options = options
+    if printed {
+        // printed is always silent about comments (ruling 2026-08-06 M9): WordStar
+        // printed nothing for them, sections included
+        options.notes.remove(.comment)
+    }
     var out: [String] = []
     for block in doc.blocks {
         if block.kind == .pagebreak {

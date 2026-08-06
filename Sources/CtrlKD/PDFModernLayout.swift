@@ -161,9 +161,21 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
         shownByIndex = noteRefLabels(refNotes, doc: doc, scheme: .prefixed)
     } else {
         shownByIndex = [:]
+        var ords: [NoteKind: Int] = [:]
         for (i, note) in refNotes.enumerated() {
+            let k = (ords[note.kind] ?? 0) + 1
+            ords[note.kind] = k
             let label = noteLabel(note, doc: doc)
-            shownByIndex[i] = note.kind == .endnote ? endnoteRomanLabel(label) : label
+            switch note.kind {
+            case .endnote:
+                shownByIndex[i] = endnoteRomanLabel(label)
+            case .comment:
+                // self-identifying in the end list either scheme; under `word` there
+                // is no inline mark to match anyway (M9)
+                shownByIndex[i] = "c" + String(k)
+            default:
+                shownByIndex[i] = label
+            }
         }
     }
     // LJ6DTP substitutions apply in Modern too (ruling 2026-08-06 M7): the driver's
@@ -238,10 +250,14 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                     guard keep.contains(note.kind) else { continue }
                     let label = noteLabel(note, doc: doc)
                     let shown = shownByIndex[n - 1] ?? label
-                    let width = modernTokenWidth(shown, styles: styles, family: .times,
-                                                 pt: modernBodyPt, entry: nil)
-                    toks.append(ModernToken(text: shown, styles: styles, family: .times,
-                                            pt: modernBodyPt, entry: nil, width: width))
+                    if note.kind != .comment || noteRefs == .prefixed {
+                        // `word` comments are markless (Word's bubble convention);
+                        // `prefixed` shows the c-mark (M9)
+                        let width = modernTokenWidth(shown, styles: styles, family: .times,
+                                                     pt: modernBodyPt, entry: nil)
+                        toks.append(ModernToken(text: shown, styles: styles, family: .times,
+                                                pt: modernBodyPt, entry: nil, width: width))
+                    }
                     if note.kind == .footnote {
                         notes.append((n - 1, note, label))
                     } else if !endSeen.contains(n - 1) {
