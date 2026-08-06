@@ -99,7 +99,7 @@ private func markdownReferenceSpan(
 ) -> String {
     guard span.styles.contains(.fnref) else { return markdownSpan(span) }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
-    case .note(let note, let label): return "[^\(markdownReferenceKey(note.kind, label: label))]"
+    case .note(let note, let label, _): return "[^\(markdownReferenceKey(note.kind, label: label))]"
     case .excluded: return ""
     case .invalid: return markdownSpan(span)
     }

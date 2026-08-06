@@ -54,7 +54,11 @@ private func rtfStyleControls(_ styles: Style) -> String {
 /// display number (task item 2) isn't representable here and isn't attempted; only the
 /// destination's `\footnote` vs `\footnote\ftnalt` distinguishes the two kinds. An
 /// annotation has no auto-number to hook, so it carries its literal tag instead.
-private func rtfReferenceMarker(_ note: Note, label: String) -> String {
+private func rtfReferenceMarker(_ note: Note, label: String, markOverride: String? = nil) -> String {
+    if let markOverride {
+        // the `prefixed` scheme's literal custom mark in place of \chftn (M8)
+        return "{\\super " + rtfEscape(markOverride) + "}"
+    }
     switch note.kind {
     case .footnote, .endnote: return #"{\chftn}"#
     case .annotation: return "{\\super " + rtfEscape(label) + "}"
@@ -67,17 +71,24 @@ private func rtfReferenceMarker(_ note: Note, label: String) -> String {
 /// separate endnote-destination construct — differing only in what appears inside the
 /// leading `{\super …}` (the generic `\chftn` mark for an endnote, the literal tag for an
 /// annotation).
-private func rtfDestination(_ note: Note, label: String) -> String {
+/// `markOverride` is the `prefixed` scheme's label (e1/a1) standing in for `\chftn` on
+/// any kind — the mechanism annotations already used (ruling 2026-08-06 M8). Port of
+/// `_rtf_note_dest`'s `mark_override`.
+private func rtfDestination(_ note: Note, label: String, markOverride: String? = nil) -> String {
     let text = rtfEscape(note.text)
+    let flag = note.kind == .footnote ? "" : #"\ftnalt"#
+    if note.kind == .annotation || markOverride != nil {
+        let markText = rtfEscape(markOverride ?? label)
+        return #"{\*\footnote"# + flag + #" \pard\plain\fs24 {\super "# + markText + #" }"#
+            + text + "}"
+    }
     switch note.kind {
     case .footnote:
         return #"{\*\footnote \pard\plain\fs24 {\super\chftn }"# + text + "}"
     case .endnote:
         return #"{\*\footnote\ftnalt \pard\plain\fs24 {\super\chftn }"# + text + "}"
-    case .annotation:
-        return #"{\*\footnote\ftnalt \pard\plain\fs24 {\super "# + rtfEscape(label) + #" }"# + text + "}"
-    case .comment:
-        return ""   // comments render as their own trailing block — see emitRTF below
+    case .annotation, .comment:
+        return ""   // annotation handled above; comments render elsewhere
     }
 }
 
@@ -88,7 +99,8 @@ private func rtfDestination(_ note: Note, label: String) -> String {
 /// which already renders a stray sentinel as `{\super 1}` (fnref contributes no control
 /// word of its own, only whatever `sup` it also carries).
 private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options: EmitOptions,
-                         fontControl: [Int: String] = [:], printed: Bool = false) -> String {
+                         fontControl: [Int: String] = [:], printed: Bool = false,
+                         shownMap: [Int: String]? = nil) -> String {
     // A 0x0F print control's display string is SCREEN-ONLY: on paper WordStar sent the
     // raw printer payload and advanced by the block's HMI word. The printed facsimile
     // does the same -- the declared width of blank space (0 for LJ6DTP's rule-drawing
@@ -105,8 +117,18 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options:
         return "{" + controls + rtfEscape(span.text) + "}"
     }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
-    case .note(let note, let label):
-        return rtfReferenceMarker(note, label: label) + rtfDestination(note, label: label)
+    case .note(let note, let label, let index):
+        // `prefixed` (M8): endnotes/annotations anchor with literal e1/a1 custom marks
+        // in place of \chftn/tags — the Markdown emitter's own labels, matched across
+        // formats. Never printed: the facsimile shows what WordStar printed.
+        let override: String?
+        if let shownMap, note.kind == .endnote || note.kind == .annotation {
+            override = shownMap[index]
+        } else {
+            override = nil
+        }
+        return rtfReferenceMarker(note, label: label, markOverride: override)
+            + rtfDestination(note, label: label, markOverride: override)
     case .excluded:
         return ""
     case .invalid:
@@ -273,6 +295,10 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // fixed-width font (emit.py:210).
     let font = printed ? #"\f1"# : #"\f0"#
     let refNotes = inlineReferenceNotes(doc)
+    // `prefixed` note references (ruling 2026-08-06 M8) — never printed: the facsimile
+    // shows what WordStar printed.
+    let shownMap: [Int: String]? = (options.noteRefs == .prefixed && !printed)
+        ? noteRefLabels(refNotes, doc: doc, scheme: .prefixed) : nil
     var rtfAlign: Alignment = .left      // RTF alignment persists across \par
     var parts: [String] = []
     let stylesheet = options.styles ? rtfStylesheet(doc) : ""
@@ -303,7 +329,8 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             }
             return spans
                 .map { rtfBodySpan($0, refNotes: refNotes, doc: doc, options: options,
-                                   fontControl: fontTable.control, printed: printed) }
+                                   fontControl: fontTable.control, printed: printed,
+                                   shownMap: shownMap) }
                 .joined()
         }
         if block.heading != 0 {

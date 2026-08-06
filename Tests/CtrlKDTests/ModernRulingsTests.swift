@@ -168,3 +168,34 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     let pdf = emitPDF(doc, mode: .modern)
     #expect(contains(pdf, bytes("word") + [0x97] + bytes("word")))   // '_' -> em dash (cp1252)
 }
+
+@Test func noteRefsPrefixedSchemeMatchesMarkdownLabels() {
+    // Ruling 2026-08-06 (M8, round 2 follow-up): --note-refs prefixed shows the Markdown
+    // emitter's own labels — footnotes bare, endnotes e1, annotations a1 — in PDF, RTF,
+    // and HTML alike. `word` (the default) stays exactly what displayed before:
+    // arabic/roman/tags. Ids and structure never move; only the visible mark text does.
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
+    data += bytes("One") + ws7Note(bytes("Foot text."), cmd: 0x03, number: 0)
+    data += bytes(" two") + ws7Note(bytes("End text."), cmd: 0x04, number: 0)
+    data += bytes(" three") + ws7Note(bytes("Anno text."), cmd: 0x05, number: 0)
+    data += bytes(" done.") + HARD
+    data += bytes("A closing line of ordinary prose keeps the byte ratio honest.") + HARD
+    let doc = parseWS(data)
+
+    let pdf = emitPDF(doc, mode: .modern, options: EmitOptions(noteRefs: .prefixed))
+    let texts = contentSpans(pdf).map(\.text)
+    #expect(texts.contains("e1") && texts.contains("[e1]"))   // endnote, inline + end
+    #expect(texts.contains("a1") && texts.contains("[a1]"))   // annotation likewise
+    #expect(!texts.contains("i"))                             // no roman under prefixed
+
+    let rtf = emitRTF(doc, mode: .modern, options: EmitOptions(noteRefs: .prefixed))
+    #expect(rtf.contains(#"{\super e1}"#))                    // custom mark, not \chftn
+    #expect(rtf.contains(#"{\super a1}"#))
+    let word = emitRTF(doc, mode: .modern)
+    #expect(!word.contains(#"{\super e1}"#))                  // default keeps \chftn
+
+    let html = emitHTML(doc, mode: .modern, options: EmitOptions(noteRefs: .prefixed))
+    #expect(html.contains(">e1</a></sup>"))
+    #expect(html.contains("id=\"enref1\""))                   // ids stay structural
+}

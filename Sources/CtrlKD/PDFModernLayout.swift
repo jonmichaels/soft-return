@@ -149,8 +149,23 @@ func modernTokenWidth(_ text: String, styles: Style, family: PDFFamily, pt: Int,
 /// contributes NOTHING at all (no token, unlike RTF/HTML's fallback to plain styled
 /// text) — Python's `except (ValueError, IndexError): continue` / `if note.kind not in
 /// keep: continue`, both `continue`s with no token appended either.
-func modernFlow(_ doc: Document, keep: Set<NoteKind>) -> [ModernFlowItem] {
+func modernFlow(_ doc: Document, keep: Set<NoteKind>,
+                noteRefs: NoteRefs = .word) -> [ModernFlowItem] {
     let refNotes = inlineReferenceNotes(doc)
+    // Reference-mark display per scheme (ruling 2026-08-06 M8): `word` shows arabic
+    // footnotes / roman endnotes / annotation tags — what Word itself renders from our
+    // RTF; `prefixed` shows the Markdown emitter's own labels (1 2 3, e1 e2, a1 a2),
+    // matched across formats.
+    var shownByIndex: [Int: String]
+    if noteRefs == .prefixed {
+        shownByIndex = noteRefLabels(refNotes, doc: doc, scheme: .prefixed)
+    } else {
+        shownByIndex = [:]
+        for (i, note) in refNotes.enumerated() {
+            let label = noteLabel(note, doc: doc)
+            shownByIndex[i] = note.kind == .endnote ? endnoteRomanLabel(label) : label
+        }
+    }
     // LJ6DTP substitutions apply in Modern too (ruling 2026-08-06 M7): the driver's
     // patched slots are CONTENT — an em dash is an em dash in any century — while its
     // page art (colour, rules, boxes) stays print-time.
@@ -222,7 +237,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>) -> [ModernFlowItem] {
                     let note = refNotes[n - 1]
                     guard keep.contains(note.kind) else { continue }
                     let label = noteLabel(note, doc: doc)
-                    let shown = note.kind == .endnote ? endnoteRomanLabel(label) : label
+                    let shown = shownByIndex[n - 1] ?? label
                     let width = modernTokenWidth(shown, styles: styles, family: .times,
                                                  pt: modernBodyPt, entry: nil)
                     toks.append(ModernToken(text: shown, styles: styles, family: .times,
@@ -453,7 +468,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
     let keep: Set<NoteKind> = options.notes.isEmpty
         ? [.footnote, .endnote, .annotation] : options.notes
     let (margl, margt, margb, width) = modernGeometry(doc)
-    let flow = modernFlow(doc, keep: keep)
+    let flow = modernFlow(doc, keep: keep, noteRefs: options.noteRefs)
     let noteLead = modernLine * Double(modernNotePt)
     let sepH = noteLead
 

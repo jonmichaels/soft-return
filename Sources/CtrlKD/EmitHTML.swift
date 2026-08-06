@@ -109,9 +109,11 @@ private func htmlIDs(_ kind: NoteKind, label: String) -> (ref: String, target: S
 /// The id/href use the slugged form (`htmlIDs`); the visible link text stays the raw,
 /// HTML-escaped label — display text and identifier are sanitized for different purposes and
 /// must not share one sanitizer.
-private func htmlReferenceAnchor(_ note: Note, label: String) -> String {
+/// `shown` overrides the visible text only (the `prefixed` scheme, ruling 2026-08-06 M8);
+/// the ids stay kind-prefixed and stable either way.
+private func htmlReferenceAnchor(_ note: Note, label: String, shown: String? = nil) -> String {
     let ids = htmlIDs(note.kind, label: label)
-    let escaped = htmlEscape(label)
+    let escaped = htmlEscape(shown ?? label)
     return "<sup><a id=\"\(ids.ref)\" href=\"#\(ids.target)\" role=\"doc-noteref\">\(escaped)</a></sup>"
 }
 
@@ -121,11 +123,13 @@ private func htmlReferenceAnchor(_ note: Note, label: String) -> String {
 /// `htmlSpan`'s ordinary styling, which already renders it as bare digits inside whatever
 /// `sup` it carries (see `htmlSpanFnrefContributesNoTag`).
 private func htmlBodySpan(
-    _ span: Span, keepWS: Bool = false, refNotes: [Note], doc: Document, options: EmitOptions
+    _ span: Span, keepWS: Bool = false, refNotes: [Note], doc: Document, options: EmitOptions,
+    shownMap: [Int: String]? = nil
 ) -> String {
     guard span.styles.contains(.fnref) else { return htmlSpan(span, keepWS: keepWS) }
     switch resolveReference(span, refNotes: refNotes, doc: doc, options: options) {
-    case .note(let note, let label): return htmlReferenceAnchor(note, label: label)
+    case .note(let note, let label, let index):
+        return htmlReferenceAnchor(note, label: label, shown: shownMap?[index])
     case .excluded: return ""
     case .invalid: return htmlSpan(span, keepWS: keepWS)
     }
@@ -188,6 +192,10 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     let title = options.title
     let printed = mode == .printed || isPrinted(doc)
     let refNotes = inlineReferenceNotes(doc)
+    // `prefixed` reference labels (ruling 2026-08-06 M8) change the visible mark text
+    // only; ids and sections are structural and stay put.
+    let shownMap: [Int: String]? = (options.noteRefs == .prefixed && !printed)
+        ? noteRefLabels(refNotes, doc: doc, scheme: .prefixed) : nil
     var parts: [String] = []
     var styleClass: [Int: String] = [:]
     if options.styles {
@@ -209,7 +217,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             // Merged in BOTH modes: a heading is a logical unit, and joining its logical
             // lines with a space is what this always rendered (ctrl-kd 2.0.0).
             let text = mergedLines(block)
-                .map { line in line.spans.map { htmlBodySpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
+                .map { line in line.spans.map { htmlBodySpan($0, refNotes: refNotes, doc: doc, options: options, shownMap: shownMap) }.joined() }
                 .joined(separator: " ")             // heading lines read as one phrase
                 .trimmed()
             if !text.isEmpty {
@@ -220,14 +228,14 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
         if printed {
             // PHYSICAL lines: inside <pre>, a soft return is a real line break.
             let body = block.lines
-                .map { line in line.spans.map { htmlBodySpan($0, keepWS: true, refNotes: refNotes, doc: doc, options: options) }.joined() }
+                .map { line in line.spans.map { htmlBodySpan($0, keepWS: true, refNotes: refNotes, doc: doc, options: options, shownMap: shownMap) }.joined() }
                 .joined(separator: "\n")
             if !body.trimmed().isEmpty {
                 parts.append("<pre\(cls)>\(body)</pre>")
             }
         } else {
             // Logical lines: soft wraps joined back (`mergedLines`, ctrl-kd 2.0.0).
-            let lines = mergedLines(block).map { line in line.spans.map { htmlBodySpan($0, refNotes: refNotes, doc: doc, options: options) }.joined() }
+            let lines = mergedLines(block).map { line in line.spans.map { htmlBodySpan($0, refNotes: refNotes, doc: doc, options: options, shownMap: shownMap) }.joined() }
             // emit.py:180 — the author's own line breaks inside a paragraph, kept as <br>.
             let para = lines.joined(separator: "<br>\n")
             if !para.trimmed().isEmpty {

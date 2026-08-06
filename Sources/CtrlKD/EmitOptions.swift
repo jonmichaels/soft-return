@@ -52,6 +52,17 @@ public struct PageSettings: Hashable, Sendable {
     }
 }
 
+/// Note reference-mark display scheme in Modern output (ctrl-kd's `--note-refs`, ruling
+/// 2026-08-06 M8). `word` (the default) is the Word standard — arabic footnotes,
+/// lowercase-roman endnotes (MS-OI29500 §17.11.17, Word's own documented default),
+/// WordStar tags for annotations. `prefixed` shows the Markdown emitter's own labels
+/// (footnotes bare 1 2 3, endnotes e1 e2, annotations a1 a2), matched across PDF, RTF,
+/// and HTML. Printed output is a facsimile and ignores this.
+public enum NoteRefs: String, Hashable, Sendable {
+    case word
+    case prefixed
+}
+
 public struct EmitOptions: Hashable, Sendable {
     /// Goes in `<title>`, escaped. Read by `emitHTML`; the other three built-ins ignore it,
     /// exactly as in Python (emit.py:156 takes `title=''`, its three siblings do not).
@@ -100,14 +111,20 @@ public struct EmitOptions: Hashable, Sendable {
     /// `PageSettings`. `nil` (the default) applies no override at all.
     public var pageSettings: PageSettings?
 
+    /// Note reference-mark display scheme — see `NoteRefs` (ctrl-kd's `note_refs=`).
+    /// Read by the Modern paths of PDF, RTF, and HTML; the flat formats and printed
+    /// mode ignore it, exactly as in Python.
+    public var noteRefs: NoteRefs
+
     public init(title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes,
                 styles: Bool = true, fontsTarget: FontsTarget = .office,
-                pageSettings: PageSettings? = nil) {
+                pageSettings: PageSettings? = nil, noteRefs: NoteRefs = .word) {
         self.title = title
         self.notes = notes
         self.styles = styles
         self.fontsTarget = fontsTarget
         self.pageSettings = pageSettings
+        self.noteRefs = noteRefs
     }
 }
 
