@@ -309,3 +309,18 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     let xs = hdr.compactMap(\.x)
     #expect(xs == xs.sorted())                                      // strictly left-to-right
 }
+
+@Test func modernDrawsFontlessCP437SquareBulletAsVector() {
+    // Round 3 (2026-08-06, M11): -README's list bullets are cp437 0xFE black squares in
+    // FONTLESS spans — no cp1252 slot, and the graphics vector path used to require a
+    // font entry, so they rendered '?'. Modern now draws the geometry for fontless spans
+    // too; printed keeps its fontless-untouched doctrine (digests prove it).
+    var data = ws7Block(0x00)
+    data += bytes("A paragraph of ordinary prose before the bulleted list here.") + HARD
+    data += [0xFE] + bytes(" First item of the list, plain prose and clear.") + HARD
+    data += bytes("A closing paragraph of ordinary prose after the list ends.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .modern)
+    #expect(!contains(pdf, bytes("(?")))                  // no mangled bullet
+    #expect(contains(pdf, bytes("re f")))                 // a filled vector rect
+    #expect(contentSpans(pdf).contains { $0.text == "First" })   // text continues after it
+}

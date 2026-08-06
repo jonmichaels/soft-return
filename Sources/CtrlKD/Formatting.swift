@@ -42,26 +42,52 @@ func fixedOneDecimal(tenths: Int) -> String {
 /// Linux build can't link (see `PDFLayout.swift`'s `roundHalfToEven`, the same technique this
 /// borrows: truncate via `Int(_:)`, which is a compiler builtin, then compare the fraction).
 ///
-/// Round-half-to-even, same tie-break as Python's own correctly-rounded formatter, computed
-/// on `value * 10` rather than on the exact binary value directly — a second rounding step
-/// that could in principle disagree with a fully correct decimal formatter at a value landing
-/// exactly on a tenth's boundary only after that multiplication. Checked against the reference
-/// for the actual coordinate domain this writer produces (every `.lh` unit conversion this
-/// project's own vectors exercise, accumulated page-length deep, and both rule offsets): no
-/// disagreement found.
+/// Round-half-to-even on the EXACT binary value, same as Python's correctly-rounded
+/// formatter — via integer arithmetic on the double's own significand/exponent, so no
+/// second floating-point rounding step can disagree. The previous implementation rounded
+/// `value * 10` and its documented in-principle disagreement became real on 2026-08-06:
+/// Modern proportional x-advances land on values like 184.35 (binary 184.34999…), where
+/// `* 10.0` rounds UP to exactly 1843.5 and the tie-break then fired on a value Python's
+/// exact formatter sees as below the midpoint — 23 ops in one archive PDF differed by
+/// 0.1pt. Exact comparison: value = m/2^k with integer m, so tenths = ⌊10m/2^k⌋ and the
+/// remainder compares against half of 2^k with no rounding at all.
 func fixedOneDecimalDouble(_ value: Double) -> String {
     let negative = value < 0
     let magnitude = negative ? -value : value
-    let scaled = magnitude * 10.0
-    let whole = Int(scaled)
-    let fraction = scaled - Double(whole)
-    let tenths: Int
-    if fraction < 0.5 {
-        tenths = whole
-    } else if fraction > 0.5 {
-        tenths = whole + 1
+    // Domain guard: coordinates are 0..~15000pt. Anything under half a thousandth of a
+    // tenth formats as 0.0 regardless; anything astronomically large would overflow the
+    // exact path and cannot occur in a PDF this writer emits.
+    if magnitude < 0.001 { return (negative ? "-" : "") + "0.0" }
+    let m = Int64(magnitude.significandBitPattern | (1 << 52))   // normal doubles only here
+    let e2 = magnitude.exponent - 52                             // magnitude = m * 2^e2
+    var tenths: Int64
+    if e2 >= 0 {
+        // an exact integer: no fraction, no tie (e2 capped: a coordinate ≥ 2^58pt is no
+        // real PDF; the cap only avoids shift overflow, the value is absurd either way)
+        tenths = (m << min(e2, 5)) * 10
+    } else if e2 < -62 {
+        // magnitude < 2^-10: caught by the domain guard above; unreachable
+        tenths = 0
     } else {
-        tenths = whole % 2 == 0 ? whole : whole + 1
+        let den: Int64 = 1 << (-e2)
+        let num = m.multipliedReportingOverflow(by: 10)
+        if num.overflow {
+            // magnitude ≥ ~2^59pt: no real PDF coordinate; saturate via the old path
+            tenths = Int64(magnitude * 10.0)
+        } else {
+            tenths = num.partialValue / den
+            let rem = num.partialValue % den
+            let twice = rem.multipliedReportingOverflow(by: 2)
+            if !twice.overflow {
+                if twice.partialValue > den {
+                    tenths += 1
+                } else if twice.partialValue == den {
+                    if tenths % 2 != 0 { tenths += 1 }           // half-to-even
+                }
+            } else if rem > den / 2 {
+                tenths += 1
+            }
+        }
     }
     return (negative ? "-" : "") + "\(tenths / 10).\(tenths % 10)"
 }
