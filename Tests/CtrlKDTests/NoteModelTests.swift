@@ -397,7 +397,10 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
                                         content: [0, 0, 7] + bytes("[LOGO] ")
                                                  + [0x1B] + bytes("*p0002x"))
                               + bytes(" after.\r\n"))
-    #expect(emitText(withDisplay, mode: .printed).contains("[LOGO]"))
+    // Round 3 (2026-08-06, M10): the paper never showed the display string --
+    // printed pads the control's declared HMI width instead (here 0)
+    #expect(!emitText(withDisplay, mode: .printed).contains("[LOGO]"))
+    #expect(emitText(withDisplay, mode: .printed).contains("Before  after."))
     #expect(withDisplay.includes.isEmpty)
 
     // neither: pure printer bytes stay a REPORTED unknown

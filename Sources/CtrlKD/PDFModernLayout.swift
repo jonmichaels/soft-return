@@ -239,6 +239,12 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
             var toks: [ModernToken] = []
             var notes: [(index: Int, note: Note, label: String)] = []
             for span in spans {
+                if span.pctlHMI != nil {
+                    // a 0x0F print control's display string is SCREEN-ONLY; the paper
+                    // got the raw payload. Printed pads its HMI width; Modern shows
+                    // nothing — command codes are invisible (M4, extended M10)
+                    continue
+                }
                 var styles = span.styles
                 if block.heading != 0 { styles.insert(.bold) }
                 styles.formUnion(block.styleAttrs)
@@ -369,17 +375,24 @@ func modernNoteLines(_ note: Note, label: String, width: Double) -> [[ModernToke
 /// One modern running-head/foot line: Times `modernNotePt` in the margin zone, WordStar's
 /// `#` token as the page number (same rule as printed: `.op` never suppresses an explicit
 /// `#`). The header keeps its own baked spaces — that is how a 1990 head positioned its
-/// parts, and a running head is a page fixture, not reflowing text. Port of
-/// `_modern_hf_ops`.
+/// parts, and a running head is a page fixture, not reflowing text. Raw toggle bytes in
+/// the stored head (`^B` bold and friends — LJ6DTP's `.h1`) are interpreted as styles via
+/// `hfRuns`, so measurement and drawing agree; letters overlapped when the toggles were
+/// measured as glyphs (M10). Port of `_modern_hf_ops`.
 func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Double,
                  res: FontResources, tzState: inout Int) -> [[UInt8]] {
-    let text = txt.replacingAll("#", with: String(pageNo))
     var toks: [ModernToken] = []
-    for piece in splitKeepingSpaceRuns(text) {
-        let w = stringWidthPt(piece, "Times-Roman", modernNotePt)
-        toks.append(ModernToken(text: piece, styles: [], family: .times, pt: modernNotePt,
-                                entry: nil, width: w))
+    for run in hfRuns(txt) {
+        let runText = run.text.replacingAll("#", with: String(pageNo))
+        for piece in splitKeepingSpaceRuns(runText) {
+            let basefont = base14(.times, bold: run.styles.contains(.bold),
+                                  italic: run.styles.contains(.italic))
+            let w = stringWidthPt(piece, basefont, modernNotePt)
+            toks.append(ModernToken(text: piece, styles: run.styles, family: .times,
+                                    pt: modernNotePt, entry: nil, width: w))
+        }
     }
+    if toks.isEmpty { return [] }
     return modernLineOps(toks, left: left, y: y, width: width, align: .left,
                          res: res, tzState: &tzState)
 }

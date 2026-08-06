@@ -241,8 +241,10 @@ import Testing
     let body = ws7Block(0x00) + bytes("Heading before the control") + ctl + HARD
         + bytes("Plain paragraph of ordinary prose padding for detection.") + HARD
     let doc = parseWS(body)
-    #expect(emitText(doc, mode: .modern).contains("EMPTY 3-dot rule"))
-    #expect(emitRTF(doc, mode: .modern).contains("EMPTY 3-dot rule"))
+    // Round 3 (2026-08-06, M10): display strings are SCREEN-ONLY everywhere --
+    // Modern shows nothing (command codes are invisible; M4 extended)
+    #expect(!emitText(doc, mode: .modern).contains("EMPTY 3-dot rule"))
+    #expect(!emitRTF(doc, mode: .modern).contains("EMPTY 3-dot rule"))
     let pdf = emitPDF(doc, mode: .printed)
     #expect(!contains(pdf, bytes("EMPTY 3-dot rule")))
     #expect(contains(pdf, bytes("Heading before the control")))

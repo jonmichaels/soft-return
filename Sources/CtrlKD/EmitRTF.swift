@@ -102,10 +102,12 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], doc: Document, options:
                          fontControl: [Int: String] = [:], printed: Bool = false,
                          shownMap: [Int: String]? = nil) -> String {
     // A 0x0F print control's display string is SCREEN-ONLY: on paper WordStar sent the
-    // raw printer payload and advanced by the block's HMI word. The printed facsimile
-    // does the same -- the declared width of blank space (0 for LJ6DTP's rule-drawing
-    // controls), in the 10-CPI print columns the rest of printed layout uses.
-    if printed, let hmi = span.pctlHMI {
+    // raw printer payload and advanced by the block's HMI word. Printed pads that width
+    // (10-CPI print columns); Modern shows NOTHING -- the string is an editor-screen
+    // artifact, and command codes are invisible (M4, extended to print controls, ruling
+    // 2026-08-06 round 3 / M10).
+    if let hmi = span.pctlHMI {
+        guard printed else { return "" }
         let pad = roundHalfToEven(Double(hmi) / 180.0)
         return pad > 0 ? "{" + String(repeating: " ", count: pad) + "}" : ""
     }
@@ -257,6 +259,48 @@ func stripAlignSpaces(_ spans: [Span]) -> [Span] {
     return out
 }
 
+/// WordStar print-toggle bytes that legitimately appear inside header/footer TEXT (a
+/// `.h1` line carries them raw — LJ6DTP's is `^B^BLJ6DTP ... ^B`). Interpreted minimally
+/// here: toggles flip a style, every other control byte is stripped (0x0F print-control
+/// lead-ins included). U+2219 maps to the cp1252-friendly bullet so PDF measurement and
+/// drawing agree; one glyph, consistent across formats. Port of `_HF_TOGGLES`.
+private let hfToggles: [UInt32: Style] = [
+    0x02: .bold, 0x19: .italic, 0x13: .underline,
+    0x14: .sup, 0x16: .sub, 0x18: .strike,
+]
+
+/// A running-head string -> [(text, styles)] with WordStar's own toggle bytes interpreted
+/// and remaining control bytes stripped. Returns [] for a head that is nothing but
+/// control bytes (LJ6DTP's `.f1` is two 0x0F bytes) — callers skip those instead of
+/// rendering junk. Port of `hf_runs` (M10).
+func hfRuns(_ txt: String) -> [(text: String, styles: Style)] {
+    var runs: [(text: String, styles: Style)] = []
+    var buf = ""
+    var active: Style = []
+    func flush() {
+        if !buf.isEmpty {
+            runs.append((buf, active))
+            buf = ""
+        }
+    }
+    for scalar in txt.replacingAll("\u{2219}", with: "\u{2022}").unicodeScalars {
+        if let toggle = hfToggles[scalar.value] {
+            flush()
+            active.formSymmetricDifference(toggle)
+            continue
+        }
+        if scalar.value < 0x20 { continue }
+        buf.unicodeScalars.append(scalar)
+    }
+    flush()
+    // whitespace runs SURVIVE (a head positions its parts with baked spaces); only a
+    // head with no visible text at all empties out
+    if !runs.contains(where: { !$0.text.trimmed().isEmpty }) {
+        return []
+    }
+    return runs
+}
+
 /// Modern RTF `\header`/`\footer` groups from the document's own running heads (ruling
 /// 2026-08-06: Modern keeps headers).
 ///
@@ -285,9 +329,17 @@ private func rtfRunningHeads(_ doc: Document) -> String {
 
     func group(_ name: String, _ lines: [Int: String]) -> String {
         if lines.isEmpty { return "" }
-        let body = lines.keys.sorted().map { n in
-            rtfEscape(lines[n]!).replacingAll("#", with: #"{\chpgn }"#)
-        }.joined(separator: #"\line "#)
+        var rendered: [String] = []
+        for n in lines.keys.sorted() {
+            let runs = hfRuns(lines[n]!)
+            if runs.isEmpty { continue }                 // control-bytes-only head (M10)
+            rendered.append(runs.map { run in
+                "{" + rtfStyleControls(run.styles)
+                    + rtfEscape(run.text).replacingAll("#", with: #"{\chpgn }"#) + "}"
+            }.joined())
+        }
+        if rendered.isEmpty { return "" }
+        let body = rendered.joined(separator: #"\line "#)
         return #"{\\#(name) \pard\plain \f0\fs22 \#(body)\par}"#
     }
 
