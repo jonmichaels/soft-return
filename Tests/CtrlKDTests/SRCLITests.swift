@@ -243,7 +243,10 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 
 // MARK: - Argument surface
 
-@Test func defaultFormatIsMarkdown() throws {
+@Test func defaultFormatIsRTF() throws {
+    // Ruling 2026-08-05: the default format follows the mode -- bare (modern) -> the
+    // full-fidelity RTF, "each mode's bare run yields its best artifact". Supersedes the
+    // old markdown-always default.
     let command = parseArguments(["PAPER.WS"])
     #expect(command == .run({
         var options = Options()
@@ -251,7 +254,28 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
         return options
     }()))
     guard case .run(let options) = command else { return }
-    #expect(options.formats == ["markdown"])
+    #expect(options.formats == ["rtf"])
+    #expect(options.mode == .modern)
+}
+
+@Test func printedModeDefaultsToPDF() throws {
+    // Same ruling: bare --mode printed -> PDF, "the closest thing to actually printing".
+    guard case .run(let options) = parseArguments(["--mode", "printed", "PAPER.WS"]) else {
+        Issue.record("expected a run")
+        return
+    }
+    #expect(options.formats == ["pdf"])
+    #expect(options.mode == .printed)
+    #expect(options.modeExplicit)
+}
+
+@Test func explicitToFlagWinsOverTheModeDefault() throws {
+    guard case .run(let options) = parseArguments(["--mode", "printed", "-t", "html", "PAPER.WS"])
+    else {
+        Issue.record("expected a run")
+        return
+    }
+    #expect(options.formats == ["html"])
 }
 
 @Test func toFlagIsRepeatableAndKeepsOrder() throws {
@@ -357,12 +381,12 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 }
 
 @Test func versionLineNamesBothTheCLIAndTheReference() {
-    #expect(versionLine == "sr 2.1.0 (ctrl-kd parity 3.0.0)")
+    #expect(versionLine == "sr 3.0.0 (ctrl-kd parity 4.0.0)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
     #expect(recorder.out == [versionOutput])
-    #expect(versionOutput.hasSuffix("sr 2.1.0 (ctrl-kd parity 3.0.0)"))
+    #expect(versionOutput.hasSuffix("sr 3.0.0 (ctrl-kd parity 4.0.0)"))
     #expect(versionOutput.contains("_____       ______     ____"))  // the SOFT RETURN Slant banner leads
     #expect(recorder.written.isEmpty)
 }
@@ -520,12 +544,13 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
     let status = run(["/archive/PAPER.WS"], environment: recorder.environment)
 
     #expect(status == ExitStatus.ok)
-    #expect(Array(recorder.written.keys) == ["/archive/PAPER.md"])
+    // Bare invocation is Modern RTF now (ruling 2026-08-05) — .md was the old default.
+    #expect(Array(recorder.written.keys) == ["/archive/PAPER.rtf"])
     // Status lines go to STDERR: on stdout they land inside the converted
     // document whenever the destination is /dev/stdout or a pipe (both CLIs
     // carried this defect; fixed together 2026-08-04).
     #expect(recorder.out.isEmpty)
-    #expect(recorder.err == ["/archive/PAPER.WS -> /archive/PAPER.md"])
+    #expect(recorder.err == ["/archive/PAPER.WS -> /archive/PAPER.rtf"])
     #expect(recorder.createdDirectories.isEmpty)
 }
 
@@ -533,7 +558,7 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
     // Python's `os.path.dirname(path) or '.'` — a bare name has no directory part.
     let recorder = Recorder(files: ["PAPER.WS": makeProse()])
     #expect(run(["PAPER.WS"], environment: recorder.environment) == ExitStatus.ok)
-    #expect(Array(recorder.written.keys) == ["./PAPER.md"])
+    #expect(Array(recorder.written.keys) == ["./PAPER.rtf"])
 }
 
 @Test func outdirIsCreatedAndUsedForEveryFormat() {
@@ -591,10 +616,10 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
     let status = run(["/archive/MISSING.WS", "/archive/GOOD.WS"], environment: recorder.environment)
 
     #expect(status == ExitStatus.fileFailure, "one bad input must not make the run succeed")
-    #expect(Array(recorder.written.keys) == ["/archive/GOOD.md"], "the good file still converts")
+    #expect(Array(recorder.written.keys) == ["/archive/GOOD.rtf"], "the good file still converts")
     // stderr carries the failure for MISSING.WS plus GOOD's status line
     #expect(recorder.err.count == 2)
-    #expect(recorder.err.contains("/archive/GOOD.WS -> /archive/GOOD.md"))
+    #expect(recorder.err.contains("/archive/GOOD.WS -> /archive/GOOD.rtf"))
 }
 
 @Test func usageErrorsExitTwoAndSayUsage() {
@@ -660,12 +685,132 @@ private let staleDiagnoseKeys: Set<String> = ["notes", "page", "producer", "comm
 
 @Test func aWriteFailureIsReportedAndDoesNotStopTheRun() {
     let recorder = Recorder(files: ["/archive/A.WS": makeProse(), "/archive/B.WS": makeProse()])
-    recorder.refuseWritesTo = "/archive/A.md"
+    recorder.refuseWritesTo = "/archive/A.rtf"
     let status = run(["/archive/A.WS", "/archive/B.WS"], environment: recorder.environment)
 
     #expect(status == ExitStatus.fileFailure)
-    #expect(Array(recorder.written.keys) == ["/archive/B.md"])
-    #expect(recorder.err.first?.contains("/archive/A.md") == true)
+    #expect(Array(recorder.written.keys) == ["/archive/B.rtf"])
+    #expect(recorder.err.first?.contains("/archive/A.rtf") == true)
+}
+
+// MARK: - The wholesale-defaults batch (CLI-Defaults-Audit, all ruled 2026-08-05)
+
+@Test func bareInvocationIsModernRTF() throws {
+    // THE ruling: "the converter is about bringing the old docs to a modern audience" --
+    // no flags means Modern RTF, Georgia 14 body, modern page. Port of
+    // `test_bare_invocation_is_modern_rtf`.
+    let recorder = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    #expect(run(["/archive/DOC.WS"], environment: recorder.environment) == ExitStatus.ok)
+    let out = String(decoding: try #require(recorder.written["/archive/DOC.rtf"]), as: UTF8.self)
+    #expect(out.hasPrefix(#"{\rtf1"#))
+    #expect(out.contains(#"{\f0 Georgia{\*\falt Times New Roman};}"#))
+    #expect(out.contains(#"\f0\fs28"#))                   // the cozy-book 14pt
+    #expect(out.contains(#"\paperw12240"#))
+    #expect(out.contains(#"\margl1440"#))
+}
+
+@Test func printedModeDefaultsToPDFEndToEnd() throws {
+    // Port of `test_printed_mode_defaults_to_pdf`.
+    let recorder = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    #expect(run(["--mode", "printed", "/archive/DOC.WS"], environment: recorder.environment)
+            == ExitStatus.ok)
+    let pdf = try #require(recorder.written["/archive/DOC.pdf"])
+    #expect(pdf.starts(with: bytes("%PDF-1.4")))
+}
+
+@Test func pageSettingsPresets() throws {
+    // sawyer: the DEFAULT.PAT machine (mt ~0.83in -> margt 1195/1440*1440 twips = 1195...
+    // in lines*240: 4.979*240 = 1195); default: factory page. Port of
+    // `test_page_settings_presets`.
+    let recorder = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    #expect(run(["--mode", "printed", "-t", "rtf", "--page-settings", "sawyer", "/archive/DOC.WS"],
+                environment: recorder.environment) == ExitStatus.ok)
+    let sawyer = String(decoding: try #require(recorder.written["/archive/DOC.rtf"]), as: UTF8.self)
+    #expect(sawyer.contains(#"\margt1195"#))
+    #expect(sawyer.contains(#"\margb1440"#))
+    #expect(sawyer.contains(#"\margl1008"#))
+
+    let recorder2 = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    #expect(run(["--mode", "printed", "-t", "rtf", "--page-settings", "default", "/archive/DOC.WS"],
+                environment: recorder2.environment) == ExitStatus.ok)
+    let factory = String(decoding: try #require(recorder2.written["/archive/DOC.rtf"]), as: UTF8.self)
+    #expect(factory.contains(#"\margt720"#))
+    #expect(factory.contains(#"\margb1920"#))              // factory 0.5/1.33in
+}
+
+@Test func forcedPrintedNoticeOnExplicitModern() throws {
+    // D5: a print stream cannot reflow; an EXPLICIT --mode modern gets one stderr line
+    // saying so. The default (no --mode) stays quiet. Port of
+    // `test_forced_printed_notice_on_explicit_modern`.
+    let stream = bytes("Line one of a printed page\r\nLine two of it\r\n") + [0x1a]
+    let recorder = Recorder(files: ["/archive/CAP.PRN": stream])
+    #expect(run(["--mode", "modern", "-t", "text", "/archive/CAP.PRN"],
+                environment: recorder.environment) == ExitStatus.ok)
+    #expect(recorder.err.contains { $0.contains("modern reflow is not possible") })
+
+    let recorder2 = Recorder(files: ["/archive/CAP2.PRN": stream])
+    #expect(run(["-t", "text", "/archive/CAP2.PRN"], environment: recorder2.environment)
+            == ExitStatus.ok)
+    #expect(!recorder2.err.contains { $0.contains("modern reflow") })
+}
+
+// MARK: - D4: sr's own overwrite prompt (ruled platform divergence, "it's a Mac";
+// ctrl-kd's own --force is a documented no-op, ctrl-kd always overwrites silently)
+
+@Test func forceFlagIsAccepted() throws {
+    // Port of `test_force_flag_is_accepted` (there, a no-op; here, real: bypasses D4).
+    let recorder = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    recorder.existingFiles.insert("/archive/DOC.rtf")
+    #expect(run(["--force", "/archive/DOC.WS"], environment: recorder.environment) == ExitStatus.ok)
+    #expect(recorder.written["/archive/DOC.rtf"] != nil)
+}
+
+@Test func overwriteIsSilentWhenTheDestinationIsNew() throws {
+    let recorder = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    #expect(run(["/archive/DOC.WS"], environment: recorder.environment) == ExitStatus.ok)
+    #expect(recorder.written["/archive/DOC.rtf"] != nil)
+    #expect(recorder.err.allSatisfy { !$0.contains("already exists") })
+}
+
+@Test func overwriteIsRefusedOutrightWhenStdinIsNotATTY() throws {
+    let recorder = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    recorder.existingFiles.insert("/archive/DOC.rtf")
+    recorder.isTTY = false
+    let status = run(["/archive/DOC.WS"], environment: recorder.environment)
+    #expect(status == ExitStatus.fileFailure)
+    #expect(recorder.written["/archive/DOC.rtf"] == nil)
+    #expect(recorder.err.contains { $0.contains("already exists") && $0.contains("--force") })
+}
+
+@Test func overwriteAsksAndProceedsOnYesWhenStdinIsATTY() throws {
+    let recorder = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    recorder.existingFiles.insert("/archive/DOC.rtf")
+    recorder.isTTY = true
+    recorder.answers = ["y"]
+    #expect(run(["/archive/DOC.WS"], environment: recorder.environment) == ExitStatus.ok)
+    #expect(recorder.written["/archive/DOC.rtf"] != nil)
+}
+
+@Test func overwriteAsksAndRefusesOnAnythingButYes() throws {
+    let recorder = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    recorder.existingFiles.insert("/archive/DOC.rtf")
+    recorder.isTTY = true
+    recorder.answers = ["n"]
+    let status = run(["/archive/DOC.WS"], environment: recorder.environment)
+    #expect(status == ExitStatus.fileFailure)
+    #expect(recorder.written["/archive/DOC.rtf"] == nil)
+}
+
+@Test func overwriteAtEOFOnAPromptIsTreatedAsNo() throws {
+    // An unanswerable prompt (stdin closed mid-run) must never fall through to
+    // overwriting — silently hanging or silently agreeing are both worse than refusing.
+    let recorder = Recorder(files: ["/archive/DOC.WS": makeProse()])
+    recorder.existingFiles.insert("/archive/DOC.rtf")
+    recorder.isTTY = true
+    recorder.answers = []                                  // EOF
+    let status = run(["/archive/DOC.WS"], environment: recorder.environment)
+    #expect(status == ExitStatus.fileFailure)
+    #expect(recorder.written["/archive/DOC.rtf"] == nil)
 }
 
 // MARK: - Gaps the job-014 mutation run found
@@ -803,6 +948,16 @@ private final class Recorder: @unchecked Sendable {
     var err: [String] = []
     /// Destination that fails to write, for the error path.
     var refuseWritesTo: String?
+    /// Destinations the D4 overwrite gate should treat as already existing — separate from
+    /// `written` (which only grows once a write actually happens) so a test can simulate a
+    /// pre-existing file the run never itself created.
+    var existingFiles: Set<String> = []
+    /// D4's TTY test. `false` (a script/pipeline) by default, matching production's own
+    /// safer default when nothing overrides it.
+    var isTTY = false
+    /// Canned answers to the D4 y/n prompt, consumed in order; `nil` (the default, an
+    /// empty queue) means EOF — treated as "no", same as production's real stdin closing.
+    var answers: [String] = []
 
     init(files: [String: [UInt8]] = [:]) {
         self.files = files
@@ -829,7 +984,10 @@ private final class Recorder: @unchecked Sendable {
             },
             createDirectory: { [self] path in createdDirectories.append(path) },
             writeOut: { [self] line in out.append(line) },
-            writeErr: { [self] line in err.append(line) }
+            writeErr: { [self] line in err.append(line) },
+            fileExists: { [self] path in existingFiles.contains(path) || written[path] != nil },
+            stdinIsTTY: { [self] in isTTY },
+            readLine: { [self] in answers.isEmpty ? nil : answers.removeFirst() }
         )
     }
 }

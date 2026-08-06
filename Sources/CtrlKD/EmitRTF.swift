@@ -267,10 +267,61 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     }
 
     let body = parts.joined(separator: "\n")
-    var out = #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}"#
+
+    // The sophisticated body (ruling 2026-08-05): text with no font information reads in
+    // Georgia 14 under Modern — "like reading a cozy book" — one font for every target,
+    // the per-target variation riding in the falt (RTF's own no-Georgia safety net).
+    // Printed keeps the historical Times New Roman f0 / Courier f1 / \fs24 UNTOUCHED: a
+    // fontless document on the era's fixed grid IS a typescript, and Printed gap-fills
+    // with 1990, never with today's conventions.
+    let bodyFonts = modernBodyFonts[options.fontsTarget] ?? modernBodyFonts[.office]!
+    var f0Entry = #"{\f0 \#(bodyFonts.primary){\*\falt \#(bodyFonts.falt)};}"#
+    var bodyFontSize = #"\fs\#(modernBodySize * 2)"#
+    if printed {
+        f0Entry = #"{\f0 Times New Roman;}"#
+        bodyFontSize = #"\fs24"#
+    }
+
+    // Page setup, emitted EXPLICITLY: without \paperw/\margl the opening app's locale
+    // decides the paper (A4 in most of the world), and the "Modern page settings" ruling
+    // would be fiction. Geometry follows the governing principle: the document's own
+    // declared values win; silence is filled by the MODE's own page — Modern's is 1in
+    // margins on Letter, Printed's is the era page already resolved onto `doc.page` (which
+    // carries WordStar's own factory defaults when the file declared nothing).
+    let page = doc.page
+    func twipsLines(_ value: Double?, default defaultLines: Double) -> Int {
+        roundHalfToEven((value ?? defaultLines) * 240.0)     // 1 line at 6 LPI = 240 twips
+    }
+    let margt: Int
+    let margb: Int
+    let margl: Int
+    let paperh: Int
+    if printed {
+        margt = twipsLines(page?.mtLines, default: 3.0)
+        margb = twipsLines(page?.mbLines, default: 8.0)
+        margl = roundHalfToEven((page?.poCols ?? 8.0) * 144.0)
+        paperh = roundHalfToEven((page?.heightIn ?? 11.0) * 1440.0)
+    } else {
+        // Modern mode only trusts a field the document (or a --page-settings override,
+        // which is applied as though it were the document's own — see `effectivePage`)
+        // actually DECLARED; an undeclared field falls back to Modern's own fixed 1in
+        // page rather than whatever WordStar factory number `doc.page` already carries.
+        let mtDeclared = (page?.mtSource ?? .default) != .default
+        let mbDeclared = (page?.mbSource ?? .default) != .default
+        let poDeclared = (page?.poSource ?? .default) != .default
+        margt = mtDeclared ? twipsLines(page?.mtLines, default: 6.0) : 1440
+        margb = mbDeclared ? twipsLines(page?.mbLines, default: 6.0) : 1440
+        margl = poDeclared ? roundHalfToEven((page?.poCols ?? 10.0) * 144.0) : 1440
+        paperh = 15840
+    }
+    let pageSetup = #"\paperw12240\paperh\#(paperh)\margl\#(margl)\margr\#(margl)"#
+        + #"\margt\#(margt)\margb\#(margb)"#
+
+    var out = #"{\rtf1\ansi\deff0{\fonttbl"# + f0Entry + #"{\f1 Courier New;}"#
     out += fontTable.fontTable + "}"
     out += stylesheet
-    out += "\n" + font + #"\fs24 "# + "\n"
+    out += pageSetup
+    out += "\n" + font + bodyFontSize + " " + "\n"
     out += body
     out += "\n}\n"
     return out

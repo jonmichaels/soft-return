@@ -82,12 +82,24 @@ import Testing
     #expect(!isPrinted(doc), "…so emitPDF takes the modern path")
 
     // Was [54, 0] at 1.1.5. The 54 must still be there: the fix removes the empty page, it
-    // does not lose a line of content off the end of the full one.
+    // does not lose a line of content off the end of the full one. `docToPagelines` itself
+    // is UNCHANGED by the Modern-PDF rewrite (ruling 2026-08-05) — Python keeps its own
+    // `_doc_to_pagelines`'s modern branch as dead code the same way, since `_emit_pdf_inner`
+    // no longer calls it for Modern — so this half of the regression test still pins the
+    // original bug fix exactly.
     #expect(docToPagelines(doc, printed: false).map(\.count) == [54])
 
+    // `emitPDF(mode: .modern)` no longer goes through `docToPagelines` at all (it dispatches
+    // to `modernStreams`'s proportional reflow instead), so the PAGE COUNT below is not the
+    // same "54" — 14pt Times at 1.2x leading needs more vertical room per line than the old
+    // fixed 65-col/54-line Courier grid did for the same text, and this fixture is now long
+    // enough to spill onto a second page. What must still hold, and is what this test
+    // actually guards against, is the ORIGINAL bug: no spurious trailing blank sheet — the
+    // same trailing-empty-page trim (`while pages.count > 1 && ... .isEmpty`) protects the
+    // new engine too.
     let pdf = emitPDF(doc, mode: .modern)
-    #expect(countOccurrences(of: bytes("/Type /Page "), in: pdf) == 1)
-    #expect(contains(pdf, bytes("/Count 1")))
+    #expect(countOccurrences(of: bytes("/Type /Page "), in: pdf) == 2)
+    #expect(contains(pdf, bytes("/Count 2")))
     #expect(!contains(pdf, bytes("<< /Length 0 >>\nstream\n\nendstream")),
             "the blank sheet, gone from the bytes")
 }

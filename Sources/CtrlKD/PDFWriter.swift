@@ -285,7 +285,7 @@ struct LineSegment {
 /// either, then the rise chooses the direction. `sup` wins if a span somehow carries both,
 /// matching Python's nested conditional. Reduced to 2/3 — 8pt at the default 12, the ratio
 /// this emitter has always used.
-private func sized(_ styles: Style, _ size: Int) -> (points: Int, rise: Int) {
+func sized(_ styles: Style, _ size: Int) -> (points: Int, rise: Int) {
     if styles.contains(.sup) { return (max(1, roundHalfToEven(Double(size * 2) / 3.0)), 3) }
     if styles.contains(.sub) { return (max(1, roundHalfToEven(Double(size * 2) / 3.0)), -2) }
     return (size, 0)
@@ -293,7 +293,7 @@ private func sized(_ styles: Style, _ size: Int) -> (points: Int, rise: Int) {
 
 /// Underline / strikethrough as stroked paths (PDF has no text attribute for either), for a
 /// span occupying `w` points from `x`. Port of `pdf._rules`.
-private func rules(_ styles: Style, _ text: String, x: Double, y: Double, w: Double) -> [[UInt8]] {
+func rules(_ styles: Style, _ text: String, x: Double, y: Double, w: Double) -> [[UInt8]] {
     // A rule under a run of pure whitespace would be a stray dash, so Python guards both
     // with `text.strip()` — non-empty after stripping, i.e. the run has ink.
     guard text.contains(where: { !$0.isWhitespace }) else { return [] }
@@ -648,82 +648,85 @@ private func joined(_ chunks: [[UInt8]], separator: UInt8) -> [UInt8] {
 public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> [UInt8] {
     var doc = doc
-    // `options.pageDefaults`: replacement DEFAULTS for geometry the document does not
+    // `options.pageSettings`: replacement geometry for everything the document does not
     // declare itself (a field is overridden only when its own resolved value is still
     // this project's built-in default — a document's own dot commands always win). This
     // exists because WordStar's stock defaults are not what a given machine printed:
     // WSCHANGE patches them per installation. Applied to a local COPY of `doc` — a value
     // type, so there is nothing to restore afterward, unlike Python's save/try/finally
-    // dance around a shared mutable `doc.meta['page']`.
-    if let pageDefaults = options.pageDefaults, var page = doc.page {
-        if let mt = pageDefaults.mtLines, page.mtSource == .default { page.mtLines = mt }
-        if let mb = pageDefaults.mbLines, page.mbSource == .default { page.mbLines = mb }
-        if let po = pageDefaults.poCols, page.poSource == .default { page.poCols = po }
-        if let hm = pageDefaults.hmLines, page.hmSource == .default { page.hmLines = hm }
-        if let fm = pageDefaults.fmLines, page.fmSource == .default { page.fmLines = fm }
-        page.textLines = textLinesPerPage(pl: page.plLines, mt: page.mtLines,
-                                          mb: page.mbLines, lh48: page.lh48)
-        doc.page = page
+    // dance around a shared mutable `doc.meta['page']`. Shared with the CLI's own
+    // once-per-document application (`Run.swift`) via `effectivePage` (EmitOptions.swift).
+    if let pageSettings = options.pageSettings, let page = doc.page {
+        doc.page = effectivePage(page, settings: pageSettings)
     }
     let printed = mode == .printed || isPrinted(doc)
-    let pages = docToPagelines(doc, printed: printed)
-    // ctrl-kd 1.3.0: both figures are per-document in Printed mode now — `printedTop`/
-    // `printedLead` (PDFLayout.swift) read the file's own `.mt`/`.lh`, falling back to the
-    // same fixed `topPrinted`/`lead` a print stream (no page geometry) always used. Modern
-    // mode is untouched: it never faithfulness-matches the original page, so it keeps the
-    // fixed margin and lead regardless of what the document's geometry says.
-    let top = printed ? printedTop(doc) : PDFMetrics.topModern
-    let lead = printed ? printedLead(doc) : Double(PDFMetrics.lead)
-    // ctrl-kd 2.0.0: `.cw`/`.po`-derived for a Printed-mode WS document (PDFLayout.swift's
-    // `printedSize`/`printedLeft`), falling back to the same fixed size/margin a print
-    // stream (no page geometry) always used. Modern mode is untouched: it never
-    // faithfulness-matches the original page, so it keeps the fixed size and margin
-    // regardless of what the document's geometry says.
-    let size = printed ? printedSize(doc) : PDFMetrics.size
-    let left = printed ? printedLeft(doc, size: size) : Double(PDFMetrics.margin)
+    // THE STREAMS ARE WRITTEN FIRST: which base-14 fonts the document actually uses is only
+    // known once every span has been laid out, and the resource table has to name them all.
+    // `res` is a class (reference semantics), shared by every page, so `/Fn` numbering is
+    // stable across the whole file whichever branch below fills it in.
+    let res = FontResources()
+    let streams: [[UInt8]]
     // The SAME figure `printedCap` derives the line count from (PDFLayout.swift) — Python
     // computes it once in `emit_pdf` and uses it for both the MediaBox and the content
-    // stream's Y-origin (pdf.py:449,476-479). A page that paginates at a custom `.pl`'s
-    // resolved capacity but still declares a Letter-size MediaBox would be internally
-    // inconsistent: the right number of lines, drawn on the wrong-size sheet of paper.
+    // stream's Y-origin. A page that paginates at a custom `.pl`'s resolved capacity but
+    // still declares a Letter-size MediaBox would be internally inconsistent: the right
+    // number of lines, drawn on the wrong-size sheet of paper. Modern is always Letter
+    // (`resolvedPageHeight` already returns the fixed height when `printed` is false), like
+    // the Modern RTF's own page setup.
     let pageHeight = resolvedPageHeight(doc, printed: printed)
-    // Font runs are a PRINTED-mode facsimile feature: Modern mode is Courier by ruling, so
-    // it is handed no fonts at all and every span stays on the fixed-pitch path. WS4
-    // documents and print streams have no font blocks, so `doc.fonts` is empty for them and
-    // this is a no-op.
-    let fonts = printed ? doc.fonts : []
-    // Colour is DRIVER-DEFINED: the palette indices a document records mean whatever its
-    // printer description file says. LJ6DTP's table is known (recovered from the driver
-    // file's own string table and confirmed against the document's sample rows): 0
-    // Black, 1-7 grays of decreasing ink, 15 White — the knockout that lets white text
-    // punch out of a black bar. Any other driver: indices stay opaque, nothing rendered.
-    let colourMap = (printed && doc.printerDriver == "LJ6DTP") ? colourGrayLJ6DTP : [:]
+    if printed {
+        let pages = docToPagelines(doc, printed: true)
+        // ctrl-kd 1.3.0/2.0.0: per-document in Printed mode — `printedTop`/`printedLead`/
+        // `printedSize`/`printedLeft` (PDFLayout.swift) read the file's own `.mt`/`.lh`/
+        // `.cw`/`.po`, falling back to the same fixed figures a print stream (no page
+        // geometry) always used. UNTOUCHED by the Modern-PDF rewrite (2026-08-05) — the
+        // printed digests survive it byte-for-byte.
+        let top = printedTop(doc)
+        let lead = printedLead(doc)
+        let size = printedSize(doc)
+        let left = printedLeft(doc, size: size)
+        // Font runs are a PRINTED-mode facsimile feature — WS4 documents and print
+        // streams have no font blocks, so `doc.fonts` is empty for them and this is a
+        // no-op either way.
+        let fonts = doc.fonts
+        // Colour is DRIVER-DEFINED: the palette indices a document records mean whatever
+        // its printer description file says. LJ6DTP's table is known (recovered from the
+        // driver file's own string table and confirmed against the document's sample
+        // rows): 0 Black, 1-7 grays of decreasing ink, 15 White — the knockout that lets
+        // white text punch out of a black bar. Any other driver: indices stay opaque,
+        // nothing rendered. Printed-only: Modern has no colour ops at all.
+        let colourMap = doc.printerDriver == "LJ6DTP" ? colourGrayLJ6DTP : [:]
+        // `.pn n` sets the number of the page it appears on, so a chapter file in a larger
+        // manuscript numbers from where the previous one stopped. Printed-only: Modern has
+        // no running heads at all, so there is nothing to number them for.
+        let startNo = doc.page?.pnStart ?? 1
+        var built: [[UInt8]] = []
+        for (i, page) in pages.enumerated() {
+            // Per-page header/footer state, replayed from `doc.hfEvents` through
+            // pagination (`Page.headers`/`.footers`) — populated for every page
+            // regardless of which paginator built it (the notes-aware one stamps the
+            // document's final state on every page instead, matching Python's `getattr`
+            // fallback for a plain list).
+            let running = runningOps(doc, pageNo: startNo + i, pageHeight: pageHeight,
+                                     lead: lead, size: size, left: left, printed: true,
+                                     headers: page.headers, footers: page.footers)
+            built.append(pageStream(page, top: top, pageHeight: pageHeight, lead: lead,
+                                    size: size, left: left, running: running,
+                                    fonts: fonts, res: res, colourMap: colourMap))
+        }
+        streams = built
+    } else {
+        // Modern: the printed form of the Modern RTF (ruling 2026-08-05) — document fonts
+        // carried, proportional reflow at the real measure, footnotes at the page bottom,
+        // fontless body Times 14. Always US Letter, like the RTF's own page setup. No
+        // running heads, no colour ops — both are Printed-only features.
+        streams = modernStreams(doc, options: options, res: res)
+    }
 
     // (number, body) — the body WITHOUT the `N 0 obj` wrapper, which the writer adds while
     // recording offsets.
     var objs: [(number: Int, body: [UInt8])] = []
     var nextNum = 3                                   // 1 and 2 are reserved, inserted below
-
-    // `.pn n` sets the number of the page it appears on, so a chapter file in a larger
-    // manuscript numbers from where the previous one stopped.
-    let startNo = doc.page?.pnStart ?? 1
-
-    // THE STREAMS ARE WRITTEN FIRST: which base-14 fonts the document actually uses is only
-    // known once every span has been laid out, and the resource table has to name them all.
-    let res = FontResources()
-    var streams: [[UInt8]] = []
-    for (i, page) in pages.enumerated() {
-        // Per-page header/footer state, replayed from `doc.hfEvents` through pagination
-        // (`Page.headers`/`.footers`) — populated for every page regardless of which
-        // paginator built it (the notes-aware one stamps the document's final state on
-        // every page instead, matching Python's `getattr` fallback for a plain list).
-        let running = runningOps(doc, pageNo: startNo + i, pageHeight: pageHeight,
-                                 lead: lead, size: size, left: left, printed: printed,
-                                 headers: page.headers, footers: page.footers)
-        streams.append(pageStream(page, top: top, pageHeight: pageHeight, lead: lead,
-                                  size: size, left: left, running: running,
-                                  fonts: fonts, res: res, colourMap: colourMap))
-    }
 
     var fontNums: [(name: String, number: Int)] = []
     for font in res.fonts {
@@ -751,7 +754,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
 
     var pageNums: [Int] = []
     var contentNums: [Int] = []
-    for _ in pages {
+    for _ in streams {
         pageNums.append(nextNum); nextNum += 1
         contentNums.append(nextNum); nextNum += 1
     }
@@ -759,7 +762,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     let kids = pageNums.map { "\($0) 0 R" }.joined(separator: " ")
     objs.insert((1, Array("<< /Type /Catalog /Pages 2 0 R >>".utf8)), at: 0)
     objs.insert((2, Array(
-        "<< /Type /Pages /Kids [\(kids)] /Count \(pages.count) >>".utf8)), at: 1)
+        "<< /Type /Pages /Kids [\(kids)] /Count \(streams.count) >>".utf8)), at: 1)
 
     for (i, stream) in streams.enumerated() {
         objs.append((pageNums[i], Array("""

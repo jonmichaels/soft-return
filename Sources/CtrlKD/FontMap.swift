@@ -35,8 +35,11 @@ let fontAlternates: [String: [String]] = [
     "times":                  ["Times New Roman"],
     "zapfchancery":           ["Apple Chancery", "Monotype Corsiva"],
     "zapf chancery":          ["Apple Chancery", "Monotype Corsiva"],
-    "zapfdingbats":           ["Zapf Dingbats", "Wingdings"],
-    "zapf dingbats":          ["Zapf Dingbats", "Wingdings"],
+    // No Wingdings here (ruling, 2026-08-05): its glyph MAPPING differs, so a fallback to
+    // it would print wrong symbols -- and dingbat runs are transliterated to real Unicode
+    // anyway, which any font-stack terminus can render.
+    "zapfdingbats":           ["Zapf Dingbats"],
+    "zapf dingbats":          ["Zapf Dingbats"],
     "symbol":                 ["Symbol"],
     "courier":                ["Courier New"],
     "pica":                   ["Courier New"],
@@ -99,81 +102,170 @@ public enum FontsTarget: String, Hashable, Sendable, CaseIterable {
 
 /// `GENERIC_PRIMARY` (fontmap.py) — the target's face for each of the font block's own
 /// generic-style bits, which is what an unmapped (or unnamed) font lands on.
+///
+/// `.mac` serif is Times New Roman (Jon's ruling, 2026-08-05): the generic fires for
+/// UNKNOWN faces, and the era-honest render is the era's own neutral serif -- Georgia now
+/// means exactly one thing on mac (New Century Schoolbook, via `TARGET_FONTS` below).
+/// `.google` display is Poppins: Impact exists in Docs' MENU but the import CONVERTER
+/// maps names through an internal table that lacks it (Jon's three import tests,
+/// 2026-08-05 -- the Drive previewer renders Impact, conversion turns every declaration
+/// form into Arial identically).
 let genericPrimary: [FontsTarget: [GenericStyle: String]] = [
     .office: [.sans: "Arial", .serif: "Times New Roman",
               .script: "Monotype Corsiva", .display: "Impact"],
-    .mac:    [.sans: "Helvetica", .serif: "Georgia",
+    .mac:    [.sans: "Helvetica", .serif: "Times New Roman",
               .script: "Apple Chancery", .display: "Futura"],
     .google: [.sans: "Arial", .serif: "Times New Roman",
-              .script: "Dancing Script", .display: "Impact"],
+              .script: "Dancing Script", .display: "Poppins"],
     .linux:  [.sans: "DejaVu Sans", .serif: "DejaVu Serif",
               .script: "Z003", .display: "DejaVu Sans"],
 ]
 
-/// `TARGET_OVERRIDES` (fontmap.py) — where a target's best name differs from the head of
-/// `fontAlternates`, which is Office-first.
-let targetOverrides: [FontsTarget: [String: String]] = [
-    .office: [:],
-    // macOS-native stand-ins for the Office-private set: Futura carries the
-    // Avant Garde geometry; Iowan Old Style is the closest native to
-    // Bookman's warmth; Georgia was DESIGNED as a screen Schoolbook-alike.
-    .mac: [
-        "avant garde": "Futura",
-        "bookman": "Iowan Old Style",
-        "cntry schlbk": "Georgia",
-        "newcntschlbk": "Georgia",
-        "new century schoolbook": "Georgia",
-        "century": "Georgia",
-        "american classic": "Iowan Old Style",
-        "helv": "Helvetica",
-        "helvetica": "Helvetica",
-        "univers": "Helvetica Neue",
-    ],
-    // URW base-35 canonical family names (the C059/P052/Z003 codes ARE the
-    // modern fontconfig names; older aliases 'Century SchoolBook L' /
-    // 'URW Palladio L' / 'URW Chancery L' still resolve on most distros).
-    .linux: [
-        "avant garde": "URW Gothic",
-        "bookman": "URW Bookman",
-        "cntry schlbk": "C059",
-        "newcntschlbk": "C059",
-        "new century schoolbook": "C059",
-        "century": "C059",
-        "american classic": "C059",
-        "palatino": "P052",
-        "zapfchancery": "Z003",
-        "zapf chancery": "Z003",
-        "coronet": "Z003",
-        "helv": "Nimbus Sans",
-        "helvetica": "Nimbus Sans",
-        "helv narrow": "Nimbus Sans Narrow",
-        "helv cond.": "Nimbus Sans Narrow",
-        "helvetica narrow": "Nimbus Sans Narrow",
-        "univers": "Nimbus Sans",
-        "times": "Nimbus Roman",
-        "tms rmn": "Nimbus Roman",
-        "cg times": "Nimbus Roman",
-        "courier": "Nimbus Mono PS",
-        "pica": "Nimbus Mono PS",
-        "elite": "Nimbus Mono PS",
-        "lineprinter": "Nimbus Mono PS",
-        "symbol": "Standard Symbols PS",
-    ],
-    // Docs resolves the Microsoft names natively; its one real gap is a
-    // chancery script -- Dancing Script is the stock calligraphic answer.
-    .google: [
-        "zapfchancery": "Dancing Script",
-        "zapf chancery": "Dancing Script",
-        "coronet": "Dancing Script",
-    ],
+/// The sophisticated body: what a document with NO font information at all (every WS4
+/// file, fontless WS5+) reads in under Modern. Jon's specimen ruling 2026-08-05: "Georgia
+/// 14 at 1in margins -- like reading a cozy book" -- and one font for ALL targets, because
+/// RTF's falt and HTML's font stack carry the no-Georgia case natively (the per-target
+/// variation lives in the FALLBACK). PDF is not here: base-14 by design principle, it
+/// renders the body as Times at the same size ("the PDF needs to work no matter what.
+/// Times New Roman 14. It has to be.").
+let modernBodySize = 14
+let modernBodyFonts: [FontsTarget: (primary: String, falt: String)] = [
+    .office: ("Georgia", "Times New Roman"),
+    .mac:    ("Georgia", "Times New Roman"),
+    .google: ("Georgia", "Times New Roman"),
+    .linux:  ("Georgia", "P052"),
 ]
 
-/// `(primary, falt_or_nil)` for an RTF fonttbl entry. The primary is the target's best
-/// AVAILABLE name; the falt is the next-best MODERN name -- never the era name (Jon: 'no
-/// use keeping the ALT font that crazy title' -- nothing modern resolves 'PS SansSer
-/// Qual'; the verbatim era name stays first-class in `Document.fonts` and the HTML
-/// stacks). A family with no table entry gets the target's generic primary from the font
-/// block's own style bits, so EVERY font run lands on a usable face.
+// ---- the FINAL RULED FONT TABLE (CLI-Defaults-Audit, 2026-08-05) ----------
+// Complete per-target (primary, falt) pairs. Every mac cell device-verified by Jon (Font
+// Book, locked-flag test); office cells verified against Microsoft's published Windows-11
+// + cloud-fonts lists (11 names are M365 cloud fonts: menu-visible, auto-fetch, absent
+// from disk -- the target means CURRENT CONNECTED WORD); google cells verified by Jon's
+// Docs import tests (MS names NEVER survive conversion; Google-catalog names and the web
+// core minus Impact do); linux primaries are the URW true clones (Ghostscript tier) with
+// every falt a guaranteed-tier name (Liberation rides LibreOffice, DejaVu rides
+// fontconfig itself).
+//
+// A `nil` falt means the primary is already the safest name available.
+
+/// Flatten alias groups (`"a|b|c"`) into one `key -> (primary, falt)` table, mirroring
+/// Python's `_expand`.
+private func expandTargetFonts(
+    _ rows: [(keys: String, primary: String, falt: String?)]
+) -> [String: (primary: String, falt: String?)] {
+    var flat: [String: (primary: String, falt: String?)] = [:]
+    for row in rows {
+        for key in row.keys.split(separator: "|") {
+            flat[String(key)] = (row.primary, row.falt)
+        }
+    }
+    return flat
+}
+
+let targetFonts: [FontsTarget: [String: (primary: String, falt: String?)]] = [
+    .office: expandTargetFonts([
+        ("avant garde", "Century Gothic", "ITC Avant Garde Gothic"),
+        ("bookman", "Bookman Old Style", "Georgia"),
+        ("cntry schlbk|newcntschlbk|new century schoolbook|century", "Century Schoolbook", "Georgia"),
+        ("american classic", "Century Schoolbook", "Georgia"),
+        ("helv|helvetica", "Arial", "Helvetica Neue"),
+        ("helv narrow|helv cond.|helvetica narrow", "Arial Narrow", "Helvetica Neue Condensed"),
+        ("palatino", "Palatino Linotype", "Palatino"),
+        ("tms rmn|times|cg times", "Times New Roman", nil),
+        ("zapfchancery|zapf chancery|coronet", "Monotype Corsiva", "Apple Chancery"),
+        ("zapfdingbats|zapf dingbats", "Zapf Dingbats", "Segoe UI Symbol"),
+        ("symbol", "Symbol", nil),
+        ("courier|pica|elite|lineprinter", "Courier New", nil),
+        ("letter gothic|gothic", "Consolas", "Courier New"),
+        ("prestige", "Courier New", nil),
+        ("univers", "Arial", "Helvetica Neue"),
+        ("cg triumvirate|ps sansser qual", "Arial", "Helvetica"),
+        ("antique olive", "Candara", "Verdana"),
+        ("optima", "Candara", "Optima"),
+        ("garamond", "Garamond", "EB Garamond"),
+        ("clarendon", "Rockwell", "Clarendon"),
+        ("aachen|rockwell", "Rockwell", "Courier New"),
+        ("bodoni", "Bodoni MT", "Bodoni 72"),
+        ("broadway", "Broadway", nil),
+        ("univ. roman", "Harrington", "Georgia"),
+    ]),
+    .mac: expandTargetFonts([
+        ("avant garde", "Futura", "Century Gothic"),
+        ("bookman", "Cochin", "Bookman Old Style"),
+        ("cntry schlbk|newcntschlbk|new century schoolbook|century", "Georgia", "Century Schoolbook"),
+        ("american classic", "Baskerville", "Century Schoolbook"),
+        ("helv|helvetica", "Helvetica", "Arial"),
+        ("helv narrow|helv cond.|helvetica narrow", "Arial Narrow", "Helvetica Neue Condensed"),
+        ("palatino", "Palatino", "Palatino Linotype"),
+        ("tms rmn|times|cg times", "Times New Roman", nil),
+        ("zapfchancery|zapf chancery|coronet", "Apple Chancery", "Monotype Corsiva"),
+        ("zapfdingbats|zapf dingbats", "Zapf Dingbats", nil),
+        ("symbol", "Symbol", nil),
+        ("courier|pica|elite|lineprinter", "Courier New", nil),
+        ("letter gothic|gothic", "Menlo", "Courier New"),
+        ("prestige", "Courier New", nil),
+        ("univers", "Helvetica Neue", "Arial"),
+        ("cg triumvirate|ps sansser qual", "Helvetica", "Arial"),
+        ("antique olive", "Optima", "Verdana"),
+        ("optima", "Optima", "Candara"),
+        ("garamond", "Hoefler Text", "Garamond"),
+        ("clarendon", "Rockwell", "Clarendon"),
+        ("aachen|rockwell", "Rockwell", "Courier New"),
+        ("bodoni", "Bodoni 72", "Bodoni MT"),
+        ("broadway", "Phosphate Solid", "Futura"),
+        ("univ. roman", "Didot", "Georgia"),
+    ]),
+    .google: expandTargetFonts([
+        ("avant garde", "Poppins", "Century Gothic"),
+        ("bookman", "Merriweather", "Bookman Old Style"),
+        ("cntry schlbk|newcntschlbk|new century schoolbook|century", "Georgia", "Century Schoolbook"),
+        ("american classic", "Georgia", "Century Schoolbook"),
+        ("helv|helvetica|univers", "Arial", nil),
+        ("cg triumvirate|ps sansser qual", "Arial", nil),
+        ("helv narrow|helv cond.|helvetica narrow", "PT Sans Narrow", "Arial Narrow"),
+        ("palatino", "Lora", "Palatino Linotype"),
+        ("tms rmn|times|cg times", "Times New Roman", nil),
+        ("zapfchancery|zapf chancery|coronet", "Dancing Script", "Apple Chancery"),
+        ("zapfdingbats|zapf dingbats", "Zapf Dingbats", nil),
+        ("symbol", "Symbol", nil),
+        ("courier|pica|elite|lineprinter|letter gothic|gothic|prestige", "Courier New", nil),
+        ("antique olive|optima", "Verdana", nil),
+        ("garamond", "EB Garamond", "Garamond"),
+        ("clarendon|aachen|rockwell", "Roboto Slab", "Rockwell"),
+        ("bodoni", "Bodoni Moda", "Bodoni MT"),
+        ("broadway", "Poppins", nil),
+        ("univ. roman", "Bodoni Moda", nil),
+    ]),
+    .linux: expandTargetFonts([
+        ("avant garde", "URW Gothic", "DejaVu Sans"),
+        ("bookman", "URW Bookman", "DejaVu Serif"),
+        ("cntry schlbk|newcntschlbk|new century schoolbook|century", "C059", "DejaVu Serif"),
+        ("american classic", "C059", "DejaVu Serif"),
+        ("helv|helvetica|univers", "Nimbus Sans", "Liberation Sans"),
+        ("cg triumvirate|ps sansser qual", "Nimbus Sans", "Liberation Sans"),
+        ("helv narrow|helv cond.|helvetica narrow", "Nimbus Sans Narrow", "DejaVu Sans"),
+        ("palatino", "P052", "DejaVu Serif"),
+        ("tms rmn|times|cg times", "Nimbus Roman", "Liberation Serif"),
+        ("zapfchancery|zapf chancery|coronet", "Z003", "DejaVu Serif"),
+        ("zapfdingbats|zapf dingbats", "D050000L", "Zapf Dingbats"),
+        ("symbol", "Standard Symbols PS", "Symbol"),
+        ("courier|pica|elite|lineprinter", "Nimbus Mono PS", "Liberation Mono"),
+        ("letter gothic|gothic", "DejaVu Sans Mono", "Nimbus Mono PS"),
+        ("prestige", "Nimbus Mono PS", "Liberation Mono"),
+        ("antique olive|optima", "DejaVu Sans", "Verdana"),
+        ("garamond", "P052", "DejaVu Serif"),
+        ("clarendon|aachen|rockwell", "DejaVu Serif", "Rockwell"),
+        ("bodoni", "C059", "DejaVu Serif"),
+        ("broadway", "URW Gothic", "DejaVu Sans"),
+        ("univ. roman", "DejaVu Serif", nil),
+    ]),
+]
+
+/// `(primary, falt_or_nil)` for an RTF fonttbl entry, from the FINAL RULED FONT TABLE. A
+/// family with no table entry gets the target's generic primary from the font block's own
+/// style bits (a primary that RESOLVES beats a period name Cocoa/Docs cannot -- the
+/// verbatim era name stays first-class in `Document.fonts` and the HTML stacks), falling
+/// all the way back to the family's own name when even the bits are absent.
 ///
 /// Python's `rtf_fonts` (fontmap.py). `generic` is optional here as it is there, even
 /// though `FontChange.genericStyle` always has one: the falsy-`generic_style` arm is what
@@ -181,10 +273,11 @@ let targetOverrides: [FontsTarget: [String: String]] = [
 func rtfFonts(_ family: String, generic: GenericStyle? = nil,
               target: FontsTarget = .office) -> (primary: String?, falt: String?) {
     let key = asciiLowercased(family)
+    if let pair = targetFonts[target]?[key] {
+        return pair
+    }
     let alts = fontAlternates[key] ?? []
-    let primary = targetOverrides[target]?[key]
-        ?? alts.first
-        ?? generic.flatMap { genericPrimary[target]?[$0] }
+    let primary = alts.first ?? generic.flatMap { genericPrimary[target]?[$0] }
     guard let primary else { return (family.isEmpty ? nil : family, nil) }
     // Python's `next((a for a in alts if a != primary), None)`: the FIRST alternate that
     // isn't already the primary — a second modern name, or nothing.

@@ -1104,6 +1104,15 @@ private func loadJob013Vectors() throws -> Job013VectorFile {
     // of every stream, all ten-digit xref offsets, and startxref — a single byte moved
     // anywhere earlier in the file shifts every offset after it, so this is the test that
     // proves the assembly rather than the pieces.
+    //
+    // `modern_ws4`'s `expected_hex` was RE-TAKEN by hand (2026-08-05), against the live
+    // Python reference directly — `gen_vectors.py` does not cover an `emit_pdf` section
+    // (only `layout_updates`/`esc`/`page_stream` in this file are its business), so this
+    // one entry was frozen from before Modern PDF carried fonts at all and would otherwise
+    // compare Swift's new (correct, ruling 2026-08-05) Modern output against a stale
+    // Courier-grid answer. `printed_stream`'s `expected_hex` is UNTOUCHED — Printed mode is
+    // not part of this batch, and this vector still matches Swift's own Printed output
+    // exactly, which is the proof that path did not move.
     let vectors = try loadJob012Vectors().emitPDF
     #expect(vectors.count == 2)
     for v in vectors {
