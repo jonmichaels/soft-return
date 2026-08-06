@@ -379,3 +379,39 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     #expect(EmitterRegistry.standard.formats().contains("layout"))   // CLI-reachable
     #expect(emitter.ext == ".json")
 }
+
+// ================= Page width joins the model (task #16, 2026-08-06) =================
+
+@Test func pageGeometrySnapsToA4AndCarriesWidth() {
+    // .PL 70 = 11.667in: within 0.026 of A4's 11.693 — since 2026-08-06 ("the 3 main
+    // page sizes") that IS A4, at the 210mm width. Farther out stays honest Custom at
+    // the 8.5in sheet.
+    let a4 = parseWS(bytes(".PL 70") + HARD + bytes("x") + HARD)
+    #expect(a4.page?.sizeName == "A4")
+    #expect(abs((a4.page?.pwIn ?? 0) - 8.268) < 1e-6)
+    let far = parseWS(bytes(".PL 74") + HARD + bytes("x") + HARD)
+    #expect(far.page?.sizeName == "Custom")
+    #expect(far.page?.pwIn == 8.5)
+    #expect(abs((far.page?.heightIn ?? 0) - 74.0 / 6.0) < 1e-9)
+}
+
+@Test func pageSettingsSizePresetsLetterLegalA4() throws {
+    // Ruling 2026-08-06 (task #16): --page-settings size=letter|legal|a4 fills SILENT
+    // files with a named sheet — the document's own .pl always wins. An A4 page narrows
+    // the PDF MediaBox and the RTF \paperw.
+    var silent = parseWS(ws7Block(0x00)
+        + bytes("Plain prose line, ordinary and long enough here.") + HARD)
+    let eff = effectivePage(try #require(silent.page), settings: PageSettings(plLines: 70.157))
+    #expect(eff.sizeName == "A4")
+    #expect(abs(eff.pwIn - 8.268) < 1e-6)
+    silent.page = eff
+    let pdf = emitPDF(silent, mode: .modern)
+    #expect(contains(pdf, bytes("/MediaBox [0 0 595 842]")))
+    let rtf = emitRTF(silent, mode: .modern)
+    #expect(rtf.contains(#"\paperw11906"#) && rtf.contains(#"\paperh16838"#))
+    // a file DECLARING its length keeps it against any preset
+    let own = parseWS(ws7Block(0x00) + bytes(".pl 84") + HARD
+        + bytes("Plain prose line, ordinary and long enough here.") + HARD)
+    let effOwn = effectivePage(try #require(own.page), settings: PageSettings(plLines: 70.157))
+    #expect(effOwn.sizeName == "Legal" && effOwn.pwIn == 8.5)
+}

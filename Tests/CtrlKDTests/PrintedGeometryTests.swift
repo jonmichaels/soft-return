@@ -99,12 +99,12 @@ private func geoDoc(
 
 // MARK: - Modern mode
 
-/// Modern deliberately ignores the file's page: fixed Letter, 1in margins, whatever the
-/// document's own `.pl`/`.po` say. The app sizes its window from this in Modern style, so
-/// "ignores the document" is the behavior to pin, not an accident to tolerate.
+/// Modern renders on the document's declared SHEET (Letter/Legal/A4 -- page size joined
+/// the model 2026-08-06, task #16) but keeps its own 1in margins and metrics: the sheet
+/// is the document's, the typography is Modern's. A `.po` never moves Modern's margin.
 @Test func modernMetricsIgnoreTheDocumentsGeometry() {
     let legal = modernMetrics(geoDoc(heightIn: 14, sizeName: "Legal", poCols: 20, cw120: 10))
-    #expect(legal.pageHeight == Double(PDFMetrics.pageHeight))   // 792, not 1008
+    #expect(legal.pageHeight == 1008.0)                          // the file's own sheet
     #expect(legal.left == Double(PDFMetrics.margin))             // 72, not .po-derived
     #expect(legal.top == Double(PDFMetrics.topModern))
     #expect(legal.capacity == PDFMetrics.linesModern)

@@ -188,6 +188,18 @@ func parsePageSettings(_ arg: String) -> PageSettingsParseResult {
         let key = pieces.count > 0 ? pieces[0].trimmingASCIIWhitespace().lowercased() : ""
         let rawValue = pieces.count > 1 ? pieces[1].trimmingASCIIWhitespace().lowercased() : ""
         let presetList = pagePresets.keys.sorted().joined(separator: ", ")
+        if key == "size" {
+            // the three main page sizes (ruled 2026-08-06) as .pl lines; width rides on
+            // the height inference in the page model
+            let sizes: [String: Double] = ["letter": 66.0, "legal": 84.0,
+                                           "a4": 11.693 * 6]
+            guard let pl = sizes[rawValue] else {
+                return .failure("--page-settings: unknown size '\(rawValue)' "
+                    + "(choose from a4, legal, letter)")
+            }
+            result.plLines = pl
+            continue
+        }
         guard !rawValue.isEmpty else {
             return .failure("--page-settings: unknown or empty entry '\(part)' "
                 + "(or use a preset: \(presetList))")
@@ -506,7 +518,8 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             keys mt, mb, po, hm, fm, comma-separated, e.g.
                             mt=0.83in,mb=1in,po=0.7in -- an "in" suffix converts
                             from inches, else native units (lines at 6 LPI; po in
-                            10-CPI columns)
+                            10-CPI columns). size=letter|legal|a4 names the sheet
+                            for files that declare no page length
       --force               overwrite an existing output file without asking.
                             Without it, sr asks before overwriting when stdin is
                             a terminal, and refuses outright (suggesting

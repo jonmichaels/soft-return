@@ -454,6 +454,9 @@ private func jsonPage(_ page: PageGeometry?) -> LayoutJSONValue {
         ("pl_lines", .double(p.plLines)),
         ("height_in", .double(p.heightIn)),
         ("size_name", .string(p.sizeName)),
+        // width is INFERRED from the height (no dot command exists for it); its
+        // provenance is therefore the size's provenance
+        ("pw_in", .double(p.pwIn)),
         ("size_source", .string(p.sizeSource.rawValue)),
         ("mt_lines", .double(p.mtLines)),
         ("mt_source", .string(p.mtSource.rawValue)),

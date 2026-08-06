@@ -70,7 +70,8 @@ func modernGeometry(_ doc: Document) -> (left: Double, top: Double, bottom: Doub
     let margt = mtDeclared ? (page?.mtLines ?? 6.0) * 12.0 : 72.0
     let margb = mbDeclared ? (page?.mbLines ?? 6.0) * 12.0 : 72.0
     let margl = poDeclared ? (page?.poCols ?? 10.0) * 7.2 : 72.0
-    let width = max(144.0, Double(PDFMetrics.pageWidth) - margl - 72.0)
+    let pageW = (page?.pwIn ?? 8.5) * 72.0     // A4 files are narrower (2026-08-06)
+    let width = max(144.0, pageW - margl - 72.0)
     return (margl, margt, margb, width)
 }
 

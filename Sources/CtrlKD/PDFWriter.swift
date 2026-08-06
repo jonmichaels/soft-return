@@ -674,6 +674,10 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     // (`resolvedPageHeight` already returns the fixed height when `printed` is false), like
     // the Modern RTF's own page setup.
     let pageHeight = resolvedPageHeight(doc, printed: printed)
+    // Width joined the page model 2026-08-06 ("the 3 main page sizes"): inferred from
+    // the height -- A4-tall pages are 210mm wide, everything else is the 8.5in sheet --
+    // so a default document stays exactly 612.
+    let pageWidth = roundHalfToEven((doc.page?.pwIn ?? 8.5) * 72.0)
     if printed {
         let pages = docToPagelines(doc, printed: true)
         // ctrl-kd 1.3.0/2.0.0: per-document in Printed mode — `printedTop`/`printedLead`/
@@ -766,7 +770,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
 
     for (i, stream) in streams.enumerated() {
         objs.append((pageNums[i], Array("""
-        << /Type /Page /Parent 2 0 R /MediaBox [0 0 \(PDFMetrics.pageWidth) \
+        << /Type /Page /Parent 2 0 R /MediaBox [0 0 \(pageWidth) \
         \(pageHeight)] /Resources << /Font << \(fontDict) >> >> \
         /Contents \(contentNums[i]) 0 R >>
         """.utf8)))
