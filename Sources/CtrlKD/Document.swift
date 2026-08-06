@@ -296,6 +296,84 @@ public struct CommentBug: Hashable, Sendable {
     }
 }
 
+/// One dot line in the round-trip ledger: its verbatim UNMASKED bytes plus separator,
+/// anchored to the parse's event counter ("this dot line sits before event N", N
+/// counting Lines and form-feed pagebreaks in emission order — the coarsest anchor that
+/// survives every block split/drop that makes (block, line) anchors unstable).
+public struct RoundtripDot: Hashable, Sendable {
+    public var anchor: Int
+    public var raw: [UInt8]
+    public var brk: [UInt8]
+
+    public init(anchor: Int, raw: [UInt8], brk: [UInt8]) {
+        self.anchor = anchor
+        self.raw = raw
+        self.brk = brk
+    }
+}
+
+/// One consumed symmetric sequence in the round-trip ledger: where its expansion
+/// (possibly empty) sits in the cleaned stream, how many bytes that expansion
+/// contributed there, and the verbatim source bytes `1D..1D`.
+public struct RoundtripSym: Hashable, Sendable {
+    public var offset: Int
+    public var expansion: Int
+    public var raw: [UInt8]
+
+    public init(offset: Int, expansion: Int, raw: [UInt8]) {
+        self.offset = offset
+        self.expansion = expansion
+        self.raw = raw
+    }
+}
+
+/// One byte the `_FLAGGED` translation rewrote in the cleaned stream (offset, original).
+public struct RoundtripFlagged: Hashable, Sendable {
+    public var offset: Int
+    public var original: UInt8
+
+    public init(offset: Int, original: UInt8) {
+        self.offset = offset
+        self.original = original
+    }
+}
+
+/// Round-trip ledger (tasks #20/#21): the raw-source facts the IR proper cannot carry
+/// without faking — per-dot-line raw bytes (the parser stores them bit-7-masked and
+/// rstripped), each consumed symmetric block's exact bytes with its offset in the
+/// cleaned stream, the bytes the `_FLAGGED` translation rewrote, the trailing-blank run
+/// `linesPass` drops at EOF, and the file tail from the bare 0x1A onward (^Z padding,
+/// WS5+ style library). This is NOT a copy of the input: body text is serialized back
+/// from the spans, so an editor's mutations survive a save. `nil` on `Document` for
+/// documents not built by `parseWS` (the writer then writes canonical WordStar
+/// defaults). Python's `doc.roundtrip` dict.
+public struct RoundtripLedger: Hashable, Sendable {
+    public var era: String
+    public var encoding: String
+    public var dots: [RoundtripDot]
+    public var sym: [RoundtripSym]
+    public var flaggedAt: [RoundtripFlagged]
+    public var eofTail: [UInt8]
+    public var tail: [UInt8]
+    /// `"shift-jis"` when 0x17 Shift-In/Out rewrote the cleaned stream after the fact,
+    /// so every recorded offset in a Japanese run is unreplayable — the writer refuses
+    /// such documents instead of corrupting them.
+    public var unsupported: String?
+
+    public init(era: String, encoding: String = "cp437", dots: [RoundtripDot] = [],
+                sym: [RoundtripSym] = [], flaggedAt: [RoundtripFlagged] = [],
+                eofTail: [UInt8] = [], tail: [UInt8] = [], unsupported: String? = nil) {
+        self.era = era
+        self.encoding = encoding
+        self.dots = dots
+        self.sym = sym
+        self.flaggedAt = flaggedAt
+        self.eofTail = eofTail
+        self.tail = tail
+        self.unsupported = unsupported
+    }
+}
+
 /// The top-level IR: a parsed document as blocks, footnotes, and parse diagnostics.
 ///
 /// The Python side's `meta` is a single heterogeneous dict — `parse_ws`/
@@ -422,6 +500,9 @@ public struct Document: Hashable, Sendable {
     /// block it precedes — see `HFEvent`. `headers`/`footers` above are the FINAL state,
     /// a convenience view kept for callers that don't need per-page replay.
     public var hfEvents: [HFEvent]
+    /// Round-trip ledger — see `RoundtripLedger` (tasks #20/#21). `nil` for documents
+    /// not built by `parseWS`.
+    public var roundtrip: RoundtripLedger?
     /// Name of the `Era` whose rules were applied (`Era.swift`) — so a caller can see
     /// WHICH release's behaviour this document was parsed under, not just which variant
     /// was detected. Mirrors Python's `meta['era']`.

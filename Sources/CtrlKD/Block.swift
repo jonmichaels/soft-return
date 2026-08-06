@@ -1,3 +1,11 @@
+/// Provenance of a structural block — see `Block.origin` (tasks #20/#21).
+public enum BlockOrigin: String, Hashable, Sendable {
+    /// A pagebreak made by a literal 0x0C byte.
+    case ff
+    /// The fabricated `[insert: NAME]` paragraph for a `.fi` line.
+    case fi
+}
+
 /// What kind of content a `Block` holds.
 public enum BlockKind: String, Hashable, Sendable {
     /// Ordinary content.
@@ -80,6 +88,13 @@ public struct Block: Hashable, Sendable {
     /// into every span in the block, the same way heading bold is merged -- the style's
     /// formatting is not a property of any one span, it applies to the paragraph.
     public var styleAttrs: Style
+    /// Provenance of a STRUCTURAL block (tasks #20/#21, the round-trip writer): `.ff` =
+    /// a pagebreak made by a literal 0x0C in the byte stream (the writer re-emits the
+    /// form feed); `.fi` = the synthetic `[insert: NAME]` paragraph `parseWS` fabricates
+    /// for a `.fi` line (no source bytes of its own — the dot ledger re-emits the `.fi`
+    /// line, so the writer skips this block). `nil` everywhere else, including
+    /// dot-command pagebreaks (`.pa`), whose bytes are the dot line itself.
+    public var origin: BlockOrigin?
 
     public init(
         kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0,
@@ -87,8 +102,9 @@ public struct Block: Hashable, Sendable {
         leftMargin: Double? = nil, rightMargin: Double? = nil, paraMargin: Double? = nil,
         tabStops: [Double]? = nil,
         columns: Int? = nil, columnGutter: Double? = nil, styleID: Int? = nil,
-        styleName: String? = nil, styleAttrs: Style = []
+        styleName: String? = nil, styleAttrs: Style = [], origin: BlockOrigin? = nil
     ) {
+        self.origin = origin
         self.tabStops = tabStops
         self.leftMargin = leftMargin
         self.rightMargin = rightMargin
