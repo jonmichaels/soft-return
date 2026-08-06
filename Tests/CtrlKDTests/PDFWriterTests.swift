@@ -18,9 +18,13 @@ import Testing
     #expect(pdf.starts(with: bytes("%PDF-1.4")))
     #expect(latin1(pdf).trimmed().hasSuffix("%%EOF"))
     #expect(countOccurrences(of: bytes("/Type /Page "), in: pdf) == 1)
+    // The Courier four are ALWAYS allocated, used or not (`FontResources`).
     #expect(contains(pdf, bytes("/Courier")))
-    // The text actually reached a content stream, escaped as a PDF string literal.
-    #expect(contains(pdf, bytes("(Second paragraph.)")))
+    // The text actually reached a content stream, escaped as a PDF string literal —
+    // one word per Tj op under Modern's proportional reflow (ruling 2026-08-05), so
+    // "Second paragraph." is two ops, not one string.
+    #expect(contains(pdf, bytes("(Second)")))
+    #expect(contains(pdf, bytes("(paragraph.)")))
 }
 
 /// Python's `test_pdf_pagebreak_makes_pages`.
@@ -106,10 +110,15 @@ import Testing
     #expect(segments.contains { $0.text == "Body" && !$0.styles.contains(.bold) })
 
     // Python's version stops at the layout. Carry it into the bytes too, which is where the
-    // promise was made and where a reader sees it: the heading must select Courier-Bold.
+    // promise was made and where a reader sees it: the heading must select bold. Modern
+    // PDF carries fonts now (ruling 2026-08-05) — a fontless bold heading reads in
+    // Times-Bold at the sophisticated size (14pt), not Courier-Bold at 12pt, and each word
+    // is its own Tj op under proportional reflow, not one combined string.
     let pdf = emitPDF(parseWS(data), mode: .modern)
-    #expect(contains(pdf, bytes("BT /F2 12 Tf 0 Ts 72.0 708.0 Td (Chapter One) Tj ET")))
-    #expect(contains(pdf, bytes("(A second sentence keeps the prose-to-binary ratio realistic.)")))
+    #expect(contains(pdf, bytes("/BaseFont /Times-Bold")))
+    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 72.0 703.2 Td (Chapter) Tj ET")))
+    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 125.3 703.2 Td (One) Tj ET")))
+    #expect(contains(pdf, bytes("(realistic.)")))
 }
 
 /// Python 1.1.6's `test_pdf_exact_fill_no_blank_sheet` — the rewritten version.
@@ -155,8 +164,13 @@ import Testing
     ])
     let segments = docToPagelines(doc, printed: false).flatMap { $0 }.flatMap { $0 }
     #expect(segments.first?.styles == [.bold, .italic])
-    // Which is the bold-italic Courier in the bytes — the only route to F4 from a document.
-    #expect(latin1(emitPDF(doc, mode: .modern)).contains("/F4 12 Tf"))
+    // Modern PDF now carries fonts (ruling 2026-08-05): a fontless bold-italic heading
+    // reads in Times-BoldItalic at the sophisticated size (14pt), not Courier-BoldOblique
+    // at 12pt — the Courier-only Modern died with the WS4 lens. F5 is the first slot past
+    // the Courier four (F1-F4), the only route there from a document with one font run.
+    let pdf = latin1(emitPDF(doc, mode: .modern))
+    #expect(pdf.contains("/BaseFont /Times-BoldItalic"))
+    #expect(pdf.contains("/F5 14 Tf"))
 }
 
 @Test func trailingDoublePageBreakDoesNotLeaveABlankSheet() {
@@ -364,10 +378,14 @@ import Testing
 
 @Test func emitPDFHonoursPrintedModeAndTheDocumentsOwnVerdict() {
     // Two ways to reach the printed layout, and the top margin is how you tell: 792-36-12
-    // = 744.0 printed, 792-72-12 = 708.0 modern.
+    // = 744.0 printed. Modern's own geometry changed under the Modern-PDF rewrite (ruling
+    // 2026-08-05): the first BASELINE is `PAGE_H - margt - lineHeight`, not `- size` — a
+    // visual line's height is `1.2 x` its own type size (single-spacing), not the fixed
+    // 12pt Courier lead — so fontless Times at the sophisticated 14pt gives
+    // 792 - 72 - (1.2 * 14) = 703.2, not the old Courier-grid 708.0.
     let ws = parseWS(ws4Text("Some words here") + HARD)
     #expect(ws.detection?.variant == .ws4)
-    #expect(latin1(emitPDF(ws, mode: .modern)).contains("72.0 708.0 Td"))
+    #expect(latin1(emitPDF(ws, mode: .modern)).contains("72.0 703.2 Td"))
     // ctrl-kd 2.0.0: printed mode's left margin is now `.po`-derived, not the fixed 72pt
     // MARGIN this emitter used to guess. `ws` never sets `.po`/`.cw`, so it resolves to
     // the new defaults (8 columns at 10 CPI) -- 8 * 12 * 0.6 = 57.6pt, the WS7 manual's

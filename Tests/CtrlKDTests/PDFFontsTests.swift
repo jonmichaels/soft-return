@@ -34,8 +34,15 @@ import Testing
 
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .printed))
         == "d8f6c993a645c735df77a78f58e4dd44464219685e49403e69359d5ff0641e3b")
+    // Modern's pin is RE-TAKEN (ruling 2026-08-05: "Modern PDF needs to be the printed
+    // version of Modern RTF" — document fonts carried, proportional reflow, the
+    // Courier-only Modern died with the WS4 lens). This exact digest is also what the
+    // Python reference now pins for the identical fixture (`make_prose()` ==
+    // `makeProse()`) — confirmed directly against Python, not merely copied: Modern PDF
+    // parity is byte-for-byte here, though the cross-check contract only requires
+    // equivalence, not identity (see this test's own header comment).
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .modern))
-        == "a78b6655ab04698ed1b1b3b550a0d734aa4c713ab74e9c41cf8304b0881c05d8")
+        == "eb8bc918916d3bbb0b274e203c1c3f03b9008e6f6755cc67c6100a2f30705950")
     #expect(sha256Hex(emitPDF(parseWS(styled), mode: .printed))
         == "a9ffc0cb6a78d7c145306d3a22c1b210d04f1b87b6d38ff7fb7936c969908d39")
     #expect(sha256Hex(emitPDF(parsePrintstream(stream), mode: .printed))
@@ -54,8 +61,10 @@ import Testing
 @Test func pdfPrintedRendersTheDocumentsOwnFontAndSize() {
     // Typestyle 4 is 'Helv' with the block's own generic bits saying sans, at 14pt (height
     // word 280 VMI = 14 points). Printed mode is a facsimile: it sets that run in Helvetica
-    // at 14, from the file's own words. Modern mode is Courier by ruling and must show
-    // neither.
+    // at 14, from the file's own words. Modern mode CARRIES the document's fonts too now
+    // (ruling 2026-08-05: Modern PDF is the printed form of Modern RTF) — the Courier-only
+    // Modern died with the WS4 lens, so Helvetica shows there as well; the fontless run
+    // reads in Times at the sophisticated size (14pt) instead of Courier.
     // staged: 6.2.4's type-checker times out on the one-expression form
     var data = ws7Block(0x00)
     data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
@@ -78,8 +87,10 @@ import Testing
     #expect(shown.contains { $0.font == "F1" && $0.size == 12 && $0.text.hasPrefix("Before.") })
 
     let modern = emitPDF(doc, mode: .modern)
-    #expect(!contains(modern, bytes("Helvetica")))
-    #expect(contains(modern, bytes("/Courier")))
+    #expect(contains(modern, bytes("Helvetica")))
+    let modernShown = contentSpans(modern)
+    #expect(modernShown.contains { $0.size == 14 && $0.text.contains("After.") })
+    #expect(baseFonts(modern).values.contains("Times-Roman"))
 }
 
 @Test func pdfSymbolRunSetsTheSymbolFaceWithItsOwnBytes() {

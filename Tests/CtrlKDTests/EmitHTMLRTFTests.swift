@@ -127,8 +127,9 @@ import Testing
     // Python exactly as here (verified against the reference). The assertion is a shape
     // check for prose, not an escaping check; this exact-output test is the escaping check.
     let doc = Document(blocks: [Block(lines: [Line(spans: [Span(text: "a{b}c{")])])])
-    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
-            + "\n" + #"\f0\fs24 "# + "\n"
+    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
+            + #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
+            + "\n" + #"\f0\fs28 "# + "\n"
             + #"{a\{b\}c\{}\par "# + "\n" + #"\par "# + "\n}\n")
 }
 
@@ -141,8 +142,9 @@ import Testing
         Block(lines: []),
         Block(lines: [Line(spans: [Span(text: "B")])]),
     ])
-    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
-            + "\n" + #"\f0\fs24 "# + "\n"
+    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
+            + #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
+            + "\n" + #"\f0\fs28 "# + "\n"
             + #"{A}\par "# + "\n" + #"\par "# + "\n" + #"\par "# + "\n"
             + #"{B}\par "# + "\n" + #"\par "# + "\n}\n")
 }
@@ -158,6 +160,7 @@ import Testing
     // one span-less line. Output verified against the Python reference.
     let doc = try parse(bytes("Some plain text here today.\r\n\u{0C}"))
     #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
+            + #"\paperw12240\paperh15840\margl1152\margr1152\margt720\margb1920"#
             + "\n" + #"\f1\fs24 "# + "\n"
             + #"{Some plain text here today.}\line \par "# + "\n"
             + #"\page "# + "\n" + #"\par "# + "\n}\n")
@@ -348,8 +351,19 @@ import Testing
     #expect(unnamedDoc.fonts.first?.family == "")            // the table has no name for 300
     #expect(unnamedDoc.fonts.first?.genericStyle == .script)
     let unnamedOffice = emitRTF(unnamedDoc, mode: .modern)
+    // The FINAL RULED FONT TABLE (2026-08-05) swapped office's ZapfChancery primary/falt
+    // (problem #1 in the audit: Apple Chancery is Apple-only, Word falls to falt, Docs
+    // gets garbage) -- its primary is now Monotype Corsiva, the SAME primary the generic
+    // unnamed font (office's script generic) already lands on. So this doc now dedupes to
+    // ONE \fK on office too, not two -- the coverage this test exists to prove (era names
+    // sharing one \fK when they resolve to the same primary) still holds, just on a
+    // different pairing than before the table rewrite.
     #expect(unnamedOffice.contains(#"{\f2 Monotype Corsiva;}"#))
-    #expect(unnamedOffice.contains(#"{\f3 Apple Chancery{\*\falt Monotype Corsiva};}"#))
+    #expect(!unnamedOffice.contains(#"\f3 "#))               // one primary, one \fK
+    #expect(!unnamedOffice.contains("Apple Chancery"))       // falt never surfaces: the
+                                                              // FIRST occurrence to claim
+                                                              // the primary (the unnamed
+                                                              // generic run) had none
     let unnamedGoogle = emitRTF(unnamedDoc, mode: .modern,
                                 options: EmitOptions(fontsTarget: .google))
     #expect(unnamedGoogle.contains(#"{\f2 Dancing Script;}"#))
@@ -381,6 +395,9 @@ import Testing
     let doc = parseWS(data)
 
     let rtf = emitRTF(doc, mode: .modern, options: EmitOptions(fontsTarget: .linux))
-    #expect(rtf.contains(#"{\f2 URW Gothic{\*\falt Century Gothic};}"#))
+    // falt is guaranteed-tier per the FINAL RULED FONT TABLE (2026-08-05 ruling): DejaVu
+    // rides fontconfig itself, so it is what every linux falt ends on -- a Microsoft name
+    // (the old falt here) is useless on a Ghostscript-less box.
+    #expect(rtf.contains(#"{\f2 URW Gothic{\*\falt DejaVu Sans};}"#))
     #expect(rtf.contains("Z003"))
 }

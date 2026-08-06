@@ -12,19 +12,37 @@ public struct CLIEnvironment: Sendable {
     public var createDirectory: @Sendable (String) throws -> Void
     public var writeOut: @Sendable (String) -> Void
     public var writeErr: @Sendable (String) -> Void
+    /// Whether a file already exists at `path` — the D4 overwrite gate (sr-only ruling,
+    /// 2026-08-05: ctrl-kd always overwrites silently; sr asks — "it's a Mac"). Defaults to
+    /// "nothing ever exists" so every caller from before this flag existed (every other
+    /// test in this file, and `--force` itself) is unaffected.
+    public var fileExists: @Sendable (String) -> Bool
+    /// Whether stdin is an interactive terminal. Decides which half of D4 fires: a TTY
+    /// gets asked; a script or pipeline gets refused outright rather than hang silently on
+    /// a prompt nobody can answer (the audit's own implementation note).
+    public var stdinIsTTY: @Sendable () -> Bool
+    /// One line of the user's answer to the D4 overwrite prompt, or `nil` at EOF (treated
+    /// as "no" — an unanswerable prompt must never fall through to overwriting).
+    public var readLine: @Sendable () -> String?
 
     public init(
         readFile: @escaping @Sendable (String) throws -> [UInt8],
         writeFile: @escaping @Sendable (String, [UInt8]) throws -> Void,
         createDirectory: @escaping @Sendable (String) throws -> Void,
         writeOut: @escaping @Sendable (String) -> Void,
-        writeErr: @escaping @Sendable (String) -> Void
+        writeErr: @escaping @Sendable (String) -> Void,
+        fileExists: @escaping @Sendable (String) -> Bool = { _ in false },
+        stdinIsTTY: @escaping @Sendable () -> Bool = { false },
+        readLine: @escaping @Sendable () -> String? = { nil }
     ) {
         self.readFile = readFile
         self.writeFile = writeFile
         self.createDirectory = createDirectory
         self.writeOut = writeOut
         self.writeErr = writeErr
+        self.fileExists = fileExists
+        self.stdinIsTTY = stdinIsTTY
+        self.readLine = readLine
     }
 }
 
@@ -54,8 +72,9 @@ public func run(
         return ExitStatus.ok
     case .usageError(let message):
         environment.writeErr("usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] "
-            + "[--mode MODE]\n          [--variant VARIANT] [--fonts TARGET] [--no-notes] "
-            + "[--comments] [--diagnose] FILE [FILE ...]")
+            + "[--mode MODE]\n          [--variant VARIANT] [--fonts TARGET] "
+            + "[--page-settings P] [--force] [--no-notes]\n          [--comments] "
+            + "[--diagnose] FILE [FILE ...]")
         environment.writeErr("sr: error: \(message)")
         return ExitStatus.usage
     case .run(let options):
@@ -87,7 +106,7 @@ private func convertAll(
             continue
         }
 
-        let doc: Document
+        var doc: Document
         do {
             doc = try parse(data, variant: options.variant)
         } catch {
@@ -96,6 +115,27 @@ private func convertAll(
                     + "(use --diagnose to inspect, --variant to force)")
             status = ExitStatus.fileFailure
             continue
+        }
+
+        // D5 (ruled 2026-08-05): when the user EXPLICITLY asked for modern and the input
+        // can only render printed (a print stream, or a ruler-line/columnar document —
+        // `isPrinted` is exactly that gate), say so once instead of silently disobeying
+        // the flag. The override itself stands — a print stream has no soft returns to
+        // unwrap — the CLI only explains itself. Quiet when modern was merely defaulted:
+        // every bare run of one of these files would otherwise print this on every file.
+        if options.modeExplicit, options.mode == .modern, isPrinted(doc) {
+            let kind = doc.detection?.variant == .printstream
+                ? "print stream" : "ruler-line document"
+            environment.writeErr("sr: \(path): \(kind) -- modern reflow is not possible; "
+                + "rendering printed")
+        }
+
+        // --page-settings applies ONCE to the resolved page, so every emitter (PDF
+        // geometry, RTF page setup) sees the same effective page (ruling 2026-08-05,
+        // "Page Settings at every layer") — mirrors `PDFWriter.swift`'s own `emitPDF`
+        // option for a caller using the library directly, without going through the CLI.
+        if let pageSettings = options.pageSettings, let page = doc.page {
+            doc.page = effectivePage(page, settings: pageSettings)
         }
 
         let base = stem(path)
@@ -107,11 +147,13 @@ private func convertAll(
                 status = ExitStatus.fileFailure
                 continue
             }
+            // No `pageSettings` here: the CLI already applied it once to `doc.page` above,
+            // so every format sees the identical effective page. (`EmitOptions.pageSettings`
+            // stays available to a caller using `emitPDF` directly, outside the CLI.)
             let output = emitter.emit(doc, options.mode,
                                       EmitOptions(title: base, notes: options.notes,
                                                   styles: options.styles,
-                                                  fontsTarget: options.fontsTarget,
-                                                  pageDefaults: options.pageDefaults))
+                                                  fontsTarget: options.fontsTarget))
 
             let destination: String
             if let explicit = options.output {
@@ -119,6 +161,28 @@ private func convertAll(
             } else {
                 let directory = options.outdir ?? (dirname(path).isEmpty ? "." : dirname(path))
                 destination = joinPath(directory, base + emitter.ext)
+            }
+
+            // D4 (sr-only ruling, 2026-08-05 — a sanctioned platform divergence from
+            // ctrl-kd, which always overwrites silently: "it's a Mac"). `--force` bypasses
+            // this whole gate. Otherwise: a TTY gets asked; a script or pipeline (no TTY to
+            // ask) is refused outright rather than hang forever on a prompt nothing will
+            // ever answer — the audit's own implementation note.
+            if !options.force, environment.fileExists(destination) {
+                if environment.stdinIsTTY() {
+                    environment.writeErr("sr: \(destination) already exists. Overwrite? [y/N] ")
+                    let answer = environment.readLine()?.lowercased() ?? ""
+                    guard answer.hasPrefix("y") else {
+                        environment.writeErr("sr: \(destination): not overwritten")
+                        status = ExitStatus.fileFailure
+                        continue
+                    }
+                } else {
+                    environment.writeErr(
+                        "sr: \(destination): already exists (use --force to overwrite)")
+                    status = ExitStatus.fileFailure
+                    continue
+                }
             }
 
             do {

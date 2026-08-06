@@ -7,7 +7,7 @@
 /// string breaks equivalence with Python. Change it there first if it ever needs changing.
 private let htmlCSS = """
 body{max-width:42rem;margin:2rem auto;padding:0 1rem;
-font:17px/1.6 Georgia,serif;color:#222}p{margin:0 0 1em}
+font:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}
 pre{font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}
 hr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}
 section[role=doc-endnotes]{margin-top:2rem}

@@ -18,13 +18,14 @@ Soft Return is a Swift package with two faces: **`sr`**, a command-line converte
 **CtrlKD** library it is built on.
 
 ```
-sr PAPER.WS                       # -> PAPER.md, modern reflow
+sr PAPER.WS                       # -> PAPER.rtf, modern reflow, Georgia body
 sr PAPER.WS -t html -o out.html
-sr --mode printed LETTER          # as it came off the printer
+sr --mode printed LETTER          # -> LETTER.pdf, as it came off the printer
 sr --diagnose MYSTERY.FIL         # what IS this file?
 sr -t text -t html -d out/ *.WS   # batch, multiple formats
 sr --comments MEMO.WS             # include the author's hidden comments
 sr --no-notes PAPER.WS            # body text only, no notes
+sr --page-settings sawyer LETTER  # the DEFAULT.PAT-recovered machine's page
 ```
 
 ```swift

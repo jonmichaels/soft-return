@@ -151,7 +151,7 @@ func graphicOps(_ text: String, x: Double, y: Double, pitch: Double, pt: Int) ->
 /// more graphics) in between — Python's `_GRAPHIC_RUN` regex (`[G](?:[G ]*[G])?`),
 /// reproduced by hand since this module has no regex engine. Returns non-overlapping
 /// index ranges into `chars`.
-private func graphicRunRanges(_ chars: [Character]) -> [Range<Int>] {
+func graphicRunRanges(_ chars: [Character]) -> [Range<Int>] {
     var ranges: [Range<Int>] = []
     var i = 0
     let n = chars.count

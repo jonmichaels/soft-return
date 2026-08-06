@@ -89,7 +89,10 @@ private func withFourKindFile(_ body: (String) throws -> Void) throws {
         defer { try? FileManager.default.removeItem(at: out) }
 
         func convert(_ extra: [String]) throws -> String {
-            let r = try runSR(["-t", "text", "-o", out.path] + extra + [path])
+            // --force: this test reuses one output path across three conversions to
+            // compare note-flag behavior, which is a legitimate overwrite -- not what
+            // the D4 prompt/refusal (ruling 2026-08-05) exists to catch.
+            let r = try runSR(["-t", "text", "-o", out.path, "--force"] + extra + [path])
             #expect(r.status == 0, "convert \(extra) exited \(r.status): \(r.err)")
             return try String(contentsOf: out, encoding: .utf8)
         }
