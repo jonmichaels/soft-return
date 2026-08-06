@@ -108,6 +108,22 @@ public struct Block: Hashable, Sendable {
 /// at parse time — a space in the wrapped line's trailing style, suppressed after an
 /// existing space or a hyphenated break — so Modern output is byte-identical either
 /// side of the 2.0.0 split.
+/// Hard blank lines at the END of a block — the author's own paragraph spacing.
+/// `mergedLines` emits interior blanks and buffers trailing ones away; Modern layouts
+/// used to paper over the difference with a synthetic blank after EVERY block, which
+/// invented spacing wherever a dot command split the block (ruling 2026-08-06: command
+/// codes are invisible — only the author's blank lines make space). Soft blanks are
+/// `.ls` filler and never count, same as in `mergedLines`. Port of
+/// `core.trailing_blank_lines`.
+public func trailingBlankLines(_ block: Block) -> Int {
+    var n = 0
+    for line in block.lines.reversed() {
+        if !line.spans.isEmpty { break }
+        if !line.soft { n += 1 }
+    }
+    return n
+}
+
 public func mergedLines(_ block: Block) -> [Line] {
     var out: [Line] = []
     var cur: Line? = nil

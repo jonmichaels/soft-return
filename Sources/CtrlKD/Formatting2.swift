@@ -217,7 +217,17 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // Print columns at 10 CPI, matching `.po`; a unit suffix converts, since the
         // archive writes both `.rm 65` and `.rm 6.5"`.
         guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
-        let cols = resolveColsArg(value, unit)
+        var cols = resolveColsArg(value, unit)
+        let isLM = String(decoding: name.map(asciiUpper), as: UTF8.self) == "LM"
+        if isLM, unit == nil || unit!.isEmpty {
+            // `.lm 8` is a COLUMN NUMBER (1-based: text begins AT column 8 = 7 columns
+            // of offset), while a unit-suffixed `.lm 0.7"` and a paragraph style's
+            // left_margin_hmi are already offsets from the edge. Normalised here so
+            // leftMargin means one thing -- offset columns -- to every consumer,
+            // whichever way the file said it (found 2026-08-06 wiring Modern block
+            // margins).
+            cols = Swift.max(0.0, cols - 1.0)
+        }
         switch String(decoding: name.map(asciiUpper), as: UTF8.self) {
         case "LM": state.leftMargin = cols
         case "RM": state.rightMargin = cols

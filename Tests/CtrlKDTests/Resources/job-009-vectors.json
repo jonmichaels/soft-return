@@ -20,7 +20,7 @@
    "input_hex": "024269e7205469746ce5020d0a0d0a1941ee206974616c69e32071756f74e52068657265ae190d0a0d0a506c6169ee20636c6f73696ee7207061726167726170e82074657874ae0d0a",
    "format": "rtf",
    "mode": "modern",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{\\b Big Title}\\par \n\\par \n{\\i An italic quote here.}\\par \n\\par \n{Plain closing paragraph text.}\\par \n\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{\\b Big Title}\\par \n\\par \n{\\i An italic quote here.}\\par \n\\par \n{Plain closing paragraph text.}\\par \n}\n"
   },
   {
    "name": "bold_ital_paras/rtf/printed",
@@ -48,7 +48,7 @@
    "input_hex": "2020202020412073686f727420706f656d206c696e652c8d0a2020202020616e6f746865722073686f7274206c696e652e8d0a0d0a8d0a20202020205365636f6e64207374616e7a6120636c6f7365732e0d0a",
    "format": "rtf",
    "mode": "modern",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{     A short poem line,}\\line {     another short line.}\\par \n\\par \n{     Second stanza closes.}\\par \n\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{     A short poem line,}\\line {     another short line.}\\par \n\\par \n{     Second stanza closes.}\\par \n}\n"
   },
   {
    "name": "poem_indents/rtf/printed",
@@ -76,7 +76,7 @@
    "input_hex": "43686172f3206c696be5203c74616773be20616ee420a620616d70657273616e64f320616ee4202271756f746573a22068657265ae0d0a",
    "format": "rtf",
    "mode": "modern",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Chars like <tags> and & ampersands and \"quotes\" here.}\\par \n\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Chars like <tags> and & ampersands and \"quotes\" here.}\\par \n}\n"
   },
   {
    "name": "html_escaping/rtf/printed",
@@ -104,7 +104,7 @@
    "input_hex": "1d0500110505001d43686170746572204f6e650d0a54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f726520746578742e0d0a1d04000b04001d4e65787420706167652e0d0a",
    "format": "rtf",
    "mode": "modern",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Chapter One}\\line {Treaties were made.}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }See the accords.}{ More text.}\\line {Next page.}\\par \n\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Chapter One}\\line {Treaties were made.}{\\chftn}{\\*\\footnote \\pard\\plain\\fs24 {\\super\\chftn }See the accords.}{ More text.}\\line {Next page.}\\par \n}\n"
   },
   {
    "name": "ws5_footnote_heading/rtf/printed",
@@ -132,7 +132,7 @@
    "input_hex": "506167e5206f6ee520746578f420686572e520746f646179ae0d0a2e70610d0a506167e5207477ef20746578f420686572e520746f646179ae0d0a",
    "format": "rtf",
    "mode": "modern",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Page one text here today.}\\par \n\\par \n\\page \n{Page two text here today.}\\par \n\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Page one text here today.}\\par \n\\page \n{Page two text here today.}\\par \n}\n"
   },
   {
    "name": "dot_pagebreak/rtf/printed",
@@ -216,7 +216,7 @@
    "input_hex": "4f64642003636f646573032068657265201b82206f6b2e0d0a",
    "format": "rtf",
    "mode": "modern",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Odd codes here \\u233? ok.}\\par \n\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Odd codes here \\u233? ok.}\\par \n}\n"
   },
   {
    "name": "extended_char/rtf/printed",

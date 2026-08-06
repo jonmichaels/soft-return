@@ -130,6 +130,16 @@ private func convertAll(
                 + "rendering printed")
         }
 
+        // A driver-art document reflowed under modern will look strange, and the log
+        // should say why (ruling 2026-08-06): the driver's page art (colour knockouts,
+        // rules, hand-laid boxes) exists only at print time. Its CHARACTER substitutions
+        // are content and ARE applied.
+        if options.mode == .modern, doc.printerDriver == "LJ6DTP" {
+            environment.writeErr("sr: \(path): LJ6DTP driver document -- its print-time "
+                + "page art (boxes, rules, colour) does not reflow; character "
+                + "substitutions applied. --mode printed reproduces the page")
+        }
+
         // --page-settings applies ONCE to the resolved page, so every emitter (PDF
         // geometry, RTF page setup) sees the same effective page (ruling 2026-08-05,
         // "Page Settings at every layer") — mirrors `PDFWriter.swift`'s own `emitPDF`

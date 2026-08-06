@@ -114,10 +114,13 @@ import Testing
     // PDF carries fonts now (ruling 2026-08-05) — a fontless bold heading reads in
     // Times-Bold at the sophisticated size (14pt), not Courier-Bold at 12pt, and each word
     // is its own Tj op under proportional reflow, not one combined string.
+    // The x values carry the style's own left margin as a real Modern indent since M2
+    // (ruling 2026-08-06: block margins are the document's explicit choices and win in
+    // Modern exactly as its fonts do) — re-pinned against the live Python reference.
     let pdf = emitPDF(parseWS(data), mode: .modern)
     #expect(contains(pdf, bytes("/BaseFont /Times-Bold")))
-    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 72.0 703.2 Td (Chapter) Tj ET")))
-    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 125.3 703.2 Td (One) Tj ET")))
+    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 144.0 703.2 Td (Chapter) Tj ET")))
+    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 197.3 703.2 Td (One) Tj ET")))
     #expect(contains(pdf, bytes("(realistic.)")))
 }
 

@@ -130,23 +130,24 @@ import Testing
     #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
             + #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
             + "\n" + #"\f0\fs28 "# + "\n"
-            + #"{a\{b\}c\{}\par "# + "\n" + #"\par "# + "\n}\n")
+            + #"{a\{b\}c\{}\par "# + "\n}\n")
 }
 
-@Test func rtfModernEmitsABlankParagraphEvenForAnEmptyBlock() {
-    // emit.py:231-232 appends `\par ` unconditionally in modern mode, so a block that
-    // contributed no paragraph of its own still emits one — three `\par ` runs between A
-    // and B, not two. A quirk, verified against Python rather than assumed.
+@Test func rtfModernParagraphSpacingFollowsTheAuthorsBlankLines() {
+    // Ruling 2026-08-06 (M4): only the author's own blank lines make space. The old
+    // unconditional blank `\par` after every block invented spacing wherever a dot
+    // command split a block; now the count comes from `trailingBlankLines`. A block that
+    // ends in the author's hard blank gets its `\par`; a bare block boundary gets none.
     let doc = Document(blocks: [
-        Block(lines: [Line(spans: [Span(text: "A")])]),
+        Block(lines: [Line(spans: [Span(text: "A")]), Line(spans: [])]),
         Block(lines: []),
         Block(lines: [Line(spans: [Span(text: "B")])]),
     ])
     #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
             + #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
             + "\n" + #"\f0\fs28 "# + "\n"
-            + #"{A}\par "# + "\n" + #"\par "# + "\n" + #"\par "# + "\n"
-            + #"{B}\par "# + "\n" + #"\par "# + "\n}\n")
+            + #"{A}\par "# + "\n" + #"\par "# + "\n"
+            + #"{B}\par "# + "\n}\n")
 }
 
 @Test func printedModeKeepsAnEmptyBlockAsABlankParagraph() throws {

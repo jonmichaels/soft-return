@@ -191,6 +191,81 @@ func rtfAlignControl(_ align: Alignment) -> String {
     }
 }
 
+/// Spans minus leading/trailing spaces — for center/right blocks under Modern.
+/// WordStar 5+ aligned at EDITOR time, so the file carries BOTH the alignment tag and
+/// the spaces that implemented it; emitting both aligns twice (ruling 2026-08-06).
+/// The tag does the work now. Port of `_strip_align_spaces`.
+func stripAlignSpaces(_ spans: [Span]) -> [Span] {
+    var out = spans
+    while let first = out.first {
+        let t = String(first.text.drop(while: { $0 == " " }))
+        if !t.isEmpty {
+            if t != first.text {
+                var span = first
+                span.text = t
+                out[0] = span
+            }
+            break
+        }
+        out.removeFirst()
+    }
+    while let last = out.last {
+        var t = last.text
+        while t.hasSuffix(" ") { t.removeLast() }
+        if !t.isEmpty {
+            if t != last.text {
+                var span = last
+                span.text = t
+                out[out.count - 1] = span
+            }
+            break
+        }
+        out.removeLast()
+    }
+    return out
+}
+
+/// Modern RTF `\header`/`\footer` groups from the document's own running heads (ruling
+/// 2026-08-06: Modern keeps headers).
+///
+/// RTF carries ONE header per section; a document that redefines its head mid-file keeps
+/// the FIRST definition of each line slot (the common case — OLDTIMES — defines each
+/// exactly once). WordStar's `#` token becomes `\chpgn`, Word's own page-number field. A
+/// head first defined after the opening block gets `\titlepg` with an empty first-page
+/// header: the manuscript convention (no running head on page 1), and exactly what
+/// WordStar itself printed when `.h1` follows page 1's title. Port of
+/// `_rtf_running_heads`.
+private func rtfRunningHeads(_ doc: Document) -> String {
+    var hdr: [Int: String] = [:]
+    var ftr: [Int: String] = [:]
+    var firstAnchor: Int? = nil
+    for event in doc.hfEvents {
+        let isHeader = event.kind == .header
+        let present = isHeader ? hdr[event.line] != nil : ftr[event.line] != nil
+        if !present, !event.text.isEmpty {
+            if isHeader { hdr[event.line] = event.text } else { ftr[event.line] = event.text }
+            if firstAnchor == nil || event.blockAnchor < firstAnchor! {
+                firstAnchor = event.blockAnchor
+            }
+        }
+    }
+    if hdr.isEmpty, ftr.isEmpty { return "" }
+
+    func group(_ name: String, _ lines: [Int: String]) -> String {
+        if lines.isEmpty { return "" }
+        let body = lines.keys.sorted().map { n in
+            rtfEscape(lines[n]!).replacingAll("#", with: #"{\chpgn }"#)
+        }.joined(separator: #"\line "#)
+        return #"{\\#(name) \pard\plain \f0\fs22 \#(body)\par}"#
+    }
+
+    var out = group("header", hdr) + group("footer", ftr)
+    if let anchor = firstAnchor, anchor > 0 {
+        out = #"\titlepg{\headerf \pard\plain\par}"# + out
+    }
+    return out
+}
+
 public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> String {
     let printed = mode == .printed || isPrinted(doc)
@@ -220,7 +295,13 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         // printed: physical lines (\line at every printed break, soft or hard); modern:
         // logical lines only (`mergedLines`, ctrl-kd 2.0.0).
         var lines = (printed ? block.lines : mergedLines(block)).map { line in
-            line.spans
+            var spans = line.spans
+            if !printed, block.align == .center || block.align == .right, !spans.isEmpty {
+                // editor-time alignment: the spaces implemented the tag; keeping both
+                // aligns twice (ruling 2026-08-06)
+                spans = stripAlignSpaces(spans)
+            }
+            return spans
                 .map { rtfBodySpan($0, refNotes: refNotes, doc: doc, options: options,
                                    fontControl: fontTable.control, printed: printed) }
                 .joined()
@@ -252,11 +333,10 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             parts.append(para + #"\par "#)
         }
         if !printed {
-            // emit.py:231-232 — modern mode puts a blank paragraph between paragraphs, and
-            // does so unconditionally: an empty block that contributed no `\par` above still
-            // gets this one, and the last block still gets a trailing blank. Faithful to
-            // Python, quirk included; the vectors pin both.
-            parts.append(#"\par "#)
+            // Only the author's own blank lines make space (ruling 2026-08-06): a block
+            // boundary is often just a dot command, and command codes are invisible.
+            parts.append(contentsOf: Array(repeating: #"\par "#,
+                                           count: trailingBlankLines(block)))
         }
     }
 
@@ -317,10 +397,12 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     let pageSetup = #"\paperw12240\paperh\#(paperh)\margl\#(margl)\margr\#(margl)"#
         + #"\margt\#(margt)\margb\#(margb)"#
 
+    let running = printed ? "" : rtfRunningHeads(doc)
     var out = #"{\rtf1\ansi\deff0{\fonttbl"# + f0Entry + #"{\f1 Courier New;}"#
     out += fontTable.fontTable + "}"
     out += stylesheet
     out += pageSetup
+    out += running
     out += "\n" + font + bodyFontSize + " " + "\n"
     out += body
     out += "\n}\n"
