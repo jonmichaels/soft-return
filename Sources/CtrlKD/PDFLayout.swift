@@ -71,15 +71,24 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     /// areas, wrapped Modern text, blank fillers) — only a printed-mode body line
     /// carries WordStar's own flag.
     public var overprint: Bool
+    /// `Line.soft` carried into the paginated representation (Python `PageLine.soft`,
+    /// added 2026-08-03 there; closed here with the layout facade): a soft return is
+    /// WordStar's own word wrap — or the filler `.ls > 1` materialises — where a hard
+    /// one is the author pressing Return. What Soft Return.app's Show Invisibles needs,
+    /// and part of the `layout` JSON contract.
+    public var soft: Bool
 
     public init() {
         spans = []
         lead = nil
         overprint = false
+        soft = false
     }
 
-    public init(_ spans: [Span], lead: Double? = nil, overprint: Bool = false) {
+    public init(_ spans: [Span], soft: Bool = false, lead: Double? = nil,
+                overprint: Bool = false) {
         self.spans = spans
+        self.soft = soft
         self.lead = lead
         self.overprint = overprint
     }
@@ -322,7 +331,7 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
                 .map { extra.isEmpty ? $0 : Span(text: $0.text, styles: $0.styles.union(extra),
                                                  font: $0.font) }
             items.append(contentsOf: wrapLine(spans, width: PDFMetrics.maxCols)
-                .map(LayoutItem.line))
+                .map { LayoutItem.line(PageLine($0.spans, soft: line.soft)) })
         }
         if !block.lines.isEmpty {
             items.append(.line([]))                           // blank line between paragraphs
@@ -572,7 +581,7 @@ private func resolvePrintedBody(_ doc: Document) -> [PrintedBodyItem] {
             // A PageLine, not a bare list of spans, so the line's own `.lh` survives the
             // footnote paginator too — body lines keep their lead whether or not the
             // document has notes.
-            items.append(.line(PageLine(outSpans, lead: leadPt(line.lead48),
+            items.append(.line(PageLine(outSpans, soft: line.soft, lead: leadPt(line.lead48),
                                         overprint: line.overprint), due: due))
         }
     }
@@ -1006,7 +1015,7 @@ private func resolvePlainBody(_ doc: Document) -> [PlainBodyItem] {
                         : Span(text: $0.text, styles: $0.styles.union(extra), font: $0.font,
                                colour: $0.colour, pctlHMI: $0.pctlHMI)
                 }
-            items.append(.line(PageLine(spans, lead: leadPt(line.lead48),
+            items.append(.line(PageLine(spans, soft: line.soft, lead: leadPt(line.lead48),
                                         overprint: line.overprint)))
         }
     }
