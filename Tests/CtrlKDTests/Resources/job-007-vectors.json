@@ -1,0 +1,238 @@
+{
+ "note": "machine-generated from Python ctrl-kd 1.1.3: parse_printstream Documents + parse() front-door routing",
+ "parse_printstream": [
+  {
+   "input_hex": "7472656174696573207769746820496e6469616e732e18311220204d6f726520746578740d0a1470616765206f6e650d0a0c706167652074776f0d0a",
+   "document": {
+    "blocks": [
+     {
+      "kind": "para",
+      "heading": 0,
+      "lines": [
+       [
+        {
+         "text": "treaties with Indians.",
+         "styles": []
+        },
+        {
+         "text": "1",
+         "styles": [
+          "sup"
+         ]
+        },
+        {
+         "text": "  More text",
+         "styles": []
+        }
+       ],
+       [
+        {
+         "text": "page one",
+         "styles": []
+        }
+       ],
+       []
+      ]
+     },
+     {
+      "kind": "pagebreak",
+      "heading": 0,
+      "lines": []
+     },
+     {
+      "kind": "para",
+      "heading": 0,
+      "lines": [
+       [
+        {
+         "text": "page two",
+         "styles": []
+        }
+       ],
+       []
+      ]
+     }
+    ],
+    "footnotes": [],
+    "meta": {
+     "variant": "printstream",
+     "columnar": true
+    }
+   }
+  },
+  {
+   "input_hex": "1e426f6c64205469746c651f0d0a056974616c69632076657273650620616e64201363617365206e616d651520616e642010756e6465726c696e6564110d0a",
+   "document": {
+    "blocks": [
+     {
+      "kind": "para",
+      "heading": 0,
+      "lines": [
+       [
+        {
+         "text": "Bold Title",
+         "styles": [
+          "b"
+         ]
+        }
+       ],
+       [
+        {
+         "text": "italic verse",
+         "styles": [
+          "i"
+         ]
+        },
+        {
+         "text": " and ",
+         "styles": []
+        },
+        {
+         "text": "case name",
+         "styles": [
+          "i"
+         ]
+        },
+        {
+         "text": " and ",
+         "styles": []
+        },
+        {
+         "text": "underlined",
+         "styles": [
+          "u"
+         ]
+        }
+       ],
+       []
+      ]
+     }
+    ],
+    "footnotes": [],
+    "meta": {
+     "variant": "printstream",
+     "columnar": true
+    }
+   }
+  },
+  {
+   "input_hex": "0d0a0d0a2020202020436861707465722064726f7020746578740d0a0d0a6c696e6520616674657220626c616e6b0d0a",
+   "document": {
+    "blocks": [
+     {
+      "kind": "para",
+      "heading": 0,
+      "lines": [
+       [],
+       [],
+       [
+        {
+         "text": "     Chapter drop text",
+         "styles": []
+        }
+       ],
+       [],
+       [
+        {
+         "text": "line after blank",
+         "styles": []
+        }
+       ],
+       []
+      ]
+     }
+    ],
+    "footnotes": [],
+    "meta": {
+     "variant": "printstream",
+     "columnar": true
+    }
+   }
+  },
+  {
+   "input_hex": "4265666f72652074686520656e642e0d0a1a1a1a6761726261676520616674657220656f66",
+   "document": {
+    "blocks": [
+     {
+      "kind": "para",
+      "heading": 0,
+      "lines": [
+       [
+        {
+         "text": "Before the end.",
+         "styles": []
+        }
+       ],
+       []
+      ]
+     }
+    ],
+    "footnotes": [],
+    "meta": {
+     "variant": "printstream",
+     "columnar": true
+    }
+   }
+  },
+  {
+   "input_hex": "68696768a062697420686572650d0a",
+   "document": {
+    "blocks": [
+     {
+      "kind": "para",
+      "heading": 0,
+      "lines": [
+       [
+        {
+         "text": "high bit here",
+         "styles": []
+        }
+       ],
+       []
+      ]
+     }
+    ],
+    "footnotes": [],
+    "meta": {
+     "variant": "printstream",
+     "columnar": true
+    }
+   }
+  },
+  {
+   "input_hex": "636f6c3109636f6c320d0a",
+   "document": {
+    "blocks": [
+     {
+      "kind": "para",
+      "heading": 0,
+      "lines": [
+       [
+        {
+         "text": "col1\tcol2",
+         "styles": []
+        }
+       ],
+       []
+      ]
+     }
+    ],
+    "footnotes": [],
+    "meta": {
+     "variant": "printstream",
+     "columnar": true
+    }
+   }
+  }
+ ],
+ "parse_front_door": [
+  {
+   "input_hex": "4c696e65206f6e65206f66207072696e74656420706167650d0a4c696e652074776f0d0a4c696e652074687265650d0a1a",
+   "routes_to": "printstream"
+  },
+  {
+   "input_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+   "routes_to": "REFUSES"
+  }
+ ]
+}

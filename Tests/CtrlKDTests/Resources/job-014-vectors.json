@@ -1,0 +1,63 @@
+{
+ "note": "generated from the Python reference implementation (ctrl-kd 1.1.6): cli.diagnose() reference outputs. Ruled EQUIVALENT-not-byte-identical: Swift emits the same information in a documented stable shape (file field excluded from comparison).",
+ "diagnose_reference": [
+  {
+   "name": "ws4_doc",
+   "input_hex": "02c1205469746ce5020d0a0d0a426f64f9207061726167726170e820776974e820656e6f7567e820776f7264f32074ef2062e52064657465637465e42070726f7065726cf92068657265ae0d0a",
+   "python_reference_json": {
+    "file": "/tmp/ws4_doc",
+    "variant": "ws4",
+    "soft_returns": 0,
+    "hard_returns": 3,
+    "high_bit_bytes": 12,
+    "text_pct": 97,
+    "symmetric_blocks_1d": 0,
+    "size": 77,
+    "margin_estimate": 65,
+    "dot_commands": [],
+    "unknown_codes": {},
+    "columnar": false,
+    "paragraphs": 2,
+    "footnotes": 0
+   }
+  },
+  {
+   "name": "printstream",
+   "input_hex": "4c696e65206f6e65206f66207072696e74656420706167650d0a4c696e652074776f0d0a",
+   "python_reference_json": {
+    "file": "/tmp/printstream",
+    "variant": "printstream",
+    "soft_returns": 0,
+    "hard_returns": 2,
+    "high_bit_bytes": 0,
+    "text_pct": 100,
+    "symmetric_blocks_1d": 0,
+    "size": 36
+   }
+  },
+  {
+   "name": "binary",
+   "input_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+   "python_reference_json": {
+    "file": "/tmp/binary",
+    "variant": "binary",
+    "reason": "only 11% text-like",
+    "soft_returns": 0,
+    "hard_returns": 0,
+    "high_bit_bytes": 0,
+    "text_pct": 11,
+    "symmetric_blocks_1d": 0,
+    "size": 26
+   }
+  },
+  {
+   "name": "empty_ctrlz",
+   "input_hex": "1a616e797468696e6720616674657220656f66",
+   "python_reference_json": {
+    "file": "/tmp/empty_ctrlz",
+    "variant": "binary",
+    "reason": "empty (or ^Z at start)"
+   }
+  }
+ ]
+}

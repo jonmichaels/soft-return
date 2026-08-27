@@ -1,0 +1,139 @@
+{
+ "note": "machine-generated from Python ctrl-kd 1.1.4: convert() front-door per format (+md alias), and the form-feed-bracketed printstream case from the job-009 finding (empty-block guards on all four emitters, both modes)",
+ "convert": [
+  {
+   "input_hex": "0252656769737472f920546573f4020d0a0d0a4f6ee5207061726167726170e82069f320656e6f7567e82074ef2070726f76e520776972696e67ae0d0a",
+   "to": "text",
+   "expected": "Registry Test\n\nOne paragraph is enough to prove wiring.\n"
+  },
+  {
+   "input_hex": "0252656769737472f920546573f4020d0a0d0a4f6ee5207061726167726170e82069f320656e6f7567e82074ef2070726f76e520776972696e67ae0d0a",
+   "to": "markdown",
+   "expected": "**Registry Test**\n\nOne paragraph is enough to prove wiring.\n"
+  },
+  {
+   "input_hex": "0252656769737472f920546573f4020d0a0d0a4f6ee5207061726167726170e82069f320656e6f7567e82074ef2070726f76e520776972696e67ae0d0a",
+   "to": "html",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p><strong>Registry Test</strong></p>\n<p>One paragraph is enough to prove wiring.</p>\n</body></html>\n"
+  },
+  {
+   "input_hex": "0252656769737472f920546573f4020d0a0d0a4f6ee5207061726167726170e82069f320656e6f7567e82074ef2070726f76e520776972696e67ae0d0a",
+   "to": "rtf",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{\\b Registry Test}\\par \n\\par \n{One paragraph is enough to prove wiring.}\\par \n}\n"
+  },
+  {
+   "input_hex": "0252656769737472f920546573f4020d0a0d0a4f6ee5207061726167726170e82069f320656e6f7567e82074ef2070726f76e520776972696e67ae0d0a",
+   "to": "md",
+   "expected": "**Registry Test**\n\nOne paragraph is enough to prove wiring.\n"
+  }
+ ],
+ "formfeed_printstream": {
+  "input_hex": "0c46697273742070616765207465787420686572652e0d0a0c5365636f6e642070616765207465787420686572652e0d0a0c",
+  "document": {
+   "blocks": [
+    {
+     "kind": "para",
+     "heading": 0,
+     "lines": [
+      []
+     ]
+    },
+    {
+     "kind": "pagebreak",
+     "heading": 0,
+     "lines": []
+    },
+    {
+     "kind": "para",
+     "heading": 0,
+     "lines": [
+      [
+       {
+        "text": "First page text here.",
+        "styles": []
+       }
+      ],
+      []
+     ]
+    },
+    {
+     "kind": "pagebreak",
+     "heading": 0,
+     "lines": []
+    },
+    {
+     "kind": "para",
+     "heading": 0,
+     "lines": [
+      [
+       {
+        "text": "Second page text here.",
+        "styles": []
+       }
+      ],
+      []
+     ]
+    },
+    {
+     "kind": "pagebreak",
+     "heading": 0,
+     "lines": []
+    },
+    {
+     "kind": "para",
+     "heading": 0,
+     "lines": [
+      []
+     ]
+    }
+   ],
+   "footnotes": [],
+   "meta": {
+    "variant": "printstream",
+    "columnar": true
+   }
+  },
+  "emit": [
+   {
+    "format": "text",
+    "mode": "modern",
+    "expected": "\n--------------------\n\nFirst page text here.\n\n\n--------------------\n\nSecond page text here.\n\n\n--------------------\n\n"
+   },
+   {
+    "format": "text",
+    "mode": "printed",
+    "expected": "\n\f\nFirst page text here.\n\n\f\nSecond page text here.\n\n\f\n\n"
+   },
+   {
+    "format": "markdown",
+    "mode": "modern",
+    "expected": "```\n\n\f\nFirst page text here.\n\n\f\nSecond page text here.\n\n\f\n```\n"
+   },
+   {
+    "format": "markdown",
+    "mode": "printed",
+    "expected": "```\n\n\f\nFirst page text here.\n\n\f\nSecond page text here.\n\n\f\n```\n"
+   },
+   {
+    "format": "html",
+    "mode": "modern",
+    "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<hr class=\"pb\">\n<p class=\"ws-native\">First page text here.<br>\n</p>\n<hr class=\"pb\">\n<p class=\"ws-native\">Second page text here.<br>\n</p>\n<hr class=\"pb\">\n</body></html>\n"
+   },
+   {
+    "format": "html",
+    "mode": "printed",
+    "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<hr class=\"pb\">\n<p class=\"ws-native\">First page text here.<br>\n</p>\n<hr class=\"pb\">\n<p class=\"ws-native\">Second page text here.<br>\n</p>\n<hr class=\"pb\">\n</body></html>\n"
+   },
+   {
+    "format": "rtf",
+    "mode": "modern",
+    "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n\\par \n\\page \n{First page text here.}\\line \\par \n\\page \n{Second page text here.}\\line \\par \n\\page \n\\par \n}\n"
+   },
+   {
+    "format": "rtf",
+    "mode": "printed",
+    "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n\\par \n\\page \n{First page text here.}\\line \\par \n\\page \n{Second page text here.}\\line \\par \n\\page \n\\par \n}\n"
+   }
+  ]
+ }
+}

@@ -1,0 +1,682 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<!--
+  Soft Return's AppleScript dictionary.
+
+  This file IS the ruled dictionary in docs/AppleScript-Dictionary.md — the vocabulary
+  was proposed and ruled on BEFORE this was written (Jon, 2026-08-07/08: ws5plus one
+  word, sawyer stays the public preset name, layout JSON included for full CLI parity).
+  Every class, verb, parameter, and enumeration below is that document made concrete;
+  see it for the "why" behind each shape. The three acceptance scripts at the bottom of
+  that doc are the bar this dictionary is meant to clear.
+
+  Every command routes through SoftReturn.Operations.DocumentOperations — the same
+  headless layer the CLI (`sr`) and the App Intents (Shortcuts) surfaces call — so the
+  three surfaces cannot drift apart. No conversion/diagnosis logic lives in the Cocoa
+  Scripting glue itself.
+
+  Job 147 (2026-08-09): the Standard Suite below is declared INLINE, copied verbatim
+  from docs/reference/spotlight-schemas/skim.sdef's own Standard Suite (`<cocoa
+  name="NSCoreSuite"/>`) instead of `xi:include`-ing CocoaStandard.sdef. This exists to
+  test the surviving hypothesis for the -1708 "doesn't understand" bug (jobs 143/144):
+  that the runtime NSScriptSuiteRegistry loader in the sandboxed Release process does
+  not resolve xi:include the way terminology tooling (sdp/osacompile) does. Unlike the
+  old xi:include (which used an xpointer filter to DROP "save"/"delete"/"make" — "Soft
+  Return is a viewer"), this inline copy includes those terms because that is what
+  Skim's shipping suite actually contains and the point of this experiment is a faithful
+  structural copy, not a re-litigation of viewer semantics. SoftReturn.WSDocument does
+  not override handleSaveScriptCommand:/NSCreateCommand/NSDeleteCommand, so those verbs
+  now compile and dispatch through AppKit's own default NSDocument/NSApplication
+  behavior rather than being absent from the dictionary — flagged here, not silently
+  shipped; see the job 147 report for the product-behavior call this raises for Jon.
+-->
+<dictionary title="Soft Return Terminology">
+    <suite name="Standard Suite" code="core"
+           description="Common classes and commands for all applications.">
+
+        <cocoa name="NSCoreSuite"/>
+
+        <command name="open" code="aevtodoc" description="Open a document.">
+            <direct-parameter description="The file(s) to be opened.">
+                <type type="file"/>
+                <type type="file" list="yes"/>
+            </direct-parameter>
+            <result description="The opened document(s).">
+                <type type="document"/>
+                <type type="document" list="yes"/>
+            </result>
+        </command>
+
+        <enumeration name="save options" code="savo">
+            <enumerator name="yes" code="yes " description="Save the file."/>
+            <enumerator name="no" code="no  " description="Do not save the file."/>
+            <enumerator name="ask" code="ask " description="Ask the user whether or not to save the file."/>
+        </enumeration>
+
+        <command name="close" code="coreclos" description="Close a document.">
+            <cocoa class="NSCloseCommand"/>
+            <direct-parameter type="specifier" description="the document(s) or window(s) to close."/>
+            <parameter name="saving" code="savo" type="save options" optional="yes" description="Should changes be saved before closing?">
+                <cocoa key="SaveOptions"/>
+            </parameter>
+            <parameter name="saving in" code="kfil" type="file" optional="yes" description="The file in which to save the document, if so.">
+                <cocoa key="File"/>
+            </parameter>
+        </command>
+
+        <command name="save" code="coresave" description="Save a document.">
+            <direct-parameter type="specifier" description="The document(s) or window(s) to save."/>
+            <parameter name="in" code="kfil" type="file" optional="yes" description="The file in which to save the document.">
+                <cocoa key="File"/>
+            </parameter>
+            <parameter name="as" code="fltp" type="text" optional="yes" description="The file format to use. Should be one of &quot;PDF&quot;, &quot;PDF Bundle&quot;, &quot;PDF Without Notes&quot;, &quot;PDF With Embedded Notes&quot;, &quot;PostScript&quot;, &quot;PostScript Without Notes&quot;, &quot;Encapsulated PostScript&quot;, &quot;Encapsulated PostScript Without Notes&quot;, &quot;DVI&quot;, &quot;DVI Without Notes&quot;, &quot;XDV&quot;, &quot;XDV Without Notes&quot;, &quot;Skim Notes&quot;, &quot;Notes as Text&quot;, &quot;Notes as RTF&quot;, &quot;Notes as RTFD&quot;, and &quot;Notes as FDF&quot;, or the name of a custom export template.">
+                <cocoa key="FileType"/>
+            </parameter>
+        </command>
+
+        <enumeration name="printing error handling" code="enum">
+            <enumerator name="standard" code="lwst" description="Standard PostScript error handling">
+                <cocoa boolean-value="NO"/>
+            </enumerator>
+            <enumerator name="detailed" code="lwdt" description="print a detailed report of PostScript errors">
+                <cocoa boolean-value="YES"/>
+            </enumerator>
+        </enumeration>
+
+        <record-type name="print settings" code="pset">
+            <property name="copies" code="lwcp" type="integer" description="the number of copies of a document to be printed">
+                <cocoa key="NSCopies"/>
+            </property>
+            <property name="collating" code="lwcl" type="boolean" description="Should printed copies be collated?">
+                <cocoa key="NSMustCollate"/>
+            </property>
+            <property name="starting page" code="lwfp" type="integer" description="the first page of the document to be printed">
+                <cocoa key="NSFirstPage"/>
+            </property>
+            <property name="ending page" code="lwlp" type="integer" description="the last page of the document to be printed">
+                <cocoa key="NSLastPage"/>
+            </property>
+            <property name="pages across" code="lwla" type="integer" description="number of logical pages laid across a physical page">
+                <cocoa key="NSPagesAcross"/>
+            </property>
+            <property name="pages down" code="lwld" type="integer" description="number of logical pages laid out down a physical page">
+                <cocoa key="NSPagesDown"/>
+            </property>
+            <property name="requested print time" code="lwqt" type="date" description="the time at which the desktop printer should print the document">
+                <cocoa key="NSPrintTime"/>
+            </property>
+            <property name="error handling" code="lweh" type="printing error handling" description="how errors are handled">
+                <cocoa key="NSDetailedErrorReporting"/>
+            </property>
+            <property name="fax number" code="faxn" type="text" description="for fax number">
+                <cocoa key="NSFaxNumber"/>
+            </property>
+            <property name="target printer" code="trpr" type="text" description="for target printer">
+                <cocoa key="NSPrinterName"/>
+            </property>
+        </record-type>
+
+        <command name="print" code="aevtpdoc" description="Print a document.">
+            <direct-parameter description="The file(s), document(s), or window(s) to be printed.">
+                <type type="file" list="yes"/>
+                <type type="specifier"/>
+            </direct-parameter>
+            <parameter name="with properties" code="prdt" type="print settings" optional="yes" description="The print settings to use.">
+                <cocoa key="PrintSettings"/>
+            </parameter>
+            <parameter name="print dialog" code="pdlg" type="boolean" optional="yes" description="Should the application show the print dialog?">
+                <cocoa key="ShowPrintDialog"/>
+            </parameter>
+        </command>
+
+        <command name="quit" code="aevtquit" description="Quit the application.">
+            <cocoa class="NSQuitCommand"/>
+            <parameter name="saving" code="savo" type="save options" optional="yes" description="Should changes be saved before quitting?">
+                <cocoa key="SaveOptions"/>
+            </parameter>
+        </command>
+
+        <command name="count" code="corecnte" description="Return the number of elements of a particular class within an object.">
+            <cocoa class="NSCountCommand"/>
+            <direct-parameter type="specifier" description="The objects to be counted."/>
+            <parameter name="each" code="kocl" type="type" optional="yes" description="The class of objects to be counted." hidden="yes">
+                <cocoa key="ObjectClass"/>
+            </parameter>
+            <result type="integer" description="The count."/>
+        </command>
+
+        <command name="delete" code="coredelo" description="Delete an object.">
+            <cocoa class="NSDeleteCommand"/>
+            <direct-parameter type="specifier" description="The object(s) to delete."/>
+        </command>
+
+        <command name="duplicate" code="coreclon" description="Copy an object.">
+            <cocoa class="NSCloneCommand"/>
+            <direct-parameter type="specifier" description="The object(s) to copy."/>
+            <parameter name="to" code="insh" type="location specifier" description="The location for the new copy or copies." optional="yes">
+                <cocoa key="ToLocation"/>
+            </parameter>
+            <parameter name="with properties" code="prdt" type="record" description="Properties to set in the new copy or copies right away." optional="yes">
+                <cocoa key="WithProperties"/>
+            </parameter>
+        </command>
+
+        <command name="exists" code="coredoex" description="Verify that an object exists.">
+            <cocoa class="NSExistsCommand"/>
+            <direct-parameter type="any" description="The object(s) to check."/>
+            <result type="boolean" description="Did the object(s) exist?"/>
+        </command>
+
+        <command name="make" code="corecrel" description="Create a new object.">
+            <cocoa class="NSCreateCommand"/>
+            <parameter name="new" code="kocl" type="type" description="The class of the new object.">
+                <cocoa key="ObjectClass"/>
+            </parameter>
+            <parameter name="at" code="insh" type="location specifier" optional="yes" description="The location at which to insert the object.">
+                <cocoa key="Location"/>
+            </parameter>
+            <parameter name="with data" code="data" type="any" optional="yes" description="The initial contents of the object.">
+                <cocoa key="ObjectData"/>
+            </parameter>
+            <parameter name="with properties" code="prdt" type="record" optional="yes" description="The initial values for properties of the object.">
+                <cocoa key="KeyDictionary"/>
+            </parameter>
+            <result type="specifier" description="The new object."/>
+        </command>
+
+        <command name="move" code="coremove" description="Move an object to a new location.">
+            <cocoa class="NSMoveCommand"/>
+            <direct-parameter type="specifier" description="The object(s) to move."/>
+            <parameter name="to" code="insh" type="location specifier" description="The new location for the object(s).">
+                <cocoa key="ToLocation"/>
+            </parameter>
+        </command>
+
+        <class name="application" code="capp"
+               description="The application's top level scripting object.">
+            <cocoa class="NSApplication"/>
+            <property name="name" code="pnam" type="text" access="r" description="The name of the application."/>
+            <property name="frontmost" code="pisf" type="boolean" access="r" description="Is this the active application?">
+                <cocoa key="isActive"/>
+            </property>
+            <property name="version" code="vers" type="text" access="r" description="The version number of the application."/>
+            <element type="document">
+                <cocoa key="orderedDocuments"/>
+            </element>
+            <element type="window" access="r">
+                <cocoa key="orderedWindows"/>
+            </element>
+            <responds-to command="open">
+                <cocoa method="handleOpenScriptCommand:"/>
+            </responds-to>
+            <responds-to command="print">
+                <cocoa method="handlePrintScriptCommand:"/>
+            </responds-to>
+            <responds-to command="quit">
+                <cocoa method="handleQuitScriptCommand:"/>
+            </responds-to>
+        </class>
+
+        <class name="document" code="docu"
+               description="A document.">
+            <cocoa class="NSDocument"/>
+            <property name="name" code="pnam" type="text" access="r" description="Its name.">
+                <cocoa key="displayName"/>
+            </property>
+            <property name="modified" code="imod" type="boolean" access="r" description="Has it been modified since the last save?">
+                <cocoa key="isDocumentEdited"/>
+            </property>
+            <property name="file" code="file" type="file" access="r" description="Its location on disk, if it has one.">
+                <cocoa key="fileURL"/>
+            </property>
+            <property name="path" code="ppth" type="text" access="r" hidden="yes"
+                       description="The document's path.">
+                <cocoa key="fileName"/>
+            </property>
+            <responds-to command="close">
+                <cocoa method="handleCloseScriptCommand:"/>
+            </responds-to>
+            <responds-to command="print">
+                <cocoa method="handlePrintScriptCommand:"/>
+            </responds-to>
+            <responds-to command="save">
+                <cocoa method="handleSaveScriptCommand:"/>
+            </responds-to>
+        </class>
+
+        <class name="window" code="cwin"
+               description="A window.">
+            <cocoa class="NSWindow"/>
+            <property name="name" code="pnam" type="text" access="r" description="The title of the window.">
+                <cocoa key="title"/>
+            </property>
+            <property name="id" code="ID  " type="integer" access="r" description="The unique identifier of the window.">
+                <cocoa key="uniqueID"/>
+            </property>
+            <property name="index" code="pidx" type="integer" description="The index of the window, ordered front to back.">
+                <cocoa key="orderedIndex"/>
+            </property>
+            <property name="bounds" code="pbnd" type="rectangle" description="The bounding rectangle of the window.">
+                <cocoa key="boundsAsQDRect"/>
+            </property>
+            <property name="closeable" code="hclb" type="boolean" access="r" description="Does the window have a close button?">
+                <cocoa key="hasCloseBox"/>
+            </property>
+            <property name="miniaturizable" code="ismn" type="boolean" access="r" description="Does the window have a minimize button?">
+                <cocoa key="isMiniaturizable"/>
+            </property>
+            <property name="miniaturized" code="pmnd" type="boolean" description="Is the window minimized right now?">
+                <cocoa key="isMiniaturized"/>
+            </property>
+            <property name="resizable" code="prsz" type="boolean" access="r" description="Can the window be resized?">
+                <cocoa key="isResizable"/>
+            </property>
+            <property name="visible" code="pvis" type="boolean" description="Is the window visible right now?">
+                <cocoa key="isVisible"/>
+            </property>
+            <property name="zoomable" code="iszm" type="boolean" access="r" description="Does the window have a zoom button?">
+                <cocoa key="isZoomable"/>
+            </property>
+            <property name="zoomed" code="pzum" type="boolean" description="Is the window zoomed right now?">
+                <cocoa key="isZoomed"/>
+            </property>
+            <property name="document" code="docu" type="document" access="r" description="The document whose contents are displayed in the window."/>
+            <responds-to command="close">
+                <cocoa method="handleCloseScriptCommand:"/>
+            </responds-to>
+            <responds-to command="print">
+                <cocoa method="handlePrintScriptCommand:"/>
+            </responds-to>
+            <responds-to command="save">
+                <cocoa method="handleSaveScriptCommand:"/>
+            </responds-to>
+        </class>
+
+    </suite>
+
+    <suite name="Soft Return Suite" code="SRsu"
+           description="Classes and commands specific to Soft Return: converting, diagnosing, and reading WordStar-era documents.">
+
+        <!-- ============================== Enumerations ============================== -->
+
+        <enumeration name="variant" code="SRva"
+                     description="Which WordStar-era format a document was written in — the CLI's --variant.">
+            <enumerator name="ws4" code="SRv4" description="WordStar 4 through 6."/>
+            <enumerator name="ws5plus" code="SRv5" description="WordStar 5 through 7 (the CLI's ws5+)."/>
+            <enumerator name="printstream" code="SRvp" description="A print-to-disk capture."/>
+            <enumerator name="text" code="SRvt" description="Plain text, no WordStar formatting."/>
+        </enumeration>
+
+        <enumeration name="style" code="SRsy"
+                     description="How a document is rendered — the CLI's --mode, plus the app's own on-screen Native view (job 313B, superseding an earlier &quot;Native has no export equivalent&quot; ruling). Exporting/converting as native only changes PDF output — every other format is identical to printed.">
+            <enumerator name="native" code="SRsn" description="The window's own AppKit-rendered facsimile (Courier Prime, title faces). PDF export/convert reuses the exact print-path render Cmd-P uses; every other format is identical to printed."/>
+            <enumerator name="printed" code="SRsp" description="Line-for-line, the 1990 facsimile — the engine's own literal PDF bytes."/>
+            <enumerator name="modern" code="SRsm" description="Reflowed for a modern audience."/>
+        </enumeration>
+
+        <enumeration name="export format" code="SRfm"
+                     description="An output format export/convert can produce — the CLI's -t/--to, full parity including layout JSON.">
+            <enumerator name="plain text" code="SRft" description="The library's text emitter."/>
+            <enumerator name="Markdown" code="SRfk" description="The library's markdown emitter."/>
+            <enumerator name="HTML" code="SRfh" description="The library's html emitter."/>
+            <enumerator name="RTF" code="SRfr" description="The library's rtf emitter."/>
+            <enumerator name="PDF" code="SRfp" description="The library's pdf emitter."/>
+            <enumerator name="layout JSON" code="SRfj"
+                       description="The full viewer contract as JSON — the CLI's -t layout."/>
+        </enumeration>
+
+        <enumeration name="note reference style" code="SRnr"
+                     description="How note references are marked in Modern output — the CLI's --note-refs.">
+            <enumerator name="word style" code="SRnw"
+                       description="Arabic footnotes, lowercase-roman endnotes, WordStar tags for annotations."/>
+            <enumerator name="prefixed" code="SRnp"
+                       description="footnote 1 2 3, endnote e1 e2, annotation a1 a2 — matched across formats."/>
+        </enumeration>
+
+        <enumeration name="page size" code="SRpz"
+                     description="A named printed-sheet override.">
+            <enumerator name="US letter" code="SRpl"/>
+            <enumerator name="US legal" code="SRpg"/>
+            <enumerator name="A4" code="SRp4"/>
+        </enumeration>
+
+        <enumeration name="settings preset" code="SRpr"
+                     description="A named page-settings preset — the CLI's --page-settings preset names.">
+            <enumerator name="factory" code="SRxf"
+                       description="WordStar's own factory geometry (the CLI's 'default')."/>
+            <enumerator name="sawyer" code="SRxs"
+                       description="Robert J. Sawyer's WSCHANGE-recovered machine."/>
+            <enumerator name="modern" code="SRxm"
+                       description="Modern style's own 1in-margin page (the CLI's 'modern')."/>
+        </enumeration>
+
+        <enumeration name="pictures mode" code="SRpx"
+                     description="Job 373 (b24 FLAG UI): how .PIX image references are handled — the CLI's --pictures {off,embed,export}.">
+            <enumerator name="off" code="SRxo" description="The plain [image: NAME] placeholder, no picture handling."/>
+            <enumerator name="embed" code="SRxe" description="RTF/PDF native embedding, HTML data URI, MD exports files. The default."/>
+            <enumerator name="export" code="SRxx" description="PNG files beside the output, relative links from HTML/MD; RTF/PDF still embed."/>
+        </enumeration>
+
+        <enumeration name="fonts" code="SRfn"
+                     description="Job 504: which importer the RTF font names are chosen for — the CLI's --fonts, CtrlKD.FontsTarget.">
+            <enumerator name="office" code="SRof" description="Word AND Google Docs both resolve the Microsoft names — the widest single answer."/>
+            <enumerator name="mac" code="SRmc" description="Cocoa-native names — TextEdit/Pages/Soft Return.app world. The default here (the CLI's own D7 ruling: sr is the Mac tool)."/>
+            <enumerator name="google" code="SRgg" description="Google Docs' own catalog where it has something Office lacks."/>
+            <enumerator name="linux" code="SRlx" description="The URW base-35 clones — free, metric-compatible copies of this era's fonts."/>
+        </enumeration>
+
+        <enumeration name="page numbers mode" code="SRpn"
+                     description="Job 506 (b31): WordStar's own AUTOMATIC page number — the CLI's --page-numbers {auto,on,off}. Printed PDF only.">
+            <enumerator name="auto" code="SRpa" description="The document's own dot commands decide — .pn/.pg turn it on, .op turns it off. A document that never touches any of them gets no number. The default."/>
+            <enumerator name="on" code="SRpo" description="Force stock default numbering (bottom row a footer would use; .pc repositions it) even on a silent document."/>
+            <enumerator name="off" code="SRp0" description="Suppress it unconditionally."/>
+        </enumeration>
+
+        <enumeration name="sentence spacing mode" code="SRsq"
+                     description="Job 521 (N9, b33): the typewriter double space after a sentence-ending . ? or ! — the CLI's --sentence-spacing {auto,keep,single}.">
+            <enumerator name="auto" code="SRsa" description="Modern exports collapse it to a single space; Printed and Native exports keep the document exactly as authored. The default."/>
+            <enumerator name="keep" code="SRsk" description="Keep the document's own spacing exactly as authored, regardless of style."/>
+            <enumerator name="single" code="SRsl" description="Collapse it to a single space, regardless of style."/>
+        </enumeration>
+
+        <enumeration name="zoom setting" code="SRzs"
+                     description="A named zoom state; a zoom can also be a plain percentage number.">
+            <enumerator name="fit" code="SRzf" description="Scaled to fill the window."/>
+            <enumerator name="actual size" code="SRza" description="100% — true size against a ruler."/>
+        </enumeration>
+
+        <!-- ================================ Records ================================ -->
+
+        <record-type name="page settings" code="SRrp"
+                     description="Replacement page geometry — the CLI's PageSettings, one field per dot command it can override. Every field is optional; an absent field leaves the document's own (or the factory) value alone.">
+            <property name="margin top" code="SRr1" type="real" description="`.mt` replacement, in lines at 6 LPI.">
+                <cocoa key="marginTop"/>
+            </property>
+            <property name="margin bottom" code="SRr2" type="real" description="`.mb` replacement, in lines at 6 LPI.">
+                <cocoa key="marginBottom"/>
+            </property>
+            <property name="page offset" code="SRr3" type="real" description="`.po` replacement, in columns at 10 CPI.">
+                <cocoa key="pageOffset"/>
+            </property>
+            <property name="header margin" code="SRr4" type="real" description="`.hm` replacement, in lines at 6 LPI.">
+                <cocoa key="headerMargin"/>
+            </property>
+            <property name="footer margin" code="SRr5" type="real" description="`.fm` replacement, in lines at 6 LPI.">
+                <cocoa key="footerMargin"/>
+            </property>
+            <property name="paper size" code="SRr7" type="page size" description="Job 504: a named sheet size (US letter/US legal/A4), the CLI's --page-settings size=. Sets page length via the library's own size table — an explicit page length in the same record wins if both are given.">
+                <cocoa key="paperSize"/>
+            </property>
+            <property name="page length" code="SRr6" type="real" description="`.pl` replacement, in lines at 6 LPI.">
+                <cocoa key="pageLength"/>
+            </property>
+        </record-type>
+
+        <record-type name="conversion result" code="SRrc"
+                     description="What a batch convert did — the CLI's -d batch summary.">
+            <property name="converted" code="SRc1" type="integer" description="Files that produced at least one output.">
+                <cocoa key="converted"/>
+            </property>
+            <property name="skipped" code="SRc2" type="integer" description="Files that were not convertible WordStar-era documents.">
+                <cocoa key="skipped"/>
+            </property>
+            <property name="failed" code="SRc3" type="file" list="yes" description="Files that failed for some other reason.">
+                <cocoa key="failed"/>
+            </property>
+        </record-type>
+
+        <record-type name="diagnosis" code="SRrd"
+                     description="What a file IS — the CLI's --diagnose, as a record instead of JSON.">
+            <property name="variant" code="SRd1" type="variant" description="The detected variant.">
+                <cocoa key="variant"/>
+            </property>
+            <property name="pages" code="SRd2" type="integer"
+                      description="Printed pagination; missing only when the bytes did not parse as a document at all.">
+                <cocoa key="pages"/>
+            </property>
+            <property name="dot commands" code="SRd3" type="text" list="yes" description="Dot commands observed, in file order.">
+                <cocoa key="dotCommands"/>
+            </property>
+            <property name="unknown codes" code="SRd4" type="integer" description="Total occurrences of codes the parser did not recognize.">
+                <cocoa key="unknownCodes"/>
+            </property>
+            <property name="comments present" code="SRd5" type="boolean" description="Whether the file carries any WordStar comments.">
+                <cocoa key="commentsPresent"/>
+            </property>
+            <property name="margins" code="SRd6" type="page settings" description="The file's own resolved page geometry.">
+                <cocoa key="margins"/>
+            </property>
+        </record-type>
+
+        <!-- ================================= Classes ================================= -->
+
+        <class-extension extends="document" description="A Soft Return document window.">
+            <cocoa class="SoftReturn.WSDocument"/>
+
+            <property name="variant" code="SRDv" type="variant"
+                      description="Reading returns the currently-parsed variant (detected, or last forced). Setting re-parses the document under the new variant — the CLI's --force.">
+                <cocoa key="scriptingVariant"/>
+            </property>
+            <property name="style" code="SRDs" type="style" description="The viewer's display mode. Reading reports exactly what the window shows, including native (job 313B — superseded the earlier printed-only reporting). Setting native switches the view the same way the View menu's Native item does.">
+                <cocoa key="scriptingStyle"/>
+            </property>
+            <property name="page count" code="SRDc" type="integer" access="r" description="How many pages this document laid out, at its current style.">
+                <cocoa key="scriptingPageCount"/>
+            </property>
+            <property name="current page" code="SRDp" type="integer" description="Which page is showing — the Go menu, as a property.">
+                <cocoa key="scriptingCurrentPage"/>
+            </property>
+            <property name="zoom" code="SRDz" description="Fit, Actual Size, or a percentage number.">
+                <cocoa key="scriptingZoom"/>
+                <type type="zoom setting"/>
+                <type type="real"/>
+            </property>
+            <property name="page size" code="SRDg" type="page size" description="The printed sheet override.">
+                <cocoa key="scriptingPageSize"/>
+            </property>
+            <property name="modern font" code="SRDf" type="text" description="Modern style's typeface. Printed style ignores this — it is always Courier.">
+                <cocoa key="scriptingModernFont"/>
+            </property>
+            <property name="modern size" code="SRDe" type="real" description="Modern style's point size. Printed style ignores this.">
+                <cocoa key="scriptingModernSize"/>
+            </property>
+            <property name="show invisibles" code="SRDi" type="boolean" description="View ▸ Show Invisibles.">
+                <cocoa key="scriptingShowInvisibles"/>
+            </property>
+            <!-- Job 254 (export-specifier): dispatch for the Soft Return Suite's own
+                 "export" command — see that command's own comment and `ExportCommand`'s
+                 header for why this class-extension, not a <cocoa class>, is where it's
+                 bound. -->
+            <responds-to command="export">
+                <cocoa method="handleExportScriptCommand:"/>
+            </responds-to>
+        </class-extension>
+
+        <!-- ================================= Commands ================================= -->
+
+        <command name="export" code="SRsuexpo"
+                 description="Export one document to one output file — the CLI's single-file conversion.">
+            <!-- Job 254 (export-specifier): no <cocoa class> binding here, deliberately —
+                 dispatch goes through the document class's <responds-to> below
+                 (handleExportScriptCommand:), the same receiver-resolution mechanism
+                 close/save already use, not a custom NSScriptCommand subclass. Candidate A
+                 (resolving the specifier by hand inside a custom command's
+                 performDefaultImplementation) did not fix job 252's field probe; this did. -->
+            <direct-parameter type="specifier" description="The document to export."/>
+            <parameter name="to" code="SRto" type="file" description="The output file's location.">
+                <cocoa key="scriptingDestination"/>
+            </parameter>
+            <parameter name="as" code="SRas" type="export format" description="The output format.">
+                <cocoa key="scriptingFormat"/>
+            </parameter>
+            <parameter name="using style" code="SRus" type="style" optional="yes"
+                      description="Omitted: the document's current style.">
+                <cocoa key="scriptingStyle"/>
+            </parameter>
+            <parameter name="footnotes" code="SRbf" type="boolean" optional="yes"
+                      description="With/without footnotes in the output. Default: with.">
+                <cocoa key="scriptingFootnotes"/>
+            </parameter>
+            <parameter name="endnotes" code="SRbe" type="boolean" optional="yes"
+                      description="With/without endnotes in the output. Default: with.">
+                <cocoa key="scriptingEndnotes"/>
+            </parameter>
+            <parameter name="annotations" code="SRba" type="boolean" optional="yes"
+                      description="With/without annotations in the output. Default: with.">
+                <cocoa key="scriptingAnnotations"/>
+            </parameter>
+            <parameter name="comments" code="SRbc" type="boolean" optional="yes"
+                      description="With/without WordStar comments in the output. Default: without.">
+                <cocoa key="scriptingComments"/>
+            </parameter>
+            <parameter name="note references" code="SRnf" type="note reference style" optional="yes"
+                      description="How note reference marks are shown in Modern output. Default: word style.">
+                <cocoa key="scriptingNoteReferences"/>
+            </parameter>
+            <parameter name="page settings" code="SRps" optional="yes"
+                      description="A named preset, or a page settings record (e.g. from import page settings).">
+                <cocoa key="scriptingPageSettings"/>
+                <type type="settings preset"/>
+                <type type="page settings"/>
+            </parameter>
+            <parameter name="headers" code="SReh" type="boolean" optional="yes"
+                      description="Job 373: with/without headers, footers, and page numbers (paged formats only — RTF/PDF). Omitted: Settings' own default.">
+                <cocoa key="scriptingHeaders"/>
+            </parameter>
+            <parameter name="table of contents" code="SRet" type="boolean" optional="yes"
+                      description="Job 373: with/without a compiled Table of Contents/Index section, from the document's own .tc/.ix entries. Omitted: Settings' own default.">
+                <cocoa key="scriptingTOC"/>
+            </parameter>
+            <parameter name="inline styling" code="SRei" type="boolean" optional="yes"
+                      description="Job 373: with/without the author's own inline color and font-size changes (RTF/HTML only). Omitted: Settings' own default.">
+                <cocoa key="scriptingInlineStyling"/>
+            </parameter>
+            <parameter name="pictures" code="SRep" type="pictures mode" optional="yes"
+                      description="Job 373: how .PIX image references are handled. Omitted: Settings' own default.">
+                <cocoa key="scriptingPictures"/>
+            </parameter>
+            <parameter name="line numbers" code="SRel" type="boolean" optional="yes"
+                      description="Job 504: with/without the document's own `.l#` line-number gutter (paged formats only — RTF/PDF). Default: with (the CLI's --line-numbers default).">
+                <cocoa key="scriptingLineNumbers"/>
+            </parameter>
+            <parameter name="styles" code="SRes" type="boolean" optional="yes"
+                      description="Job 504: with/without the document's own paragraph styles passed through to formats that can carry them (HTML classes/CSS, RTF \stylesheet). Default: with; false is the CLI's --no-styles.">
+                <cocoa key="scriptingStyles"/>
+            </parameter>
+            <parameter name="fonts" code="SRef" type="fonts" optional="yes"
+                      description="Job 504: which importer the RTF font names are chosen for (RTF only). Default: mac — the CLI's own D7 ruling, no longer this app's hardcoded ceiling.">
+                <cocoa key="scriptingFontsTarget"/>
+            </parameter>
+            <parameter name="page numbers" code="SRen" type="page numbers mode" optional="yes"
+                      description="Job 506 (b31), updated job 520 (N5): WordStar's own AUTOMATIC page number (paged formats only — RTF/PDF). Omitted: Settings' own default.">
+                <cocoa key="scriptingPageNumbers"/>
+            </parameter>
+            <parameter name="sentence spacing" code="SRey" type="sentence spacing mode" optional="yes"
+                      description="Job 521 (N9, b33): the typewriter double space after a sentence-ending . ? or ! (every format). Omitted: auto — there is deliberately no Settings default for this one.">
+                <cocoa key="scriptingSentenceSpacing"/>
+            </parameter>
+            <result type="file" description="The file actually written — job 504: never the requested destination if that name already existed. A collision writes Finder-style, 'NAME 2.ext' (then 'NAME 3.ext', ...), never a silent overwrite; this is the name the result reports."/>
+        </command>
+
+        <command name="convert" code="SRsuconv"
+                 description="Batch-convert files and/or folders, app-level, no windows — the CLI's -d.">
+            <cocoa class="SoftReturn.ConvertCommand"/>
+            <direct-parameter type="file" list="yes" description="Files and/or folders to convert."/>
+            <parameter name="to folder" code="SRcf" type="file" optional="yes"
+                      description="Omitted: each output lands beside its source.">
+                <cocoa key="scriptingDestinationFolder"/>
+            </parameter>
+            <parameter name="as" code="SRcy" type="export format" list="yes" description="The output format(s).">
+                <cocoa key="scriptingFormats"/>
+            </parameter>
+            <parameter name="using style" code="SRcs" type="style" optional="yes"
+                      description="Omitted: each document's current/detected style.">
+                <cocoa key="scriptingStyle"/>
+            </parameter>
+            <parameter name="footnotes" code="SRkf" type="boolean" optional="yes"
+                      description="Job 504: with/without footnotes in the output. Default: with.">
+                <cocoa key="scriptingFootnotes"/>
+            </parameter>
+            <parameter name="endnotes" code="SRke" type="boolean" optional="yes"
+                      description="Job 504: with/without endnotes in the output. Default: with.">
+                <cocoa key="scriptingEndnotes"/>
+            </parameter>
+            <parameter name="annotations" code="SRka" type="boolean" optional="yes"
+                      description="Job 504: with/without annotations in the output. Default: with.">
+                <cocoa key="scriptingAnnotations"/>
+            </parameter>
+            <parameter name="comments" code="SRkc" type="boolean" optional="yes"
+                      description="Job 504: with/without WordStar comments in the output. Default: without.">
+                <cocoa key="scriptingComments"/>
+            </parameter>
+            <parameter name="searching subfolders" code="SRcb" type="boolean" optional="yes"
+                      description="With/without recursing into subfolders. Default: without.">
+                <cocoa key="scriptingSearchingSubfolders"/>
+            </parameter>
+            <parameter name="forcing variant" code="SRcv" type="variant" optional="yes"
+                      description="Force every input to parse as this variant, for stubborn files.">
+                <cocoa key="scriptingForcingVariant"/>
+            </parameter>
+            <parameter name="page settings" code="SRcp" optional="yes"
+                      description="A named preset, or a page settings record.">
+                <cocoa key="scriptingPageSettings"/>
+                <type type="settings preset"/>
+                <type type="page settings"/>
+            </parameter>
+            <parameter name="headers" code="SRch" type="boolean" optional="yes"
+                      description="Job 373: with/without headers, footers, and page numbers (paged formats only — RTF/PDF). Omitted: Settings' own default.">
+                <cocoa key="scriptingHeaders"/>
+            </parameter>
+            <parameter name="table of contents" code="SRct" type="boolean" optional="yes"
+                      description="Job 373: with/without a compiled Table of Contents/Index section, from each document's own .tc/.ix entries. Omitted: Settings' own default.">
+                <cocoa key="scriptingTOC"/>
+            </parameter>
+            <parameter name="inline styling" code="SRci" type="boolean" optional="yes"
+                      description="Job 373: with/without the author's own inline color and font-size changes (RTF/HTML only). Omitted: Settings' own default.">
+                <cocoa key="scriptingInlineStyling"/>
+            </parameter>
+            <parameter name="pictures" code="SRcz" type="pictures mode" optional="yes"
+                      description="Job 373: how .PIX image references are handled. Omitted: Settings' own default.">
+                <cocoa key="scriptingPictures"/>
+            </parameter>
+            <parameter name="line numbers" code="SRcl" type="boolean" optional="yes"
+                      description="Job 504: with/without the document's own `.l#` line-number gutter (paged formats only — RTF/PDF). Default: with (the CLI's --line-numbers default).">
+                <cocoa key="scriptingLineNumbers"/>
+            </parameter>
+            <parameter name="styles" code="SRck" type="boolean" optional="yes"
+                      description="Job 504: with/without each document's own paragraph styles passed through to formats that can carry them (HTML classes/CSS, RTF \stylesheet). Default: with; false is the CLI's --no-styles.">
+                <cocoa key="scriptingStyles"/>
+            </parameter>
+            <parameter name="fonts" code="SRcg" type="fonts" optional="yes"
+                      description="Job 504: which importer the RTF font names are chosen for (RTF only). Default: mac — the CLI's own D7 ruling, no longer this app's hardcoded ceiling.">
+                <cocoa key="scriptingFontsTarget"/>
+            </parameter>
+            <parameter name="page numbers" code="SRcn" type="page numbers mode" optional="yes"
+                      description="Job 506 (b31), updated job 520 (N5): WordStar's own AUTOMATIC page number (paged formats only — RTF/PDF). Omitted: Settings' own default.">
+                <cocoa key="scriptingPageNumbers"/>
+            </parameter>
+            <parameter name="sentence spacing" code="SRcw" type="sentence spacing mode" optional="yes"
+                      description="Job 521 (N9, b33): the typewriter double space after a sentence-ending . ? or ! (every format). Omitted: auto — there is deliberately no Settings default for this one.">
+                <cocoa key="scriptingSentenceSpacing"/>
+            </parameter>
+            <result type="text" description="The output files' POSIX paths, one per line, in the order they were produced — job 504: the paths actually written, never a silent overwrite (a collision writes Finder-style, 'NAME 2.ext', 'NAME 3.ext', ...). Job 241's A/B matrix proved Cocoa Scripting's reply-packaging trampoline cannot coerce ANY list-shaped return value (native [NSURL] or a hand-built typeAEList, declared list=&quot;yes&quot; or not) into a real reply — every list-shaped variant returned errAEEventNotHandled (-1708) with a genuinely empty reply, while every SCALAR shape (text, a single file, or nil) succeeded. A scalar text blob is the only shape that both works and preserves every produced file's path for a batch of more than one; parse it by splitting on newlines. Empty is impossible: convert raises a script error instead when nothing converts (all inputs skipped or failed) — a partial run returns just the files it produced."/>
+        </command>
+
+        <command name="diagnose" code="SRsudiag"
+                 description="Report what a file IS — the CLI's --diagnose, as JSON text (job 216: was a record; see docs/AppleScript-Dictionary.md for why).">
+            <cocoa class="SoftReturn.DiagnoseCommand"/>
+            <direct-parameter type="file" description="The file to inspect."/>
+            <result type="text" description="Exactly sr --diagnose's own JSON rendering: keys sorted, two-space indent."/>
+        </command>
+
+        <command name="import page settings" code="SRsuimpg"
+                 description="Read a WSCHANGE .PAT dump's page geometry — the CLI's --page-settings preset resolver, for an arbitrary machine's own patch file.">
+            <cocoa class="SoftReturn.ImportPageSettingsCommand"/>
+            <parameter name="from" code="SRpf" type="file" description="A .PAT file.">
+                <cocoa key="scriptingSource"/>
+            </parameter>
+            <result type="text" description="JSON text (job 216: was a page settings record) with only the fields the .PAT dump actually set — mt_lines/mb_lines/po_cols/hm_lines/fm_lines/pl_lines, the same keys diagnose's own margins field uses. Cannot be fed directly back into another command's page settings parameter the way the old record result could; see docs/AppleScript-Dictionary.md."/>
+        </command>
+
+    </suite>
+</dictionary>

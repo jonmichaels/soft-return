@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Same minimum an appex needs to load at all — see SoftReturnQuickLook.entitlements'
+	     doc comment on why a re-signed dev build with none at all refuses to load. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- No file-access entitlement beyond app-sandbox: `provideThumbnail(for:_:)` reads
+	     `request.fileURL`, a URL QuickLookThumbnailing (not the user) hands the extension for
+	     exactly this one call, with a temporary sandbox read grant attached automatically —
+	     same reasoning as SoftReturnQuickLook's PreviewProvider. -->
+
+	<!-- Job 178 (b8): same app-group grant as SoftReturnQuickLook — see that file's doc
+	     comment and SoftReturn.entitlements for the full rationale. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>RC448RH3EN.softreturn</string>
+	</array>
+</dict>
+</plist>

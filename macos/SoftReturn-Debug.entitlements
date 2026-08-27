@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Job 392 (Jon's ruling, 2026-08-19): same un-sandboxing as the Release entitlements
+	     — see SoftReturn.entitlements' doc comment. Kept identical across configurations
+	     (this file existed only so a Debug-only divergence could never explain a
+	     group-container mismatch, per job 178's original reasoning, which still holds).
+	     The DEBUG-only temporary-exception.files.absolute-path.read-write entry the probe
+	     harnesses (render-probe/, pixel-oracle-report/, etc.) needed is gone too — that
+	     entitlement only ever existed to reach outside the sandbox container; an
+	     unsandboxed process can already write anywhere it has POSIX permission for. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>RC448RH3EN.softreturn</string>
+	</array>
+</dict>
+</plist>

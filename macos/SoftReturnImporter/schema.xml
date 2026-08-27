@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Derived byte-for-byte from the shipping importers' schemas (Skim,
+     OpenOffice/LibreOffice, Thunderbird — verbatim copies in
+     docs/reference/spotlight-schemas/). Rules those four agree on:
+     the root element and schemaLocation are invariant; <attributes>
+     declares only CUSTOM attributes (standard kMDItem* need none —
+     we emit only standard ones, so it stays empty); each handled UTI
+     gets a <type> whose allattrs lists everything the importer emits
+     (Thunderbird ships an empty displayattrs; Skim lists standard
+     attributes there for Get Info display — we follow Skim). -->
+<schema version="1.0" xmlns="http://www.apple.com/metadata"
+                      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                      xsi:schemaLocation="http://www.apple.com/metadata file:///System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Resources/MetadataSchema.xsd">
+    <note>
+        WordStar documents. All emitted attributes are standard Spotlight
+        attributes; no custom attributes are declared.
+    </note>
+    <attributes>
+    </attributes>
+
+    <types>
+        <type name="me.beforeti.wordstar-document">
+            <note>
+                The keys this metadata importer handles.
+            </note>
+            <allattrs>
+                kMDItemTextContent
+                kMDItemTitle
+                kMDItemNumberOfPages
+                kMDItemKeywords
+            </allattrs>
+            <displayattrs>
+                kMDItemTitle
+                kMDItemNumberOfPages
+            </displayattrs>
+        </type>
+    </types>
+</schema>

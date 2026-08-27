@@ -1,0 +1,8 @@
+ca7249ad785c21625a683ed5f3f7a7e74e1c238cfe473c46fc32e48e9107ce02  IconAssets/SoftReturn.icon/Assets/Soft-Return-IC-Background 2.svg
+3418f62eb506894bfe5c9b9a66d4aa5d6d023fde331fc44576015f10cfa5f1dd  IconAssets/SoftReturn.icon/Assets/Soft-Return-IC-Blue-Star 2.svg
+0587839221d1b8b8648fe505edf5f1d591dd3f6a14597c0824cd67cda9d169c9  IconAssets/SoftReturn.icon/Assets/Soft-Return-IC-Green-Star 2.svg
+1b779a8df54dc0da4d8e36661d7b5320b857cde6e05acb7d99586d23ea04fd18  IconAssets/SoftReturn.icon/Assets/Soft-Return-IC-Grin 2.svg
+3435e1a85938e6487ed3dd6980a392f68d88c2e1c01e6dc45e9e26024f71d042  IconAssets/SoftReturn.icon/Assets/Soft-Return-IC-Red-Star 2.svg
+39f97106763b2dd261a8f5e71723dcbb9e63969e10a576568079f19e720bfb21  IconAssets/SoftReturn.icon/icon.json
+1f0df7b0b121d077c58c0996aa450ce9acb868e21792ad2bc1fca37a1b49bfc1  IconAssets/app-icon-1024.png
+0e860979991efe33f1ae34831a9eff52b2e8f37c1358f851ef95ee987b4c983e  IconAssets/doc-icon-1024.png

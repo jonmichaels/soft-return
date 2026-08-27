@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Job 392 (Jon's ruling, 2026-08-19): indie (Developer-ID) releases are NOT
+	     sandboxed — App Sandbox was an unruled default (mistake-registry #27), it bought
+	     no real security value for a memory-safe Swift viewer, and it actively caused
+	     field bugs (b24's PIX sibling-read denial). The app target ships without
+	     com.apple.security.app-sandbox and every sandbox-scoped key that went with it
+	     (user-selected/downloads/bookmarks file access, network.client, print — see
+	     archive/sandbox/ and docs/SANDBOX-ARCHIVE.md for the full removed-piece manifest
+	     and how to restore them for a future MAS build). QuickLook/Thumbnail stay
+	     sandboxed (Apple-mandatory for extensions); this app-group entitlement is what
+	     lets this now-unsandboxed app still read the shared container those sandboxed
+	     extensions write to. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>RC448RH3EN.softreturn</string>
+	</array>
+</dict>
+</plist>

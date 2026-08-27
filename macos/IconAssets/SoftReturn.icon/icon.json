@@ -1,0 +1,130 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.00000,0.47843,1.00000,1.00000"
+  },
+  "groups" : [
+    {
+      "hidden" : false,
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill" : "none",
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "Soft-Return-IC-Grin 2.svg",
+          "name" : "Soft-Return-IC-Grin 2",
+          "position" : {
+            "scale" : 0.25,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "hidden" : false,
+      "layers" : [
+        {
+          "hidden" : false,
+          "image-name" : "Soft-Return-IC-Red-Star 2.svg",
+          "name" : "Soft-Return-IC-Red-Star 2",
+          "position" : {
+            "scale" : 0.25,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "image-name" : "Soft-Return-IC-Green-Star 2.svg",
+          "name" : "Soft-Return-IC-Green-Star 2",
+          "position" : {
+            "scale" : 0.25,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "image-name" : "Soft-Return-IC-Blue-Star 2.svg",
+          "name" : "Soft-Return-IC-Blue-Star 2",
+          "position" : {
+            "scale" : 0.25,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "blur-material" : null,
+      "hidden" : false,
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "Soft-Return-IC-Background 2.svg",
+          "name" : "Soft-Return-IC-Background 2",
+          "position" : {
+            "scale" : 0.5,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.25
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

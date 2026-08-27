@@ -1,0 +1,1265 @@
+{
+ "note": "machine-generated from Python ctrl-kd 1.1.6 \u2014 the REAL exact-fill fix (pop AFTER stripping). parser field per your job-012 finding-2 suggestion.",
+ "layout_116": [
+  {
+   "name": "exact_fill_true_boundary/modern",
+   "input_hex": "5061726167726170e820b020686572e520746f646179ae0d0a0d0a5061726167726170e820b120686572e520746f646179ae0d0a0d0a5061726167726170e820b220686572e520746f646179ae0d0a0d0a5061726167726170e820b320686572e520746f646179ae0d0a0d0a5061726167726170e820b420686572e520746f646179ae0d0a0d0a5061726167726170e820b520686572e520746f646179ae0d0a0d0a5061726167726170e820b620686572e520746f646179ae0d0a0d0a5061726167726170e820b720686572e520746f646179ae0d0a0d0a5061726167726170e820b820686572e520746f646179ae0d0a0d0a5061726167726170e820b920686572e520746f646179ae0d0a0d0a5061726167726170e82031b020686572e520746f646179ae0d0a0d0a5061726167726170e82031b120686572e520746f646179ae0d0a0d0a5061726167726170e82031b220686572e520746f646179ae0d0a0d0a5061726167726170e82031b320686572e520746f646179ae0d0a0d0a5061726167726170e82031b420686572e520746f646179ae0d0a0d0a5061726167726170e82031b520686572e520746f646179ae0d0a0d0a5061726167726170e82031b620686572e520746f646179ae0d0a0d0a5061726167726170e82031b720686572e520746f646179ae0d0a0d0a5061726167726170e82031b820686572e520746f646179ae0d0a0d0a5061726167726170e82031b920686572e520746f646179ae0d0a0d0a5061726167726170e82032b020686572e520746f646179ae0d0a0d0a5061726167726170e82032b120686572e520746f646179ae0d0a0d0a5061726167726170e82032b220686572e520746f646179ae0d0a0d0a5061726167726170e82032b320686572e520746f646179ae0d0a0d0a5061726167726170e82032b420686572e520746f646179ae0d0a0d0a5061726167726170e82032b520686572e520746f646179ae0d0a0d0a546869f32066696e61ec207061726167726170e82069f32064656c696265726174656cf9206c6f6ee720656e6f7567e820746861f4207468e520777261f020746573f4206d7573f42062726561eb2069f4206163726f73f3207477ef2070687973696361ec206c696e6573ae0d0a",
+   "parser": "parse",
+   "printed": false,
+   "pages": [
+    [
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "0",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "1",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "2",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "3",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "4",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "5",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "6",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "7",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "8",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "9",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "10",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "11",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "12",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "13",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "14",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "15",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "16",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "17",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "18",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "19",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "20",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "21",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "22",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "23",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "24",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "25",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "This",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "final",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "is",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "deliberately",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "long",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "enough",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "that",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "the",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "wrap",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": "test",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "must",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "break",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "it",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "across",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "two",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "physical",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "lines.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "exact_fill_true_boundary/printed",
+   "input_hex": "5061726167726170e820b020686572e520746f646179ae0d0a0d0a5061726167726170e820b120686572e520746f646179ae0d0a0d0a5061726167726170e820b220686572e520746f646179ae0d0a0d0a5061726167726170e820b320686572e520746f646179ae0d0a0d0a5061726167726170e820b420686572e520746f646179ae0d0a0d0a5061726167726170e820b520686572e520746f646179ae0d0a0d0a5061726167726170e820b620686572e520746f646179ae0d0a0d0a5061726167726170e820b720686572e520746f646179ae0d0a0d0a5061726167726170e820b820686572e520746f646179ae0d0a0d0a5061726167726170e820b920686572e520746f646179ae0d0a0d0a5061726167726170e82031b020686572e520746f646179ae0d0a0d0a5061726167726170e82031b120686572e520746f646179ae0d0a0d0a5061726167726170e82031b220686572e520746f646179ae0d0a0d0a5061726167726170e82031b320686572e520746f646179ae0d0a0d0a5061726167726170e82031b420686572e520746f646179ae0d0a0d0a5061726167726170e82031b520686572e520746f646179ae0d0a0d0a5061726167726170e82031b620686572e520746f646179ae0d0a0d0a5061726167726170e82031b720686572e520746f646179ae0d0a0d0a5061726167726170e82031b820686572e520746f646179ae0d0a0d0a5061726167726170e82031b920686572e520746f646179ae0d0a0d0a5061726167726170e82032b020686572e520746f646179ae0d0a0d0a5061726167726170e82032b120686572e520746f646179ae0d0a0d0a5061726167726170e82032b220686572e520746f646179ae0d0a0d0a5061726167726170e82032b320686572e520746f646179ae0d0a0d0a5061726167726170e82032b420686572e520746f646179ae0d0a0d0a5061726167726170e82032b520686572e520746f646179ae0d0a0d0a546869f32066696e61ec207061726167726170e82069f32064656c696265726174656cf9206c6f6ee720656e6f7567e820746861f4207468e520777261f020746573f4206d7573f42062726561eb2069f4206163726f73f3207477ef2070687973696361ec206c696e6573ae0d0a",
+   "parser": "parse",
+   "printed": true,
+   "pages": [
+    [
+     [
+      {
+       "text": "Paragraph 0 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 1 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 2 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 3 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 4 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 5 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 6 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 7 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 8 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 9 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 10 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 11 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 12 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 13 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 14 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 15 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 16 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 17 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 18 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 19 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 20 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 21 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 22 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 23 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 24 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "Paragraph 25 here today.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "This final paragraph is deliberately long enough that the wrap test must break it across two physical lines.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "trailing_double_pa/modern",
+   "input_hex": "50616765206f6e65207465787420686572652e0d0a2e70610d0a2e70610d0a",
+   "parser": "parse_ws",
+   "printed": false,
+   "pages": [
+    [
+     [
+      {
+       "text": "Page",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "one",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "text",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "trailing_double_pa/printed",
+   "input_hex": "50616765206f6e65207465787420686572652e0d0a2e70610d0a2e70610d0a",
+   "parser": "parse_ws",
+   "printed": true,
+   "pages": [
+    [
+     [
+      {
+       "text": "Page one text here.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "interior_double_pa_preserved/modern",
+   "input_hex": "4f6e652e0d0a2e70610d0a2e70610d0a54776f2e0d0a",
+   "parser": "parse_ws",
+   "printed": false,
+   "pages": [
+    [
+     [
+      {
+       "text": "One.",
+       "styles": []
+      }
+     ]
+    ],
+    [],
+    [
+     [
+      {
+       "text": "Two.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "interior_double_pa_preserved/printed",
+   "input_hex": "4f6e652e0d0a2e70610d0a2e70610d0a54776f2e0d0a",
+   "parser": "parse_ws",
+   "printed": true,
+   "pages": [
+    [
+     [
+      {
+       "text": "One.",
+       "styles": []
+      }
+     ]
+    ],
+    [],
+    [
+     [
+      {
+       "text": "Two.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  }
+ ]
+}

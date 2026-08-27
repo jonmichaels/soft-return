@@ -1,0 +1,933 @@
+{
+ "format": "ctrl-kd-layout",
+ "version": 1,
+ "meta": {
+  "variant": "ws5+",
+  "producer": null,
+  "printer_driver": null,
+  "columnar": false,
+  "encoding": "cp437"
+ },
+ "page": {
+  "pn_start": 1,
+  "pn_source": "default",
+  "pc_col": null,
+  "pc_source": "default",
+  "pl_lines": 66.0,
+  "height_in": 11.0,
+  "size_name": "Letter",
+  "pw_in": 8.5,
+  "size_source": "file",
+  "mt_lines": 4.0,
+  "mt_source": "file",
+  "mb_lines": 7.0,
+  "mb_source": "file",
+  "po_cols": 8.0,
+  "po_source": "default",
+  "hm_lines": 2.0,
+  "hm_source": "default",
+  "fm_lines": 2.0,
+  "fm_source": "default",
+  "lh_48": 8.0,
+  "lh_source": "default",
+  "ls": 1.0,
+  "ls_source": "default",
+  "cw_120": 12.0,
+  "cw_source": "default",
+  "text_lines": 55,
+  "lh_varies": false
+ },
+ "fonts": [],
+ "modern": {
+  "items": [
+   {
+    "kind": "tabs",
+    "stops": [
+     6.0,
+     12.0,
+     18.0
+    ]
+   },
+   {
+    "kind": "hf",
+    "which": "H",
+    "line": 1,
+    "text": "Byte Parity Gazette                                    page #"
+   },
+   {
+    "kind": "hf",
+    "which": "F",
+    "line": 1,
+    "text": "- # -"
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 5.0,
+    "cut_cols": 7.0,
+    "runs": [
+     {
+      "text": "A synthetic paragraph, invented text with real framing, long enough to wrap when reflowed, so both engines exercise the merge path.",
+      "styles": []
+     }
+    ],
+    "footnotes": [],
+    "bi": 0,
+    "structure": {
+     "col": 5.0,
+     "level": 0,
+     "kind": null,
+     "marker": null,
+     "label": null,
+     "body": null,
+     "centered": false,
+     "center_via": null,
+     "center_text": null
+    }
+   },
+   {
+    "kind": "blank"
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 5.0,
+    "cut_cols": 7.0,
+    "runs": [
+     {
+      "text": "Body prose with a footnote",
+      "styles": []
+     },
+     {
+      "text": "2",
+      "styles": [
+       "fnref",
+       "sup"
+      ],
+      "ref": 0,
+      "note_kind": "footnote"
+     },
+     {
+      "text": " and an endnote",
+      "styles": []
+     },
+     {
+      "text": "ii",
+      "styles": [
+       "fnref",
+       "sup"
+      ],
+      "ref": 1,
+      "note_kind": "endnote"
+     },
+     {
+      "text": " and an annotation",
+      "styles": []
+     },
+     {
+      "text": "1",
+      "styles": [
+       "fnref",
+       "sup"
+      ],
+      "ref": 2,
+      "note_kind": "annotation"
+     },
+     {
+      "text": " and a comment",
+      "styles": []
+     },
+     {
+      "text": ".",
+      "styles": []
+     }
+    ],
+    "footnotes": [
+     [
+      0,
+      "2"
+     ]
+    ],
+    "bi": 1,
+    "structure": {
+     "col": 5.0,
+     "level": 0,
+     "kind": null,
+     "marker": null,
+     "label": null,
+     "body": null,
+     "centered": false,
+     "center_via": null,
+     "center_text": null
+    }
+   },
+   {
+    "kind": "blank"
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 0,
+    "cut_cols": 0,
+    "runs": [
+     {
+      "text": "- first bullet item, marker discovered from repetition",
+      "styles": []
+     }
+    ],
+    "footnotes": [],
+    "bi": 2,
+    "structure": {
+     "col": 0,
+     "level": 1,
+     "kind": "bullet",
+     "marker": "-",
+     "label": null,
+     "body": "first bullet item, marker discovered from repetition",
+     "centered": false,
+     "center_via": null,
+     "center_text": null
+    }
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 0,
+    "cut_cols": 0,
+    "runs": [
+     {
+      "text": "- second bullet item at the same column",
+      "styles": []
+     }
+    ],
+    "footnotes": [],
+    "bi": 2,
+    "structure": {
+     "col": 0,
+     "level": 1,
+     "kind": "bullet",
+     "marker": "-",
+     "label": null,
+     "body": "second bullet item at the same column",
+     "centered": false,
+     "center_via": null,
+     "center_text": null
+    }
+   },
+   {
+    "kind": "blank"
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 0,
+    "cut_cols": 0,
+    "runs": [
+     {
+      "text": "WS.EXE:    a definition-list row, label glued by wide gap",
+      "styles": []
+     }
+    ],
+    "footnotes": [],
+    "bi": 3,
+    "structure": {
+     "col": 0,
+     "level": 1,
+     "kind": "def",
+     "marker": null,
+     "label": "WS.EXE:",
+     "body": "a definition-list row, label glued by wide gap",
+     "centered": false,
+     "center_via": null,
+     "center_text": null
+    }
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 0,
+    "cut_cols": 0,
+    "runs": [
+     {
+      "text": "ALSO.EXE:  a second one for company",
+      "styles": []
+     }
+    ],
+    "footnotes": [],
+    "bi": 3,
+    "structure": {
+     "col": 0,
+     "level": 1,
+     "kind": "def",
+     "marker": null,
+     "label": "ALSO.EXE:",
+     "body": "a second one for company",
+     "centered": false,
+     "center_via": null,
+     "center_text": null
+    }
+   },
+   {
+    "kind": "blank"
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 0,
+    "cut_cols": 0,
+    "runs": [
+     {
+      "text": "                         A Centered Line",
+      "styles": []
+     }
+    ],
+    "footnotes": [],
+    "bi": 4,
+    "structure": {
+     "col": 25,
+     "level": 1,
+     "kind": null,
+     "marker": null,
+     "label": null,
+     "body": null,
+     "centered": true,
+     "center_via": "spaces",
+     "center_text": "A Centered Line"
+    }
+   },
+   {
+    "kind": "blank"
+   },
+   {
+    "kind": "cond",
+    "lines": 4
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 0,
+    "cut_cols": 0,
+    "runs": [
+     {
+      "text": "After a conditional break.",
+      "styles": []
+     }
+    ],
+    "footnotes": [],
+    "bi": 6,
+    "structure": {
+     "col": 0,
+     "level": 0,
+     "kind": null,
+     "marker": null,
+     "label": null,
+     "body": null,
+     "centered": false,
+     "center_via": null,
+     "center_text": null
+    }
+   },
+   {
+    "kind": "break",
+    "origin": ".pa"
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 0,
+    "cut_cols": 0,
+    "runs": [
+     {
+      "text": "After the dot-command page break.",
+      "styles": []
+     }
+    ],
+    "footnotes": [],
+    "bi": 8,
+    "structure": {
+     "col": 0,
+     "level": 0,
+     "kind": null,
+     "marker": null,
+     "label": null,
+     "body": null,
+     "centered": false,
+     "center_via": null,
+     "center_text": null
+    }
+   },
+   {
+    "kind": "break",
+    "origin": "\f"
+   },
+   {
+    "kind": "para",
+    "align": "left",
+    "indent_cols": 0,
+    "cut_cols": 0,
+    "runs": [
+     {
+      "text": "After the form-feed break.",
+      "styles": []
+     }
+    ],
+    "footnotes": [],
+    "bi": 10,
+    "structure": {
+     "col": 0,
+     "level": 0,
+     "kind": null,
+     "marker": null,
+     "label": null,
+     "body": null,
+     "centered": false,
+     "center_via": null,
+     "center_text": null
+    }
+   },
+   {
+    "kind": "blank"
+   },
+   {
+    "kind": "note-separator"
+   },
+   {
+    "kind": "note",
+    "index": 1,
+    "note_kind": "endnote",
+    "label": "ii",
+    "text": "A synthetic endnote."
+   },
+   {
+    "kind": "note",
+    "index": 2,
+    "note_kind": "annotation",
+    "label": "1",
+    "text": "A synthetic annotation."
+   }
+  ],
+  "notes": [
+   {
+    "kind": "footnote",
+    "label": "2",
+    "shown": "2",
+    "text": "A synthetic footnote, its text also invented.",
+    "origin": "block"
+   },
+   {
+    "kind": "endnote",
+    "label": "2",
+    "shown": "ii",
+    "text": "A synthetic endnote.",
+    "origin": "block"
+   },
+   {
+    "kind": "annotation",
+    "label": "1",
+    "shown": "1",
+    "text": "A synthetic annotation.",
+    "origin": "block"
+   }
+  ]
+ },
+ "printed": {
+  "pages": [
+   {
+    "lines": [
+     {
+      "segments": [
+       {
+        "text": "     A synthetic paragraph, invented text with real framing, long enough",
+        "styles": []
+       }
+      ],
+      "soft": true,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "to wrap when reflowed, so both engines exercise the merge path.",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "Body prose with a footnote",
+        "styles": []
+       },
+       {
+        "text": "2",
+        "styles": [
+         "fnref",
+         "sup"
+        ]
+       },
+       {
+        "text": " and an endnote",
+        "styles": []
+       },
+       {
+        "text": "2",
+        "styles": [
+         "fnref",
+         "sup"
+        ]
+       },
+       {
+        "text": " and an annotation",
+        "styles": []
+       },
+       {
+        "text": "1",
+        "styles": [
+         "fnref",
+         "sup"
+        ]
+       },
+       {
+        "text": " and a comment",
+        "styles": []
+       },
+       {
+        "text": ".",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "- first bullet item, marker discovered from repetition",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "- second bullet item at the same column",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "WS.EXE:    a definition-list row, label glued by wide gap",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "ALSO.EXE:  a second one for company",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "                         A Centered Line",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "After a conditional break.",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [],
+      "soft": false,
+      "overprint": false,
+      "lead": 444.0
+     },
+     {
+      "segments": [
+       {
+        "text": "--------------------",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "2.",
+        "styles": []
+       },
+       {
+        "text": "   ",
+        "styles": []
+       },
+       {
+        "text": "A",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "synthetic",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "footnote,",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "its",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "text",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "also",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "invented.",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "1",
+        "styles": []
+       },
+       {
+        "text": "    ",
+        "styles": []
+       },
+       {
+        "text": "A",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "synthetic",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "annotation.",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     }
+    ],
+    "headers": {},
+    "footers": {}
+   },
+   {
+    "lines": [
+     {
+      "segments": [
+       {
+        "text": "After the dot-command page break.",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     }
+    ],
+    "headers": {},
+    "footers": {}
+   },
+   {
+    "lines": [
+     {
+      "segments": [
+       {
+        "text": "After the form-feed break.",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     },
+     {
+      "segments": [
+       {
+        "text": "(2)",
+        "styles": []
+       },
+       {
+        "text": "  ",
+        "styles": []
+       },
+       {
+        "text": "A",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "synthetic",
+        "styles": []
+       },
+       {
+        "text": " ",
+        "styles": []
+       },
+       {
+        "text": "endnote.",
+        "styles": []
+       }
+      ],
+      "soft": false,
+      "overprint": false,
+      "lead": null
+     }
+    ],
+    "headers": {},
+    "footers": {}
+   }
+  ]
+ },
+ "invisibles": {
+  "dot_commands": [
+   ".pl 66",
+   ".mt 4",
+   ".mb 7",
+   ".he Byte Parity Gazette                                    page #",
+   ".fo - # -",
+   ".lm 6",
+   ".rm 58",
+   ".tb 6, 12, 18",
+   ".lm 1",
+   ".rm 65",
+   ".cp 4",
+   ".pa"
+  ],
+  "dot_positions": [
+   [
+    0,
+    0,
+    ".pl 66"
+   ],
+   [
+    0,
+    0,
+    ".mt 4"
+   ],
+   [
+    0,
+    0,
+    ".mb 7"
+   ],
+   [
+    0,
+    0,
+    ".he Byte Parity Gazette                                    page #"
+   ],
+   [
+    0,
+    0,
+    ".fo - # -"
+   ],
+   [
+    0,
+    0,
+    ".lm 6"
+   ],
+   [
+    0,
+    0,
+    ".rm 58"
+   ],
+   [
+    0,
+    0,
+    ".tb 6, 12, 18"
+   ],
+   [
+    2,
+    0,
+    ".lm 1"
+   ],
+   [
+    2,
+    0,
+    ".rm 65"
+   ],
+   [
+    5,
+    0,
+    ".cp 4"
+   ],
+   [
+    6,
+    1,
+    ".pa"
+   ]
+  ],
+  "hf_events": [
+   [
+    "H",
+    1,
+    "Byte Parity Gazette                                    page #",
+    0
+   ],
+   [
+    "F",
+    1,
+    "- # -",
+    0
+   ]
+  ],
+  "notes": [
+   {
+    "kind": "footnote",
+    "text": "A synthetic footnote, its text also invented.",
+    "origin": "block",
+    "offset": 297
+   },
+   {
+    "kind": "endnote",
+    "text": "A synthetic endnote.",
+    "origin": "block",
+    "offset": 369
+   },
+   {
+    "kind": "annotation",
+    "text": "A synthetic annotation.",
+    "origin": "block",
+    "offset": 419
+   },
+   {
+    "kind": "comment",
+    "text": "A synthetic comment: never printed, anchored inline.",
+    "origin": "block",
+    "offset": 468
+   },
+   {
+    "kind": "comment",
+    "text": "A second comment, same offset story as dot-line ones.",
+    "origin": "block",
+    "offset": 532
+   }
+  ]
+ }
+}

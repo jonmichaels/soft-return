@@ -1,0 +1,1343 @@
+{
+ "note": "machine-generated from Python ctrl-kd 1.1.4 pdf.py internals \u2014 PDF Job A (layout half): constants, _wrap_line, _coalesce, _doc_to_pagelines. MAX_COLS etc. given explicitly, never recompute.",
+ "constants": {
+  "PAGE_W": 612,
+  "PAGE_H": 792,
+  "MARGIN": 72,
+  "SIZE": 12,
+  "LEAD": 12,
+  "TOP_MODERN": 72,
+  "TOP_PRINTED": 36,
+  "LINES_MODERN": 54,
+  "LINES_PRINTED": 60,
+  "MAX_COLS": 65
+ },
+ "wrap_line": [
+  {
+   "spans": [
+    {
+     "text": "Short line fits fine.",
+     "styles": []
+    }
+   ],
+   "width": 65,
+   "expected": [
+    [
+     {
+      "text": "Short",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "line",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "fits",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "fine.",
+      "styles": []
+     }
+    ]
+   ]
+  },
+  {
+   "spans": [
+    {
+     "text": "  Leading indent kept. ",
+     "styles": []
+    },
+    {
+     "text": "bold segment",
+     "styles": [
+      "b"
+     ]
+    },
+    {
+     "text": " tail words here",
+     "styles": []
+    }
+   ],
+   "width": 20,
+   "expected": [
+    [
+     {
+      "text": "  ",
+      "styles": []
+     },
+     {
+      "text": "Leading",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "indent",
+      "styles": []
+     }
+    ],
+    [
+     {
+      "text": "kept.",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "bold",
+      "styles": [
+       "b"
+      ]
+     },
+     {
+      "text": " ",
+      "styles": [
+       "b"
+      ]
+     },
+     {
+      "text": "segment",
+      "styles": [
+       "b"
+      ]
+     }
+    ],
+    [
+     {
+      "text": "tail",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "words",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "here",
+      "styles": []
+     }
+    ]
+   ]
+  },
+  {
+   "spans": [
+    {
+     "text": "Supercalifragilisticexpialidociousandthensomemoreletters more",
+     "styles": []
+    }
+   ],
+   "width": 20,
+   "expected": [
+    [
+     {
+      "text": "Supercalifragilisticexpialidociousandthensomemoreletters",
+      "styles": []
+     }
+    ],
+    [
+     {
+      "text": "more",
+      "styles": []
+     }
+    ]
+   ]
+  },
+  {
+   "spans": [
+    {
+     "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+     "styles": []
+    }
+   ],
+   "width": 65,
+   "expected": [
+    [
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     }
+    ],
+    [
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     }
+    ],
+    [
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     },
+     {
+      "text": " ",
+      "styles": []
+     },
+     {
+      "text": "word",
+      "styles": []
+     }
+    ]
+   ]
+  }
+ ],
+ "coalesce": [
+  {
+   "line": [
+    {
+     "text": "He",
+     "styles": [
+      "b"
+     ]
+    },
+    {
+     "text": "llo",
+     "styles": [
+      "b"
+     ]
+    },
+    {
+     "text": " world",
+     "styles": []
+    }
+   ],
+   "expected": [
+    {
+     "text": "Hello",
+     "styles": [
+      "b"
+     ]
+    },
+    {
+     "text": " world",
+     "styles": []
+    }
+   ]
+  }
+ ],
+ "doc_to_pagelines": [
+  {
+   "name": "prose_wraps/modern",
+   "input_hex": "02c12048656164696ee720486572e5020d0a0d0a546869f3207061726167726170e820636f6e7461696ef320656e6f7567e820776f7264f320746861f4207772617070696ee72061f4207468e52073697874792d666976e520636f6c756dee206c696d69f4206d7573f4206f636375f220736576657261ec2074696d65f3206265666f72e52069f42066696e616c6cf920656e6473ac2070726f76696ee7207468e520777261707065f220616761696e73f4207468e520726561ec206c696d69f4207261746865f220746861ee20e120746ff9206f6e65ae0d0a",
+   "printed": false,
+   "pages": [
+    [
+     [
+      {
+       "text": "A",
+       "styles": [
+        "b"
+       ]
+      },
+      {
+       "text": " ",
+       "styles": [
+        "b"
+       ]
+      },
+      {
+       "text": "Heading",
+       "styles": [
+        "b"
+       ]
+      },
+      {
+       "text": " ",
+       "styles": [
+        "b"
+       ]
+      },
+      {
+       "text": "Here",
+       "styles": [
+        "b"
+       ]
+      }
+     ],
+     [],
+     [
+      {
+       "text": "This",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "paragraph",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "contains",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "enough",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "words",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "that",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "wrapping",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "at",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "the",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": "sixty-five",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "column",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "limit",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "must",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "occur",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "several",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "times",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "before",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "it",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": "finally",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "ends,",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "proving",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "the",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "wrapper",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "against",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "the",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "real",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "limit",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "rather",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": "than",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "a",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "toy",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "one.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "prose_wraps/printed",
+   "input_hex": "02c12048656164696ee720486572e5020d0a0d0a546869f3207061726167726170e820636f6e7461696ef320656e6f7567e820776f7264f320746861f4207772617070696ee72061f4207468e52073697874792d666976e520636f6c756dee206c696d69f4206d7573f4206f636375f220736576657261ec2074696d65f3206265666f72e52069f42066696e616c6cf920656e6473ac2070726f76696ee7207468e520777261707065f220616761696e73f4207468e520726561ec206c696d69f4207261746865f220746861ee20e120746ff9206f6e65ae0d0a",
+   "printed": true,
+   "pages": [
+    [
+     [
+      {
+       "text": "A Heading Here",
+       "styles": [
+        "b"
+       ]
+      }
+     ],
+     [],
+     [
+      {
+       "text": "This paragraph contains enough words that wrapping at the sixty-five column limit must occur several times before it finally ends, proving the wrapper against the real limit rather than a toy one.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "poem_lines/modern",
+   "input_hex": "2020202020412073686f727420706f656d206c696e652c8d0a2020202020616e6f746865722073686f7274206c696e652e8d0a0d0a8d0a20202020205365636f6e64207374616e7a6120636c6f7365732e0d0a",
+   "printed": false,
+   "pages": [
+    [
+     [
+      {
+       "text": "     ",
+       "styles": []
+      },
+      {
+       "text": "A",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "short",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "poem",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "line,",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": "     ",
+       "styles": []
+      },
+      {
+       "text": "another",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "short",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "line.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "     ",
+       "styles": []
+      },
+      {
+       "text": "Second",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "stanza",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "closes.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "poem_lines/printed",
+   "input_hex": "2020202020412073686f727420706f656d206c696e652c8d0a2020202020616e6f746865722073686f7274206c696e652e8d0a0d0a8d0a20202020205365636f6e64207374616e7a6120636c6f7365732e0d0a",
+   "printed": true,
+   "pages": [
+    [
+     [
+      {
+       "text": "     A short poem line,",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": "     another short line.",
+       "styles": []
+      }
+     ],
+     [],
+     [],
+     [
+      {
+       "text": "     Second stanza closes.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "pagebreak_doc/modern",
+   "input_hex": "506167e5206f6ee520746578f420686572e520746f646179ae0d0a2e70610d0a506167e5207477ef20746578f420686572e520746f646179ae0d0a",
+   "printed": false,
+   "pages": [
+    [
+     [
+      {
+       "text": "Page",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "one",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "text",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "text": "Page",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "two",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "text",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "today.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "pagebreak_doc/printed",
+   "input_hex": "506167e5206f6ee520746578f420686572e520746f646179ae0d0a2e70610d0a506167e5207477ef20746578f420686572e520746f646179ae0d0a",
+   "printed": true,
+   "pages": [
+    [
+     [
+      {
+       "text": "Page one text here today.",
+       "styles": []
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "text": "Page two text here today.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "footnote_doc/modern",
+   "input_hex": "54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f7265207465787420666f6c6c6f7773206865726520746f20676976652074686520666f6f746e6f746520626f647920736f6d657468696e6720746f2073697420756e6465722e0d0a",
+   "printed": false,
+   "pages": [
+    [
+     [
+      {
+       "text": "Treaties",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "were",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "made.",
+       "styles": []
+      },
+      {
+       "text": "1",
+       "styles": [
+        "fnref",
+        "sup"
+       ]
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "More",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "text",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "follows",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "to",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "give",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "the",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "footnote",
+       "styles": []
+      }
+     ],
+     [
+      {
+       "text": "body",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "something",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "to",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "sit",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "under.",
+       "styles": []
+      }
+     ],
+     [],
+     [],
+     [
+      {
+       "text": "--------------------",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "2.",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "See",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "the",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "accords.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "footnote_doc/printed",
+   "input_hex": "54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f7265207465787420666f6c6c6f7773206865726520746f20676976652074686520666f6f746e6f746520626f647920736f6d657468696e6720746f2073697420756e6465722e0d0a",
+   "printed": true,
+   "pages": [
+    [
+     [
+      {
+       "text": "Treaties were made.",
+       "styles": []
+      },
+      {
+       "text": "2",
+       "styles": [
+        "fnref",
+        "sup"
+       ]
+      },
+      {
+       "text": " More text follows here to give the footnote body something to sit under.",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "--------------------",
+       "styles": []
+      }
+     ],
+     [],
+     [
+      {
+       "text": "2.",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "See",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "the",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "accords.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "chapter_drop_print/modern",
+   "input_hex": "0d0a0d0a0d0a0d0a0d0a0d0a0d0a0d0a43686170746572206f70656e696e67207465787420686572652e0d0a0c0d0a0d0a5365636f6e642070616765207465787420686572652e0d0a",
+   "printed": false,
+   "pages": [
+    [
+     [
+      {
+       "text": "Chapter",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "opening",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "text",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here.",
+       "styles": []
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "text": "Second",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "page",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "text",
+       "styles": []
+      },
+      {
+       "text": " ",
+       "styles": []
+      },
+      {
+       "text": "here.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "chapter_drop_print/printed",
+   "input_hex": "0d0a0d0a0d0a0d0a0d0a0d0a0d0a0d0a43686170746572206f70656e696e67207465787420686572652e0d0a0c0d0a0d0a5365636f6e642070616765207465787420686572652e0d0a",
+   "printed": true,
+   "pages": [
+    [
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     [
+      {
+       "text": "Chapter opening text here.",
+       "styles": []
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "text": "Second page text here.",
+       "styles": []
+      }
+     ]
+    ]
+   ]
+  }
+ ]
+}
