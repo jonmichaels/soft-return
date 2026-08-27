@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>$(LSApplicationCategoryType)</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>MIT licensed. See LICENSE.</string>
+
+	<!-- Job 532 (Jon's ruling: Sparkle IS in b34) -- SUPublicEDKey is Jon's own generated
+	     EdDSA public key, verbatim. SUFeedURL points at the beta branch's appcast; a future
+	     stable-channel build switches this to main's appcast (not done here). No
+	     SUEnableAutomaticChecks key -- Sparkle's own documented default (first-launch
+	     permission-prompt) is what the brief asks for, not a custom schedule. -->
+	<key>SUPublicEDKey</key>
+	<string>kr6g0tYp6dxnphj1ALl88fhaVn2VWho+OAZpK239GB4=</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/jonmichaels/soft-return/beta/appcast.xml</string>
+
+	<!-- Viewer, not editor: the app never writes back to what it opens. Export is the
+	     only path out, and it always goes through a save panel the user drove. -->
+	<key>NSSupportsAutomaticTermination</key>
+	<true/>
+	<key>NSSupportsSuddenTermination</key>
+	<true/>
+
+	<!-- AppleScript: everything the CLI can do, in AppleScript's own vocabulary — see
+	     docs/AppleScript-Dictionary.md and SoftReturn/Resources/SoftReturn.sdef. -->
+	<key>NSAppleScriptEnabled</key>
+	<true/>
+	<key>OSAScriptingDefinition</key>
+	<string>SoftReturn.sdef</string>
+
+	<!-- Document types. WordStar files are the point; plain text and extensionless data
+	     are Alternate rank because we can READ them (the detector classifies text and
+	     printstream too) but have no business claiming to own .txt on anyone's Mac. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>WordStar Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>WordStarDocument</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>me.beforeti.wordstar-document</string>
+			</array>
+			<key>NSDocumentClass</key>
+			<string>SoftReturn.WSDocument</string>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Plain Text</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.plain-text</string>
+			</array>
+			<key>NSDocumentClass</key>
+			<string>SoftReturn.WSDocument</string>
+		</dict>
+		<!-- Extensionless files are the common shape of a 1987 floppy's contents, and
+		     public.data is the only UTI that reaches them. Alternate rank + Viewer role
+		     so this never becomes the default handler for arbitrary data. -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>NSDocumentClass</key>
+			<string>SoftReturn.WSDocument</string>
+		</dict>
+		<!-- Job 261 (`related-items-write`): convert's OUTPUT extensions, declared as related
+		     items (NOT input document types the app opens) so NSFilePresenter's
+		     primaryPresentedItemURL/presentedItemURL sibling-write mechanism is legal per
+		     Apple DevForums 14718 — a registered presenter alone is not enough, the plist must
+		     also declare the extension with NSIsRelatedItemType=YES and CFBundleTypeRole=Editor
+		     (Viewer/None both fail this the same way). See
+		     docs/reference/apple/ae-file-grant-packet.md and BesideSourceWriter.swift. -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Rich Text</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>NSIsRelatedItemType</key>
+			<true/>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>rtf</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PDF Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>NSIsRelatedItemType</key>
+			<true/>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>pdf</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>HTML Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>NSIsRelatedItemType</key>
+			<true/>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>html</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Markdown Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>NSIsRelatedItemType</key>
+			<true/>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>md</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Plain Text Export</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>NSIsRelatedItemType</key>
+			<true/>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>txt</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Layout JSON</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>NSIsRelatedItemType</key>
+			<true/>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>json</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- WordStar predates UTIs, so nobody owns this identifier; we export one. The
+	     extension list is Jon's Tier-1 ruling (2026-08-08): WordStar-family names only —
+	     .ws, the .ws0-.ws9 numbered backups, .wsd, .wsm (officially macros, but real
+	     corpora keep manuscripts under it), and WordStar's own .ws-bak/.ws-$$$ forms.
+	     Generic extensions WordStar users also used (.DOC, .LST, ...) are deliberately
+	     NOT claimed: they open fine via the public.data Alternate + content detection,
+	     and claiming them would fight other apps for ownership. -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>me.beforeti.wordstar-document</string>
+			<key>UTTypeDescription</key>
+			<string>WordStar Document</string>
+			<!-- Finder resolves a document's Finder/Get-Info icon from the UTI's OWN
+			     UTTypeIconFile — CFBundleDocumentTypes' CFBundleTypeIconFile (above) feeds
+			     older Open-With machinery, not Finder's icon lookup, and neither key falls
+			     back to the other. Same .icns both times:
+			     SoftReturn/Resources/DocumentIcons/WordStarDocument.icns. -->
+			<key>UTTypeIconFile</key>
+			<string>WordStarDocument</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.content</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ws</string>
+					<string>ws0</string>
+					<string>ws1</string>
+					<string>ws2</string>
+					<string>ws3</string>
+					<string>ws4</string>
+					<string>ws5</string>
+					<string>ws6</string>
+					<string>ws7</string>
+					<string>ws8</string>
+					<string>ws9</string>
+					<string>wsd</string>
+					<string>wsm</string>
+					<string>ws-bak</string>
+					<string>ws-$$$</string>
+				</array>
+			</dict>
+		</dict>
+		<!-- Job 374 (QL-PIX): Inset's own on-disk graphics format predates UTIs exactly like
+		     WordStar's own document format does, so we export this one too — nobody else owns
+		     it, and QuickLook/Thumbnail need a UTI to key their QLSupportedContentTypes off of
+		     to preview a standalone `.PIX` (see `TestDocs/ws7/INSET/PIX/WORDSTAR.PIX`, the same
+		     real corpus file `DocumentPictures`/`PixInViewsTests` already resolve as an EMBEDDED
+		     reference — this is the same format, viewed standalone). `public.image`: it decodes
+		     to a real raster image (`CtrlKD.pixDecode`/`pixToPNG`), even though no system
+		     component other than our own extensions can actually decode the bytes. -->
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>me.beforeti.wordstar-pix</string>
+			<key>UTTypeDescription</key>
+			<string>WordStar PIX Image</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.image</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>pix</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.quicklook.preview</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>SoftReturnQuickLook.PreviewProvider</string>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>QLSupportedContentTypes</key>
+			<array>
+				<!-- Our exported UTI ONLY. Jon ruled 2026-08-08: no hijacking .txt previews —
+				     with the extension actually working (QLIsDataBasedPreview fix), claiming
+				     public.plain-text would put our preview on every .txt on the Mac. -->
+				<string>me.beforeti.wordstar-document</string>
+				<!-- Job 374 (QL-PIX): standalone `.PIX` images, same extension point,
+				     dispatched content-first inside PreviewProvider itself. -->
+				<string>me.beforeti.wordstar-pix</string>
+			</array>
+			<!-- TRUE means "this extension uses the data-based QLPreviewProvider API"
+			     (providePreview(for:) returning a QLPreviewReply) — which is exactly what
+			     PreviewProvider.swift is. It does NOT mean "input arrives as in-memory data";
+			     request.fileURL is the normal input for data-based providers too. With this
+			     false, macOS wraps the principal class in its view-based
+			     QLPreviewExtensionViewController, asserts (observed live at
+			     QLPreviewExtensionViewController.m:139 on taco, 2026-08-08), cancels the XPC
+			     connection, and the host spins forever — the dev-a..k spinner. -->
+			<key>QLIsDataBasedPreview</key>
+			<true/>
+		</dict>
+	</dict>
+</dict>
+</plist>

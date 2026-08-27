@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.quicklook.thumbnail</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>SoftReturnThumbnail.ThumbnailProvider</string>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>QLSupportedContentTypes</key>
+			<array>
+				<!-- Same set `SoftReturnQuickLook/Info.plist` supports: the app's own exported
+				     UTI, plus the shapes real WordStar files arrive in off a floppy or a
+				     name-only copy. -->
+				<string>me.beforeti.wordstar-document</string>
+				<string>public.plain-text</string>
+				<!-- Job 374 (QL-PIX): standalone `.PIX` images — same content-first dispatch
+				     as SoftReturnQuickLook, see ThumbnailProvider.swift. -->
+				<string>me.beforeti.wordstar-pix</string>
+			</array>
+		</dict>
+	</dict>
+</dict>
+</plist>

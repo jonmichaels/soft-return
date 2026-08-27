@@ -1,0 +1,372 @@
+{
+ "generator": "ctrl-kd 1.2.0",
+ "cases": {
+  "four_kinds": {
+   "input_hex": "1d04000004001d6f6e65201d1700030100000030466f6f746e6f746520746578742e17001d2074776f201d1600040100000030456e646e6f746520746578742e16001d207468726565201d35000501000080052e2e2072656d61726b0d0a1d0c000500000000054143310c001d20416e6e6f746174696f6e20746578740d0a35001d20666f7572201d1600060100000030436f6d6d656e7420746578742e16001d20666976650d0a",
+   "notes": [
+    {
+     "kind": "footnote",
+     "text": "Footnote text.",
+     "number": 0,
+     "tag": null,
+     "dot_commands": []
+    },
+    {
+     "kind": "endnote",
+     "text": "Endnote text.",
+     "number": 0,
+     "tag": null,
+     "dot_commands": []
+    },
+    {
+     "kind": "annotation",
+     "text": "Annotation text",
+     "number": null,
+     "tag": "AC1",
+     "dot_commands": [
+      ".. remark"
+     ]
+    },
+    {
+     "kind": "comment",
+     "text": "Comment text.",
+     "number": null,
+     "tag": null,
+     "dot_commands": []
+    }
+   ],
+   "meta": {
+    "page": {
+     "pl_lines": 66.0,
+     "height_in": 11.0,
+     "size_name": "Letter",
+     "size_source": "default",
+     "mt_lines": 3.0,
+     "mt_source": "default",
+     "mb_lines": 8.0,
+     "mb_source": "default",
+     "po_cols": 0.0,
+     "po_source": "default"
+    },
+    "producer": null,
+    "footnote_number_start": null,
+    "endnote_number_start": null,
+    "comment_bug": null
+   },
+   "emit": {
+    "text": {
+     "default": "one [1] two (1) three [AC1] four  five\n\nFootnotes:\n[1] Footnote text.\n\nEndnotes:\n(1) Endnote text.\n\nAnnotations:\n[AC1] Annotation text\n",
+     "all_notes": "one [1] two (1) three [AC1] four  five\n\nFootnotes:\n[1] Footnote text.\n\nEndnotes:\n(1) Endnote text.\n\nAnnotations:\n[AC1] Annotation text\n\nComments:\n[1] Comment text.\n",
+     "no_notes": "one  two  three  four  five\n"
+    },
+    "markdown": {
+     "default": "one [^1] two [^e1] three [^aAC1] four  five\n\n[^1]: Footnote text.\n[^e1]: Endnote text.\n[^aAC1]: Annotation text\n",
+     "all_notes": "one [^1] two [^e1] three [^aAC1] four [^c1] five\n\n[^1]: Footnote text.\n[^e1]: Endnote text.\n[^aAC1]: Annotation text\n[^c1]: Comment text.\n",
+     "no_notes": "one  two  three  four  five\n"
+    },
+    "html": {
+     "default": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>one <sup><a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\">1</a></sup> two <sup><a id=\"enref1\" href=\"#en1\" role=\"doc-noteref\">1</a></sup> three <sup><a id=\"anrefAC1\" href=\"#anAC1\" role=\"doc-noteref\">AC1</a></sup> four  five</p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn1\" data-note-kind=\"footnote\">Footnote text. <a href=\"#fnref1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n<section role=\"doc-endnotes\" aria-labelledby=\"endnotes-label\"><h2 id=\"endnotes-label\">Endnotes</h2><ol><li id=\"en1\" data-note-kind=\"endnote\">Endnote text. <a href=\"#enref1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n<section role=\"doc-endnotes\" aria-labelledby=\"annotations-label\"><h2 id=\"annotations-label\">Annotations</h2><ol><li id=\"anAC1\" data-note-kind=\"annotation\" data-note-tag=\"AC1\">Annotation text <a href=\"#anrefAC1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n",
+     "all_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>one <sup><a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\">1</a></sup> two <sup><a id=\"enref1\" href=\"#en1\" role=\"doc-noteref\">1</a></sup> three <sup><a id=\"anrefAC1\" href=\"#anAC1\" role=\"doc-noteref\">AC1</a></sup> four  five</p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn1\" data-note-kind=\"footnote\">Footnote text. <a href=\"#fnref1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n<section role=\"doc-endnotes\" aria-labelledby=\"endnotes-label\"><h2 id=\"endnotes-label\">Endnotes</h2><ol><li id=\"en1\" data-note-kind=\"endnote\">Endnote text. <a href=\"#enref1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n<section role=\"doc-endnotes\" aria-labelledby=\"annotations-label\"><h2 id=\"annotations-label\">Annotations</h2><ol><li id=\"anAC1\" data-note-kind=\"annotation\" data-note-tag=\"AC1\">Annotation text <a href=\"#anrefAC1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n<section role=\"doc-endnotes\" aria-labelledby=\"comments-label\"><h2 id=\"comments-label\">Comments</h2><ol><li id=\"cm1\" data-note-kind=\"comment\">Comment text.</li></ol></section>\n</body></html>\n",
+     "no_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>one  two  three  four  five</p>\n</body></html>\n"
+    },
+    "rtf": {
+     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{one }{\\chftn}{\\footnote \\pard\\plain\\fs24 {\\super\\chftn }Footnote text.}{ two }{\\chftn}{\\footnote\\ftnalt \\pard\\plain\\fs24 {\\super\\chftn }Endnote text.}{ three }{\\super AC1}{\\footnote\\ftnalt \\pard\\plain\\fs24 {\\super AC1 }Annotation text}{ four }{ five}\\par \n}\n",
+     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{one }{\\chftn}{\\footnote \\pard\\plain\\fs24 {\\super\\chftn }Footnote text.}{ two }{\\chftn}{\\footnote\\ftnalt \\pard\\plain\\fs24 {\\super\\chftn }Endnote text.}{ three }{\\super AC1}{\\footnote\\ftnalt \\pard\\plain\\fs24 {\\super AC1 }Annotation text}{ four }{\\chatn}{\\*\\atnid ctrl-kd}{\\*\\annotation \\pard\\plain\\fs24 Comment text.}{ five}\\par \n}\n",
+     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{one }{ two }{ three }{ four }{ five}\\par \n}\n"
+    }
+   },
+   "printed_pagelines": [
+    [
+     "one 1 two 1 three AC1 four  five",
+     "",
+     "--------------------",
+     "",
+     "1.   Footnote text.",
+     "",
+     "AC1  Annotation text",
+     "",
+     "(1)  Endnote text."
+    ]
+   ]
+  },
+  "number_starts": {
+   "input_hex": "2e462320350d0a2e45232031300d0a1d04000004001d61201d0f0003010000003046697273742e0f001d2062201d0d00040100000030456e642e0d001d0d0a",
+   "notes": [
+    {
+     "kind": "footnote",
+     "text": "First.",
+     "number": 0,
+     "tag": null,
+     "dot_commands": []
+    },
+    {
+     "kind": "endnote",
+     "text": "End.",
+     "number": 0,
+     "tag": null,
+     "dot_commands": []
+    }
+   ],
+   "meta": {
+    "page": {
+     "pl_lines": 66.0,
+     "height_in": 11.0,
+     "size_name": "Letter",
+     "size_source": "default",
+     "mt_lines": 3.0,
+     "mt_source": "default",
+     "mb_lines": 8.0,
+     "mb_source": "default",
+     "po_cols": 0.0,
+     "po_source": "default"
+    },
+    "producer": null,
+    "footnote_number_start": 5,
+    "endnote_number_start": 10,
+    "comment_bug": null
+   },
+   "emit": {
+    "text": {
+     "default": "a [5] b (10)\n\nFootnotes:\n[5] First.\n\nEndnotes:\n(10) End.\n",
+     "all_notes": "a [5] b (10)\n\nFootnotes:\n[5] First.\n\nEndnotes:\n(10) End.\n",
+     "no_notes": "a  b \n"
+    },
+    "markdown": {
+     "default": "a [^5] b [^e10]\n\n[^5]: First.\n[^e10]: End.\n",
+     "all_notes": "a [^5] b [^e10]\n\n[^5]: First.\n[^e10]: End.\n",
+     "no_notes": "a  b\n"
+    },
+    "html": {
+     "default": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>a <sup><a id=\"fnref5\" href=\"#fn5\" role=\"doc-noteref\">5</a></sup> b <sup><a id=\"enref10\" href=\"#en10\" role=\"doc-noteref\">10</a></sup></p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn5\" data-note-kind=\"footnote\">First. <a href=\"#fnref5\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n<section role=\"doc-endnotes\" aria-labelledby=\"endnotes-label\"><h2 id=\"endnotes-label\">Endnotes</h2><ol><li id=\"en10\" data-note-kind=\"endnote\">End. <a href=\"#enref10\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n",
+     "all_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>a <sup><a id=\"fnref5\" href=\"#fn5\" role=\"doc-noteref\">5</a></sup> b <sup><a id=\"enref10\" href=\"#en10\" role=\"doc-noteref\">10</a></sup></p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn5\" data-note-kind=\"footnote\">First. <a href=\"#fnref5\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n<section role=\"doc-endnotes\" aria-labelledby=\"endnotes-label\"><h2 id=\"endnotes-label\">Endnotes</h2><ol><li id=\"en10\" data-note-kind=\"endnote\">End. <a href=\"#enref10\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n",
+     "no_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>a  b </p>\n</body></html>\n"
+    },
+    "rtf": {
+     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{a }{\\chftn}{\\footnote \\pard\\plain\\fs24 {\\super\\chftn }First.}{ b }{\\chftn}{\\footnote\\ftnalt \\pard\\plain\\fs24 {\\super\\chftn }End.}\\par \n}\n",
+     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{a }{\\chftn}{\\footnote \\pard\\plain\\fs24 {\\super\\chftn }First.}{ b }{\\chftn}{\\footnote\\ftnalt \\pard\\plain\\fs24 {\\super\\chftn }End.}\\par \n}\n",
+     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{a }{ b }\\par \n}\n"
+    }
+   },
+   "printed_pagelines": [
+    [
+     "a 5 b 10",
+     "",
+     "--------------------",
+     "",
+     "5.    First.",
+     "",
+     "(10)  End."
+    ]
+   ]
+  },
+  "geometry_legal": {
+   "input_hex": "2e504c2038340d0a2e504f20380d0a2e4d5420360d0a2e4d4220360d0a1d04000004001d426f64792e0d0a",
+   "notes": [],
+   "meta": {
+    "page": {
+     "pl_lines": 84.0,
+     "height_in": 14.0,
+     "size_name": "Legal",
+     "size_source": "file",
+     "mt_lines": 6.0,
+     "mt_source": "file",
+     "mb_lines": 6.0,
+     "mb_source": "file",
+     "po_cols": 8.0,
+     "po_source": "file"
+    },
+    "producer": null,
+    "footnote_number_start": null,
+    "endnote_number_start": null,
+    "comment_bug": null
+   },
+   "emit": {
+    "text": {
+     "default": "Body.\n",
+     "all_notes": "Body.\n",
+     "no_notes": "Body.\n"
+    },
+    "markdown": {
+     "default": "Body.\n",
+     "all_notes": "Body.\n",
+     "no_notes": "Body.\n"
+    },
+    "html": {
+     "default": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Body.</p>\n</body></html>\n",
+     "all_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Body.</p>\n</body></html>\n",
+     "no_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Body.</p>\n</body></html>\n"
+    },
+    "rtf": {
+     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh20160\\margl1152\\margr1152\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n",
+     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh20160\\margl1152\\margr1152\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n",
+     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh20160\\margl1152\\margr1152\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n"
+    }
+   },
+   "printed_pagelines": [
+    [
+     "Body."
+    ]
+   ]
+  },
+  "stray_sentinel": {
+   "input_hex": "1d04000004001d426f6479207769746820072073747261792e0d0a",
+   "notes": [],
+   "meta": {
+    "page": {
+     "pl_lines": 66.0,
+     "height_in": 11.0,
+     "size_name": "Letter",
+     "size_source": "default",
+     "mt_lines": 3.0,
+     "mt_source": "default",
+     "mb_lines": 8.0,
+     "mb_source": "default",
+     "po_cols": 0.0,
+     "po_source": "default"
+    },
+    "producer": null,
+    "footnote_number_start": null,
+    "endnote_number_start": null,
+    "comment_bug": null
+   },
+   "emit": {
+    "text": {
+     "default": "Body with  stray.\n",
+     "all_notes": "Body with  stray.\n",
+     "no_notes": "Body with  stray.\n"
+    },
+    "markdown": {
+     "default": "Body with  stray.\n",
+     "all_notes": "Body with  stray.\n",
+     "no_notes": "Body with  stray.\n"
+    },
+    "html": {
+     "default": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Body with  stray.</p>\n</body></html>\n",
+     "all_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Body with  stray.</p>\n</body></html>\n",
+     "no_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Body with  stray.</p>\n</body></html>\n"
+    },
+    "rtf": {
+     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Body with  stray.}\\par \n}\n",
+     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Body with  stray.}\\par \n}\n",
+     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Body with  stray.}\\par \n}\n"
+    }
+   },
+   "printed_pagelines": [
+    [
+     "Body with  stray."
+    ]
+   ]
+  },
+  "tiny_page_wrap": {
+   "input_hex": "2e504c20360d0a1d04000004001d5265661d76000301000000307730207731207732207733207734207735207736207737207738207739207731302077313120773132207731332077313420773135207731362077313720773138207731392077323020773231207732322077323320773234207732352077323620773237207732382077323976001d20656e642e0d0a",
+   "notes": [
+    {
+     "kind": "footnote",
+     "text": "w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29",
+     "number": 0,
+     "tag": null,
+     "dot_commands": []
+    }
+   ],
+   "meta": {
+    "page": {
+     "pl_lines": 6.0,
+     "height_in": 1.0,
+     "size_name": "Custom",
+     "size_source": "file",
+     "mt_lines": 3.0,
+     "mt_source": "default",
+     "mb_lines": 8.0,
+     "mb_source": "default",
+     "po_cols": 0.0,
+     "po_source": "default"
+    },
+    "producer": null,
+    "footnote_number_start": null,
+    "endnote_number_start": null,
+    "comment_bug": null
+   },
+   "emit": {
+    "text": {
+     "default": "Ref[1] end.\n\nFootnotes:\n[1] w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29\n",
+     "all_notes": "Ref[1] end.\n\nFootnotes:\n[1] w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29\n",
+     "no_notes": "Ref end.\n"
+    },
+    "markdown": {
+     "default": "Ref[^1] end.\n\n[^1]: w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29\n",
+     "all_notes": "Ref[^1] end.\n\n[^1]: w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29\n",
+     "no_notes": "Ref end.\n"
+    },
+    "html": {
+     "default": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Ref<sup><a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\">1</a></sup> end.</p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn1\" data-note-kind=\"footnote\">w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29 <a href=\"#fnref1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n",
+     "all_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Ref<sup><a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\">1</a></sup> end.</p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn1\" data-note-kind=\"footnote\">w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29 <a href=\"#fnref1\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n",
+     "no_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Ref end.</p>\n</body></html>\n"
+    },
+    "rtf": {
+     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh1440\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Ref}{\\chftn}{\\footnote \\pard\\plain\\fs24 {\\super\\chftn }w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29}{ end.}\\par \n}\n",
+     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh1440\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Ref}{\\chftn}{\\footnote \\pard\\plain\\fs24 {\\super\\chftn }w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29}{ end.}\\par \n}\n",
+     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh1440\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Ref}{ end.}\\par \n}\n"
+    }
+   },
+   "printed_pagelines": [
+    [
+     "Ref1 end.",
+     "",
+     "--------------------",
+     "",
+     "1. w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17",
+     "w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29"
+    ]
+   ]
+  },
+  "wordtsar": {
+   "input_hex": "2e50534120310d0a2e505420320d0a1d04000004001d426f64792e0d0a",
+   "notes": [],
+   "meta": {
+    "page": {
+     "pl_lines": 66.0,
+     "height_in": 11.0,
+     "size_name": "Letter",
+     "size_source": "default",
+     "mt_lines": 3.0,
+     "mt_source": "default",
+     "mb_lines": 8.0,
+     "mb_source": "default",
+     "po_cols": 0.0,
+     "po_source": "default"
+    },
+    "producer": "wordtsar",
+    "footnote_number_start": null,
+    "endnote_number_start": null,
+    "comment_bug": null
+   },
+   "emit": {
+    "text": {
+     "default": "Body.\n",
+     "all_notes": "Body.\n",
+     "no_notes": "Body.\n"
+    },
+    "markdown": {
+     "default": "Body.\n",
+     "all_notes": "Body.\n",
+     "no_notes": "Body.\n"
+    },
+    "html": {
+     "default": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Body.</p>\n</body></html>\n",
+     "all_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Body.</p>\n</body></html>\n",
+     "no_notes": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Body.</p>\n</body></html>\n"
+    },
+    "rtf": {
+     "default": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n",
+     "all_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n",
+     "no_notes": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Body.}\\par \n}\n"
+    }
+   },
+   "printed_pagelines": [
+    [
+     "Body."
+    ]
+   ]
+  }
+ }
+}

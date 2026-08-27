@@ -1,0 +1,237 @@
+{
+ "note": "machine-generated from Python ctrl-kd 1.1.4 emit_html/emit_rtf over parse() output; expected strings exact incl. trailing newlines; html called with title=\"\" unless a title field is present",
+ "emit2": [
+  {
+   "name": "bold_ital_paras/html/modern",
+   "input_hex": "024269e7205469746ce5020d0a0d0a1941ee206974616c69e32071756f74e52068657265ae190d0a0d0a506c6169ee20636c6f73696ee7207061726167726170e82074657874ae0d0a",
+   "format": "html",
+   "mode": "modern",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p><strong>Big Title</strong></p>\n<p><em>An italic quote here.</em></p>\n<p>Plain closing paragraph text.</p>\n</body></html>\n"
+  },
+  {
+   "name": "bold_ital_paras/html/printed",
+   "input_hex": "024269e7205469746ce5020d0a0d0a1941ee206974616c69e32071756f74e52068657265ae190d0a0d0a506c6169ee20636c6f73696ee7207061726167726170e82074657874ae0d0a",
+   "format": "html",
+   "mode": "printed",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\"><strong>Big Title</strong><br>\n</p>\n<p class=\"ws-native\"><em>An italic quote here.</em><br>\n</p>\n<p class=\"ws-native\">Plain closing paragraph text.</p>\n</body></html>\n"
+  },
+  {
+   "name": "bold_ital_paras/rtf/modern",
+   "input_hex": "024269e7205469746ce5020d0a0d0a1941ee206974616c69e32071756f74e52068657265ae190d0a0d0a506c6169ee20636c6f73696ee7207061726167726170e82074657874ae0d0a",
+   "format": "rtf",
+   "mode": "modern",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{\\b Big Title}\\par \n\\par \n{\\i An italic quote here.}\\par \n\\par \n{Plain closing paragraph text.}\\par \n}\n"
+  },
+  {
+   "name": "bold_ital_paras/rtf/printed",
+   "input_hex": "024269e7205469746ce5020d0a0d0a1941ee206974616c69e32071756f74e52068657265ae190d0a0d0a506c6169ee20636c6f73696ee7207061726167726170e82074657874ae0d0a",
+   "format": "rtf",
+   "mode": "printed",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{\\b Big Title}\\line \\par \n{\\i An italic quote here.}\\line \\par \n{Plain closing paragraph text.}\\par \n}\n"
+  },
+  {
+   "name": "poem_indents/html/modern",
+   "input_hex": "2020202020412073686f727420706f656d206c696e652c8d0a2020202020616e6f746865722073686f7274206c696e652e8d0a0d0a8d0a20202020205365636f6e64207374616e7a6120636c6f7365732e0d0a",
+   "format": "html",
+   "mode": "modern",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p style=\"text-indent:5ch;line-height:1.15\">A short poem line,<br>\n&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;another short line.</p>\n<p style=\"text-indent:5ch\">Second stanza closes.</p>\n</body></html>\n"
+  },
+  {
+   "name": "poem_indents/html/printed",
+   "input_hex": "2020202020412073686f727420706f656d206c696e652c8d0a2020202020616e6f746865722073686f7274206c696e652e8d0a0d0a8d0a20202020205365636f6e64207374616e7a6120636c6f7365732e0d0a",
+   "format": "html",
+   "mode": "printed",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\">     A short poem line,<br>\n     another short line.<br>\n<br>\n</p>\n<p class=\"ws-native\">     Second stanza closes.</p>\n</body></html>\n"
+  },
+  {
+   "name": "poem_indents/rtf/modern",
+   "input_hex": "2020202020412073686f727420706f656d206c696e652c8d0a2020202020616e6f746865722073686f7274206c696e652e8d0a0d0a8d0a20202020205365636f6e64207374616e7a6120636c6f7365732e0d0a",
+   "format": "rtf",
+   "mode": "modern",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n\\fi720 \n\\sl322\\slmult0 \n{A short poem line,}\\line {     another short line.}\\par \n\\par \n\\sl0\\slmult0 \n{Second stanza closes.}\\par \n}\n"
+  },
+  {
+   "name": "poem_indents/rtf/printed",
+   "input_hex": "2020202020412073686f727420706f656d206c696e652c8d0a2020202020616e6f746865722073686f7274206c696e652e8d0a0d0a8d0a20202020205365636f6e64207374616e7a6120636c6f7365732e0d0a",
+   "format": "rtf",
+   "mode": "printed",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{     A short poem line,}\\line {     another short line.}\\line \\line \\par \n{     Second stanza closes.}\\par \n}\n"
+  },
+  {
+   "name": "html_escaping/html/modern",
+   "input_hex": "43686172f3206c696be5203c74616773be20616ee420a620616d70657273616e64f320616ee4202271756f746573a22068657265ae0d0a",
+   "format": "html",
+   "mode": "modern",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Chars like &lt;tags&gt; and &amp; ampersands and &quot;quotes&quot; here.</p>\n</body></html>\n"
+  },
+  {
+   "name": "html_escaping/html/printed",
+   "input_hex": "43686172f3206c696be5203c74616773be20616ee420a620616d70657273616e64f320616ee4202271756f746573a22068657265ae0d0a",
+   "format": "html",
+   "mode": "printed",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\">Chars like &lt;tags&gt; and &amp; ampersands and &quot;quotes&quot; here.</p>\n</body></html>\n"
+  },
+  {
+   "name": "html_escaping/rtf/modern",
+   "input_hex": "43686172f3206c696be5203c74616773be20616ee420a620616d70657273616e64f320616ee4202271756f746573a22068657265ae0d0a",
+   "format": "rtf",
+   "mode": "modern",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Chars like <tags> and & ampersands and \"quotes\" here.}\\par \n}\n"
+  },
+  {
+   "name": "html_escaping/rtf/printed",
+   "input_hex": "43686172f3206c696be5203c74616773be20616ee420a620616d70657273616e64f320616ee4202271756f746573a22068657265ae0d0a",
+   "format": "rtf",
+   "mode": "printed",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{Chars like <tags> and & ampersands and \"quotes\" here.}\\par \n}\n"
+  },
+  {
+   "name": "ws5_footnote_heading/html/modern",
+   "input_hex": "1d0500110505001d43686170746572204f6e650d0a54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f726520746578742e0d0a1d04000b04001d4e65787420706167652e0d0a",
+   "format": "html",
+   "mode": "modern",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p style=\"line-height:1.15\">Chapter One<br>\nTreaties were made.<sup><a id=\"fnref2\" href=\"#fn2\" role=\"doc-noteref\">2</a></sup> More text.<br>\nNext page.</p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn2\" data-note-kind=\"footnote\">See the accords. <a href=\"#fnref2\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n"
+  },
+  {
+   "name": "ws5_footnote_heading/html/printed",
+   "input_hex": "1d0500110505001d43686170746572204f6e650d0a54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f726520746578742e0d0a1d04000b04001d4e65787420706167652e0d0a",
+   "format": "html",
+   "mode": "printed",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\">Chapter One<br>\nTreaties were made.<sup><a id=\"fnref2\" href=\"#fn2\" role=\"doc-noteref\">2</a></sup> More text.<br>\nNext page.</p>\n<hr>\n<section role=\"doc-endnotes\" aria-labelledby=\"footnotes-label\"><h2 id=\"footnotes-label\">Footnotes</h2><ol><li id=\"fn2\" data-note-kind=\"footnote\">See the accords. <a href=\"#fnref2\" role=\"doc-backlink\">\u21a9</a></li></ol></section>\n</body></html>\n"
+  },
+  {
+   "name": "ws5_footnote_heading/rtf/modern",
+   "input_hex": "1d0500110505001d43686170746572204f6e650d0a54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f726520746578742e0d0a1d04000b04001d4e65787420706167652e0d0a",
+   "format": "rtf",
+   "mode": "modern",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n\\sl322\\slmult0 \n{Chapter One}\\line {Treaties were made.}{\\chftn}{\\footnote \\pard\\plain\\fs24 {\\super\\chftn }See the accords.}{ More text.}\\line {Next page.}\\par \n}\n"
+  },
+  {
+   "name": "ws5_footnote_heading/rtf/printed",
+   "input_hex": "1d0500110505001d43686170746572204f6e650d0a54726561746965732077657265206d6164652e1d190003010001003053656520746865206163636f7264732e19001d204d6f726520746578742e0d0a1d04000b04001d4e65787420706167652e0d0a",
+   "format": "rtf",
+   "mode": "printed",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{Chapter One}\\line {Treaties were made.}{\\chftn}{\\footnote \\pard\\plain\\fs24 {\\super\\chftn }See the accords.}{ More text.}\\line {Next page.}\\par \n}\n"
+  },
+  {
+   "name": "dot_pagebreak/html/modern",
+   "input_hex": "506167e5206f6ee520746578f420686572e520746f646179ae0d0a2e70610d0a506167e5207477ef20746578f420686572e520746f646179ae0d0a",
+   "format": "html",
+   "mode": "modern",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Page one text here today.</p>\n<hr class=\"pb\">\n<p>Page two text here today.</p>\n</body></html>\n"
+  },
+  {
+   "name": "dot_pagebreak/html/printed",
+   "input_hex": "506167e5206f6ee520746578f420686572e520746f646179ae0d0a2e70610d0a506167e5207477ef20746578f420686572e520746f646179ae0d0a",
+   "format": "html",
+   "mode": "printed",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\">Page one text here today.</p>\n<hr class=\"pb\">\n<p class=\"ws-native\">Page two text here today.</p>\n</body></html>\n"
+  },
+  {
+   "name": "dot_pagebreak/rtf/modern",
+   "input_hex": "506167e5206f6ee520746578f420686572e520746f646179ae0d0a2e70610d0a506167e5207477ef20746578f420686572e520746f646179ae0d0a",
+   "format": "rtf",
+   "mode": "modern",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Page one text here today.}\\par \n\\page \n{Page two text here today.}\\par \n}\n"
+  },
+  {
+   "name": "dot_pagebreak/rtf/printed",
+   "input_hex": "506167e5206f6ee520746578f420686572e520746f646179ae0d0a2e70610d0a506167e5207477ef20746578f420686572e520746f646179ae0d0a",
+   "format": "rtf",
+   "mode": "printed",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{Page one text here today.}\\par \n\\page \n{Page two text here today.}\\par \n}\n"
+  },
+  {
+   "name": "printstream_styles/html/modern",
+   "input_hex": "1e426f6c64205469746c651f0d0a0d0a183112207375706572736372697074206e6f74650d0a0c7365636f6e6420706167650d0a",
+   "format": "html",
+   "mode": "modern",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\"><strong>Bold Title</strong><br>\n<br>\n<sup>1</sup> superscript note<br>\n</p>\n<hr class=\"pb\">\n<p class=\"ws-native\">second page<br>\n</p>\n</body></html>\n"
+  },
+  {
+   "name": "printstream_styles/html/printed",
+   "input_hex": "1e426f6c64205469746c651f0d0a0d0a183112207375706572736372697074206e6f74650d0a0c7365636f6e6420706167650d0a",
+   "format": "html",
+   "mode": "printed",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\"><strong>Bold Title</strong><br>\n<br>\n<sup>1</sup> superscript note<br>\n</p>\n<hr class=\"pb\">\n<p class=\"ws-native\">second page<br>\n</p>\n</body></html>\n"
+  },
+  {
+   "name": "printstream_styles/rtf/modern",
+   "input_hex": "1e426f6c64205469746c651f0d0a0d0a183112207375706572736372697074206e6f74650d0a0c7365636f6e6420706167650d0a",
+   "format": "rtf",
+   "mode": "modern",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{\\b Bold Title}\\line \\line {\\super \\up9 1}{ superscript note}\\line \\par \n\\page \n{second page}\\line \\par \n}\n"
+  },
+  {
+   "name": "printstream_styles/rtf/printed",
+   "input_hex": "1e426f6c64205469746c651f0d0a0d0a183112207375706572736372697074206e6f74650d0a0c7365636f6e6420706167650d0a",
+   "format": "rtf",
+   "mode": "printed",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{\\b Bold Title}\\line \\line {\\super \\up9 1}{ superscript note}\\line \\par \n\\page \n{second page}\\line \\par \n}\n"
+  },
+  {
+   "name": "columnar_ruler/html/modern",
+   "input_hex": "2e72722d2d2d2d212d2d2d2d212d2d2d2d520d0a436f6cb120646174e10d0a436f6cb220646174e10d0a",
+   "format": "html",
+   "mode": "modern",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\">Col1 data<br>\nCol2 data</p>\n</body></html>\n"
+  },
+  {
+   "name": "columnar_ruler/html/printed",
+   "input_hex": "2e72722d2d2d2d212d2d2d2d212d2d2d2d520d0a436f6cb120646174e10d0a436f6cb220646174e10d0a",
+   "format": "html",
+   "mode": "printed",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\">Col1 data<br>\nCol2 data</p>\n</body></html>\n"
+  },
+  {
+   "name": "columnar_ruler/rtf/modern",
+   "input_hex": "2e72722d2d2d2d212d2d2d2d212d2d2d2d520d0a436f6cb120646174e10d0a436f6cb220646174e10d0a",
+   "format": "rtf",
+   "mode": "modern",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{Col1 data}\\line {Col2 data}\\par \n}\n"
+  },
+  {
+   "name": "columnar_ruler/rtf/printed",
+   "input_hex": "2e72722d2d2d2d212d2d2d2d212d2d2d2d520d0a436f6cb120646174e10d0a436f6cb220646174e10d0a",
+   "format": "rtf",
+   "mode": "printed",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{Col1 data}\\line {Col2 data}\\par \n}\n"
+  },
+  {
+   "name": "extended_char/html/modern",
+   "input_hex": "4f64642003636f646573032068657265201b82206f6b2e0d0a",
+   "format": "html",
+   "mode": "modern",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p>Odd codes here \u00e9 ok.</p>\n</body></html>\n"
+  },
+  {
+   "name": "extended_char/html/printed",
+   "input_hex": "4f64642003636f646573032068657265201b82206f6b2e0d0a",
+   "format": "html",
+   "mode": "printed",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title></title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p class=\"ws-native\">Odd codes here \u00e9 ok.</p>\n</body></html>\n"
+  },
+  {
+   "name": "extended_char/rtf/modern",
+   "input_hex": "4f64642003636f646573032068657265201b82206f6b2e0d0a",
+   "format": "rtf",
+   "mode": "modern",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Georgia{\\*\\falt Times New Roman};}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\n\\f0\\fs28 \n{Odd codes here \\u233? ok.}\\par \n}\n"
+  },
+  {
+   "name": "extended_char/rtf/printed",
+   "input_hex": "4f64642003636f646573032068657265201b82206f6b2e0d0a",
+   "format": "rtf",
+   "mode": "printed",
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{Odd codes here \\u233? ok.}\\par \n}\n"
+  },
+  {
+   "name": "bold_ital_paras/html/modern+title",
+   "input_hex": "024269e7205469746ce5020d0a0d0a1941ee206974616c69e32071756f74e52068657265ae190d0a0d0a506c6169ee20636c6f73696ee7207061726167726170e82074657874ae0d0a",
+   "format": "html",
+   "mode": "modern",
+   "title": "Essay <1> & \"Friends\"",
+   "expected": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Essay &lt;1&gt; &amp; &quot;Friends&quot;</title><style>body{margin:0;padding:2rem 1rem;\nfont:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}\n.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}\nspan.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}\nhr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}\nblockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}\nblockquote p{margin:0}\nsection[role=doc-endnotes]{margin-top:2rem}\nsection[role=doc-endnotes] h2{font-size:1.1rem}\n@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}\nhr.pb{border-top-color:#444}blockquote{border-left-color:#555}}</style></head>\n<body>\n<p><strong>Big Title</strong></p>\n<p><em>An italic quote here.</em></p>\n<p>Plain closing paragraph text.</p>\n</body></html>\n"
+  }
+ ]
+}

@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+
+	<!-- The classic CFPlugIn shape (job-101): mdworker/mdimport load this bundle directly via
+	     CFPlugInCreate, never via NSExtension/XPC — the modern com.apple.spotlight.import
+	     extension point (SoftReturnSpotlightImporter.appex) is registered but never invoked by
+	     the OS (confirmed on Jon's console + Apple dev forum threads 713953, 786976). No
+	     dynamic registration: every factory/type mapping is declared here, statically, so
+	     CFPlugIn never has to load the bundle's executable just to ask it what it implements. -->
+	<key>CFPlugInDynamicRegistration</key>
+	<false/>
+	<key>CFPlugInDynamicRegisterFunction</key>
+	<string></string>
+	<key>CFPlugInUnloadFunction</key>
+	<string></string>
+
+	<!-- One factory, identified by a UUID that belongs to this plugin only. The string value
+	     is the C function CFPlugIn calls to manufacture an instance -- see
+	     MDImporterGlue.m's MetadataImporterPluginFactory (job-153 Part E.b: renamed to match
+	     the canonical shape every shipping CFPlugIn importer uses; our factory UUID below is
+	     unchanged). -->
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>6C1B0F62-6E1D-4B0F-9B0E-6D9C0A4F2E51</key>
+		<string>MetadataImporterPluginFactory</string>
+	</dict>
+
+	<!-- kMDImporterTypeID (8B08C4BF-415B-11D8-B3F9-0003936726FC) -- the well-known type every
+	     classic Spotlight importer must register a factory against -- maps to the factory
+	     above. -->
+	<key>CFPlugInTypes</key>
+	<dict>
+		<key>8B08C4BF-415B-11D8-B3F9-0003936726FC</key>
+		<array>
+			<string>6C1B0F62-6E1D-4B0F-9B0E-6D9C0A4F2E51</string>
+		</array>
+	</dict>
+
+	<!-- The app's own exported UTI -- the only shape this importer claims to understand, same
+	     narrow scoping SoftReturnSpotlightImporter/Info.plist documents (CSSupportedContentTypes)
+	     for the (non-functional) modern extension point. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>MDImporter</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>me.beforeti.wordstar-document</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- job-153 Part E.f: same shape as
+	     docs/reference/spotlight-schemas/skim-importer-Info.plist's UTImportedTypeDeclarations --
+	     same identifier/UTTypeConformsTo the app's own Info.plist exports, and the full Tier-1
+	     extension tag list, so mdimport/mdworker can resolve this UTI even when this importer's
+	     bundle is queried before the app's own declaration has been registered. -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>me.beforeti.wordstar-document</string>
+			<key>UTTypeDescription</key>
+			<string>WordStar Document</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.content</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ws</string>
+					<string>ws0</string>
+					<string>ws1</string>
+					<string>ws2</string>
+					<string>ws3</string>
+					<string>ws4</string>
+					<string>ws5</string>
+					<string>ws6</string>
+					<string>ws7</string>
+					<string>ws8</string>
+					<string>ws9</string>
+					<string>wsd</string>
+					<string>wsm</string>
+					<string>ws-bak</string>
+					<string>ws-$$$</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

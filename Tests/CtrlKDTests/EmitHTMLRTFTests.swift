@@ -1,0 +1,520 @@
+import Testing
+@testable import CtrlKD
+
+/// Named-test ports for the HTML and RTF emitters, plus coverage for behavior the 33
+/// job-009 vectors don't discriminate. Every expected value below was produced by running
+/// the Python reference (ctrl-kd 1.1.4) locally — same ground truth as the vectors, just
+/// for inputs the vector set doesn't reach.
+
+// MARK: - ports of the Python named tests
+
+@Test func emitHTMLPoemBreaks() {
+    // Mirrors test_emit_html_poem_breaks. Two short indented lines read as a preserved
+    // stanza (`looksLikeVerse`), so the deliberate break survives as a real <br>.
+    //
+    // b23 exports overhaul, rule C (no literal leading indent whitespace opening a
+    // paragraph): the unit's own FIRST line loses its typed indent to a real `text-indent`
+    // CSS property instead; every OTHER line in a verified verse unit keeps its literal
+    // leading spaces exactly as before (a poem's second verse is content, not a
+    // paragraph-start marker), so it still renders as &nbsp; via `htmlSpan`'s own rule.
+    let poem = bytes("     line one,") + SOFT + bytes("     line two.") + HARD
+    let html = emitHTML(parseWS(poem))
+    #expect(html.contains("<br>"))
+    // b24 round 20 (slate item 4): a verse-classified unit now also carries the tight
+    // verse line-height on the SAME style attribute.
+    #expect(html.contains("<p style=\"text-indent:5ch;line-height:1.15\">"))
+    // Stronger than the Python assertion, and free: the whole body, exactly.
+    #expect(html.contains(
+        "<body>\n<p style=\"text-indent:5ch;line-height:1.15\">line one,<br>\n" +
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;line two.</p>\n</body></html>\n"
+    ))
+}
+
+@Test func emitHTMLPrintedPre() {
+    // Mirrors test_emit_html_printed_pre: a print stream's column alignment must survive,
+    // which is the whole point of the keep_ws branch.
+    //
+    // b23 exports overhaul (round 3 addendum): Native no longer wraps in a bare `<pre>` —
+    // a width-constraining monospace grid, the page-geometry opinion this round strips
+    // everywhere else. Native's own identity is the FONT (`ws-native` class: monospace,
+    // `white-space:pre-wrap` so literal column spacing still lines up), carried by a
+    // normal-flow `<p>` with an explicit `<br>` per physical line break instead of a
+    // literal newline.
+    let data = bytes("A    B    C\r\nD    E    F\r\n")
+    let html = emitHTML(parsePrintstream(data), mode: .printed)
+    #expect(html.contains("<p class=\"ws-native\">"))
+    #expect(html.contains("A    B    C"))
+    #expect(html.contains(
+        "<body>\n<p class=\"ws-native\">A    B    C<br>\nD    E    F<br>\n</p>\n</body></html>\n"
+    ))
+}
+
+@Test func emitRTFValidShape() {
+    // Mirrors test_emit_rtf_valid_shape, brace-balance assertion included: every span opens
+    // a group and must close it, or a reader chokes on the whole document.
+    let rtf = emitRTF(parseWS(makeProse()))
+    #expect(rtf.hasPrefix(#"{\rtf1"#))
+    #expect(rtf.trimmed().hasSuffix("}"))
+    #expect(rtf.filter { $0 == "{" }.count == rtf.filter { $0 == "}" }.count)
+}
+
+// MARK: - gap-closing tests (not discriminated by the 33 vectors)
+
+@Test func htmlEscapesApostropheAndQuoteLikePython() {
+    // html.escape(quote=True) also escapes ' -> &#x27;, which no vector input contains.
+    #expect(htmlEscape(#"Jon's ex"tra <b> & more"#)
+            == "Jon&#x27;s ex&quot;tra &lt;b&gt; &amp; more")
+    // The ampersand pass must run FIRST, or the entities added after it get re-escaped
+    // (`&lt;` -> `&amp;lt;`). This input has both a literal & and a literal <.
+    #expect(htmlEscape("&<") == "&amp;&lt;")
+}
+
+@Test func htmlSpanNbspThresholdIsFiveSpaces() {
+    // Four leading spaces are ordinary text and stay as-is; five are a deliberate indent.
+    // Every vector with an indent has exactly five, so a mutated threshold (>=1, >=4)
+    // passes the whole vector suite.
+    #expect(htmlSpan(Span(text: "    four")) == "    four")
+    #expect(htmlSpan(Span(text: "     five")) == "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;five")
+}
+
+@Test func htmlSpanNbspCountsTheWholeLeadingRunNotJustSpaces() {
+    // The trigger is five SPACES, but the count that gets inflated is the full leading
+    // whitespace run — Python measures it with lstrip(), which eats the tab too. So this is
+    // six &nbsp;, not five.
+    #expect(htmlSpan(Span(text: "     \tsix")) == String(repeating: "&nbsp;", count: 6) + "six")
+}
+
+@Test func htmlSpanKeepWSSuppressesNbsp() {
+    // Inside <pre> the browser honours the spaces already; inflating them would double the
+    // indent. (The poem_indents/html/printed vector covers this too — kept as the direct
+    // statement of the rule.)
+    #expect(htmlSpan(Span(text: "     five"), keepWS: true) == "     five")
+}
+
+@Test func htmlSpanNestsMultipleStylesInPythonSortedOrder() {
+    // Python wraps in sorted(styles) order — b, i, strike, sub, sup, u — so bold ends up
+    // innermost and underline outermost. No vector carries a span with two TAGGED styles
+    // (the only multi-style span in the set is {fnref, sup}, and fnref has no tag), so the
+    // table order is otherwise unproven.
+    #expect(htmlSpan(Span(text: "w", styles: [.bold, .underline])) == "<u><strong>w</strong></u>")
+    #expect(htmlSpan(Span(text: "w", styles: [.bold, .italic, .underline, .sup, .sub, .strike]))
+            == "<u><sup><sub><s><em><strong>w</strong></em></s></sub></sup></u>")
+}
+
+@Test func htmlSpanFnrefContributesNoTag() {
+    // fnref is absent from _TAG, and Python's _TAG.get skips it silently — the reference
+    // renders as the bare digits inside the sup it also carries.
+    #expect(htmlSpan(Span(text: "1", styles: [.fnref, .sup])) == "<sup>1</sup>")
+    #expect(htmlSpan(Span(text: "1", styles: .fnref)) == "1")
+}
+
+@Test func htmlHeadingJoinsItsLinesWithSpacesAndStrips() {
+    // A heading that wrapped across two lines reads as one phrase, and the join leaves
+    // trailing space that .strip() removes. Every vector heading is a single line.
+    let doc = Document(blocks: [Block(
+        kind: .para,
+        lines: [Line(spans: [Span(text: "Chapter")]), Line(spans: [Span(text: "One  ")])],
+        heading: 2
+    )])
+    #expect(emitHTML(doc).contains("<body>\n<h2>Chapter One</h2>\n</body></html>\n"))
+}
+
+@Test func rtfEscapesMetacharactersAndNonASCII() {
+    // No vector input contains a backslash or a brace, so this whole branch of
+    // _rtf_escape is unproven by the vector set — and it's the branch that would corrupt a
+    // document (an unescaped brace opens a group that never closes).
+    #expect(rtfEscape(#"a\b {c} é"#) == #"a\\b \{c\} \u233?"#)
+}
+
+@Test func rtfEmitsControlWordsInPythonSortedOrder() {
+    // Concatenated, not nested, so the order is visible in the output. fnref contributes
+    // nothing (Python's .get(s, '') default).
+    let doc = Document(blocks: [Block(lines: [Line(spans: [
+        Span(text: "w", styles: [.bold, .italic, .underline, .sup, .sub, .strike, .fnref]),
+    ])])])
+    #expect(emitRTF(doc).contains(#"{\b \i \strike \sub \super \ul w}"#))
+}
+
+@Test func rtfEmitsEscapedBracesInsideTheGroupStructure() {
+    // Escaped braces in a whole document, not just through rtfEscape: the escape has to
+    // survive being wrapped in the span's own group.
+    //
+    // NOTE on the brace-balance assertion in `emitRTFValidShape`: it does NOT generalize to
+    // brace-bearing text. Counting `{` vs `}` over the raw output counts the ESCAPED ones
+    // too, so a document whose text contains an odd literal brace reports 7 vs 6 — in
+    // Python exactly as here (verified against the reference). The assertion is a shape
+    // check for prose, not an escaping check; this exact-output test is the escaping check.
+    let doc = Document(blocks: [Block(lines: [Line(spans: [Span(text: "a{b}c{")])])])
+    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
+            + #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
+            + "\n" + #"\f0\fs28 "# + "\n"
+            + #"{a\{b\}c\{}\par "# + "\n}\n")
+}
+
+@Test func rtfModernParagraphSpacingFollowsTheAuthorsBlankLines() {
+    // Ruling 2026-08-06 (M4): only the author's own blank lines make space. The old
+    // unconditional blank `\par` after every block invented spacing wherever a dot
+    // command split a block; now the count comes from `trailingBlankLines`. A block that
+    // ends in the author's hard blank gets its `\par`; a bare block boundary gets none.
+    let doc = Document(blocks: [
+        Block(lines: [Line(spans: [Span(text: "A")]), Line(spans: [])]),
+        Block(lines: []),
+        Block(lines: [Line(spans: [Span(text: "B")])]),
+    ])
+    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
+            + #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
+            + "\n" + #"\f0\fs28 "# + "\n"
+            + #"{A}\par "# + "\n" + #"\par "# + "\n"
+            + #"{B}\par "# + "\n}\n")
+}
+
+@Test func printedModeKeepsAnEmptyBlockAsABlankParagraph() throws {
+    // `if para.strip() or printed` (emit.py:229): in printed mode an empty block is still a
+    // printed block and emits its `\par `. Found by mutation — dropping `or printed` passes
+    // all 33 vectors, because no vector produces an empty block.
+    //
+    // It is reachable, though, and not exotically: a print capture that ends with a page
+    // eject. `parse_printstream` appends its trailing block unconditionally (core.py:379-380,
+    // unlike parse_ws's `if cur.lines` guard), so the form feed leaves a final block holding
+    // one span-less line. Output verified against the Python reference.
+    let doc = try parse(bytes("Some plain text here today.\r\n\u{0C}"))
+    // round 6: Printed RTF now also opens with `\sl-240\slmult0` (the document default
+    // leading, 8/48in, at -30 twips per 1/48in unit) -- the same token every other
+    // Printed paragraph carries, first paragraph included.
+    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
+            + #"\paperw12240\paperh15840\margl1152\margr1152\margt720\margb1920"#
+            + "\n" + #"\f1\fs24 "# + "\n"
+            + #"\sl-240\slmult0 "# + "\n"
+            + #"{Some plain text here today.}\line \par "# + "\n"
+            + #"\page "# + "\n" + #"\par "# + "\n}\n")
+    // HTML's printed branch takes the opposite decision on the same block — no empty
+    // Native paragraph. b23 exports overhaul (round 3 addendum): Native no longer wraps in
+    // a bare `<pre>` (a width-constraining monospace grid, the page-geometry opinion this
+    // round strips everywhere else) — it's a normal-flow `<p class="ws-native">` instead,
+    // with an explicit `<br>` per physical line break. The block itself carries a SECOND,
+    // span-less physical line before the page eject (same one the RTF assertion above
+    // renders as a trailing empty `\line`), so the `<br>`-joined body ends in a trailing
+    // `<br>` too — `<br>\n`.join(["...today.", ""]) is "...today.<br>\n".
+    #expect(emitHTML(doc).contains(
+        "<body>\n<p class=\"ws-native\">Some plain text here today.<br>\n</p>\n<hr class=\"pb\">\n</body></html>\n"
+    ))
+}
+
+@Test func breakKindsWinOverAHeadingOnTheSameBlock() {
+    // emit.py checks kind before heading, so a pagebreak block carrying a heading renders as
+    // the break and its lines are dropped. Neither parser can build that shape (both
+    // construct `Block('pagebreak')` with heading 0), but `Document`/`Block` are public, so a
+    // consumer assembling IR by hand can. Pinned against the Python reference rather than
+    // left to whichever branch happens to come first after a later edit.
+    let doc = Document(blocks: [Block(
+        kind: .pagebreak, lines: [Line(spans: [Span(text: "X")])], heading: 2
+    )])
+    #expect(emitHTML(doc).contains("<body>\n<hr class=\"pb\">\n</body></html>\n"))
+    #expect(emitRTF(doc).contains("\n" + #"\page "# + "\n}\n"))
+}
+
+@Test func htmlAnnotationTagWithPunctuationIsSluggedInIdsButRawInDisplay() {
+    // Same underlying bug as markdownAnnotationTagWithPunctuationIsSlugged: an unslugged tag
+    // lands unescaped inside an `id`/`href` attribute, where `[`, `]`, `?` are not valid id
+    // characters — HTML-escaping (meant for text content) does nothing to protect an
+    // id/URL-fragment's own syntax. `_html_ids` slugs the label before it becomes part of an
+    // id; the visible link text and `data-note-tag` keep the RAW tag, merely HTML-escaped.
+    // Verified against the Python reference for this exact input: the reference anchor is
+    // `id="anrefHow" href="#anHow"`, its list item is
+    // `id="anHow" data-note-kind="annotation" data-note-tag="[How?]"`, and its backlink is
+    // `href="#anrefHow"` — never `an[How?]`/`anref[How?]` anywhere.
+    let doc = Document(
+        blocks: [Block(lines: [Line(spans: [
+            Span(text: "Ref "),
+            Span(text: "1", styles: .fnref),
+        ])])],
+        notes: [Note(kind: .annotation, text: "Annotation body.", tag: "[How?]")]
+    )
+    let html = emitHTML(doc)
+    #expect(html.contains(
+        "<p>Ref <sup><a id=\"anrefHow\" href=\"#anHow\" role=\"doc-noteref\">[How?]</a></sup></p>"
+    ))
+    #expect(html.contains(
+        "<li id=\"anHow\" data-note-kind=\"annotation\" data-note-tag=\"[How?]\">" +
+        "Annotation body. <a href=\"#anrefHow\" role=\"doc-backlink\">\u{21A9}</a></li>"
+    ))
+    #expect(!html.contains("id=\"an[How?]\""))
+    #expect(!html.contains("id=\"anref[How?]\""))
+    #expect(!html.contains("href=\"#an[How?]\""))
+}
+
+@Test func htmlSkipsAnEmptyBlockEntirely() {
+    // Same document, HTML side: the `<p>` is suppressed rather than emitted empty.
+    let doc = Document(blocks: [
+        Block(lines: [Line(spans: [Span(text: "A")])]),
+        Block(lines: []),
+        Block(lines: [Line(spans: [Span(text: "B")])]),
+    ])
+    #expect(emitHTML(doc).contains("<body>\n<p>A</p>\n<p>B</p>\n</body></html>\n"))
+}
+
+@Test func stylePassThroughHTMLCSSAndRTFStylesheet() {
+    // Jon's ruling 2026-08-04: styles are a PASS-THROUGH — no hardwiring a name to a
+    // font; expose the record's own data as CSS/RTF so a consumer can attach font/size.
+    // Every property below comes from the fixture's 102-byte record, none from the name.
+    let rec = styleRecord(left: 1800, just: -2, attrsOn: 0x40)      // centered, bold
+    let lib = styleLibrary([
+        (name: "WordStar Defaults", record: nil),
+        (name: "WordStar Defaults", record: nil),
+        (name: "Callout", record: rec),
+    ])
+    let doc = parseWS(documentWithStyleLibrary(
+        body: bytes("Plain opening paragraph with plenty of ordinary prose.") + HARD
+            + styleRef(2) + bytes("Styled paragraph in the Callout style.") + HARD
+            + styleRef(1) + bytes("Back to defaults for the closing prose.") + HARD,
+        library: lib))
+
+    // b23 exports overhaul, round 3 (geometry normalization): MODERN per-style CSS drops
+    // `margin-left`/`margin-right` entirely — those inch values were measured against the
+    // ORIGINAL page's own width, a different, much narrower measure than a reflowed reader
+    // column. PRINTED keeps the WS4-absolute geometry verbatim (Printed's whole point).
+    let html = emitHTML(doc, mode: .modern)
+    #expect(html.contains(".ws-2-callout { "))                       // generated CSS rule
+    #expect(html.contains("text-align:center"))
+    #expect(!html.contains("margin-left"))
+    #expect(html.contains("font-weight:bold"))
+    let body = html.components(separatedBy: "<body>")[1]
+    #expect(body.contains("class=\"ws-2-callout\""))
+    #expect(!emitHTML(doc, mode: .modern, options: EmitOptions(styles: false))
+        .contains("ws-2-callout"))
+    #expect(emitHTML(doc, mode: .printed).contains("margin-left:1.00in"))
+
+    // round 4 (RTF direct-formatting doctrine): MODERN drops the stylesheet's own \li/\ri
+    // for an ORDINARY (non-quote-named) style too — "Callout" doesn't match the quote-name
+    // substring test, so it gets no inset at all in Modern; PRINTED keeps it verbatim.
+    let rtf = emitRTF(doc, mode: .modern)
+    #expect(rtf.contains(#"{\stylesheet{\s0 Normal;}{\s3\qc\b Callout;}"#))
+    #expect(rtf.components(separatedBy: #"\stylesheet"#)[1].contains(#"\s3 "#))
+    #expect(!emitRTF(doc, mode: .modern, options: EmitOptions(styles: false))
+        .contains(#"\stylesheet"#))
+    #expect(emitRTF(doc, mode: .printed).contains(#"\s3\qc\li1440\b Callout;"#))
+}
+
+@Test func fontChangesRenderAsRuns() {
+    // Jon's export review: every RTF was Times New Roman -- the font blocks were
+    // recorded and never rendered. A font block is a RUN BOUNDARY: following spans
+    // carry the run, RTF gets a real fonttbl entry + \fN\fs, HTML gets a class plus
+    // generated CSS from the block's own words. Typestyle 3 is 'Courier' in the spec's
+    // table; height 280 VMI = 14pt.
+    // staged: 6.2.4's type-checker times out on the one-expression form
+    var payload = le16(180) + le16(280)
+    payload += le16(3) + [UInt8](repeating: 0, count: 6)
+    var data = ws7Block(0x00) + bytes("Before the change. ")
+    data += ws7Block(0x02, payload: payload)
+    data += bytes("After the change.") + HARD
+    let doc = parseWS(data)
+    let spans = doc.blocks.flatMap(\.lines).flatMap(\.spans)
+    let tagged = spans.filter { $0.font != nil }
+    #expect(!tagged.isEmpty)
+    #expect(tagged.map(\.text).joined().contains("After the change."))
+    #expect(!spans.contains { $0.text.contains("Before") && $0.font != nil })
+
+    let rtf = emitRTF(doc, mode: .modern)
+    // modern primary; the falt appears only when a SECOND modern alternate exists —
+    // era names are never the falt (Jon's ruling, 2026-08-04 night), and 'Courier'
+    // maps to the single alternate 'Courier New'.
+    #expect(rtf.contains(#"{\f2 Courier New;}"#))
+    #expect(rtf.contains(#"\f2\fs28 "#))                     // 14pt = \fs28
+
+    let html = emitHTML(doc, mode: .modern)
+    #expect(html.contains(#"class="ws-font-0""#))
+    // CSS stack: original first (pass-through), modern alternate, then the TERMINAL
+    // generic -- ctrl-kd round 9: 'Courier' has no proportional bit set here (the raw
+    // typestyle word above is a bare 3, no 0x8000), so the honest terminal is CSS
+    // `monospace`, not the generic-style bits' incidental 'sans' reading (typestyle 3's
+    // raw word sets no generic-style bits either -- they only matter for a genuinely
+    // proportional record).
+    #expect(html.contains("font-family:'Courier', 'Courier New', monospace"))
+    #expect(html.contains("font-size:14pt"))
+    // --no-styles leaves the class inert: the rule is gone from the head, the class
+    // itself still rides on the span.
+    let bare = emitHTML(doc, mode: .modern, options: EmitOptions(styles: false))
+    #expect(!bare.components(separatedBy: "<body>")[0].contains("ws-font-0"))
+}
+
+@Test func fontsTargetSelectsPrimariesAndGenericCoverage() {
+    // Port of test_fonts_target_selects_primaries_and_generic_coverage.
+    //
+    // Jon's ruling, 2026-08-04 night: --fonts {office,mac,google}. mac gets Cocoa-native
+    // primaries (Futura for Avant Garde); google gets Docs' chancery (Dancing Script);
+    // an UNMAPPED family lands on the target's generic primary from the font block's own
+    // style bits -- every run a usable face, era names never the falt.
+    //
+    // The typestyle numbers are looked up in the spec's own table rather than written as
+    // literals, exactly as Python does: the table is the source of truth for which number
+    // is which name, and a hand-copied 52 would rot silently if it were ever corrected.
+    guard let ag = typestyleNames.firstIndex(where: { $0.lowercased().hasPrefix("avant garde") }),
+          let zc = typestyleNames.firstIndex(where: { $0.lowercased().hasPrefix("zapfchancery") })
+    else {
+        Issue.record("the spec typestyle table lost Avant Garde or ZapfChancery")
+        return
+    }
+    // 240 VMI = 12pt; the width is a plausible proportional pitch and is not asserted on.
+    // ctrl-kd round 9: proportional bit set by default -- Avant Garde and Zapf Chancery
+    // are genuinely proportional display/script faces, so a realistic record for either
+    // carries 0x8000, and that flag is now decisive for family selection.
+    func fontBlock(_ number: Int, styleBits: Int = 0x8000) -> [UInt8] {
+        let typestyle = (number & 0x01FF) | styleBits
+        // staged: 6.2.4's type-checker times out on the one-expression form
+        var payload = le16(180) + le16(240)
+        payload += le16(typestyle) + [UInt8](repeating: 0, count: 6)
+        return ws7Block(0x02, payload: payload)
+    }
+    // The prose padding is load-bearing: detection reads the text-to-control byte ratio,
+    // and a fixture that is mostly font blocks is not recognised as a document at all.
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding for detection, a perfectly ordinary sentence.") + HARD
+    data += fontBlock(ag) + bytes("Geometric. ")
+    data += fontBlock(zc) + bytes("Scripted.") + HARD
+    data += bytes("Closing prose line keeps the byte ratio looking like text.") + HARD
+    let doc = parseWS(data)
+
+    let office = emitRTF(doc, mode: .modern)
+    #expect(office.contains(#"{\f2 Century Gothic{\*\falt ITC Avant Garde Gothic};}"#))
+    let mac = emitRTF(doc, mode: .modern, options: EmitOptions(fontsTarget: .mac))
+    #expect(mac.contains(#"{\f2 Futura{\*\falt Century Gothic};}"#))
+    let google = emitRTF(doc, mode: .modern, options: EmitOptions(fontsTarget: .google))
+    #expect(google.contains("Dancing Script"))
+    // Never the era name, in any target: nothing modern resolves 'Avant Garde'.
+    #expect(!office.contains(#"\*\falt Avant Garde"#))
+    #expect(!mac.contains(#"\*\falt Avant Garde"#))
+
+    // Universal coverage, the arm the Python fixture names but does not reach: an
+    // UNNAMED typestyle number (the spec's table stops at 244) still resolves, from the
+    // block's own script bits alone -- office's chancery answer is Monotype Corsiva,
+    // Google's is Dancing Script, which is also what its ZapfChancery override yields, so
+    // the two share ONE \fK (dedupe is by resolved primary, not by era family).
+    var unnamed = ws7Block(0x00)
+    unnamed += bytes("Prose padding for detection, a perfectly ordinary sentence.") + HARD
+    // 0x0800 (script generic) | 0x8000 (proportional -- a script-generic face is
+    // realistically proportional too, same reasoning as the named fonts above)
+    unnamed += fontBlock(300, styleBits: 0x8800) + bytes("Nameless. ")
+    unnamed += fontBlock(zc) + bytes("Scripted.") + HARD
+    unnamed += bytes("Closing prose line keeps the byte ratio looking like text.") + HARD
+    let unnamedDoc = parseWS(unnamed)
+    #expect(unnamedDoc.fonts.first?.family == "")            // the table has no name for 300
+    #expect(unnamedDoc.fonts.first?.genericStyle == .script)
+    let unnamedOffice = emitRTF(unnamedDoc, mode: .modern)
+    // The FINAL RULED FONT TABLE (2026-08-05) swapped office's ZapfChancery primary/falt
+    // (problem #1 in the audit: Apple Chancery is Apple-only, Word falls to falt, Docs
+    // gets garbage) -- its primary is now Monotype Corsiva, the SAME primary the generic
+    // unnamed font (office's script generic) already lands on. So this doc now dedupes to
+    // ONE \fK on office too, not two -- the coverage this test exists to prove (era names
+    // sharing one \fK when they resolve to the same primary) still holds, just on a
+    // different pairing than before the table rewrite.
+    #expect(unnamedOffice.contains(#"{\f2 Monotype Corsiva;}"#))
+    #expect(!unnamedOffice.contains(#"\f3 "#))               // one primary, one \fK
+    #expect(!unnamedOffice.contains("Apple Chancery"))       // falt never surfaces: the
+                                                              // FIRST occurrence to claim
+                                                              // the primary (the unnamed
+                                                              // generic run) had none
+    let unnamedGoogle = emitRTF(unnamedDoc, mode: .modern,
+                                options: EmitOptions(fontsTarget: .google))
+    #expect(unnamedGoogle.contains(#"{\f2 Dancing Script;}"#))
+    #expect(!unnamedGoogle.contains(#"\f3 "#))               // one primary, one \fK
+}
+
+@Test func linuxTargetUsesURWBase35Clones() {
+    // Port of test_linux_target_uses_urw_base35_clones. Jon: 'We can't leave out our
+    // Open Source friends.' The URW base-35 set (fonts-urw-base35, Ghostscript
+    // heritage) is free metric-compatible clones of EXACTLY this era's faces: URW
+    // Gothic IS Avant Garde, Z003 IS Zapf Chancery. The most faithful target, libre.
+    guard let ag = typestyleNames.firstIndex(where: { $0.lowercased().hasPrefix("avant garde") }),
+          let zc = typestyleNames.firstIndex(where: { $0.lowercased().hasPrefix("zapfchancery") })
+    else {
+        Issue.record("the spec typestyle table lost Avant Garde or ZapfChancery")
+        return
+    }
+    // ctrl-kd round 9: proportional bit set -- see the same note in
+    // fontsTargetSelectsPrimariesAndGenericCoverage.
+    func fontBlock(_ number: Int) -> [UInt8] {
+        // staged: 6.2.4's type-checker times out on the one-expression form
+        var payload = le16(180) + le16(240)
+        payload += le16((number & 0x01FF) | 0x8000) + [UInt8](repeating: 0, count: 6)
+        return ws7Block(0x02, payload: payload)
+    }
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding for detection, a perfectly ordinary sentence.") + HARD
+    data += fontBlock(ag) + bytes("Geometric. ")
+    data += fontBlock(zc) + bytes("Scripted.") + HARD
+    data += bytes("Closing prose line keeps the byte ratio looking like text.") + HARD
+    let doc = parseWS(data)
+
+    let rtf = emitRTF(doc, mode: .modern, options: EmitOptions(fontsTarget: .linux))
+    // falt is guaranteed-tier per the FINAL RULED FONT TABLE (2026-08-05 ruling): DejaVu
+    // rides fontconfig itself, so it is what every linux falt ends on -- a Microsoft name
+    // (the old falt here) is useless on a Ghostscript-less box.
+    #expect(rtf.contains(#"{\f2 URW Gothic{\*\falt DejaVu Sans};}"#))
+    #expect(rtf.contains("Z003"))
+}
+
+@Test func documentDeclaringAlbertusDoesNotFallThroughToGeneric() throws {
+    // Port of test_document_declaring_albertus_does_not_fall_through_to_generic.
+    //
+    // A document whose font block IS Albertus is the real situation for a WordStar
+    // file authored/printed against one of the Sawyer archive's own LaserJet drivers
+    // (LASERJET.PDF, LJ6DTP.PDF, HP4.PDF route Aachen's typestyle to the real
+    // resident face "Albertus" -- see the note in
+    // albertusAndMarigoldResolveToGlyphicSubstitutesNotGeneric). WSFORMAT's
+    // typestyle-NUMBER table has no slot to express this, only the printer driver
+    // does -- and unlike ctrl-kd's Python dict, `FontChange.family` here is a
+    // COMPUTED property derived from the immutable typestyle word, so there is no
+    // struct field to override post-parse the way the Python test mutates
+    // `doc.fonts[0]['typestyle_name']`. The faithful port instead takes the REAL
+    // font block's own generic/proportional bits (parsed from Aachen's actual
+    // typestyle number, matching PREVIEW.WS's own font-2 record: proportional,
+    // generic_style serif) and asks `rtfFonts`/`fontStack` -- the exact function
+    // every emitter routes through -- what a document declaring "Albertus" with
+    // those SAME bits would resolve to: never the target's bare generic.
+    guard let aachenNumber = typestyleNames.firstIndex(where: { $0.lowercased().hasPrefix("aachen") })
+    else {
+        Issue.record("the spec typestyle table lost Aachen")
+        return
+    }
+    func fontBlock(_ number: Int) -> [UInt8] {
+        // 0x8000 proportional + 0x0400 generic_style=serif -- matches the REAL
+        // typestyle-50 font block in PREVIEW.WS itself (generic_style: 'serif').
+        var payload = le16(180) + le16(240)
+        payload += le16((number & 0x01FF) | 0x8400) + [UInt8](repeating: 0, count: 6)
+        return ws7Block(0x02, payload: payload)
+    }
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding for detection, a perfectly ordinary sentence.") + HARD
+    data += fontBlock(aachenNumber) + bytes("Albertus  Bold  Italic") + HARD
+    data += bytes("Closing prose line keeps the byte ratio looking like text.") + HARD
+    let doc = parseWS(data)
+    guard let aachenFont = doc.fonts.first else {
+        Issue.record("expected one parsed font block")
+        return
+    }
+    #expect(aachenFont.family == "Aachen")
+    #expect(aachenFont.genericStyle == .serif)
+    #expect(aachenFont.proportional)
+
+    let expectedPrimary: [FontsTarget: String] = [
+        .office: "Colonna MT", .mac: "Herculanum", .google: "Cinzel", .linux: "DejaVu Serif",
+    ]
+    for target in FontsTarget.allCases {
+        // The real document's own bits (genericStyle/proportional), asked as
+        // "Albertus" -- the driver-level real face this exact font block is.
+        // Proves the DEDICATED entry is used (not the generic-primary fallback
+        // path) -- checked by exact expected value, not by inequality-with-generic:
+        // linux's own least-wrong choice (documented in FontMap.swift) legitimately
+        // coincides with the generic serif primary (both "DejaVu Serif"), same as
+        // office/mac's script generic coinciding with zapfchancery's own long-ruled
+        // Monotype Corsiva -- a real, dedicated answer, not a miss, just not
+        // distinguishable from the generic by value alone on those two targets.
+        let (primary, _) = rtfFonts("Albertus", generic: aachenFont.genericStyle,
+                                    target: target, proportional: aachenFont.proportional)
+        #expect(primary == expectedPrimary[target])
+        #expect(targetFonts[target]?["albertus"] != nil)
+    }
+    let stack = fontStack("Albertus", generic: aachenFont.genericStyle,
+                          proportional: aachenFont.proportional)
+    #expect(stack == ["Albertus", "Herculanum", "Colonna MT", "Rockwell", "serif"])
+}

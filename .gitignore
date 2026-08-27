@@ -1,0 +1,37 @@
+# Xcode build output
+build/
+build-dd/
+DerivedData/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode user state — never shared
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Generated project files. Tuist emits these as build artifacts; Project.swift
+# is the source of truth. NOTE: SoftReturn.xcodeproj is still git-tracked as of
+# this commit — `git rm -r SoftReturn.xcodeproj` could not be run in the
+# sandbox that authored this migration (see commit message). A follow-up with
+# fuller permissions needs to run that and commit the removal; until then,
+# `tuist generate` will keep showing it as locally modified.
+*.xcodeproj
+*.xcworkspace
+Derived/
+.tuist-cache/
+.tuist-bin/
+
+# macOS
+.DS_Store
+__pycache__/
+*.pyc
