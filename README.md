@@ -1,83 +1,58 @@
+![Soft Return icon: a red star with with a big eyed smiley face on a white background](docs/assets/sr-lg-128.png)
 # Soft Return
 
-A macOS viewer for WordStar-era documents: open a file from 1987, read it as it
+A macOS viewer for WordStar for DOS documents: open a file from 1987, read it as it
 printed, export it to something this century can use.
+* Supports WordStar for DOS v4-v7
+* Converts to plain text, markdown, HTML, RTF, and PDF
+* QuickLook for WordStar documents, and PIX WordStar images
+* Full AppleScript library
+* `sr` Swift command line tool
 
-**This repository is PRIVATE during development.** The app is half-formed; it
-lives here so that unfinished app code never touches the working public library
-repo. Nothing here is ready to be judged as shipped software.
+Universal binary. Supports macOS 13 (Ventura) and higher. `sr` CLI supports macOS 10.15 (Catalina) and higher. 
 
-## The engine lives somewhere else
+## Viewer Style Modes
 
-All parsing, layout and conversion is **CtrlKD**, consumed as a Swift package
-from the public library repo:
+### Native
+Native mode makes a best attempt at showing the WordStar document as it would have looked back in the day.
+We have mapped WordStar v4 to Courier Prime and WordStar v5-v7 era fonts to fonts installed in macOS today.
+### Printed
+Printed mode matches the `printed` export mode in `sr` (and the original `ctrl-kd` python app). It too is an
+an attempt to reproduce original WordStar documents as PDFs using only the base-14 fonts that ship with
+the Adobe Portable Document Format, plus recreated Symbol and Zapf Dingbats fonts via Unicode.
+### Modern
+Modern attempts to show WordStar documents as they would look today. The two big changes are the removal of
+soft returns for automatic line wrapping, and swapping the old two-space sentence spacing for the
+the current one-space convention. WordStar 4 documents (and WS5+ with no font information) are presented in
+Georgia 14. WordStar v5-v7 with specified fonts continue to use them.
 
-> https://github.com/jonmichaels/soft-return
+## Download & Install
 
-This app is a viewer wrapped around that library. Detection, the WordStar
-variants, pagination, and every emitter are the library's business — if a
-document renders wrong, the bug is usually there, and the fix belongs there
-where the CLI benefits from it too. This repo owns the window, the menus, the
-page presentation, printing, and export panels.
+* macOS app (Universal Binary. macOS 13 or higher): [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest)
+* `sr` Swift CLI (Universal Binary. macOS 10.15 or higher): Latest Version
+* macOS or Linux `sr` Swift CLI via homebrew: `brew install jonmichaels/tap/sr`
+* **Experimental** Windows `sr` Swift CLI: Latest Version
 
-## Mockups are the design intent — they are not the specification
+## Siblings
 
-There are mockups for this app, and they are worth reading: they carry the
-intent, the mood, and the shape of the thing. **They do not outrank the build
-spec, and neither of them outranks AppKit.**
+[ctrl-kd](https://github.com/jonmichaels/ctrl-kd) -- Python converter for WordStar for DOS docs. The first 
+app we made on this journey.
 
-The order is: **AppKit's platform behaviour beats the build spec, and the build
-spec beats the mockups.** A mockup is a picture drawn without a compiler; where
-it disagrees with the build spec (`soft-return-app-build-spec.md`, kept in the
-private project vault, not in this repo), the build spec wins. Where the build
-spec asks for something the platform does natively and better — document
-lifecycle, Open Recent, Find, Speech, VoiceOver, the print panel, proxy icons —
-the platform wins, and the spec marks those `[SYS]` precisely because they must
-not be reimplemented. Reaching for a custom control to match a mockup pixel,
-when a standard one carries accessibility and decades of muscle memory for free,
-is the wrong trade every time.
+## Lineage
 
-## Building
+I wanted to be able to see the 70-some WordStar 4 files I had from junior high and high school. In about 
+an hour and half my agent had my files looking pretty good. And then I fell down the research rabbit hole...
 
-Requires Xcode and [Tuist](https://tuist.io). The macOS app project lives under
-`macos/`; generate the workspace from there, then build it from the repo root:
+Soft Return wouldn't have been possible without the tools and documentation that kept WordStar readable: 
+Yohanes Nugroho's WS-CON, Michael Petrie's English port, the `wsconvert` project, Robert J. Sawyer's WordStar 
+archive, and the WordStar format documentation community.
 
-```
-cd macos && tuist generate --no-open && cd ..
-xcodebuild -workspace macos/SoftReturn.xcworkspace -scheme SoftReturn -configuration Debug build
-```
+My own test files are personal and are not distributed -- this repo's tests use synthetic fixtures and some
+public domain docs I retyped in WordStar 4 and WordStar 7 in DOSBox-X, plus Robert J. Sawyer's public WS7
+archive (opt-in, `pytest -m sawyer`; see `tests/SAWYER-CORPUS.md`) you can run your own tests against that if 
+you have a copy.
 
-The library resolves over the network as a Swift package dependency.
+## Credits
 
-Bundle identifier `me.beforeti.softreturn`; the exported document type is
-`me.beforeti.wordstar-document`.
-
-## Layout
-
-| Path | What |
-|---|---|
-| `macos/SoftReturn/` | app sources — Document, Rendering, UI, Settings, Export, Batch, Debug |
-| `macos/SoftReturnTests/` | tests, and synthetic fixtures under `Fixtures/` |
-| `macos/scripts/` | development tooling: capture one app window to a PNG, for looking at what the app actually drew |
-| `macos/Info.plist`, `macos/SoftReturn.entitlements` | document types, UTIs, sandbox entitlements |
-
-### Fixtures are synthetic, always
-
-Test fixtures are invented documents with real byte structure — WordStar bit-7
-line terminators, CRLF print streams, form-feed page breaks. No real document
-belonging to anyone ever enters this repository, and the extensionless fixture
-exists because that is the shape real files from the era usually arrive in.
-
-## Debug tooling
-
-Debug builds carry a `Debug` menu:
-
-- **Show Accessibility Identifiers** — a HUD naming the control under the pointer.
-- **Dump View Tree** — writes the live view hierarchy as JSON (frames, hidden,
-  alpha, whether glyphs were actually laid out) plus an in-process render of the
-  window. Built after a blank window survived a round of fixes because every
-  test asked the model whether it was right and none asked the views what they
-  actually were.
-
-The app is sandboxed, so the dump lands in the app container's own tmp
-directory; set `SOFT_RETURN_DUMP_VIEW_TREE=1` and the resolved path is logged.
+Written by Jon Michaels -- whose 1987–1992 WordStar files, and the need to read them again, are the reason 
+this exists -- with Athena (Claude, Anthropic) as co-author.
