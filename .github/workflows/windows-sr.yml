@@ -18,6 +18,9 @@ jobs:
       - run: git config --global core.protectNTFS false
       - name: Install static zlib (vcpkg)
         run: vcpkg install zlib:x64-windows-static
+      - name: List vcpkg static libs (diagnostic)
+        shell: pwsh
+        run: Get-ChildItem "${env:VCPKG_INSTALLATION_ROOT}\installed\x64-windows-static\lib"
       - name: Build
         shell: pwsh
         run: swift build -c release --static-swift-stdlib --product sr -Xlinker "-L${env:VCPKG_INSTALLATION_ROOT}\installed\x64-windows-static\lib"

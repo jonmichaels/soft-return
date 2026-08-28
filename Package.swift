@@ -56,7 +56,7 @@ let package = Package(
         .target(name: "CtrlKD",
                swiftSettings: [.enableExperimentalFeature("Extern")],
                linkerSettings: [.linkedLibrary("z", .when(platforms: [.macOS, .linux])),
-                                .linkedLibrary("zlibstatic", .when(platforms: [.windows]))]),
+                                .linkedLibrary("zlib", .when(platforms: [.windows]))]),
         // Everything `sr` does except talk to the OS: argument parsing, the diagnose
         // report, the conversion loop. Split out from the executable so the tests can
         // call it directly — an executable target's code cannot be imported.
@@ -115,7 +115,7 @@ let package = Package(
             // target) — this test target links libz directly too regardless, rather
             // than relying on CtrlKD's own link requirement propagating transitively.
             linkerSettings: [.linkedLibrary("z", .when(platforms: [.macOS, .linux])),
-                             .linkedLibrary("zlibstatic", .when(platforms: [.windows]))]
+                             .linkedLibrary("zlib", .when(platforms: [.windows]))]
         ),
     ]
 )
