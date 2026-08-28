@@ -31,7 +31,7 @@ Georgia 14. WordStar v5-v7 with specified fonts continue to use them.
 * macOS app (Universal Binary. macOS 13 or higher): [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest/download/Soft-Return.dmg)
 * `sr` Swift CLI (Universal Binary. macOS 10.15 or higher): [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest/download/Soft-Return-CLI.pkg)
 * macOS or Linux `sr` Swift CLI via homebrew: `brew install jonmichaels/tap/sr`
-* **Experimental** Windows `sr` Swift CLI: Latest Version
+* **Experimental** Windows `sr` Swift CLI (x86_64; requires the [Swift runtime for Windows](https://www.swift.org/install/windows/)): [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest/download/sr-windows-x86_64.zip)
 
 ## Siblings
 
