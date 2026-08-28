@@ -7,7 +7,7 @@ domain (`me.beforeti.softreturn`), read by `GitHubUpdateFeed` (`macos/SoftReturn
 UpdateChecker.swift`). Neither has any effect unless set.
 
 **Job 532 update:** the app-wide **Soft Return ▸ Check for Updates…** menu item now goes
-straight to Sparkle (see `docs/RUNBOOK.md`'s "Sparkle public-feed cutover" section) — it no
+straight to Sparkle (see the internal release runbook (not part of this repo)'s "Sparkle public-feed cutover" section) — it no
 longer touches `GitHubUpdateFeed` at all, and these two override knobs have no effect on it
 any more. `GitHubUpdateFeed` itself was NOT removed: **App ▸ Command Line Tool…**'s own
 "Installer Package" **Download** button (`CLIHelpWindowController`) still drives it directly,
@@ -44,11 +44,11 @@ release. The `assets` entry is job 532's addition to this doc: `CLIHelpWindowCon
 performDownload()` (unlike the old menu-action flow this doc originally documented) requires a
 real `cliAsset` match or it shows "The latest release doesn't include Soft-Return-CLI.pkg."
 instead of downloading anything. `prerelease: false` means this fixture satisfies BOTH
-channels: the currently-shipping build (`4.0.0b34`) auto-selects the **beta** channel (its own
-version string contains "b" — `UpdateChannel.forVersion` in `UpdateChecker.swift`), and beta
-channel picks the newest release overall regardless of the `prerelease` flag; a future stable
-build would see the same fixture via the **stable** channel, which only offers non-prerelease
-releases.
+channels: the currently-shipping build (`4.0.0`, job 539's stable bump — no "b" in the version
+string, so `UpdateChannel.forVersion` in `UpdateChecker.swift` now resolves it to the
+**stable** channel rather than beta) offers this fixture via the non-prerelease check; a beta
+build (version string containing "b") would see the same fixture via the **beta** channel,
+which picks the newest release overall regardless of the `prerelease` flag.
 
 ### 2. Run the check
 

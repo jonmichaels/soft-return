@@ -233,7 +233,7 @@ enum ExportEngine {
             // drawn on the same pinned-white paper as the main content, so the ink
             // must be pinned too -- `NSColor.textColor` is not a colour, it is a
             // promise to be WHITE in Dark Mode, which is how b28 shipped with its
-            // Modern notes invisible. tools/check-pinned-colors.sh enforces this.
+            // Modern notes invisible. macos/scripts/check-pinned-colors.sh enforces this.
             output.append(NSAttributedString(string: line.isEmpty ? " " : line, attributes: [
                 .font: font, .paragraphStyle: style, .foregroundColor: NSColor.black,
             ]))

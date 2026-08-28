@@ -229,4 +229,72 @@ import Testing
         rtfCheck.sendAction(rtfCheck.action, to: rtfCheck.target)
         #expect(headers.isEnabled, "checking RTF should enable Headers/Footers immediately")
     }
+
+    // MARK: - Job 536 (Part A2): popup width + fourth column
+
+    /// Jon's ruling: Pictures/Page Numbering/Sentence Spacing get ~2/3 of `popupWidth`
+    /// (185 * 2/3 = 123.3, rounded to a clean 120pt) — narrower than every OTHER popup/
+    /// checkbox-column control in the sheet, which still uses the full `popupWidth`.
+    @Test func theThreeShortPopupsAreNarrowerThanTheStandardPopupWidth() throws {
+        let accessory = ExportAccessoryView(formats: [.rtf], notes: NoteSelection(), style: .native)
+        accessory.layoutSubtreeIfNeeded()
+        for identifier in ["export-pictures-popup", "export-page-numbers-popup", "export-sentence-spacing-popup"] {
+            let popup = try Self.popup(accessory, identifier)
+            let widthConstraint = try #require(
+                popup.constraints.first { $0.firstAttribute == .width },
+                "\(identifier) has no explicit width constraint")
+            #expect(widthConstraint.constant == 120, "\(identifier) must be the ~2/3-width constant, not the full popup width")
+        }
+    }
+
+    /// Jon's ruling: the trio (with their row labels) lives in its own fourth column now,
+    /// never inside the Options checkbox column — asserted by walking the actual view tree
+    /// rather than re-deriving the layout, same discipline every other test in this file uses.
+    @Test func theThreePopupsSitOutsideTheOptionsCheckboxColumn() throws {
+        let accessory = ExportAccessoryView(formats: [.rtf], notes: NoteSelection(), style: .native)
+        accessory.layoutSubtreeIfNeeded()
+
+        let optionsHeading = try #require(
+            Self.descendants(accessory).compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "Options" },
+            "no 'Options' column heading found")
+        let optionsColumn = try #require(optionsHeading.superview as? NSStackView,
+                                         "'Options' heading is not the first row of its own column stack")
+        let optionsColumnControls = optionsColumn.arrangedSubviews
+        #expect(!optionsColumnControls.contains { $0.accessibilityIdentifier() == "export-pictures-popup" })
+        #expect(!optionsColumnControls.contains { $0.accessibilityIdentifier() == "export-page-numbers-popup" })
+        #expect(!optionsColumnControls.contains { $0.accessibilityIdentifier() == "export-sentence-spacing-popup" })
+
+        // The Options column keeps exactly its three checkboxes plus its own heading now.
+        #expect(optionsColumnControls.count == 4,
+                "Options column must be heading + Headers/Footers + Table of Contents + Inline Styling only")
+
+        // And the three popups must still exist SOMEWHERE in the tree — moved, not dropped.
+        #expect(try Self.popup(accessory, "export-pictures-popup").superview != nil)
+        #expect(try Self.popup(accessory, "export-page-numbers-popup").superview != nil)
+        #expect(try Self.popup(accessory, "export-sentence-spacing-popup").superview != nil)
+    }
+
+    /// The sheet as a whole must show four top-level columns now (Formats, Notes, Options,
+    /// popups), not the pre-job-536 three.
+    @Test func theSheetShowsFourTopLevelColumns() throws {
+        let accessory = ExportAccessoryView(formats: [.rtf], notes: NoteSelection(), style: .native)
+        accessory.layoutSubtreeIfNeeded()
+
+        let headings = ["Formats", "Notes", "Options"]
+        let headingFields = headings.map { heading in
+            Self.descendants(accessory).compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == heading }
+        }
+        #expect(headingFields.allSatisfy { $0 != nil }, "missing one of the three named column headings")
+
+        let columnStacks = Set(headingFields.compactMap { $0?.superview as? NSStackView }.map(ObjectIdentifier.init))
+        #expect(columnStacks.count == 3, "Formats/Notes/Options must each be their own column stack")
+
+        let columnsRow = try #require(
+            headingFields.compactMap { $0?.superview as? NSStackView }.first?.superview as? NSStackView,
+            "the three named columns must share one parent row stack")
+        #expect(columnsRow.arrangedSubviews.count == 4,
+                "the columns row must hold four columns (Formats, Notes, Options, and the new popups column)")
+    }
 }

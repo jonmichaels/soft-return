@@ -114,23 +114,24 @@ import Testing
     /// Job 520 (N5, b33 page-numbering UI): the brief for the new Page Numbering row asks
     /// explicitly to verify "at default and minimum window sizes" — the default-size check
     /// above predates that row; this pins the SAME "nothing needs to scroll to be seen"
-    /// property at the window's declared minimum (`.frame(minWidth: 1040, minHeight: 560)`,
-    /// `BatchWindowController.swift`'s own `BatchView.body`), the size where the one new row
-    /// this job adds has the least slack to work with.
+    /// property at the window's declared minimum (`.frame(minWidth: 1040, minHeight: 575)`,
+    /// `BatchWindowController.swift`'s own `BatchView.body` — 575, not job 520's original
+    /// 560: job 536 restored `optionsBox`'s row spacing to match `formatsBox`'s, which needs
+    /// the extra room), the size where the left column has the least slack to work with.
     @Test @MainActor func leftColumnContentFitsWithoutScrollingAtMinimumWindowSize() async throws {
         let (controller, content) = try await Self.makeWindow()
         guard let window = controller.window else {
             Issue.record("no window")
             return
         }
-        window.setContentSize(NSSize(width: 1040, height: 560))
+        window.setContentSize(NSSize(width: 1040, height: 575))
         content.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         try await Task.sleep(for: .milliseconds(300))
         content.layoutSubtreeIfNeeded()
 
         let contentHeight = content.bounds.height
-        #expect(abs(contentHeight - 560) < 1, "window did not actually shrink to its declared 560pt minimum")
+        #expect(abs(contentHeight - 575) < 1, "window did not actually shrink to its declared 575pt minimum")
 
         let scrollViews = RenderProbeKit.descendants(content).compactMap { $0 as? NSScrollView }
         let scrollMessage = "expected exactly 1 NSScrollView (the file list's own Table) at minimum size, found "
@@ -147,5 +148,77 @@ import Testing
         let fitMessage = "Left column's bottommost content (y=\(bottomMostY)) sits below the content view's "
             + "own height (\(contentHeight)) at the window's MINIMUM size — needs a scrollbar to reach"
         #expect(bottomMostY <= contentHeight, "\(fitMessage)")
+    }
+
+    // MARK: - Job 536 (Part A3): Options row spacing matches Formats, whole stack centers
+
+    /// Jon's ruling: Options' checkbox rows must use the SAME vertical gap Formats' checkbox
+    /// rows use — both `optionsBox`/`formatsBox` VStacks are 6pt now, superseding job 521's
+    /// tightened 2pt for Options alone.
+    @Test @MainActor func optionsRowSpacingMatchesFormatsRowSpacing() async throws {
+        let (_, content) = try await Self.makeWindow()
+        let checkboxes = Self.controlsColumnCheckboxes(in: content)
+        #expect(checkboxes.count == 12,
+                "expected 12 controlsColumn checkboxes (5 Formats + 4 Notes + 3 Options), found \(checkboxes.count)")
+
+        // Declaration order (see this file's header): Formats' 5 come first, Notes' 4 next,
+        // Options' 3 (Headers/Footers, Table of Contents, Inline Styling) last — the popup
+        // rows (Pictures/Page #/Spacing) aren't `FocusRingNSButton`s so never appear here.
+        let formatsFrames = Array(checkboxes.prefix(5)).sorted { $0.minY < $1.minY }
+        let optionsFrames = Array(checkboxes.suffix(3)).sorted { $0.minY < $1.minY }
+
+        func gaps(_ frames: [CGRect]) -> [CGFloat] {
+            zip(frames, frames.dropFirst()).map { $1.minY - $0.maxY }
+        }
+        let formatsGap = try #require(gaps(formatsFrames).first, "Formats has fewer than 2 checkboxes to measure a gap from")
+        let optionsGaps = gaps(optionsFrames)
+        #expect(!optionsGaps.isEmpty, "Options has fewer than 2 checkboxes to measure a gap from")
+        for (index, gap) in optionsGaps.enumerated() {
+            #expect(abs(gap - formatsGap) < 1,
+                     "Options row gap #\(index) (\(gap)) does not match Formats' row gap (\(formatsGap))")
+        }
+    }
+
+    /// Jon's ruling: once the section stack (`detailsBox` + Formats/Notes row + `optionsBox`
+    /// + `destinationBox`) doesn't fill the whole column height, the leftover space must
+    /// split evenly above and below it, not sit entirely below as one gap (a plain top-
+    /// anchored `VStack`'s default).
+    @Test @MainActor func controlsColumnContentIsVerticallyCenteredWhenThereIsSlack() async throws {
+        let (controller, content) = try await Self.makeWindow()
+        guard let window = controller.window else {
+            Issue.record("no window")
+            return
+        }
+        // Comfortably taller than the column's own intrinsic content height so there is real
+        // slack to split — the minimum-size test above already covers the no-slack case.
+        window.setContentSize(NSSize(width: 1040, height: 900))
+        content.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        content.layoutSubtreeIfNeeded()
+
+        let contentHeight = content.bounds.height
+        let allFrames: [CGRect] = RenderProbeKit.descendants(content).map { view in view.convert(view.bounds, to: content) }
+        let columnFrames = allFrames.filter { frame -> Bool in
+            guard frame.width > 0, frame.height > 0 else { return false }
+            guard frame.minX >= 0, frame.maxX <= 300 else { return false }
+            return true
+        }
+        let topMostY = try #require(columnFrames.map(\.minY).min(), "no controlsColumn content found")
+        let bottomMostY = try #require(columnFrames.map(\.maxY).max(), "no controlsColumn content found")
+
+        // This coordinate space is flipped (`Job511BatchLayoutTests
+        // .infoBlockIsCenteredUnderThePreview`'s own `minY >= maxY` check for "below"
+        // establishes Y increases downward here) — the gap ABOVE the content is
+        // `topMostY - 0`, the gap BELOW is `contentHeight - bottomMostY`.
+        let topGap = topMostY
+        let bottomGap = contentHeight - bottomMostY
+        // Tolerance wider than the sub-pixel rounding this file's other assertions use — a
+        // `GroupBox`'s own title/border chrome is not perfectly top/bottom symmetric, so even
+        // a genuinely centered stack measures a few points off between its outermost edges.
+        #expect(abs(topGap - bottomGap) < 3, """
+            top gap (\(topGap)) and bottom gap (\(bottomGap)) must be equal — the section \
+            stack must be vertically centered, not top-anchored
+            """)
     }
 }

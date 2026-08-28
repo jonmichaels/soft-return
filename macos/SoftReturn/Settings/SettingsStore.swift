@@ -52,6 +52,7 @@ final class SettingsStore {
         self.defaultInlineStyling = defaults.object(forKey: Key.defaultInlineStyling) as? Bool ?? true
         self.defaultPictures = defaults.decode(Key.defaultPictures) ?? .embed
         self.defaultPageNumbers = defaults.decode(Key.defaultPageNumbers) ?? .auto
+        self.includeBetaVersions = defaults.object(forKey: Key.includeBetaVersions) as? Bool ?? false
     }
 
     // MARK: - The eight
@@ -114,6 +115,17 @@ final class SettingsStore {
         didSet { defaults.encode(defaultPageNumbers, Key.defaultPageNumbers) }
     }
 
+    /// 15. Job 537 (rulings 20-21, Sparkle channel opt-in): a fourth ruled spec change, same
+    /// exception as job 373/520 above — "include beta versions" is not a setting slipped past
+    /// the closed list, it is the one user-facing control the channel ruling names. Default
+    /// OFF: a one-afternoon user gets stable only unless they deliberately go looking for it
+    /// (see `SettingsWindowController`'s Option-revealed checkbox). Feeds
+    /// `SparkleChannelPolicy.allowedChannels(includeBetaVersions:)`, which
+    /// `AppDelegate.allowedChannels(for:)` reads fresh on every Sparkle channel check.
+    var includeBetaVersions: Bool {
+        didSet { defaults.set(includeBetaVersions, forKey: Key.includeBetaVersions) }
+    }
+
     // MARK: - Fixed vocabularies
 
     /// The size menu, per spec: "9, 10, 11, 12, 13, 14, 16, 18 only, default 14".
@@ -138,6 +150,7 @@ final class SettingsStore {
         static let defaultInlineStyling = "settings.defaultInlineStyling"
         static let defaultPictures = "settings.defaultPictures"
         static let defaultPageNumbers = "settings.defaultPageNumbers"
+        static let includeBetaVersions = "settings.includeBetaVersions"
     }
 }
 

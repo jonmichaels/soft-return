@@ -151,7 +151,7 @@ import Testing
 
 /// Job 458 (b28 note 5, Jon's ruling): the PASS/FAIL contract itself. Jon ran the probe on b27
 /// and found the missing-fixture guard returning `sendStatus: 0` — the exact value the OLD
-/// RUNBOOK told a human to treat as success — so a leg with NO subject read as a pass. These
+/// the internal runbook told a human to treat as success — so a leg with NO subject read as a pass. These
 /// tests pin `State.passed`/`.humanLine` and `VerbState.passed`/`.humanLine` directly against
 /// hand-built states (never a real `AESendMessage` — job 174's crash precedent, same rationale
 /// as every other test in this file), because that computed contract, not the send itself, is

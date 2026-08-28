@@ -52,6 +52,16 @@ import CtrlKD
 /// `BatchWindowController`'s — `SettingsWindowController.popupWidth - 5`, per job 511's
 /// ruling) on every popup, and the columns row switched to `.fill` distribution with tighter
 /// spacing so each column sizes to its own content.
+///
+/// Job 536 (v4.0.0 UI notes, Part A2, Jon's ruling): two more changes on top of job 530's
+/// layout. (a) Pictures/Page Numbering/Sentence Spacing don't need `popupWidth` — their titles
+/// ("Off"/"Auto"/"Single space", ...) are far shorter than Formats/Notes checkbox labels, so
+/// job 530's shared width just left a wide, empty-looking pulldown. `smallPopupWidth` (2/3 of
+/// `popupWidth` — 185 * 2/3 = 123.3, rounded to a clean 120pt) is the constant Jon asked for,
+/// "not exact pixels — pick a clean constant." (b) that trio (with their row labels) moves out
+/// of the Options column into its OWN fourth column — Options keeps only the three checkboxes
+/// (Headers/Footers, Table of Contents, Inline Styling); the popup grid gets a column to
+/// itself so it's no longer squeezed under three unrelated checkboxes.
 final class ExportAccessoryView: NSView {
     private var formatChecks: [ExportFormat: NSButton] = [:]
     private var noteChecks: [String: NSButton] = [:]
@@ -69,6 +79,11 @@ final class ExportAccessoryView: NSView {
     /// not `SettingsWindowController.popupWidth` directly, so this sheet's popups match
     /// Batch's width rather than Settings'.
     private static let popupWidth = SettingsWindowController.popupWidth - 5
+
+    /// Job 536 (Part A2): ~2/3 of `popupWidth` (185 * 2/3 = 123.3), for the three short-title
+    /// popups (Pictures/Page Numbering/Sentence Spacing) that never needed the full form-field
+    /// width — a clean 120pt, not the exact fraction (Jon: "not exact pixels").
+    private static let smallPopupWidth: CGFloat = 120
 
     /// Fires whenever a format checkbox flips — the panel keeps `allowedContentTypes` (and
     /// so the extension it will grant back) in sync with exactly-one-format-checked (job 244
@@ -142,18 +157,21 @@ final class ExportAccessoryView: NSView {
         let picturesButton = Self.makePopup(
             titles: Self.pixModeTitles.map(\.1),
             selectedIndex: Self.pixModeTitles.firstIndex { $0.0 == settings.defaultPictures } ?? 1,
-            identifier: "export-pictures-popup", accessibilityLabel: "Pictures")
+            identifier: "export-pictures-popup", accessibilityLabel: "Pictures",
+            width: Self.smallPopupWidth)
         picturesPopup = picturesButton
 
         let pageNumbersButton = Self.makePopup(
             titles: Self.pageNumbersTitles.map(\.1),
             selectedIndex: Self.pageNumbersTitles.firstIndex { $0.0 == settings.defaultPageNumbers } ?? 0,
-            identifier: "export-page-numbers-popup", accessibilityLabel: "Page Numbering")
+            identifier: "export-page-numbers-popup", accessibilityLabel: "Page Numbering",
+            width: Self.smallPopupWidth)
         pageNumbersPopup = pageNumbersButton
 
         let sentenceSpacingButton = Self.makePopup(
             titles: Self.sentenceSpacingTitles.map(\.1), selectedIndex: 0,
-            identifier: "export-sentence-spacing-popup", accessibilityLabel: "Sentence Spacing")
+            identifier: "export-sentence-spacing-popup", accessibilityLabel: "Sentence Spacing",
+            width: Self.smallPopupWidth)
         sentenceSpacingPopup = sentenceSpacingButton
 
         // The Settings form idiom (`SettingsWindowController.style(_:)`): labels right-aligned
@@ -175,14 +193,21 @@ final class ExportAccessoryView: NSView {
 
         let optionsColumn = column(
             title: "Options",
-            views: [headers, toc, inlineStyling, popupGrid])
+            views: [headers, toc, inlineStyling])
+
+        // Job 536 (Part A2): the popup trio gets its own column now, so it isn't squeezed
+        // under three unrelated checkboxes. A blank (not omitted) heading keeps this column's
+        // content starting at the same Y as the other three columns' first real row —
+        // `column(title:views:)`'s heading is what reserves that line of vertical space.
+        let popupsColumn = column(title: "", views: [popupGrid])
 
         // Re-centered as a pair (job 323) — Style no longer rides beside them as a third
-        // column, so this row now balances Formats/Notes/Options. Job 530: `.fill` (each
-        // column its own natural width) rather than `.fillEqually` (every column stretched to
-        // match the widest), which was leaving large blank gaps in the two short columns —
-        // and tighter spacing now that the popup width fix stops the Options column ballooning.
-        let columns = NSStackView(views: [formatColumn, noteColumn, optionsColumn])
+        // column, so this row now balances Formats/Notes/Options/(popups). Job 530: `.fill`
+        // (each column its own natural width) rather than `.fillEqually` (every column
+        // stretched to match the widest), which was leaving large blank gaps in the short
+        // columns — and tighter spacing now that the popup width fix stops the Options column
+        // ballooning.
+        let columns = NSStackView(views: [formatColumn, noteColumn, optionsColumn, popupsColumn])
         columns.orientation = .horizontal
         columns.alignment = .top
         columns.distribution = .fill
@@ -246,11 +271,12 @@ final class ExportAccessoryView: NSView {
     /// `SettingsWindowController.popup(_:_:_:_:)` onto the shared `FormControl` helper — see
     /// its own doc comment.)
     private static func makePopup(
-        titles: [String], selectedIndex: Int, identifier: String, accessibilityLabel: String
+        titles: [String], selectedIndex: Int, identifier: String, accessibilityLabel: String,
+        width: CGFloat = ExportAccessoryView.popupWidth
     ) -> NSPopUpButton {
         let button = FormControl.popUpButton(titles: titles, identifier: identifier,
                                               accessibilityLabel: accessibilityLabel,
-                                              width: Self.popupWidth)
+                                              width: width)
         button.selectItem(at: selectedIndex)
         return button
     }

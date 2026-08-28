@@ -73,7 +73,7 @@ private func fontlessBoxLine(_ cp437Bytes: [UInt8]) -> [UInt8] {
 
 @Test func cp437GreekInPlainCourierRoutesThroughSymbolFace() {
     // b26 fix: cp437 puts Greek/math at 0xE0-0xEE with NO font block declaring Symbol at
-    // all -- plain WS4/WS7 body text, the "screen chart" case (the private paper-scan reference's -SCREEN.pcl +
+    // all -- plain WS4/WS7 body text, the "screen chart" case (the reference corpus's -SCREEN.pcl +
     // .measurements.json: real WS7 prints the line αßΓπΣσµτΦΘΩδφε cleanly). Printed PDF's
     // text path (`esc`, cp1252-encode-with-replace) has no Greek at all, so before this fix
     // every one of those 14 characters became '?'. Only the 12 that cp1252 truly cannot

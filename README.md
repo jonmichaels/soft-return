@@ -28,8 +28,8 @@ Georgia 14. WordStar v5-v7 with specified fonts continue to use them.
 
 ## Download & Install
 
-* macOS app (Universal Binary. macOS 13 or higher): [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest)
-* `sr` Swift CLI (Universal Binary. macOS 10.15 or higher): Latest Version
+* macOS app (Universal Binary. macOS 13 or higher): [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest/download/Soft-Return.dmg)
+* `sr` Swift CLI (Universal Binary. macOS 10.15 or higher): [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest/download/Soft-Return-CLI.pkg)
 * macOS or Linux `sr` Swift CLI via homebrew: `brew install jonmichaels/tap/sr`
 * **Experimental** Windows `sr` Swift CLI: Latest Version
 
@@ -48,9 +48,7 @@ Yohanes Nugroho's WS-CON, Michael Petrie's English port, the `wsconvert` project
 archive, and the WordStar format documentation community.
 
 My own test files are personal and are not distributed -- this repo's tests use synthetic fixtures and some
-public domain docs I retyped in WordStar 4 and WordStar 7 in DOSBox-X, plus Robert J. Sawyer's public WS7
-archive (opt-in, `pytest -m sawyer`; see `tests/SAWYER-CORPUS.md`) you can run your own tests against that if 
-you have a copy.
+public domain docs I retyped in WordStar 4 and WordStar 7 in DOSBox-X.
 
 ## Credits
 

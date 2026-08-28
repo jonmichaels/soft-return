@@ -67,26 +67,58 @@ full Sawyer archive, 2,257+ files) than this one (the small, curated
   swallow a genuinely broken/partial corpus while armed into the same
   silent-empty shape a missing corpus produces.
 
-## Restored helper surface (job 534/535)
+## Restored helper surface (job 534/535, superseded — job 536)
 
-The private-material strip deleted two shared test-infrastructure files
-whole (`PixelOracleAppEngineTests.swift`, `MultipageMarginTests.swift`),
-each `TestDocs/`-dependent top to bottom, breaking compilation for 8
-surviving files that called into their enums. `PrivateCorpusSupport.swift`
-restores ONLY the minimal surface those 8 files actually need
-(`PixelOracleAppEngine.renderApp`/`renderEngine`/`rasterizePDF`,
-`MultipageMargins.testDocsDirectory`) — not the deleted files' own test
-methods, which either had hard (non-skippable) vacuity guards unsuited to
-a public tree, or (for `MultipageMargins`) exercised its own multipage
-pagination-budget oracle that no surviving file uses.
+The private-material strip deletes two shared test-infrastructure files
+whole (`PixelOracleAppEngineTests.swift`, `MultipageMarginTests.swift`) in
+any PUBLIC-only tree, each `TestDocs/`-dependent top to bottom. Job 535
+restored a minimal `PixelOracleAppEngine`/`MultipageMargins` shim in
+`PrivateCorpusSupport.swift` for that public tree specifically, since
+several surviving public/sawyer-armed files still call those two types
+(`TitleAscenderTests`, `PrintedStructuralParityTests`,
+`MultipageMargins.testDocsDirectory`'s six callers). **This tree carries
+that shim** — it is a public-only snapshot.
+
+The private canonical tree does not need the shim: that strip never
+happens there, so both full original files are present unmodified. Job
+536 found the job-535 shim colliding with them when both were present in
+the same tree (duplicate declarations of the same two types, a genuine
+compile break) and deleted it there; `PixelOracleAppEngineTests.swift`'s
+own enum is a superset of what the shim offered, and
+`MultipageMarginTests.swift`'s `testDocsDirectory` forwards to
+`PrivateCorpusSupport.testDocsDirectory` directly instead of duplicating
+it (fixing a real bug along the way — its own standalone `#filePath` walk
+never honored `CTRLKD_PRIVATE_CORPUS` at all). Any public-only snapshot
+that needs the shim restores it from git history rather than carrying it
+permanently in the private tree.
 
 ## Verifying this on a machine with the corpus
 
 This gate's unarmed path (skip-cleanly) is verified by every CI/stranger
-run of this repo. Its ARMED path — real reads succeeding, the vacuity
-guards passing, every gated test actually exercising real documents — can
-only be verified on a machine that has `TestDocs/` in-repo or a
-`CTRLKD_PRIVATE_CORPUS` pointed at a real copy. It was not verified this
-way as part of job 535 (no corpus was available in that job's environment)
-and should be re-run once on a private-tree machine before this gate is
-trusted long-term.
+run of this repo. Its ARMED path was verified for real by job 536, on this
+private-tree machine:
+
+- **Explicit `CTRLKD_PRIVATE_CORPUS` pointed at the in-repo `TestDocs/`**
+  (via the generated scheme's Test-action environment — command-line
+  `VAR=x xcodebuild test` is blocked in that job's own sandbox) produced
+  identical results to the unset/fallback path: gated tests RUN (never
+  skip), the vacuity guards pass, `PixelOracleAppEngineTests` runs its
+  full region-diff enumeration for real.
+- **A deliberately incomplete corpus** (a scratch copy with exactly one
+  `ws7/` file and empty `ws4/`/`oracle/` directories) FAILS LOUD, never
+  skips the run as a whole: `PrivateCorpusArmedVacuityGuardTests` names
+  exactly what's missing (`"vacuity guard: armed but TestDocs/ws4
+  produced zero fixtures"`, `"...TestDocs/oracle/python-printed-
+  manifest.json parsed to zero entries"`), and tests that read a specific
+  missing file throw a real, named `NSCocoaErrorDomain Code=260` ("no such
+  file") rather than swallowing it. One nuance worth knowing: a handful of
+  *individual* `@Test(arguments:)` methods whose own argument list comes
+  from the (now-empty) oracle manifest — e.g. `OracleByteParityTests
+  .tier1BareByteParity` — still report "skipped: No test cases found" for
+  themselves specifically, exactly the `try?`-degrades-to-`[]` shape this
+  file's own doc comments already name as the reason
+  `PrivateCorpusArmedVacuityGuardTests` has to exist as a separate,
+  always-armed-checked suite: it is the one guaranteed to turn the overall
+  run red when a corpus is present but broken, even though a few
+  individual parameterized methods downstream of the SAME missing data
+  degrade to a clean-looking skip on their own.

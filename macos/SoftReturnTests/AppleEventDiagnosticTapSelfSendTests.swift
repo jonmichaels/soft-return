@@ -23,7 +23,7 @@ import Testing
 /// Return at <external symbol>"), taking the whole test run down with it. Per the job-174
 /// brief's own fallback ("if it does not [work], do not burn the job on it: assert install-time
 /// records only... and say plainly in the report which assertions executed") and the
-/// job-sizing policy (`docs/RUNBOOK.md`, ~30 min/job), this was not chased further — a crash is
+/// job-sizing policy (the internal release runbook (not part of this repo), ~30 min/job), this was not chased further — a crash is
 /// itself evidence for the report, not something to spend the rest of the job symbolicating.
 ///
 /// So: ONLY the install-time assertions below actually executed for this job. No arrival
