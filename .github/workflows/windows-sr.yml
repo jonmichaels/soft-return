@@ -1,0 +1,30 @@
+# Experimental Windows build of the sr CLI. MANUAL TRIGGER ONLY
+# (workflow_dispatch) — this repo deliberately runs no CI on push.
+# The artifact is unverified: no Windows machine has run it. See README.
+name: Windows sr (experimental)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-build:
+    runs-on: windows-2022
+    steps:
+      - uses: compnerd/gha-setup-swift@main
+        with:
+          swift-version: "6.3"
+      - uses: actions/checkout@v4
+      - run: git config --global core.protectNTFS false
+      - run: swift build -c release --static-swift-stdlib --product sr
+      - name: Collect exe and dependency report
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item .build\release\sr.exe dist\sr.exe
+          & "$env:VSINSTALLDIR\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" /dependents dist\sr.exe > dist\DEPENDENCIES.txt 2>&1
+          if ($LASTEXITCODE -ne 0) { "dumpbin unavailable; list not generated" | Out-File dist\DEPENDENCIES.txt }
+          Get-Content dist\DEPENDENCIES.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sr-windows-x86_64
+          path: dist/
