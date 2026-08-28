@@ -16,7 +16,11 @@ jobs:
           swift-build: 6.3-RELEASE
       - uses: actions/checkout@v4
       - run: git config --global core.protectNTFS false
-      - run: swift build -c release --static-swift-stdlib --product sr
+      - name: Install static zlib (vcpkg)
+        run: vcpkg install zlib:x64-windows-static
+      - name: Build
+        shell: pwsh
+        run: swift build -c release --static-swift-stdlib --product sr -Xlinker "-L${env:VCPKG_INSTALLATION_ROOT}\installed\x64-windows-static\lib"
       - name: Collect exe and dependency report
         shell: pwsh
         run: |
