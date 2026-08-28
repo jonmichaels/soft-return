@@ -10,9 +10,9 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 3.2.0 is the b23 exports-overhaul batch
-/// (4.0.0 is reserved: Jon's ruling 2026-08-17, sr becomes 4.0.0 at the Soft Return
-/// v4.0.0 public release, not before) (2026-08-17,
+/// CLI's user-visible contract. 4.0.0 is the Soft Return v4.0.0 public release
+/// (Jon's ruling 2026-08-17, executed 2026-08-28: sr becomes 4.0.0 at the public
+/// release). 3.2.0 was the b23 exports-overhaul batch (2026-08-17,
 /// ctrl-kd's own modern-reflow branch, merged upstream at e9f6c42): Modern paragraph
 /// assembly (typed-paragraph manuscripts reflow into real paragraphs; verse/stanza runs
 /// keep their forced breaks; no hard line breaks inside a paragraph in ANY Modern format);
@@ -57,7 +57,7 @@ import CtrlKD
 /// capacity/top/lead from `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose);
 /// 1.1.0 added the note-selection flags and the expanded --diagnose fields; 1.0.0 was the
 /// first CLI release.
-public let srVersion = "3.2.0"
+public let srVersion = "4.0.0"
 
 /// The `ctrl-kd` release this port is verified against. A constant, updated by hand when a
 /// sync job pins the port to a new Python release — it is a claim about which reference the
@@ -88,7 +88,7 @@ public let slantBanner = """
 /// between releases, this fresh"; the parity says which reference the vectors came from.
 public func versionLine(devDate: String?) -> String {
     let version = devDate.map { "\(srVersion) (dev \($0))" } ?? srVersion
-    return "sr \(version) (ctrl-kd parity \(ctrlKDParity))"
+    return "sr v\(version) (ctrl-kd parity \(ctrlKDParity))"
 }
 
 /// What `--version` actually prints: the banner, then the version line.
