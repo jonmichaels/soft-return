@@ -18,8 +18,8 @@ import Foundation
 ///
 /// Job 219 (`SoftReturnDiagnostics`, finding B8): moved into the diagnostics module and
 /// `#if DEBUG` (compiled out of Release entirely). The probe path — previously a HARDCODED
-/// developer-workstation literal path compiled into the
-/// shipping binary — must not ship in ANY config, so it is now read from the environment
+/// worker-machine literal (a hardcoded absolute path to a developer's own scratch file)
+/// compiled into the shipping binary — must not ship in ANY config, so it is now read from the environment
 /// (`SR_BACKFILL_SELFTEST_PATH`) instead of a compiled-in literal; there is no default fallback
 /// outside the app's own container, so an unset variable degrades to "not provided" rather than
 /// silently pointing at a path that only ever existed on one developer's machine. The old

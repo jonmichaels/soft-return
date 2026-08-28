@@ -27,15 +27,16 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT licensed. See LICENSE.</string>
 
-	<!-- Job 532 (Jon's ruling: Sparkle IS in b34) -- SUPublicEDKey is Jon's own generated
-	     EdDSA public key, verbatim. SUFeedURL points at the beta branch's appcast; a future
-	     stable-channel build switches this to main's appcast (not done here). No
-	     SUEnableAutomaticChecks key -- Sparkle's own documented default (first-launch
-	     permission-prompt) is what the brief asks for, not a custom schedule. -->
+<!-- v4-assembly merge (jobs 532+537): SUPublicEDKey is Jon's generated EdDSA public
+	     key, verbatim (job 532). SUFeedURL is the ONE public appcast on the public repo's
+	     main branch (job 537, rulings 20-21): beta releases live in the same appcast tagged
+	     <sparkle:channel>beta</sparkle:channel>; AppDelegate's allowedChannels delegate is
+	     the opt-in. No SUEnableAutomaticChecks -- Sparkle's documented first-launch
+	     permission prompt is the ruled behavior. -->
 	<key>SUPublicEDKey</key>
 	<string>kr6g0tYp6dxnphj1ALl88fhaVn2VWho+OAZpK239GB4=</string>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/jonmichaels/soft-return/beta/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/jonmichaels/soft-return/main/appcast.xml</string>
 
 	<!-- Viewer, not editor: the app never writes back to what it opens. Export is the
 	     only path out, and it always goes through a save panel the user drove. -->

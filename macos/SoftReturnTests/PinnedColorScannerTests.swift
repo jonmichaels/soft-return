@@ -1,27 +1,26 @@
 import Foundation
 import Testing
 
-/// Wires `tools/check-pinned-colors.sh` into the suite so it runs on every test pass instead of
-/// only when someone remembers to invoke it by hand — the exact failure mode that let b28 ship
-/// with invisible Modern footnotes and endnotes (Jon, 2026-08-24: "Text colors must be pinned
-/// if the background color is pinned"). The script itself explains why this has to be a SOURCE
-/// scan and not a rendering comparison: the headless Mac composites in Light Mode, so no image
-/// test on this host can ever see a colour that only misbehaves in Dark Mode.
+/// Wires `macos/scripts/check-pinned-colors.sh` into the suite so it runs on every test pass
+/// instead of only when someone remembers to invoke it by hand — the exact failure mode that
+/// let b28 ship with invisible Modern footnotes and endnotes (Jon, 2026-08-24: "Text colors
+/// must be pinned if the background color is pinned"). The script itself explains why this has
+/// to be a SOURCE scan and not a rendering comparison: the headless Mac composites in Light
+/// Mode, so no image test on this host can ever see a colour that only misbehaves in Dark Mode.
 ///
 /// This test does not reimplement the check. It shells out to the same script that was already
-/// live-fired both directions on the dev host (planted violation caught, clean tree passes) and
+/// live-fired both directions (planted violation caught, clean tree passes) and
 /// fails loudly — never skips — if that script reports a violation or cannot be run at all.
 @Suite struct PinnedColorScannerTests {
     static var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // SoftReturnTests
             .deletingLastPathComponent()   // macos
-            .deletingLastPathComponent()   // repo root (job 531: macos/ restructure -- tools/
-                                            // stayed at repo root, did not move into macos/)
+            .deletingLastPathComponent()   // repo root (job 531: macos/ restructure)
     }
 
     @Test func noThemeDependentColourIsDrawnOnPinnedPaper() throws {
-        let script = Self.repoRoot.appendingPathComponent("tools/check-pinned-colors.sh")
+        let script = Self.repoRoot.appendingPathComponent("macos/scripts/check-pinned-colors.sh")
         #expect(FileManager.default.isExecutableFile(atPath: script.path),
                 "\(script.path) is missing or not executable -- the pinned-ink guard cannot run")
 

@@ -84,7 +84,7 @@ let italicOn: [UInt8] = [0x19]
 }
 
 @Test func footnoteMarkerStaysInlineBeforeABlankParagraphLine() {
-    // b26 fix, byte-verified against LYING.WS (the private paper-scan reference's pd-samples): a footnote's own
+    // b26 fix, byte-verified against LYING.WS (the reference corpus's pd-samples): a footnote's own
     // bytes contribute NOTHING to the cleaned stream (`symmetricBlocks`), so its `.fnref`
     // mark's offset is always wherever the cleaned stream already was -- the ANCHOR text's
     // own end. When that anchor sits at the end of a line immediately followed by a blank

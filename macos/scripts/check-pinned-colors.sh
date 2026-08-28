@@ -8,8 +8,9 @@
 # The paper is pinned white (`PagedDocumentView`: `view.backgroundColor =
 # .white // paper, not a UI surface`), but the text used `NSColor.textColor`,
 # which is not a colour -- it is a promise to be black in Light Mode and WHITE
-# in Dark Mode. Jon works in Dark Mode in the early morning and late evening,
-# so he saw a blank page; anyone checking at midday saw nothing wrong.
+# in Dark Mode. Whether the bug is visible depends entirely on which mode
+# whoever is looking happens to be in at the time -- it can ship unnoticed
+# for as long as everyone checking it happens to be in Light Mode.
 #
 # THE TESTS CANNOT CATCH THIS. The headless Mac composites in Light Mode, so
 # three rounds of rendering tests passed while the bug was live. That is why
@@ -20,7 +21,7 @@
 # canvas *around* the paper). They must never be used for anything drawn ON
 # the paper, or exported.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 # Semantic AppKit colours: these RESOLVE DIFFERENTLY per theme.
 DYNAMIC='NSColor\.(textColor|labelColor|secondaryLabelColor|tertiaryLabelColor|quaternaryLabelColor|controlTextColor|selectedTextColor|selectedControlTextColor|placeholderTextColor|headerTextColor|textBackgroundColor|controlBackgroundColor|separatorColor|gridColor|linkColor|shadowColor)\b'

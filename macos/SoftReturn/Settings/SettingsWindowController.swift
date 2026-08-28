@@ -63,10 +63,36 @@ final class SettingsWindowController: NSWindowController {
     private var inlineStylingCheckbox: NSButton!
     private var picturesPopup: NSPopUpButton!
     private var pageNumbersPopup: NSPopUpButton!
+    /// Stored (not a `buildForm`-local `let`, unlike `topGrid`) because job 537's beta row
+    /// needs to anchor to its bottom from outside `buildForm` — see `addBetaVersionsRow(to:)`.
+    private var bottomGrid: NSGridView!
 
-    init(settings: SettingsStore = .shared, quickLookDefaultsOverride: UserDefaults? = nil) {
+    /// Job 537 (rulings 20-21): the Option-revealed "Include beta versions" checkbox and its
+    /// row, present in `window?.contentView` only while shown — see
+    /// `updateBetaVersionsCheckboxVisibility()`. `nil` in both cases means "not currently
+    /// built", not "hidden but present" — the row is added/removed from the hierarchy rather
+    /// than toggling `isHidden`, so a hidden row costs the window zero height (plain
+    /// `NSView.isHidden` does not collapse manually-constrained space the way an `NSStackView`
+    /// arrangement would; add/remove sidesteps that entirely).
+    private var betaVersionsRow: NSView?
+    private var betaVersionsCheckbox: NSButton?
+    /// Ties `bottomGrid`'s bottom to `content`'s bottom. Active whenever `betaVersionsRow` is
+    /// absent (bottomGrid is the last thing in the form); deactivated in favor of a constraint
+    /// from the beta row's bottom when it's present. Never both at once — that would
+    /// over-constrain `content`'s height.
+    private var bottomGridBottomConstraint: NSLayoutConstraint!
+
+    /// `nil` (production) reads the real, current `⌥` state via `NSEvent.modifierFlags` at
+    /// each `showWindow(_:)` call. A test injects a fixed value instead — the same seam
+    /// `quickLookDefaultsOverride` already uses for the app-group container, because real
+    /// modifier-key state isn't something a headless test process can drive.
+    private let optionKeyHeldOverride: Bool?
+
+    init(settings: SettingsStore = .shared, quickLookDefaultsOverride: UserDefaults? = nil,
+         optionKeyHeldOverride: Bool? = nil) {
         self.settings = settings
         self.quickLookDefaultsOverride = quickLookDefaultsOverride
+        self.optionKeyHeldOverride = optionKeyHeldOverride
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: SettingsWindowController.contentWidth, height: 460),
             // Fixed width: no .resizable. A form with one right-aligned label column has
@@ -160,7 +186,7 @@ final class SettingsWindowController: NSWindowController {
         caption.setAccessibilityIdentifier("settings-font-caption")
         caption.translatesAutoresizingMaskIntoConstraints = false
 
-        let bottomGrid = NSGridView(views: [
+        bottomGrid = NSGridView(views: [
             [label("Font:"), fontPopup],
             [label("Size:"), sizePopup],
             [label("Default Export Formats:"), formatStack()],
@@ -183,6 +209,7 @@ final class SettingsWindowController: NSWindowController {
         content.addSubview(separatorBox)
         content.addSubview(caption)
         content.addSubview(bottomGrid)
+        bottomGridBottomConstraint = bottomGrid.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20)
         NSLayoutConstraint.activate([
             topGrid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
             topGrid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
@@ -199,18 +226,14 @@ final class SettingsWindowController: NSWindowController {
             bottomGrid.topAnchor.constraint(equalTo: caption.bottomAnchor, constant: 16),
             bottomGrid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             bottomGrid.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
-            bottomGrid.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+            bottomGridBottomConstraint,
         ])
         window.contentView = content
         loadCurrentValues()
+        // Job 537: decides whether the beta-versions row is part of the form at all, before
+        // the very first sizing pass below — see `updateBetaVersionsCheckboxVisibility()`.
+        updateBetaVersionsCheckboxVisibility()
 
-        // Size the window to the form rather than guessing a height. Eight rows, one of
-        // them a five-checkbox stack, do not fit the number that was hardcoded here — the
-        // content simply ran off the bottom. Fixed WIDTH is the spec's requirement; a fixed
-        // height was never asked for and was only ever going to clip.
-        content.layoutSubtreeIfNeeded()
-        let fitted = content.fittingSize
-        window.setContentSize(NSSize(width: Self.contentWidth, height: fitted.height))
         // Job 397 (Jon F9): fixes the bottom-left-corner spawn — an unpositioned
         // `NSWindow(contentRect:)` takes (0, 0) as a literal screen-space origin, not "let
         // AppKit decide". Unlike the transient windows (About, CLI Help, …), this is a form a
@@ -282,6 +305,107 @@ final class SettingsWindowController: NSWindowController {
             stack.addArrangedSubview(check)
         }
         return stack
+    }
+
+    // MARK: - Beta versions (job 537, rulings 20-21)
+
+    /// Re-checked every time the window is (re)shown, not just once at construction:
+    /// `AppDelegate` keeps one `SettingsWindowController` alive and reuses it across opens
+    /// (`showWindow(_:)` on the same instance), so a construction-time-only check would never
+    /// see a later open held with `⌥` down. This IS one of the two AppKit-supported shapes the
+    /// job brief names ("shown on open-with-Option") rather than a live `flagsChanged` monitor
+    /// — chosen over the live alternative because it needs no event-monitor lifecycle
+    /// (install on key, remove on resign-key/close) and no live window-resize-while-held
+    /// animation, and it is trivially testable via `optionKeyHeldOverride` (real `⌥` state
+    /// cannot be driven from a headless test process either way).
+    override func showWindow(_ sender: Any?) {
+        updateBetaVersionsCheckboxVisibility()
+        super.showWindow(sender)
+    }
+
+    private func currentOptionHeld() -> Bool {
+        optionKeyHeldOverride ?? NSEvent.modifierFlags.contains(.option)
+    }
+
+    /// Pure so it's testable without a real window: `⌥`-revealed while off, but if the
+    /// preference is already ON the checkbox stays visible unconditionally — a beta opter-in
+    /// should be able to find their way back off without knowing the trick that got them in.
+    static func shouldShowBetaVersionsCheckbox(preferenceOn: Bool, optionHeld: Bool) -> Bool {
+        preferenceOn || optionHeld
+    }
+
+    /// Adds or removes the beta-versions row from `content` to match
+    /// `shouldShowBetaVersionsCheckbox`, then re-fits the window to whatever the form now
+    /// contains. Add/remove rather than `isHidden`: a plain `NSView`'s manually-added
+    /// constraints stay active even while it's hidden (unlike an `NSStackView`'s arranged
+    /// subviews, which collapse automatically), so toggling `isHidden` alone would leave a
+    /// permanent gap at the bottom of the window whether the row was showing or not.
+    private func updateBetaVersionsCheckboxVisibility() {
+        guard let window, let content = window.contentView else { return }
+        let shouldShow = Self.shouldShowBetaVersionsCheckbox(
+            preferenceOn: settings.includeBetaVersions, optionHeld: currentOptionHeld())
+
+        switch (shouldShow, betaVersionsRow) {
+        case (true, .none):
+            addBetaVersionsRow(to: content)
+        case (false, .some(let row)):
+            removeBetaVersionsRow(row)
+        case (true, .some):
+            // Already built (a reopen with the same visibility outcome) — still resync the
+            // checked state in case something wrote to `settings` while the row existed.
+            betaVersionsCheckbox?.state = settings.includeBetaVersions ? .on : .off
+        case (false, .none):
+            break
+        }
+        resizeWindowToFitContent()
+    }
+
+    private func addBetaVersionsRow(to content: NSView) {
+        let checkbox = NSButton(checkboxWithTitle: "Include beta versions",
+                                target: self, action: #selector(includeBetaVersionsToggled(_:)))
+        checkbox.setAccessibilityIdentifier("include-beta-versions-checkbox")
+        checkbox.setAccessibilityLabel("Include beta versions when checking for updates")
+        checkbox.state = settings.includeBetaVersions ? .on : .off
+        betaVersionsCheckbox = checkbox
+
+        let row = NSStackView(views: [label("Updates:"), checkbox])
+        row.orientation = .horizontal
+        row.alignment = .firstBaseline
+        row.spacing = 10
+        row.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(row)
+        betaVersionsRow = row
+
+        bottomGridBottomConstraint.isActive = false
+        NSLayoutConstraint.activate([
+            row.topAnchor.constraint(equalTo: bottomGrid.bottomAnchor, constant: 16),
+            row.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            row.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
+            content.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: 20),
+        ])
+    }
+
+    private func removeBetaVersionsRow(_ row: NSView) {
+        row.removeFromSuperview()
+        betaVersionsRow = nil
+        betaVersionsCheckbox = nil
+        bottomGridBottomConstraint.isActive = true
+    }
+
+    /// Size the window to the form rather than guessing a height. Eight rows, one of them a
+    /// five-checkbox stack, do not fit a hardcoded number — the content simply runs off the
+    /// bottom. Fixed WIDTH is the spec's requirement; a fixed height was never asked for and
+    /// was only ever going to clip. Re-run whenever the beta row is added/removed, not just
+    /// once at construction.
+    private func resizeWindowToFitContent() {
+        guard let window, let content = window.contentView else { return }
+        content.layoutSubtreeIfNeeded()
+        let fitted = content.fittingSize
+        window.setContentSize(NSSize(width: Self.contentWidth, height: fitted.height))
+    }
+
+    @objc private func includeBetaVersionsToggled(_ sender: NSButton) {
+        settings.includeBetaVersions = sender.state == .on
     }
 
     // MARK: - Loading and storing

@@ -4835,7 +4835,7 @@ enum DocumentRenderer {
         // rendering is additionally the ACTUAL visible ink for these glyphs
         // (`PagedDocumentView.drawVectorGraphics`'s vector fills, gated `isPrintedStyle`) and
         // sits under a byte-exact Tier-1 gate (`OracleByteParityTests`, "NO '?' box corners,
-        // ever," `docs/RUNBOOK.md`) — leaving it untouched entirely removes any risk to that
+        // ever," the internal release runbook (not part of this repo)) — leaving it untouched entirely removes any risk to that
         // gate from even a sub-point nudge. Modern has no such vector overlay (`graphicChars`
         // glyphs stay live text there, this job's own root cause) and no byte-exact gate. The
         // pre-existing `anyFontChanged` split (Printed's own Courier -> Courier New coverage

@@ -21,8 +21,12 @@ import Testing
 // MARK: - 1. Info.plist: the exact values, verbatim
 
 @Test func infoPlistDeclaresTheExactSparkleFeedAndKey() {
+    // v4-assembly merge (job 537, rulings 20-21): ONE public appcast on the public repo's
+    // `main` branch, not a separate per-branch feed -- beta releases live in the same appcast,
+    // tagged <sparkle:channel>beta</sparkle:channel>, admitted via AppDelegate's
+    // allowedChannels(for:) delegate. Was `.../beta/appcast.xml` under job 532 alone.
     #expect(Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ==
-        "https://raw.githubusercontent.com/jonmichaels/soft-return/beta/appcast.xml")
+        "https://raw.githubusercontent.com/jonmichaels/soft-return/main/appcast.xml")
     #expect(Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ==
         "kr6g0tYp6dxnphj1ALl88fhaVn2VWho+OAZpK239GB4=")
 }
@@ -36,7 +40,7 @@ import Testing
     #expect(delegate.sparkleUpdaterExistsForTesting,
             "AppDelegate's real launch never constructed the Sparkle updater controller")
     #expect(delegate.sparkleFeedURLForTesting ==
-        URL(string: "https://raw.githubusercontent.com/jonmichaels/soft-return/beta/appcast.xml"),
+        URL(string: "https://raw.githubusercontent.com/jonmichaels/soft-return/main/appcast.xml"),
             "the updater's own feedURL must resolve from Info.plist's SUFeedURL, not just exist there")
     // `XCTestConfigurationFilePath` is set for this very process, so `AppDelegate`'s own
     // `isTestHost` check must have kept `startingUpdater: false` here -- an unstarted updater

@@ -5,6 +5,8 @@ import SoftReturnCLI
 import Glibc
 #elseif canImport(Darwin)
 import Darwin
+#elseif canImport(ucrt)
+import ucrt
 #endif
 
 // The whole executable: bind the real filesystem and the real streams, run, exit. Every
@@ -39,7 +41,14 @@ let environment = CLIEnvironment(
     // (every script and CI run) answers false, which is what routes those to the refuse
     // branch instead of hanging on a prompt nobody can see.
     stdinIsTTY: {
-        isatty(fileno(stdin)) != 0
+        {
+#if canImport(ucrt)
+            // Windows CRT prefixes these with underscores (research-windows-sr, 2026-08-28).
+            return _isatty(_fileno(stdin)) != 0
+#else
+            return isatty(fileno(stdin)) != 0
+#endif
+        }()
     },
     readLine: {
         Swift.readLine()

@@ -49,7 +49,7 @@ enum OracleManifest {
     /// renderer tail-matches against the document's own directory and ancestors, and a MISS
     /// is ruled to report-and-placeholder, never fail. A render done from the wrong location
     /// therefore produces plausible-looking output whose only tell is the hash — this is the
-    /// per-entry record the engine host's own manifest refresh adds so the app side can assert
+    /// per-entry record the full-archive manifest refresh adds so the app side can assert
     /// resolution STATE directly instead of leaving a silent placeholder to surface only as
     /// an uninterpretable byte mismatch.
     struct PixManifestEntry {
@@ -405,7 +405,7 @@ enum OracleManifest {
     /// the corpus.
     ///
     /// Jon's ruling, 2026-08-19 ("Go with A"), a dated delegation of division of labor: the
-    /// full-corpus truth is the out-of-repo engine sweep (1236/1236 byte-exact, run outside this
+    /// full-corpus truth is the full-archive engine sweep (1236/1236 byte-exact, run outside this
     /// repo), not this in-repo gate; this repo's own truth is the Tier-1 120-cell subset
     /// (`OutputParityTests.tier1Cells`). `tier2BareByteParity`/`tier2SawyerByteParity` staying a
     /// clean env-gated no-op here is the RULED shape of that division, not undone coverage debt.

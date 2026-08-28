@@ -139,7 +139,11 @@ private struct BatchView: View {
                 // a form and a fixed-aspect page, and neither improves by being wider.
                 .frame(minWidth: 360, maxWidth: .infinity)
         }
-        .frame(minWidth: 1040, minHeight: 560)
+        // Job 536 (Part A3): bumped from 518/521's 560 to 575 — `optionsBox`'s spacing
+        // restored to match `formatsBox` (6pt, up from 521's tightened 2pt) needs more room
+        // than 560 leaves at this minimum size; 575 keeps job 518's own "nothing needs to
+        // scroll to be seen" invariant true rather than letting a scrollbar back in.
+        .frame(minWidth: 1040, minHeight: 575)
         .onDrop(of: [.fileURL], isTargeted: $isTargetedForDrop) { providers in
             handleDrop(providers)
         }
@@ -193,8 +197,15 @@ private struct BatchView: View {
     private var controlsColumn: some View {
         // Job 521 (N9): tightened from job 518's original 12pt to 8pt, alongside
         // `optionsBox`'s own tightened spacing — measured margin against the real hosted
-        // window at the window's declared 560pt minimum height (see `optionsBox`'s own
-        // comment for why this box needed the room).
+        // window at the window's declared (then-560, now 575 per job 536) minimum height
+        // (see `optionsBox`'s own comment for why this box needed the room).
+        //
+        // Job 536 (v4.0.0 UI notes, Part A3, Jon's ruling): `.frame(maxHeight: .infinity,
+        // alignment: .center)` below centers this whole section stack vertically in the
+        // column now that `optionsBox` is taller (matching Formats' row spacing) — without
+        // it, a plain VStack sizes to its own content height and sits pinned to the top of
+        // whatever extra room the window has, leaving all the slack as one gap at the
+        // bottom instead of split evenly top and bottom.
         VStack(alignment: .leading, spacing: 8) {
             detailsBox
             HStack(alignment: .top, spacing: 12) {
@@ -205,6 +216,7 @@ private struct BatchView: View {
             destinationBox
         }
         .padding(16)
+        .frame(maxHeight: .infinity, alignment: .center)
     }
 
     private var detailsBox: some View {
@@ -328,13 +340,13 @@ private struct BatchView: View {
     /// for a `Toggle`/`Picker` bound to persistent `@Published` state).
     private var optionsBox: some View {
         GroupBox("Options") {
-            // Job 521 (N9): tightened from job 375's original 6pt to fit the Sentence
-            // Spacing row this job adds within the window's declared 560pt minimum height
-            // (Jon, same wording as job 518's own ask: "shrink the length so that all
-            // options in the left column display without a scrollbar") — measured against
-            // the real hosted window (`Job518BatchLayoutTests
-            // .leftColumnContentFitsWithoutScrollingAtMinimumWindowSize`), not guessed.
-            VStack(alignment: .leading, spacing: 2) {
+            // Job 536 (Part A3, Jon's ruling): back to 6pt, matching `formatsBox`'s own
+            // inter-row spacing — one spacing rhythm across every section in this column now,
+            // superseding job 521's tightening (which had traded that match away to fit the
+            // Sentence Spacing row within the window's old declared minimum height without a
+            // scrollbar; `controlsColumn`'s new vertical centering is what absorbs the extra
+            // height this restores).
+            VStack(alignment: .leading, spacing: 6) {
                 Toggle("Headers/Footers", isOn: $model.headers)
                     .toggleStyle(.checkbox)
                     .accessibilityIdentifier("batch-headers-checkbox")

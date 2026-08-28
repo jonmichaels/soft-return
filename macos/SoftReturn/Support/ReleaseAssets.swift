@@ -6,7 +6,7 @@ import Foundation
 /// matching (`GitHubUpdateFeed.parse`) both already encode these same two requirements
 /// independently; this type exists so a THIRD place (the release-time completeness check,
 /// `Scripts/verify-release-assets.py`) has one thing to read instead of re-deriving the rules
-/// from those call sites by hand. `docs/RUNBOOK.md`'s release chain runs that script before
+/// from those call sites by hand. the internal release runbook (not part of this repo)'s release chain runs that script before
 /// undraft — see its own "Release-asset completeness gate" step.
 enum ReleaseAssets {
     /// A single release-asset requirement: either an EXACT filename (case-insensitive, same

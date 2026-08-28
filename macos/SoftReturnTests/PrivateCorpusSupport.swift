@@ -116,7 +116,19 @@ enum PrivateCorpusSupport {
     }
 }
 
-// MARK: - PixelOracleAppEngine — restored, minimal surface (job 534/535)
+// MARK: - PixelOracleAppEngine / MultipageMargins — restored for this public snapshot
+//
+// Restored verbatim from commit 9e126aa (job-535, the verified public birth tree) for
+// public-v4-candidate. This tree strips PixelOracleAppEngineTests.swift and
+// MultipageMarginTests.swift (both private-corpus-tier files, docs/TESTING.md /
+// Monorepo-Layout-Proposal.md section 3.3), but surviving public/sawyer-armed files still
+// call these two shim types: `PixelOracleAppEngine.renderApp`/`renderEngine` (used by
+// TitleAscenderTests, PrintedStructuralParityTests) and `MultipageMargins.testDocsDirectory`
+// (used by AppleEventDispatchTests, AppleEventLifecycleBreadcrumbsTests,
+// AppleEventVirginDispatchTests, ConvertCommandReceiverDispatchTests, ExportCommandTests,
+// PageSettingsPickerTests). The private canonical tree does NOT carry
+// this shim — it has the two full original files instead (docs/TESTING.md, job-536) — so this
+// block is a public-snapshot-only restoration, not a permanent addition to the private tree.
 
 /// PIXEL ORACLE — first customer: the app's real view pipeline vs the engine's real
 /// `emitPDF`. Job 223's original adapter, `SoftReturnTests/PixelOracleAppEngineTests.swift`,

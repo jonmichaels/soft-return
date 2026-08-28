@@ -9,7 +9,7 @@
 # Job 532 (monorepo birth, job-c36053d): the engine used to be a REMOTE SPM
 # pin, which Xcode cloned into a disposable "SourcePackages/checkouts/
 # soft-return" directory under DerivedData — this script used to derive that
-# path from $BUILD_DIR (RUNBOOK "two SPM checkouts" trap) and build from
+# path from $BUILD_DIR (the internal runbook "two SPM checkouts" trap) and build from
 # there. The engine now lives IN-TREE at this repo's own root
 # (`Project.swift`'s `.package(path: "../")`) — there is no checkout to find
 # any more; the engine root IS `${SRCROOT}/..`, this same working tree.

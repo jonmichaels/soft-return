@@ -172,9 +172,10 @@ struct Job522BatchPulldownSizeSweepTests {
     }
 
     @Test @MainActor func pulldownGeometryAtMinimumSizeMatchesDefault() async throws {
+        // Job 536: the window's declared minimum height moved 560 -> 575 (Part A3).
         try await Self.assertMatchesDefault(
-            contentSize: NSSize(width: 1040, height: 560), seededAutosaveFrame: nil,
-            label: "declared minimum (1040x560)")
+            contentSize: NSSize(width: 1040, height: 575), seededAutosaveFrame: nil,
+            label: "declared minimum (1040x575)")
     }
 
     @Test @MainActor func pulldownGeometryAtLargeSizeMatchesDefault() async throws {

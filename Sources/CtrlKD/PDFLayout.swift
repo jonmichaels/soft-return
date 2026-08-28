@@ -2387,7 +2387,7 @@ private func layoutPrintedPages(
     // FIRST endnote, and it is NOT unconditional. WS7's note face is 12-point, so ONE note
     // line advances 120 decipoints — the 2026-08-20 measurement that put a blank line here
     // read the natural 240dp two-line advance as "24pt, one blank line" and generalised it.
-    // Re-measured 2026-08-23 against both WS7 captures (the private paper-scan reference, WordStar/ws7-prints/v1/):
+    // Re-measured 2026-08-23 against both WS7 captures (reference corpus WordStar/ws7-prints/v1/):
     //
     //   -SCREEN.pcl  "1. Footnote" V=7080 -> "(1) Endnote"  V=7320 = 240dp
     //                = ONE BLANK LINE, endnotes joining a FOOTNOTE AREA.

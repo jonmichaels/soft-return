@@ -24,19 +24,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var downloadProgressWindowController: DownloadProgressWindowController?
     private var aboutWindowController: AboutWindowController?
 
-    /// Job 532 (Jon's ruling: Sparkle IS in b34) — live: `Info.plist` carries a real
-    /// `SUFeedURL`/`SUPublicEDKey` (see that file's own comment) and `checkForUpdates(_:)`
-    /// below forwards straight to this controller. Started with `startingUpdater: !isTestHost`
-    /// (`isTestHost` in `applicationWillFinishLaunching`) rather than unconditionally `true`:
-    /// starting a real `SPUUpdater` runs Sparkle's own first-launch automatic-checks
-    /// permission prompt (a real, blocking `NSAlert`) the moment nothing has yet decided
-    /// `SUEnableAutomaticChecks` — exactly the scenario every fresh test-host launch is in,
-    /// since none of them ever click through it. `SparkleUpdateWiringTests.swift` is hosted
-    /// inside a real launch (same reasoning `SparkleInertnessTests.swift`, job 285's version
-    /// of this file, already used) and needs the controller to EXIST either way, so detecting
-    /// the test host rather than gating on `#if DEBUG` keeps a real Debug build's manual
-    /// testing fully live while every automated suite run stays exactly as network- and
-    /// alert-silent as job 285's dormant wiring always was.
+/// v4-assembly (jobs 532+537 merged): LIVE updater with channel policy. Started with
+    /// `startingUpdater: !isTestHost` (job 532): a real launch starts Sparkle (its own
+    /// documented first-launch automatic-checks permission prompt included); every automated
+    /// test-host launch stays network- and alert-silent, since Sparkle's prompt is a real
+    /// blocking NSAlert no suite ever clicks through. `updaterDelegate: self` (job 537) wires
+    /// `allowedChannelsForUpdater(_:)` so the Option-revealed "Include beta versions"
+    /// preference admits channel-tagged beta items; Info.plist carries the real
+    /// `SUFeedURL`/`SUPublicEDKey`. `SparkleUpdateWiringTests.swift` asserts this wiring from
+    /// inside a test-host launch, where the controller exists but is unstarted.
     private var sparkleUpdaterController: SPUStandardUpdaterController?
 
     // MARK: - Lifecycle
@@ -130,12 +126,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
-        // Job 532: instantiate the Sparkle updater controller — started for a real launch,
-        // left dormant for a test-host launch. See the property's own doc comment for why.
+// v4-assembly: started for a real launch, dormant for a test host (job 532); delegate
+        // wired for channel policy (job 537). See the property's doc comment.
         let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         sparkleUpdaterController = SPUStandardUpdaterController(
             startingUpdater: !isTestHost,
-            updaterDelegate: nil,
+            updaterDelegate: self,
             userDriverDelegate: nil
         )
 
@@ -585,6 +581,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var sparkleFeedURLForTesting: URL? { sparkleUpdaterController?.updater.feedURL }
     var sparkleUpdaterExistsForTesting: Bool { sparkleUpdaterController != nil }
     var sparkleCanCheckForUpdatesForTesting: Bool { sparkleUpdaterController?.updater.canCheckForUpdates ?? false }
+    /// Job 537's `allowedChannels(for:)` test seam, kept to this same Foundation-typed shape:
+    /// the real `SPUUpdater` argument is required by `SPUUpdaterDelegate`'s own signature but
+    /// is unused by `allowedChannels(for:)` below, so this just calls through the real launch's
+    /// controller and hands back the `Set<String>` result -- no `SPUUpdater` value ever crosses
+    /// into `SoftReturnTests`, same reasoning as the three accessors above.
+    @MainActor
+    var allowedChannelsForTesting: Set<String>? {
+        guard let updater = sparkleUpdaterController?.updater else { return nil }
+        return allowedChannels(for: updater)
+    }
 
     @IBAction func sendInterfaceNote(_ sender: Any?) {
         InterfaceNoteSender.presentComposer()
@@ -601,4 +607,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[SoftReturn] view tree: %@", url.path)
     }
     #endif
+}
+
+// MARK: - SPUUpdaterDelegate (job 537)
+
+extension AppDelegate: SPUUpdaterDelegate {
+    /// The channel opt-in (rulings 20-21): all logic lives in `SparkleChannelPolicy`, a pure
+    /// function of the one user preference, so it is testable without a real updater. Reads
+    /// `SettingsStore.shared` fresh on every call rather than caching, matching Sparkle's own
+    /// contract that this may be called more than once per check cycle.
+    func allowedChannels(for updater: SPUUpdater) -> Set<String> {
+        SparkleChannelPolicy.allowedChannels(includeBetaVersions: SettingsStore.shared.includeBetaVersions)
+    }
 }
