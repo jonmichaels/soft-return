@@ -28,9 +28,18 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
-          Copy-Item .build\release\sr.exe dist\sr.exe
-          & "$env:VSINSTALLDIR\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" /dependents dist\sr.exe > dist\DEPENDENCIES.txt 2>&1
-          if ($LASTEXITCODE -ne 0) { "dumpbin unavailable; list not generated" | Out-File dist\DEPENDENCIES.txt }
+          $exe = Get-ChildItem .build -Recurse -Filter sr.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "sr.exe not found under .build"; exit 1 }
+          Write-Host "Found exe at $($exe.FullName)"
+          Copy-Item $exe.FullName dist\sr.exe
+          $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+          if ($dumpbin) {
+            & $dumpbin.Source /dependents dist\sr.exe | Out-File dist\DEPENDENCIES.txt
+          } else {
+            $vs = Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue | Where-Object FullName -like "*Hostx64\x64*" | Select-Object -First 1
+            if ($vs) { & $vs.FullName /dependents dist\sr.exe | Out-File dist\DEPENDENCIES.txt }
+            else { "dumpbin unavailable; dependency list not generated" | Out-File dist\DEPENDENCIES.txt }
+          }
           Get-Content dist\DEPENDENCIES.txt
       - uses: actions/upload-artifact@v4
         with:
