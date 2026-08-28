@@ -12,7 +12,8 @@ jobs:
     steps:
       - uses: compnerd/gha-setup-swift@main
         with:
-          swift-version: "6.3"
+          swift-version: swift-6.3-release
+          swift-build: 6.3-RELEASE
       - uses: actions/checkout@v4
       - run: git config --global core.protectNTFS false
       - run: swift build -c release --static-swift-stdlib --product sr
