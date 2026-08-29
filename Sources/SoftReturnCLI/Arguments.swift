@@ -10,7 +10,9 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 4.0.1 is the v4.0.1 patch release, the first cut built
+/// CLI's user-visible contract. 4.0.2 is the v4.0.2 patch release: no engine/CLI behavior
+/// change, sr carries the version bump alongside the app-only job-549 Export As 4th-column
+/// R2 rework and LayoutProof harness. 4.0.1 is the v4.0.1 patch release, the first cut built
 /// under docs/RELEASE-CHECKLIST.md top to bottom: no engine/CLI behavior change, released
 /// in lockstep with the app-side fixes it ships alongside (Export As sheet row-spacing/
 /// top-alignment, Batch window row-spacing/vertical-centering, and removal of the dead
@@ -61,7 +63,7 @@ import CtrlKD
 /// capacity/top/lead from `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose);
 /// 1.1.0 added the note-selection flags and the expanded --diagnose fields; 1.0.0 was the
 /// first CLI release.
-public let srVersion = "4.0.1"
+public let srVersion = "4.0.2"
 
 
 /// `sr v2.0.0`.

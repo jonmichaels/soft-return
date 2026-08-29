@@ -1,4 +1,4 @@
-![Soft Return icon: a red star with with a big eyed smiley face on a white background](docs/assets/sr-lg-128.png)
+![Soft Return icon: a red star with a big eyed smiley face on a white background](docs/assets/sr-lg-128.png)
 # Soft Return
 
 A macOS viewer for WordStar for DOS documents: open a file from 1987, read it as it
@@ -31,7 +31,7 @@ Georgia 14. WordStar v5-v7 with specified fonts continue to use them.
 * macOS app (Universal Binary. macOS 13 or higher): [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest/download/Soft-Return.dmg)
 * `sr` Swift CLI (Universal Binary. macOS 10.15 or higher): [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest/download/Soft-Return-CLI.pkg)
 * macOS or Linux `sr` Swift CLI via homebrew: `brew install jonmichaels/tap/sr`
-* **Experimental** Windows `sr` Swift CLI: Latest Version
+* **Experimental** Windows `sr` Swift CLI: [Latest Version](https://github.com/jonmichaels/soft-return/releases/latest/download/sr-windows-x86_64.zip)
 
 ## Siblings
 
