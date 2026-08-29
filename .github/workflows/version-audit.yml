@@ -131,8 +131,10 @@ jobs:
                           loc = ", ".join(f"{PROJECT_PATH}:{ln}" for ln, _ in cpv_matches)
                           fail("current-project-version-integer", f"CURRENT_PROJECT_VERSION={v!r} (at {loc}) is not a plain integer")
 
-          # --- Check 3: "parity" banned anywhere under Sources/ (ruling 24) ---
-          src_root = pathlib.Path("Sources")
+          # --- Check 3: "parity" banned under Sources/SoftReturnCLI/ (ruling 24
+          # is about the CLI/banner surface -- CtrlKD's engine-wide "byte parity"
+          # vocabulary is legitimate and deliberately out of scope) ---
+          src_root = pathlib.Path("Sources/SoftReturnCLI")
           if src_root.is_dir():
               hits = []
               for path in sorted(src_root.rglob("*")):
@@ -147,20 +149,27 @@ jobs:
               if hits:
                   shown = "; ".join(hits[:25])
                   more = f" ... and {len(hits) - 25} more" if len(hits) > 25 else ""
-                  fail("no-parity-in-sources", f"the word 'parity' must not appear anywhere in Sources/ (ruling 24) — {len(hits)} hit(s): {shown}{more}")
+                  fail("no-parity-in-sources", f"the word 'parity' must not appear anywhere in Sources/SoftReturnCLI/ (ruling 24) — {len(hits)} hit(s): {shown}{more}")
           else:
-              fail("sources-dir", "Sources/ directory not found")
+              fail("sources-dir", "Sources/SoftReturnCLI/ directory not found")
 
-          # --- Check 4: no other X.Y.Z-looking version in Arguments.swift ---
+
+          # --- Check 4: no other X.Y.Z-looking version in Arguments.swift,
+          # non-comment lines only (a `//`/`///` line's first non-whitespace
+          # characters are `//` -- the changelog doc-comment's historical
+          # version numbers are legitimate history and exempt) ---
           if args_text is not None and sr_version is not None:
               ver_re = re.compile(r"\d+\.\d+\.\d+")
+              comment_re = re.compile(r"^\s*//")
               stray = []
               for i, line in enumerate(args_text.splitlines(), start=1):
+                  if comment_re.match(line):
+                      continue
                   for m in ver_re.finditer(line):
                       if m.group(0) != sr_version:
                           stray.append(f"{ARGS_PATH}:{i}: {m.group(0)!r}")
               if stray:
-                  fail("no-stray-versions-in-arguments", f"found X.Y.Z-looking string(s) other than srVersion ({sr_version!r}): " + "; ".join(stray))
+                  fail("no-stray-versions-in-arguments", f"found X.Y.Z-looking string(s) other than srVersion ({sr_version!r}) on non-comment line(s): " + "; ".join(stray))
 
           print()
           if failures:

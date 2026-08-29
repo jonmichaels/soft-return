@@ -60,7 +60,7 @@ import CtrlKD
 public let srVersion = "4.0.0"
 
 
-/// `sr 2.0.0 (ctrl-kd parity 3.0.0)`.
+/// `sr v2.0.0`.
 /// FIGlet "Slant" by Glenn Chappell (1993) -- FIGlet's own co-creator, in the
 /// WordStar 7 release window. Jon's ruling: --version, --help and the README
 /// carry it; conversion output and stderr status never do. A static constant:
@@ -78,7 +78,7 @@ public let slantBanner = """
 /// computed var: a top-level `var versionLine` alongside this overload can't call it —
 /// the bare name inside the getter binds to the var itself (job 312 caught exactly that).
 /// Callers pass `srDevDate`. Each paren group is one claim: the dev date says "cut
-/// between releases, this fresh"; (ctrl-kd parity clause REMOVED, Jon 2026-08-28: it went stale the day ctrl-kd hit 4.5.0).
+/// between releases, this fresh"; (the cross-product version clause was REMOVED, Jon 2026-08-28: it went stale the day ctrl-kd hit 4.5.0).
 public func versionLine(devDate: String?) -> String {
     let version = devDate.map { "\(srVersion) (dev \($0))" } ?? srVersion
     return "sr v\(version)"
