@@ -15,6 +15,7 @@
     </item>
     <item>
       <title>Soft Return 4.0.0b34</title>
+      <sparkle:channel>beta</sparkle:channel>
       <link>https://github.com/jonmichaels/soft-return/releases/tag/v4.0.0b34</link>
       <sparkle:version>15</sparkle:version>
       <sparkle:shortVersionString>4.0.0b34</sparkle:shortVersionString>
