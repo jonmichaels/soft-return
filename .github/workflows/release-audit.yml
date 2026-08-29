@@ -15,9 +15,20 @@
 #   2. Soft-Return.dmg is byte-identical to the versioned
 #      Soft-Return-X.Y.Z.dmg (stable-name copy must be the same bytes).
 #   3. The two windows zips are byte-identical to each other; sr.exe
-#      inside is extracted and `strings`-scanned: must contain "sr v"
-#      and must NOT contain any X.Y.Z-looking string other than the
-#      tag's own version (skipped for prerelease, same as above).
+#      inside is extracted and `strings`-scanned: (a) the "sr v" banner
+#      literal must be present, (b) the tag's own version must appear
+#      as its own isolated string, (c) no OTHER isolated X.Y.Z-looking
+#      string may appear unless it co-occurs with a known toolchain/
+#      dependency marker (zlib's copyright line, "clang version", the
+#      Windows-Kits/Swift-SDK install paths) -- verified against the
+#      real v4.0.0 sr.exe (2026-08-29): Swift compiles an interpolated
+#      string's literal pieces as SEPARATE constants concatenated only
+#      at runtime, so "sr v" and the version never sit byte-adjacent
+#      (a "sr v<version>" regex never matches, confirmed empirically);
+#      and a naive whole-binary sweep false-positives on zlib's own
+#      bare version constant plus compiler/SDK debug-path strings, all
+#      of which are legitimately embedded and not sr's own claim.
+#      Skipped for prerelease, same as above.
 #   4. When this release is currently the repo's "Latest": the three
 #      stable-name .../releases/latest/download/ links return 200.
 #   5. The appcast (fetched from the PUBLIC repo's raw main branch, not
@@ -163,14 +174,55 @@ jobs:
                           exe_path.write_bytes(zf.read(exe_names[0]))
                           out = subprocess.run(["strings", str(exe_path)], capture_output=True, text=True)
                           blob = out.stdout
-                          bad_versions = sorted(set(re.findall(r"\d+\.\d+\.\d+[A-Za-z0-9]*", blob)) - {VERSION})
+                          lines = blob.splitlines()
+                          # Verified against the real v4.0.0 sr.exe (2026-08-29):
+                          # Swift compiles an interpolated string's literal
+                          # pieces ("sr v" and srVersion's "4.0.0") as SEPARATE
+                          # constants concatenated only at runtime -- they are
+                          # never byte-adjacent in the binary, so a "sr v<ver>"
+                          # regex never matches (tried, confirmed empirically).
+                          # A whole-binary X.Y.Z sweep also false-positives:
+                          # statically-linked zlib embeds its OWN bare version
+                          # constant (indistinguishable in shape from srVersion's),
+                          # and clang/Swift-SDK/Windows-Kits debug-path strings
+                          # carry real toolchain version numbers too. So: (a)
+                          # "sr v" must appear as a substring (proves the banner
+                          # literal compiled in), (b) VERSION must appear as its
+                          # own isolated line (proves sr's OWN version constant
+                          # is the current one, not a stale one), (c) any OTHER
+                          # isolated-line X.Y.Z is stray UNLESS it co-occurs with
+                          # a known toolchain/dependency marker line, in which
+                          # case it's that dependency's real version, not sr's.
+                          ver_line_re = re.compile(r"^\d+\.\d+\.\d+[A-Za-z0-9]*$")
+                          ver_find_re = re.compile(r"\d+\.\d+\.\d+[A-Za-z0-9]*")
+                          noise_markers = [
+                              "Jean-loup Gailly",  # zlib copyright/version line
+                              "clang version",     # bundled compiler
+                              "Windows Kits",       # Windows SDK install path
+                              "Swift\\Platforms",  # Swift toolchain SDK path
+                              "usr\\lib\\swift",   # swift shims path
+                              "Swift\\Runtimes",
+                          ]
+                          noise_versions = set()
+                          for line in lines:
+                              if any(m in line for m in noise_markers):
+                                  noise_versions.update(ver_find_re.findall(line))
                           has_banner = "sr v" in blob
-                          ok = not bad_versions and has_banner
+                          version_present = any(l.strip() == VERSION for l in lines)
+                          stray = sorted({
+                              l.strip() for l in lines
+                              if ver_line_re.match(l.strip())
+                              and l.strip() != VERSION
+                              and l.strip() not in noise_versions
+                          })
+                          ok = has_banner and version_present and not stray
                           parts = []
-                          if bad_versions:
-                              parts.append(f"stray version string(s) in sr.exe: {', '.join(bad_versions)}")
                           if not has_banner:
-                              parts.append("'sr v' banner prefix not found in sr.exe strings")
+                              parts.append("'sr v' banner literal not found in sr.exe strings")
+                          if not version_present:
+                              parts.append(f"sr's own version {VERSION!r} not found as an isolated string in sr.exe")
+                          if stray:
+                              parts.append(f"stray version string(s) in sr.exe not attributable to a known dependency: {', '.join(stray)}")
                           record("windows-exe-strings", ok, "; ".join(parts))
               except Exception as e:
                   record("windows-exe-strings", False, f"error inspecting {windows_stable}: {e}")

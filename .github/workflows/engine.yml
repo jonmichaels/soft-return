@@ -2,7 +2,9 @@
 #
 # Enforces the engine test suite (`swift test`) stays green on both
 # platforms it ships to: Linux (via swift-actions/setup-swift, pinned
-# to Swift 6.3) and macOS (the system Xcode toolchain on macos-15, no
+# to the real Swift 6.3.3 release -- the action wants a full X.Y.Z it
+# can resolve via swiftly; bare "6.3" errors "Version 6.3 is not
+# available") and macOS (the system Xcode toolchain on macos-15, no
 # extra setup — Package.swift's floor is macOS 10.15 / Swift tools
 # 5.9, but CI validates against the toolchain the app actually builds
 # with). Triggers only on source-shaped changes to keep noise down.
@@ -28,7 +30,7 @@ jobs:
 
       - uses: swift-actions/setup-swift@v2
         with:
-          swift-version: "6.3"
+          swift-version: "6.3.3"
 
       - run: swift test
 
