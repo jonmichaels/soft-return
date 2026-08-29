@@ -9,7 +9,7 @@ import Testing
 /// Mode, so no image test on this host can ever see a colour that only misbehaves in Dark Mode.
 ///
 /// This test does not reimplement the check. It shells out to the same script that was already
-/// live-fired both directions (planted violation caught, clean tree passes) and
+/// live-fired both directions on the build host (planted violation caught, clean tree passes) and
 /// fails loudly — never skips — if that script reports a violation or cannot be run at all.
 @Suite struct PinnedColorScannerTests {
     static var repoRoot: URL {

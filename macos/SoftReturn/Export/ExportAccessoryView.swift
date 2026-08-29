@@ -62,6 +62,15 @@ import CtrlKD
 /// of the Options column into its OWN fourth column — Options keeps only the three checkboxes
 /// (Headers/Footers, Table of Contents, Inline Styling); the popup grid gets a column to
 /// itself so it's no longer squeezed under three unrelated checkboxes.
+///
+/// Job 545 (R2, Jon's ruling from a macOS 26/Tahoe screenshot — job 536's headless macOS 15
+/// verification didn't catch this): the popups column's row spacing (`NSGridView.rowSpacing`)
+/// was a second literal diverging from the checkbox columns' own row spacing, and the column
+/// wasn't reliably pinned to the top of the row alongside Formats/Notes/Options. Both fixed:
+/// one shared `rowSpacing` constant for every column, and `.required` vertical content-hugging
+/// on every column stack so the row's `.top` alignment can't fall back to stretching the
+/// shortest column and centering its content — see `column(title:views:)` and the `popupGrid`
+/// setup below.
 final class ExportAccessoryView: NSView {
     private var formatChecks: [ExportFormat: NSButton] = [:]
     private var noteChecks: [String: NSButton] = [:]
@@ -84,6 +93,12 @@ final class ExportAccessoryView: NSView {
     /// popups (Pictures/Page Numbering/Sentence Spacing) that never needed the full form-field
     /// width — a clean 120pt, not the exact fraction (Jon: "not exact pixels").
     private static let smallPopupWidth: CGFloat = 120
+
+    /// Job 545 (R2, Jon's ruling from his macOS 26 screenshot): the popup grid's row-to-row
+    /// spacing used to be a second literal (12) diverging from `column(title:views:)`'s own
+    /// checkbox row spacing — ONE shared constant now, used by both, so the fourth column
+    /// reads at the same vertical rhythm as Formats/Notes/Options.
+    private static let rowSpacing: CGFloat = 5
 
     /// Fires whenever a format checkbox flips — the panel keeps `allowedContentTypes` (and
     /// so the extension it will grant back) in sync with exactly-one-format-checked (job 244
@@ -183,7 +198,7 @@ final class ExportAccessoryView: NSView {
             [Self.makeLabel("Sentence Spacing:"), sentenceSpacingButton],
         ])
         popupGrid.translatesAutoresizingMaskIntoConstraints = false
-        popupGrid.rowSpacing = 12
+        popupGrid.rowSpacing = Self.rowSpacing
         popupGrid.columnSpacing = 10
         popupGrid.column(at: 0).xPlacement = .trailing
         popupGrid.column(at: 1).xPlacement = .leading
@@ -198,7 +213,11 @@ final class ExportAccessoryView: NSView {
         // Job 536 (Part A2): the popup trio gets its own column now, so it isn't squeezed
         // under three unrelated checkboxes. A blank (not omitted) heading keeps this column's
         // content starting at the same Y as the other three columns' first real row —
-        // `column(title:views:)`'s heading is what reserves that line of vertical space.
+        // `column(title:views:)`'s heading is what reserves that line of vertical space. Job
+        // 545 (R2): that alone wasn't enough on Jon's macOS 26 — `column(title:views:)` now
+        // also gives every column `.required` vertical content-hugging, so the `columns` row's
+        // `.top` alignment below can't fall back to stretching this (shortest) column and
+        // centering its content inside the stretched frame instead of pinning it to the top.
         let popupsColumn = column(title: "", views: [popupGrid])
 
         // Re-centered as a pair (job 323) — Style no longer rides beside them as a third
@@ -294,7 +313,13 @@ final class ExportAccessoryView: NSView {
         let stack = NSStackView(views: [heading] + views)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 5
+        stack.spacing = Self.rowSpacing
+        // Job 545 (R2): pin each column to its own natural content height so the horizontal
+        // `columns` row's `.top` alignment (below) can never fall back to stretching a
+        // shorter column (the popups column, 3 rows, vs. Formats' 5) and centering its
+        // content inside the stretched frame — the exact shape of Jon's "floats vertically"
+        // report.
+        stack.setContentHuggingPriority(.required, for: .vertical)
         return stack
     }
 

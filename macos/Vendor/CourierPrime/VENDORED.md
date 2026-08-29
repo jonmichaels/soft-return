@@ -8,5 +8,5 @@ Courier replacement, metric-compatible at 10-pitch.
 - Source: https://github.com/quoteunquoteapps/CourierPrime (master, fonts/ttf)
 - License: SIL OFL 1.1 (OFL.txt here) — bundling/redistribution permitted
 - Four styles: Regular / Bold / Italic / BoldItalic
-- Downloaded + checksummed (sha256 prefixes:
+- Downloaded + checksummed on the build host by Athena (sha256 prefixes:
   Regular 72f79337, Bold ff1f3878, Italic f1b9a582, BoldItalic 3355273f)
