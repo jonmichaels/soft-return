@@ -4,7 +4,7 @@
 Born 2026-08-13, the morning after 4.0.0b15 shipped with QuickLook dead:
 the appexes were re-signed without their entitlements plists, notarization
 passed anyway (Apple checks WHO signed, not WHAT entitlements survived),
-and nothing in the chain could prove the defect remotely. This can.
+and nothing in the chain could prove the defect locally. This can.
 
 Usage:
     entitlements_probe.py <binary> [--require KEY] [--forbid KEY]

@@ -270,7 +270,7 @@ defect or is entirely downstream of an already-disclosed permanent one.
   the test's own host process, relaunch failure, relaunch resolving to the
   test's own host process.
 - **Stated reason (this session, line 373's guard fired):** "no Release
-  build at `<worker-machine build tree>/build-dd/Build/Products
+  build at `<build-host-path>/build-dd/Build/Products
   /Release/Soft Return.app` — build it first (build-dd); task #65
   (session-bound dispatch environment)."
 - **View:** Native/Printed (exercises document reopen across a real app
@@ -295,15 +295,15 @@ defect or is entirely downstream of an already-disclosed permanent one.
   `XCTSkip`/`.disabled`; Swift Testing reports the resulting zero-argument
   parameterized test as `Skipped`.
 - **Stated reason (quoted, lines 398-402):** "Jon's ruling, 2026-08-19 ('Go
-  with A')... the full-corpus truth is the full-archive engine sweep (1236/1236
+  with A')... the full-corpus truth is the internal engine sweep (1236/1236
   byte-exact, run outside this repo), not this in-repo gate... staying a
   clean env-gated no-op here is the RULED shape of that division, not
   undone coverage debt."
 - **View:** engine-only (byte parity of emitted PDFs; not view-specific).
 - **Introduced:** Jon's ruling, explicit date **2026-08-19**.
 - **Retirement condition:** none intended — by design, this repo never
-  carries the corpus ("TestDocs never leave this private
-  repo"); the full-archive sweep is the permanent home for this coverage.
+  carries the corpus (`CLAUDE.md`: "TestDocs never leave this private
+  repo"); the internal engine sweep is the permanent home for this coverage.
   Filed as TEMPORARY rather than PERMANENT only because it is contingent on
   a standing ruling (division of labor) rather than a hard external
   constraint like an OS API gate — the ruling could in principle be
@@ -381,7 +381,7 @@ defect or is entirely downstream of an already-disclosed permanent one.
   informational statement itself was wrapped, purely to force a "known
   issue" entry into the test report.
 - **Stated reason (historical, quoted):** "scope statement recorded above for
-  report visibility, per the internal runbook's documented pattern" — Swift Testing
+  report visibility, per RUNBOOK's documented pattern" — Swift Testing
   swallows `print()` output on a passing test, so this was used as a way to
   get diagnostic text into a green run's report.
 - **View:** engine-only (manifest/export-surface scope statement, not
@@ -395,7 +395,7 @@ defect or is entirely downstream of an already-disclosed permanent one.
   the test's three real `#expect` assertions are untouched and still pass.
   The scope prose is not re-homed anywhere — it already exists verbatim in
   the test's own doc comment, and job reports are required to state the
-  suite's denominator themselves. the internal release runbook (not part of this repo)'s "Worker notes" was
+  suite's denominator themselves. `docs/RUNBOOK.md`'s "Worker notes" was
   rewritten in the same job to say a fake failure is never an acceptable
   way to get text into a report, because it plants a permanent phantom in
   the suppressed-test count.

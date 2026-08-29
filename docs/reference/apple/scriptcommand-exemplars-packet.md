@@ -1,7 +1,7 @@
 # NSScriptCommand — how WORKING scriptable apps shape their commands
 
-Exemplar packet for finding F (the -1708 lead). Read from real source
-2026-08-11: NetNewsWire (github.com/Ranchero-Software/
+Exemplar packet for finding F (the -1708 lead). Read from real source on
+Captured 2026-08-11: NetNewsWire (github.com/Ranchero-Software/
 NetNewsWire, Mac/Scripting/*.swift) + the Skim/qwen/Gemini research.
 
 ## THE RULE every working app follows (and we broke)

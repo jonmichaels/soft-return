@@ -14,7 +14,7 @@ Usage:
     verify-release-assets.py <repo> <tag>
 
 Fetches the release's asset list via `gh release view <tag> --repo <repo> --json assets`
-(the same `gh` the rest of the release chain already depends on — see the internal runbook) and
+(the same `gh` the rest of the release chain already depends on — see docs/RUNBOOK.md) and
 checks:
     1. an asset named exactly "Soft-Return-CLI.pkg" (case-insensitive) exists
     2. at least one asset whose name ends in ".dmg" exists

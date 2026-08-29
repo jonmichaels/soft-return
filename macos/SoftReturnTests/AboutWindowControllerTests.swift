@@ -90,43 +90,41 @@ struct EngineVersionInfoTests {
     // MARK: - Clean (release-cut) banner — the ONLY shape the real engine produces today
 
     /// `sr`'s actual current `--version` output (`slantBanner + "\n" + versionLine`,
-    /// `Sources/SoftReturnCLI/Arguments.swift`) — no `--verbose` flag exists yet, so this is
-    /// the one shape a real spawn of the bundled binary can ever produce.
+    /// `Sources/SoftReturnCLI/Arguments.swift`). Ruling 24 (Jon, 2026-08-28) dropped the
+    /// `(ctrl-kd parity X.Y.Z)` clause from the banner entirely — this parser no longer
+    /// expects it.
     static let cleanBanner = """
            _____       ______     ____       __
           / ___/____  / __/ /_   / __ \\___  / /___  ___________
           \\__ \\/ __ \\/ /_/ __/  / /_/ / _ \\/ __/ / / / ___/ __ \\
          ___/ / /_/ / __/ /_   / _, _/  __/ /_/ /_/ / /  / / / /
         /____/\\____/_/  \\__/  /_/ |_|\\___/\\__/\\__,_/_/  /_/ /_/
-        sr 3.1.0 (ctrl-kd parity 4.0.0)
+        sr v4.0.0
         """
 
-    @Test func cleanBannerParsesVersionAndParityWithNoDevDateAndNoCommit() throws {
+    @Test func cleanBannerParsesVersionWithNoDevDateAndNoCommit() throws {
         let info = try #require(EngineVersionInfo.parse(Self.cleanBanner))
-        #expect(info.srVersion == "3.1.0")
+        #expect(info.srVersion == "4.0.0")
         #expect(info.devDate == nil)
-        #expect(info.ctrlKDParity == "4.0.0")
         #expect(info.commitHash == nil)
-        #expect(info.engineRowText == "sr 3.1.0")
-        #expect(info.parityRowText == "ctrl-kd 4.0.0")
+        #expect(info.engineRowText == "sr v4.0.0")
         #expect(info.commitURL() == nil)
     }
 
     // MARK: - Dev banner — documented, not yet real; exercised via a literal fixture
 
     static let devBanner = """
-        sr 3.1.0 (dev 2026-08-15) (ctrl-kd parity 4.0.0)
+        sr v4.0.0 (dev 2026-08-15)
         engine commit 971b375d6a1fd625368b6368c982fcac938137ca
         """
 
     @Test func devBannerParsesDevDateAndCommitHash() throws {
         let info = try #require(EngineVersionInfo.parse(Self.devBanner))
-        #expect(info.srVersion == "3.1.0")
+        #expect(info.srVersion == "4.0.0")
         #expect(info.devDate == "2026-08-15")
-        #expect(info.ctrlKDParity == "4.0.0")
         #expect(info.commitHash == "971b375d6a1fd625368b6368c982fcac938137ca")
         // Job 341 (round 3): the dev parenthetical moves to its own line.
-        #expect(info.engineRowText == "sr 3.1.0\n(dev 2026-08-15)")
+        #expect(info.engineRowText == "sr v4.0.0\n(dev 2026-08-15)")
     }
 
     @Test func devBannerCommitURLPointsAtTheEngineRepoNotTheAppRepo() throws {
@@ -139,7 +137,7 @@ struct EngineVersionInfoTests {
     /// A dev-DATE with no following `engine commit` line (e.g. a build that stamped a date
     /// but not a hash) must not fabricate a commit — no stamp, no hash.
     @Test func devDateWithNoCommitLineLeavesCommitHashNil() throws {
-        let info = try #require(EngineVersionInfo.parse("sr 3.1.0 (dev 2026-08-15) (ctrl-kd parity 4.0.0)"))
+        let info = try #require(EngineVersionInfo.parse("sr v4.0.0 (dev 2026-08-15)"))
         #expect(info.devDate == "2026-08-15")
         #expect(info.commitHash == nil)
     }
@@ -154,7 +152,7 @@ struct EngineVersionInfoTests {
     /// per the ruling's own "no stamp -> no hash" rule.
     @Test func commitLineAfterACleanVersionLineIsIgnored() throws {
         let info = try #require(EngineVersionInfo.parse(
-            "sr 3.1.0 (ctrl-kd parity 4.0.0)\nengine commit deadbeef"))
+            "sr v4.0.0\nengine commit deadbeef"))
         #expect(info.commitHash == nil)
     }
 }
@@ -301,14 +299,14 @@ struct AboutWindowControllerTests {
         #expect(grid.column(at: 1).xPlacement == .leading)
     }
 
-    /// Jon's ruling: the Engine row's dev shape wraps — "sr 3.1.0" on line 1, "(dev ...)" on
+    /// Jon's ruling: the Engine row's dev shape wraps — "sr v4.0.0" on line 1, "(dev ...)" on
     /// its own line 2 below it, rather than one long single-line string.
     @Test func engineRowWrapsTheDevParentheticalOntoItsOwnLine() throws {
         let info = try #require(EngineVersionInfo.parse(EngineVersionInfoTests.devBanner))
         let controller = AboutWindowController(
             engineProbe: FakeEngineVersionProbe(result: info), urlOpener: FakeAboutURLOpener())
         let grid = try infoGrid(in: controller)
-        #expect(rowValueText(grid, 2) == "sr 3.1.0\n(dev 2026-08-15)")
+        #expect(rowValueText(grid, 2) == "sr v4.0.0\n(dev 2026-08-15)")
         let value = try #require(grid.cell(atColumnIndex: 1, rowIndex: 2).contentView as? NSTextField)
         #expect(value.maximumNumberOfLines == 0, "the dev-shape value must allow more than one line")
     }
@@ -320,7 +318,7 @@ struct AboutWindowControllerTests {
         let controller = AboutWindowController(
             engineProbe: FakeEngineVersionProbe(result: info), urlOpener: FakeAboutURLOpener())
         let grid = try infoGrid(in: controller)
-        #expect(rowValueText(grid, 2) == "sr 3.1.0")
+        #expect(rowValueText(grid, 2) == "sr v4.0.0")
         #expect(rowValueText(grid, 2)?.contains("\n") == false)
     }
 
@@ -409,7 +407,7 @@ struct AboutWindowControllerTests {
         #expect(grid.numberOfRows == 3, "clean (no dev suffix) banner must not show a Commit row")
         #expect([rowLabel(grid, 0), rowLabel(grid, 1), rowLabel(grid, 2)]
             == ["Version", "Build", "Engine"])
-        #expect(rowValueText(grid, 2) == "sr 3.1.0")
+        #expect(rowValueText(grid, 2) == "sr v4.0.0")
     }
 
     /// Job 341 (round 3): the row set is Version/Build/Engine/Commit — Parity is gone, and the
@@ -422,7 +420,7 @@ struct AboutWindowControllerTests {
         #expect(grid.numberOfRows == 4)
         #expect([rowLabel(grid, 0), rowLabel(grid, 1), rowLabel(grid, 2), rowLabel(grid, 3)]
             == ["Version", "Build", "Engine", "Commit"])
-        #expect(rowValueText(grid, 2) == "sr 3.1.0\n(dev 2026-08-15)")
+        #expect(rowValueText(grid, 2) == "sr v4.0.0\n(dev 2026-08-15)")
         #expect(rowValueText(grid, 3) == "971b375d6a1fd625368b6368c982fcac938137ca")
     }
 
@@ -494,31 +492,40 @@ struct AboutWindowControllerTests {
     /// opposite off a STALE standalone clone and an old prebuilt app's `strings` output
     /// neither of which reflect the checkout THIS build actually resolved — the real spawn
     /// caught the mistake, which is exactly what "prove it, don't assume" is for.
-    @Test func realBundledSRSpawnSucceedsUnderSandboxAndParsesTheDevBanner() throws {
+    ///
+    /// CORRECTED again, job 545: `build-sr-cli.sh`'s own release switch (Jon's ruling
+    /// 2026-08-14) drops to the clean, nil-stamped banner whenever `MARKETING_VERSION` is
+    /// STABLE (no "b"), not only on a real release cut — this repo's `MARKETING_VERSION` has
+    /// been stable (no "b" suffix) since the v4.0.0 release cut, so a hosted test build now
+    /// produces the clean shape, not the dev one. This asserts shape-correctness of WHICHEVER shape actually comes
+    /// back rather than assuming one, since which shape is live depends on the checked-out
+    /// version, not on this test.
+    @Test func realBundledSRSpawnSucceedsUnderSandboxAndParsesTheBanner() throws {
         let probe = ProcessEngineVersionProbe()
         let info = try #require(probe.currentInfo(), """
             spawning the bundled sr under Process returned nil — either the bundled binary \
             is missing from this test host, or the spawn was denied; see job 323's report
             """)
-        // SHAPE only, never a literal — the engine bumps `srVersion`/`ctrlKDParity` on its
-        // own release cadence, and the dev date/hash change with every pinned commit and
-        // every build (CLAUDE.md: no version literals in tests; `AboutInfoTests`' own header
-        // notes a hardcoded version broke on this app's very first bump).
+        // SHAPE only, never a literal — the engine bumps `srVersion` on its own release
+        // cadence, and the dev date/hash change with every pinned commit and every build
+        // (CLAUDE.md: no version literals in tests; `AboutInfoTests`' own header notes a
+        // hardcoded version broke on this app's very first bump).
         #expect(info.srVersion.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil,
                 "srVersion \(info.srVersion) is not a plain X.Y.Z")
-        #expect(info.ctrlKDParity.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil,
-                "ctrlKDParity \(info.ctrlKDParity) is not a plain X.Y.Z")
-        // A dev-configuration build of THIS app always builds `sr` from a live SPM checkout
-        // with real git metadata (`build-sr-cli.sh`'s own fallback only drops to the clean,
-        // nil-stamped banner when the checkout has none) — so the dev shape, not the clean
-        // one, is what a hosted test actually proves here.
-        let devDate = try #require(info.devDate, "expected a dev-date stamp from a live SPM checkout")
-        #expect(devDate.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
-                "devDate \(devDate) is not a plain YYYY-MM-DD")
-        let commitHash = try #require(info.commitHash, "expected an engine commit stamp alongside the dev date")
-        #expect(commitHash.range(of: "^[0-9a-f]+$", options: .regularExpression) != nil,
-                "commitHash \(commitHash) is not plain lowercase hex")
-        #expect(info.engineRowText == "sr \(info.srVersion)\n(dev \(devDate))")
-        #expect(info.commitURL()?.absoluteString == "https://github.com/jonmichaels/soft-return/commit/\(commitHash)")
+        if let devDate = info.devDate {
+            #expect(devDate.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
+                    "devDate \(devDate) is not a plain YYYY-MM-DD")
+            let commitHash = try #require(info.commitHash, "expected an engine commit stamp alongside the dev date")
+            #expect(commitHash.range(of: "^[0-9a-f]+$", options: .regularExpression) != nil,
+                    "commitHash \(commitHash) is not plain lowercase hex")
+            #expect(info.engineRowText == "sr v\(info.srVersion)\n(dev \(devDate))")
+            #expect(info.commitURL()?.absoluteString
+                == "https://github.com/jonmichaels/soft-return/commit/\(commitHash)")
+        } else {
+            // The clean (release-switch) shape: no dev stamp, no commit, single-line row.
+            #expect(info.commitHash == nil)
+            #expect(info.engineRowText == "sr v\(info.srVersion)")
+            #expect(info.commitURL() == nil)
+        }
     }
 }

@@ -429,13 +429,13 @@ private func noFSEnvironment() -> CLIEnvironment {
     // This repo never carries a dev stamp (DevStamp.swift is nil here; the app's build
     // script injects real values into its own checkout) — so the committed shape is the
     // clean release string, and the dev shape is exercised through the split-out helper.
-    #expect(versionLine(devDate: srDevDate) == "sr v4.0.0")
-    #expect(versionLine(devDate: "2026-08-14") == "sr v4.0.0 (dev 2026-08-14)")
+    #expect(versionLine(devDate: srDevDate) == "sr v4.0.1")
+    #expect(versionLine(devDate: "2026-08-14") == "sr v4.0.1 (dev 2026-08-14)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
     #expect(recorder.out == [versionOutput])
-    #expect(versionOutput.hasSuffix("sr v4.0.0"))
+    #expect(versionOutput.hasSuffix("sr v4.0.1"))
     #expect(versionOutput.contains("_____       ______     ____"))  // the SOFT RETURN Slant banner leads
     #expect(recorder.written.isEmpty)
 

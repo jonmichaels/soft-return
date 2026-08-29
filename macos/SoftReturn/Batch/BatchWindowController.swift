@@ -114,6 +114,51 @@ private extension Array {
     }
 }
 
+// MARK: - Vertical centering, bridged into AppKit (job 545, R3)
+
+/// Job 545 (R3, Jon's ruling from a macOS 26/Tahoe screenshot): job 536's SwiftUI
+/// `.frame(maxHeight: .infinity, alignment: .center)` does not split `controlsColumn`'s slack
+/// evenly on Jon's Mac — more blank space above the section stack than below it. Rather than
+/// keep guessing at SwiftUI frame modifiers this environment cannot visually verify against
+/// Tahoe, this hosts the column's content in a real `NSHostingView` and centers THAT with an
+/// actual `centerYAnchor` constraint — the same "trust the real layout engine, not a SwiftUI
+/// wrapper" move `BatchPopUpButton` above already makes for pulldown width. The `>=`/`<=`
+/// guard constraints (not `.required`, so they yield instead of conflicting with `centerY` in
+/// the pathological case the content ever exceeds the column's height) keep the hosted view
+/// from being pushed off either edge.
+private struct VerticallyCenteringHost<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView()
+        let hosting = NSHostingView(rootView: content)
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(hosting)
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            hosting.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
+        let topGuard = hosting.topAnchor.constraint(greaterThanOrEqualTo: container.topAnchor)
+        let bottomGuard = container.bottomAnchor.constraint(greaterThanOrEqualTo: hosting.bottomAnchor)
+        topGuard.priority = .defaultHigh
+        bottomGuard.priority = .defaultHigh
+        NSLayoutConstraint.activate([topGuard, bottomGuard])
+        context.coordinator.hostingView = hosting
+        return container
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.hostingView?.rootView = content
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var hostingView: NSHostingView<Content>?
+    }
+}
+
 // MARK: - The window's content
 
 private struct BatchView: View {
@@ -186,6 +231,10 @@ private struct BatchView: View {
     /// `.fixedSize` on each label backs that up so nothing wraps even if a label's measured
     /// width was ever a hair off.
     private static let labelColumnWidth: CGFloat = 58
+    /// Job 545 (R3, Jon's ruling): `detailsBox`'s Grid rows (Variant/Style/Font/Size) had
+    /// their own, larger, inter-row spacing (10) than `optionsBox`'s rows (6) — one shared
+    /// constant now, used by both, so the whole controls column reads at one rhythm.
+    private static let rowSpacing: CGFloat = 6
 
     // Job 518 (N4, Jon verbatim): "get FORMATS and NOTES sections in that left column
     // side-by-side in two columns... shrink the length so that all options in the left
@@ -200,29 +249,32 @@ private struct BatchView: View {
         // window at the window's declared (then-560, now 575 per job 536) minimum height
         // (see `optionsBox`'s own comment for why this box needed the room).
         //
-        // Job 536 (v4.0.0 UI notes, Part A3, Jon's ruling): `.frame(maxHeight: .infinity,
-        // alignment: .center)` below centers this whole section stack vertically in the
-        // column now that `optionsBox` is taller (matching Formats' row spacing) — without
-        // it, a plain VStack sizes to its own content height and sits pinned to the top of
-        // whatever extra room the window has, leaving all the slack as one gap at the
-        // bottom instead of split evenly top and bottom.
-        VStack(alignment: .leading, spacing: 8) {
-            detailsBox
-            HStack(alignment: .top, spacing: 12) {
-                formatsBox
-                notesBox
+        // Job 536 (v4.0.0 UI notes, Part A3, Jon's ruling) tried centering this section
+        // stack with `.frame(maxHeight: .infinity, alignment: .center)`; job 545 (R3, Jon's
+        // ruling from a macOS 26/Tahoe screenshot) found that split the column's slack
+        // unevenly on his Mac. `VerticallyCenteringHost` (below) replaces it with a real
+        // AppKit `centerYAnchor` constraint, which is unambiguous by construction rather
+        // than trusting a SwiftUI frame modifier this headless environment can't visually
+        // confirm against Tahoe.
+        VerticallyCenteringHost(content:
+            VStack(alignment: .leading, spacing: 8) {
+                detailsBox
+                HStack(alignment: .top, spacing: 12) {
+                    formatsBox
+                    notesBox
+                }
+                optionsBox
+                destinationBox
             }
-            optionsBox
-            destinationBox
-        }
-        .padding(16)
-        .frame(maxHeight: .infinity, alignment: .center)
+            .padding(16)
+        )
+        .frame(maxHeight: .infinity)
     }
 
     private var detailsBox: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 10) {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: Self.rowSpacing) {
                     GridRow {
                         Text("Variant:")
                             .frame(width: Self.labelColumnWidth, alignment: .trailing)
@@ -345,8 +397,9 @@ private struct BatchView: View {
             // superseding job 521's tightening (which had traded that match away to fit the
             // Sentence Spacing row within the window's old declared minimum height without a
             // scrollbar; `controlsColumn`'s new vertical centering is what absorbs the extra
-            // height this restores).
-            VStack(alignment: .leading, spacing: 6) {
+            // height this restores). Job 545 (R3): `detailsBox`'s Grid now shares this same
+            // `Self.rowSpacing` constant, so Variant/Style/Font/Size read at this rhythm too.
+            VStack(alignment: .leading, spacing: Self.rowSpacing) {
                 Toggle("Headers/Footers", isOn: $model.headers)
                     .toggleStyle(.checkbox)
                     .accessibilityIdentifier("batch-headers-checkbox")

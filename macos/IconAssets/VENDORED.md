@@ -11,5 +11,5 @@
   the doc icon. Renamed from Soft-Return-App-LG.icon (job 341, b23):
   `ASSETCATALOG_COMPILER_APPICON_NAME` must equal the bundle's own
   base name, and "SoftReturn" is the clean value Project.swift wires.
-Authoritative source: the design vault's soft-return icon-art directory.
+Authoritative source: the private reference vault (design/soft-return/icon-jm/).
 CHECKSUMS.txt pins this delivery; regenerate it if Jon ships new art.

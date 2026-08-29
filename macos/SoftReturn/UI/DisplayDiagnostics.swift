@@ -2,8 +2,8 @@ import AppKit
 
 /// One attached screen's ground truth for Help ▸ Copy Display Diagnostics (beta) — the same
 /// physical metrics `ActualSizeMagnification` computes from, laid out so Jon can paste a
-/// machine's real screen data into a report from ANY Mac (his desk, another machine's
-/// external displays, anyone's), not just the ones already in this room.
+/// machine's real screen data into a report from ANY Mac (his desk, a second Mac's three 4Ks,
+/// anyone's), not just the ones already in this room.
 struct DisplayDiagnosticEntry: Equatable {
     let localizedName: String
     /// `NSScreen.frame`, in points — origin included, since a multi-display arrangement's

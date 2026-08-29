@@ -35,10 +35,10 @@ import Testing
 /// engine-vs-stale-oracle gap, not an app-vs-engine bug). Only the 10 `ws7FixturesInManifest`
 /// fixtures' cells were re-rendered — this environment has no access to the private Sawyer
 /// corpus tree the other 141 v9 files need (`Scripts/generate_oracle_manifest.py`'s own
-/// docstring: "Runs where ctrl-kd and the Sawyer tree live"). A full v10 (all 151
-/// files) is a full-archive-host job.
+/// docstring: "Runs on the build host where ctrl-kd and the Sawyer tree live"). A full v10 (all 151
+/// files) is a build-host job.
 ///
-/// **v11 (job 426, FULL RESCOPE):** generated on the full-archive host (`ctrl-kd b07a9c7`) directly against
+/// **v11 (job 426, FULL RESCOPE):** generated on the build host (`ctrl-kd b07a9c7`) directly against
 /// this repo's OWN bundled `TestDocs/ws7` corpus — 19 files, 228 non-skipped cells — rather
 /// than against the separate, much larger private Sawyer tree v9/v10 tracked (151 files, 1236
 /// cells, of which only 10 files/120 cells were ever reachable from this repo). The corpus
@@ -48,7 +48,7 @@ import Testing
 /// `fullDenominatorLawStatesThisSuitesRealScopeAgainstTheFullManifestCorpus` was written to
 /// track (job 374, "a gate covering less than its named full corpus must state its own
 /// denominator") a non-issue for v11: 0 cells remain outside this suite's own reach, so Tier 2
-/// (`CTRLKD_PRIVATE_CORPUS`-gated) and the full-archive sweep are no longer covering anything
+/// (`CTRLKD_PRIVATE_CORPUS`-gated) and the internal engine sweep are no longer covering anything
 /// this suite doesn't already — kept below only as still-valid infrastructure in case a future
 /// manifest reverts to tracking a larger corpus than what's bundled.
 ///
@@ -79,8 +79,8 @@ import Testing
 /// against. `fullManifestNonSkippedCellCount`/`bundledFixtures`/`bundledCells` move from
 /// 228/19/228 to 216/18/216 as a result — see `fullDenominatorLawStatesThisSuitesRealScopeAgainstTheFullManifestCorpus`'s
 /// updated pins below. A true regeneration against the CURRENT engine pin (which has also
-/// drifted from `c1b622d` since job 488) is separate, larger, out-of-scope work for a
-/// full-archive-host session with `ctrl-kd` and the exact pinned commit available.
+/// drifted from `c1b622d` since job 488) is separate, larger, out-of-scope work for a build-host
+/// session with `ctrl-kd` and the exact pinned commit available.
 ///
 /// SCOPE NOTE, flagged not buried: `TestDocs/ws7` has gained `BOTHNOTE.WS`, `-README.WS` and
 /// `-SCREEN.WS` since v11 was captured, and v12 deliberately does NOT cover them — adding them
@@ -115,7 +115,7 @@ import Testing
 /// non-skipped cells — unchanged from v8; only cell hashes moved, not the corpus shape). See
 /// `fullDenominatorLawStatesThisSuitesRealScopeAgainstTheFullManifestCorpus` below for the
 /// exact, pinned numbers and why this repo cannot bundle more of the corpus from this
-/// environment. Tier 2 (env-gated, below) and the full-archive sweep are the full-matrix gate.
+/// environment. Tier 2 (env-gated, below) and the internal engine sweep are the full-matrix gate.
 enum OutputManifest {
     struct CellEntry {
         let sha256: String?
@@ -393,7 +393,7 @@ enum OutputManifest {
     /// bundled corpus (19 files, 228 cells) rather than the separate private tree — so
     /// `full == bundled` now and the gap this test exists to catch is currently zero. Tier 2
     /// (`tier2DocumentOperationsMatchesOracle`, `CTRLKD_PRIVATE_CORPUS`-gated) and the
-    /// full-archive sweep remain wired but currently have nothing left to cover beyond this suite.
+    /// internal engine sweep remain wired but currently have nothing left to cover beyond this suite.
     ///
     /// Job 498 (`DARKNESS.WS` removed as a fixture, Jon's ruling): 18/216, both pins moving
     /// together, keeps `full == bundled` — see this file's own header comment's "v12 addendum".
@@ -402,7 +402,7 @@ enum OutputManifest {
     /// bundled cells 216) — any drifting deserves a deliberate look (a manifest regen, or a
     /// real corpus-subset expansion landing), not a report quietly going stale, per this test's
     /// own name. The scope STATEMENT itself is a `withKnownIssue`, per this repo's documented
-    /// pattern for getting message text into a PASSING run's report (the internal release runbook (not part of this repo)'s
+    /// pattern for getting message text into a PASSING run's report (`docs/RUNBOOK.md`'s
     /// "Worker notes": "passing Swift Testing cases swallow print()... diagnostic output only
     /// via a forced-fail probe or withKnownIssue message text").
     @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
@@ -532,7 +532,7 @@ enum OutputManifest {
     /// unset in the normal gate, so this tier is a clean no-op there.
     ///
     /// Jon's ruling, 2026-08-19 ("Go with A"), a dated delegation of division of labor: the
-    /// full-corpus truth is the full-archive engine sweep (1236/1236 byte-exact, run outside this
+    /// full-corpus truth is the internal engine sweep (1236/1236 byte-exact, run outside this
     /// repo), not this in-repo gate; this repo's own truth is the Tier-1 120-cell subset
     /// (`tier1Cells`, exercised by `documentOperationsMatchesOracle` above). This tier
     /// (`tier2DocumentOperationsMatchesOracle`) staying a clean env-gated no-op here is the
