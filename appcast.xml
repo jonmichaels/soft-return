@@ -6,6 +6,14 @@
     <description>Soft Return beta updates</description>
     <language>en</language>
     <item>
+      <title>Soft Return 4.0.1</title>
+      <link>https://github.com/jonmichaels/soft-return/releases/tag/v4.0.1</link>
+      <sparkle:version>18</sparkle:version>
+      <sparkle:shortVersionString>4.0.1</sparkle:shortVersionString>
+      <pubDate>Sat, 30 Aug 2026 00:20:00 -0400</pubDate>
+      <enclosure url="https://github.com/jonmichaels/soft-return/releases/download/v4.0.1/Soft-Return-4.0.1.dmg" sparkle:edSignature="HoIgWQ93PhXwTOGHuZKf85r7q8TDDjcTAqBTWxnZPUEN1DFVe5wgbzSo671lqFfECYgFwJYa8wEtkDe2dZbGDg==" length="12395485" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>Soft Return 4.0.0</title>
       <link>https://github.com/jonmichaels/soft-return/releases/tag/v4.0.0</link>
       <sparkle:version>17</sparkle:version>
