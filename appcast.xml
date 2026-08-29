@@ -8,10 +8,10 @@
     <item>
       <title>Soft Return 4.0.0</title>
       <link>https://github.com/jonmichaels/soft-return/releases/tag/v4.0.0</link>
-      <sparkle:version>16</sparkle:version>
+      <sparkle:version>17</sparkle:version>
       <sparkle:shortVersionString>4.0.0</sparkle:shortVersionString>
       <pubDate>Fri, 29 Aug 2026 09:30:00 -0400</pubDate>
-      <enclosure url="https://github.com/jonmichaels/soft-return/releases/download/v4.0.0/Soft-Return-4.0.0.dmg" sparkle:edSignature="Yl26MOROc3BPswjPEzIGWaPD5MP/Cr9kfNZW7IE282mMxsdPxiEGtiz+UvN2Z2u31M5eWEhkYBeKdgoljTiyCQ==" length="12396867" type="application/octet-stream"/>
+      <enclosure url="https://github.com/jonmichaels/soft-return/releases/download/v4.0.0/Soft-Return-4.0.0.dmg" sparkle:edSignature="ZfVqYLzQoZ2TS4OXyrn3gOlmNXgOgKlnEuYIgSp8FdNYZjf9C576twXFRpt3Ms8JUhYr5OEfdk6BwcZ4ri9GAA==" length="12375001" type="application/octet-stream"/>
     </item>
     <item>
       <title>Soft Return 4.0.0b34</title>
