@@ -55,7 +55,8 @@ private func withFourKindFile(_ body: (String) throws -> Void) throws {
     let r = try runSR(["--version"])
     #expect(r.status == 0, "sr --version exited \(r.status): \(r.err)")
     #expect(r.out.contains("sr "), "no version string in: \(r.out)")
-    #expect(r.out.contains("ctrl-kd parity"), "no parity line in: \(r.out)")
+    #expect(r.out.contains("sr v4.0.0"), "banner missing sr v4.0.0 in: \(r.out)")
+    #expect(!r.out.contains("parity"), "parity clause must stay gone: \(r.out)")
 }
 
 @Test func binaryHelpListsTheNoteFlags() throws {

@@ -59,13 +59,6 @@ import CtrlKD
 /// first CLI release.
 public let srVersion = "4.0.0"
 
-/// The `ctrl-kd` release this port is verified against. A constant, updated by hand when a
-/// sync job pins the port to a new Python release — it is a claim about which reference the
-/// vectors came from, so it must never be derived or guessed. 4.0.0 here means ctrl-kd at
-/// commit e9f6c42 (the b23 exports-overhaul merge onto main -- paragraph assembly, quote
-/// continuity, RTF direct-formatting doctrine; ctrl-kd's own __version__ stayed 4.0.0
-/// through that batch, same as it did through abb9d3c's, the prior pin).
-public let ctrlKDParity = "4.0.0"
 
 /// `sr 2.0.0 (ctrl-kd parity 3.0.0)`.
 /// FIGlet "Slant" by Glenn Chappell (1993) -- FIGlet's own co-creator, in the
@@ -85,10 +78,10 @@ public let slantBanner = """
 /// computed var: a top-level `var versionLine` alongside this overload can't call it —
 /// the bare name inside the getter binds to the var itself (job 312 caught exactly that).
 /// Callers pass `srDevDate`. Each paren group is one claim: the dev date says "cut
-/// between releases, this fresh"; the parity says which reference the vectors came from.
+/// between releases, this fresh"; (ctrl-kd parity clause REMOVED, Jon 2026-08-28: it went stale the day ctrl-kd hit 4.5.0).
 public func versionLine(devDate: String?) -> String {
     let version = devDate.map { "\(srVersion) (dev \($0))" } ?? srVersion
-    return "sr v\(version) (ctrl-kd parity \(ctrlKDParity))"
+    return "sr v\(version)"
 }
 
 /// What `--version` actually prints: the banner, then the version line.
