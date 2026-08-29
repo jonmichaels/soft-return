@@ -71,6 +71,11 @@ import CtrlKD
 /// on every column stack so the row's `.top` alignment can't fall back to stretching the
 /// shortest column and centering its content — see `column(title:views:)` and the `popupGrid`
 /// setup below.
+///
+/// Job 549 (R2 respin, Jon's ruling — literally the same Tahoe session, job 545's fix STILL
+/// wasn't right there): replaced the popup grid outright — see `makePopupsColumn`'s own doc
+/// comment for the exact ruling text and why hard `NSLayoutConstraint`s against `headersCheck`
+/// replace the `NSGridView`/hugging-priority approach entirely, rather than patching it again.
 final class ExportAccessoryView: NSView {
     private var formatChecks: [ExportFormat: NSButton] = [:]
     private var noteChecks: [String: NSButton] = [:]
@@ -189,36 +194,21 @@ final class ExportAccessoryView: NSView {
             width: Self.smallPopupWidth)
         sentenceSpacingPopup = sentenceSpacingButton
 
-        // The Settings form idiom (`SettingsWindowController.style(_:)`): labels right-aligned
-        // into a shared gutter, every popup starting at one left edge — rather than three rows
-        // each independently sized around its own label's width.
-        let popupGrid = NSGridView(views: [
-            [Self.makeLabel("Pictures:"), picturesButton],
-            [Self.makeLabel("Page Numbering:"), pageNumbersButton],
-            [Self.makeLabel("Sentence Spacing:"), sentenceSpacingButton],
-        ])
-        popupGrid.translatesAutoresizingMaskIntoConstraints = false
-        popupGrid.rowSpacing = Self.rowSpacing
-        popupGrid.columnSpacing = 10
-        popupGrid.column(at: 0).xPlacement = .trailing
-        popupGrid.column(at: 1).xPlacement = .leading
-        for index in 0..<popupGrid.numberOfRows {
-            popupGrid.row(at: index).yPlacement = .center
-        }
-
         let optionsColumn = column(
             title: "Options",
             views: [headers, toc, inlineStyling])
 
-        // Job 536 (Part A2): the popup trio gets its own column now, so it isn't squeezed
-        // under three unrelated checkboxes. A blank (not omitted) heading keeps this column's
-        // content starting at the same Y as the other three columns' first real row —
-        // `column(title:views:)`'s heading is what reserves that line of vertical space. Job
-        // 545 (R2): that alone wasn't enough on Jon's macOS 26 — `column(title:views:)` now
-        // also gives every column `.required` vertical content-hugging, so the `columns` row's
-        // `.top` alignment below can't fall back to stretching this (shortest) column and
-        // centering its content inside the stretched frame instead of pinning it to the top.
-        let popupsColumn = column(title: "", views: [popupGrid])
+        // Job 549 (Jon's ruling from a Tahoe screenshot — job 545's `NSGridView`-inside-a-
+        // hugging-`NSStackView` R2 fix still floated on real macOS 26): the popup trio's own
+        // column, built entirely from hard `NSLayoutConstraint`s against `headers` rather than
+        // from stack/grid row-height inference — see `makePopupsColumn` for why.
+        let (popupsColumn, popupsHeadersAlignment) = Self.makePopupsColumn(
+            headersCheck: headers,
+            rows: [
+                (Self.makeLabel("Pictures:"), picturesButton),
+                (Self.makeLabel("Page Numbering:"), pageNumbersButton),
+                (Self.makeLabel("Sentence Spacing:"), sentenceSpacingButton),
+            ])
 
         // Re-centered as a pair (job 323) — Style no longer rides beside them as a third
         // column, so this row now balances Formats/Notes/Options/(popups). Job 530: `.fill`
@@ -244,6 +234,13 @@ final class ExportAccessoryView: NSView {
             outer.centerXAnchor.constraint(equalTo: centerXAnchor),
             outer.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 20),
         ])
+
+        // `popupsHeadersAlignment` spans the popups column and the Options column — two
+        // different subtrees until `columns`/`outer` are themselves added to `self` just
+        // above. Activating it any earlier (e.g. inside `makePopupsColumn`, before `headers`
+        // and the popups container share a common ancestor) is the exact "no common ancestor"
+        // `NSGenericException` job 549's proof test caught.
+        NSLayoutConstraint.activate([popupsHeadersAlignment])
 
         updateOptionAvailability()
     }
@@ -321,6 +318,110 @@ final class ExportAccessoryView: NSView {
         // report.
         stack.setContentHuggingPriority(.required, for: .vertical)
         return stack
+    }
+
+    /// Job 549 (Jon's ruling, verbatim, from a Tahoe screenshot): "'Pictures' title text must
+    /// exactly vertically align with 'Headers/Footers'... Page Numbering and Sentence Spacing
+    /// must keep the same horizontal alignment in relation to Pictures but the vertical space
+    /// between each pulldown menu must match the vertical space between checkboxes in one of
+    /// the other columns... This does mean that Page Numbering will NOT line up with Table of
+    /// Contents. The pulldown menu is taller than the checkbox."
+    ///
+    /// Job 545's fix for this same requirement — an `NSGridView` embedded as the lone arranged
+    /// subview of a `column(title:views:)` stack, kept top-pinned via `.required` vertical
+    /// content-hugging — was STILL wrong on Jon's real macOS 26 session. A stack/grid's row
+    /// height and cross-axis alignment resolution is exactly the kind of thing that can differ
+    /// across AppKit versions when it depends on hugging/compression priorities rather than a
+    /// hard constraint. This version pins every row directly against `headersCheck` with plain
+    /// `NSLayoutConstraint` equalities instead, so the result is correct BY CONSTRUCTION — true
+    /// regardless of which AppKit version resolves it (the same reasoning job 545's own R3 fix
+    /// used a real `centerYAnchor` for, per that job's own honesty caveat about what a headless
+    /// macOS 15 run can and can't prove). `Job549ExportAccessoryLayoutProofTests` is the actual
+    /// proof, against real hosted frames.
+    ///
+    /// R2 respin: the `headersCheck` cross-column pin (Row 1's `centerYAnchor` equality below)
+    /// is returned unactivated rather than activated here, because at the time this function
+    /// runs `headersCheck` and this column's `container` are still in different, not-yet-
+    /// attached view hierarchies — activating a constraint across them here throws
+    /// `NSGenericException "no common ancestor"`. The caller activates it once both are under
+    /// the shared accessory root. Every other constraint built here stays same-hierarchy
+    /// (entirely within `container`) and is activated immediately, as before.
+    ///
+    /// A blank heading (same bold/small font as every OTHER column's real heading, so its
+    /// height matches theirs exactly) still opens the column — it is what makes the column's
+    /// OWN top edge land above the Pictures row rather than in line with it, so the `columns`
+    /// row's `.top` alignment lines this column's top up with Formats/Notes/Options' heading
+    /// tops without ever colliding with the Pictures row's own, independently pinned position:
+    /// the two are never tied together directly, and the arithmetic (heading height +
+    /// `rowSpacing` + half a checkbox, vs. half a popup) always leaves the Pictures row
+    /// strictly below the heading.
+    private static func makePopupsColumn(
+        headersCheck: NSButton, rows: [(label: NSTextField, popup: NSPopUpButton)]
+    ) -> (view: NSView, headersAlignment: NSLayoutConstraint) {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let heading = NSTextField(labelWithString: "")
+        heading.font = .boldSystemFont(ofSize: NSFont.smallSystemFontSize)
+        heading.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(heading)
+        for (label, popup) in rows {
+            label.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(label)
+            container.addSubview(popup)
+        }
+
+        var constraints = [
+            heading.topAnchor.constraint(equalTo: container.topAnchor),
+            heading.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+        ]
+
+        let firstLabel = rows[0].label
+        let firstPopup = rows[0].popup
+        // Row 1 — the hard cross-column pin the whole ruling hinges on: "Pictures" title text
+        // exactly level with "Headers/Footers", and the popup carrying the same relative
+        // alignment to its own title every other row in this sheet uses (centered on it).
+        // `headersCheck` lives in a sibling column (`optionsColumn`), not under this
+        // `container` — this one constraint spans two not-yet-attached subtrees, so unlike
+        // every other constraint built here it is returned UNACTIVATED; the caller (`init`)
+        // activates it only once both subtrees are under the shared accessory root.
+        let headersAlignment = firstPopup.centerYAnchor.constraint(equalTo: headersCheck.centerYAnchor)
+        constraints.append(firstLabel.centerYAnchor.constraint(equalTo: firstPopup.centerYAnchor))
+
+        for (index, row) in rows.enumerated() {
+            let (label, popup) = row
+            // One right-aligned label gutter, one left-aligned popup column — same shape as
+            // the old `NSGridView`'s `.trailing`/`.leading` `xPlacement`, as hard anchors.
+            constraints.append(popup.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 10))
+            guard index > 0 else { continue }
+            constraints.append(label.trailingAnchor.constraint(equalTo: firstLabel.trailingAnchor))
+            constraints.append(popup.leadingAnchor.constraint(equalTo: firstPopup.leadingAnchor))
+        }
+
+        for (previous, current) in zip(rows, rows.dropFirst()) {
+            // The actual vertical GAP between one pulldown and the next — not their top-to-top
+            // PITCH — is what must match the checkbox columns' own gap (`rowSpacing`, the same
+            // constant `column(title:views:)` uses). Because a popup is taller than a
+            // checkbox, the resulting PITCH ends up wider than the checkbox columns' own — Page
+            // Numbering will not land on Table of Contents' row, exactly as ruled.
+            constraints.append(current.popup.topAnchor.constraint(
+                equalTo: previous.popup.bottomAnchor, constant: Self.rowSpacing))
+            constraints.append(current.label.centerYAnchor.constraint(equalTo: current.popup.centerYAnchor))
+        }
+
+        // The container wraps its content exactly, so the outer `columns` row stack sizes and
+        // positions it the same way it does the other three (real) column stacks. The widest
+        // label — by actual measured text, not an assumption about which row's title is
+        // longest — sets the container's own leading edge, since every label already shares
+        // one trailing anchor and so the widest one is necessarily the leftmost.
+        let widestLabel = rows.map(\.label)
+            .max { $0.intrinsicContentSize.width < $1.intrinsicContentSize.width }!
+        constraints.append(container.leadingAnchor.constraint(equalTo: widestLabel.leadingAnchor))
+        constraints.append(container.trailingAnchor.constraint(equalTo: firstPopup.trailingAnchor))
+        constraints.append(container.bottomAnchor.constraint(equalTo: rows.last!.popup.bottomAnchor))
+
+        NSLayoutConstraint.activate(constraints)
+        return (container, headersAlignment)
     }
 
     // MARK: - Results

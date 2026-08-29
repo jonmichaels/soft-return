@@ -152,11 +152,11 @@ let appTarget: Target = .target(
             "ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS": "NO",
             "CODE_SIGN_STYLE": "Automatic",
             "COMBINE_HIDPI_IMAGES": "YES",
-            "CURRENT_PROJECT_VERSION": "18",
+            "CURRENT_PROJECT_VERSION": "19",
             "ENABLE_HARDENED_RUNTIME": "YES",
             "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/../Frameworks"],
             "LSApplicationCategoryType": "public.app-category.productivity",
-            "MARKETING_VERSION": "4.0.1",
+            "MARKETING_VERSION": "4.0.2",
             "PRODUCT_MODULE_NAME": "SoftReturn",
             "SWIFT_EMIT_LOC_STRINGS": "YES",
         ],
@@ -262,8 +262,8 @@ let quickLookTarget: Target = .target(
     ],
     settings: .settings(base: [
         "CODE_SIGN_STYLE": "Automatic",
-        "CURRENT_PROJECT_VERSION": "18",
-        "MARKETING_VERSION": "4.0.1",
+        "CURRENT_PROJECT_VERSION": "19",
+        "MARKETING_VERSION": "4.0.2",
         "SKIP_INSTALL": "YES",
         // Job 369: explicitly pinned, not a fix by itself — `xcodebuild -showBuildSettings`
         // confirmed this key is absent/unset project-wide (Tuist never sets it, and this
@@ -296,9 +296,9 @@ let importerTarget: Target = .target(
     ],
     settings: .settings(base: [
         "CODE_SIGN_STYLE": "Automatic",
-        "CURRENT_PROJECT_VERSION": "18",
+        "CURRENT_PROJECT_VERSION": "19",
         "GENERATE_INFOPLIST_FILE": "NO",
-        "MARKETING_VERSION": "4.0.1",
+        "MARKETING_VERSION": "4.0.2",
         "SKIP_INSTALL": "YES",
         "WRAPPER_EXTENSION": "mdimporter",
         // Xcode auto-injects -lz (CtrlKD's linkedLibrary) for .app/.appExtension
@@ -353,8 +353,8 @@ let thumbnailTarget: Target = .target(
     ],
     settings: .settings(base: [
         "CODE_SIGN_STYLE": "Automatic",
-        "CURRENT_PROJECT_VERSION": "18",
-        "MARKETING_VERSION": "4.0.1",
+        "CURRENT_PROJECT_VERSION": "19",
+        "MARKETING_VERSION": "4.0.2",
         "SKIP_INSTALL": "YES",
         // Job 369: same pin, same reasoning — see `quickLookTarget`'s settings above.
         "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",

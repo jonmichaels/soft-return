@@ -298,62 +298,13 @@ import Testing
                 "the columns row must hold four columns (Formats, Notes, Options, and the new popups column)")
     }
 
-    // MARK: - Job 545 (R2): popup-grid row spacing and top alignment
-
-    private static func columnStack(_ accessory: ExportAccessoryView, headingText: String) throws -> NSStackView {
-        let heading = try #require(
-            Self.descendants(accessory).compactMap { $0 as? NSTextField }
-                .first { $0.stringValue == headingText },
-            "no '\(headingText)' column heading found")
-        return try #require(heading.superview as? NSStackView,
-                             "'\(headingText)' heading is not the first row of its own column stack")
-    }
-
-    private static func grid(_ accessory: ExportAccessoryView) throws -> NSGridView {
-        try #require(Self.descendants(accessory).compactMap { $0 as? NSGridView }.first,
-                     "no NSGridView found in the accessory's view tree")
-    }
-
-    /// Jon's ruling (macOS 26 screenshot): the popup grid's row spacing must be the SAME
-    /// value the checkbox columns use, not a second, larger literal.
-    @Test func popupGridRowSpacingMatchesTheCheckboxColumnsOwnSpacing() throws {
-        let accessory = ExportAccessoryView(formats: [.rtf], notes: NoteSelection(), style: .native)
-        accessory.layoutSubtreeIfNeeded()
-
-        let formatsColumn = try Self.columnStack(accessory, headingText: "Formats")
-        let grid = try Self.grid(accessory)
-        let message = "the popup grid's row spacing (\(grid.rowSpacing)) must match the checkbox "
-            + "columns' own row spacing (\(formatsColumn.spacing))"
-        #expect(grid.rowSpacing == formatsColumn.spacing, "\(message)")
-    }
-
-    /// Jon's ruling: the popups column must start at the same Y as the other three columns'
-    /// first row, not float lower — checked against each control's own ALIGNMENT rect (not
-    /// its raw frame), converted into one shared coordinate space. Job511BatchLayoutTests'
-    /// own precedent comment names the reason: a bordered/bezeled `NSPopUpButton`'s raw
-    /// `.frame` carries several points of bezel chrome an `NSButton` checkbox's frame doesn't
-    /// (`alignmentRectInsets`, "a universal AppKit property of this control style") — Auto
-    /// Layout and `NSStackView`/`NSGridView` position views by their alignment rect for
-    /// exactly this reason, so comparing raw frames here would flag a chrome difference as a
-    /// layout bug it isn't.
-    @Test func picturesPopupTopAlignsWithTheChecklistColumnsFirstRow() throws {
-        let accessory = ExportAccessoryView(formats: [.rtf], notes: NoteSelection(), style: .native)
-        accessory.layoutSubtreeIfNeeded()
-
-        let firstFormatCheckbox = try Self.checkbox(
-            accessory, "export-format-\(ExportFormat.allCases[0].rawValue)-checkbox")
-        let picturesPopup = try Self.popup(accessory, "export-pictures-popup")
-
-        func alignmentTop(_ view: NSView) throws -> CGFloat {
-            let superview = try #require(view.superview, "\(view) has no superview to convert from")
-            let alignmentRect = view.alignmentRect(forFrame: view.frame)
-            return superview.convert(NSPoint(x: 0, y: alignmentRect.maxY), to: accessory).y
-        }
-
-        let checkboxTop = try alignmentTop(firstFormatCheckbox)
-        let popupTop = try alignmentTop(picturesPopup)
-        let message = "Pictures row (alignment top \(popupTop)) must align with the first "
-            + "checkbox's row (alignment top \(checkboxTop))"
-        #expect(abs(checkboxTop - popupTop) < 1.0, "\(message)")
-    }
+    // MARK: - Job 545 (R2)/549 (R2 respin): popup-column row spacing and alignment
+    //
+    // Job 545's own two tests here (`popupGridRowSpacingMatchesTheCheckboxColumnsOwnSpacing`,
+    // `picturesPopupTopAlignsWithTheChecklistColumnsFirstRow`) probed the `NSGridView` that
+    // mechanism used — job 549 replaced that mechanism outright with hard
+    // `NSLayoutConstraint`s (`ExportAccessoryView.makePopupsColumn`), so there is no grid left
+    // to probe. `Job549ExportAccessoryLayoutProofTests` is the real proof now: real hosted
+    // frames, checked against Jon's own verbatim ruling (Pictures-vs-Headers/Footers
+    // alignment, pulldown-to-pulldown gap vs. checkbox gap, column top-pin).
 }
