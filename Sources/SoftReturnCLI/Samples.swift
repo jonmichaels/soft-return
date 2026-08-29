@@ -1,7 +1,7 @@
 import Foundation
 
 /// The four public-domain WordStar sample documents bundled into `sr` (`--samples DIR`,
-/// S1 — parity with the flag of the same name added to ctrl-kd). Bundled as SPM resources
+/// S1 — matching the flag of the same name in ctrl-kd). Bundled as SPM resources
 /// (`Package.swift`'s `SoftReturnCLI` target) rather than embedded as Swift source, so the
 /// bytes on disk here and the bytes `sr` writes are provably the same file, not a
 /// hand-transcribed copy of it.
