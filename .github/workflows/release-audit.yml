@@ -1,0 +1,252 @@
+# release-audit.yml
+#
+# The user-eye release audit, as code: for a given published release,
+# verifies the assets actually match what the release checklist and
+# appcast promise, not just that an upload happened. Runs on every
+# release publish, and can be re-run by hand (workflow_dispatch, input
+# `tag`) against any past tag.
+#
+# Checks (see the inline python for exact logic):
+#   1. All 5 expected asset names present: Soft-Return-X.Y.Z.dmg,
+#      Soft-Return-CLI.pkg, Soft-Return.dmg, sr-X.Y.Z-windows-x86_64.zip,
+#      sr-windows-x86_64.zip. X.Y.Z is derived from the tag. The two
+#      windows names are skipped (reported, not silently omitted) when
+#      the release is marked prerelease on GitHub.
+#   2. Soft-Return.dmg is byte-identical to the versioned
+#      Soft-Return-X.Y.Z.dmg (stable-name copy must be the same bytes).
+#   3. The two windows zips are byte-identical to each other; sr.exe
+#      inside is extracted and `strings`-scanned: must contain "sr v"
+#      and must NOT contain any X.Y.Z-looking string other than the
+#      tag's own version (skipped for prerelease, same as above).
+#   4. When this release is currently the repo's "Latest": the three
+#      stable-name .../releases/latest/download/ links return 200.
+#   5. The appcast (fetched from the PUBLIC repo's raw main branch, not
+#      whatever ref triggered this run) has an <item> whose enclosure
+#      URL points into this tag, whose length attribute equals the
+#      actual downloaded asset's byte size, and which carries a
+#      (non-empty) sparkle:edSignature attribute.
+#
+# Prints a full pass/fail/skip table and exits nonzero on any FAIL.
+#
+# FAILURE HERE IS SIGNAL. This gate should always be green; red means
+# a release actually shipped assets that don't match what they claim
+# to be.
+name: release-audit
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to audit (e.g. v4.0.0 or v4.0.0b34)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Ensure strings(1) is available
+        run: |
+          command -v strings >/dev/null 2>&1 || (sudo apt-get update -y && sudo apt-get install -y binutils)
+
+      - name: Release audit
+        run: |
+          python3 - "$REPO" "$TAG" <<'PY'
+          import sys
+          import os
+          import re
+          import json
+          import subprocess
+          import urllib.request
+          import urllib.error
+          import hashlib
+          import zipfile
+          import tempfile
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          REPO = sys.argv[1]
+          TAG = sys.argv[2]
+
+          results = []  # (check_name, status, detail) — status in PASS/FAIL/SKIP
+
+          def record(name, ok, detail="", skip=False):
+              status = "SKIP" if skip else ("PASS" if ok else "FAIL")
+              results.append((name, status, detail))
+
+          def gh_api(path):
+              out = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+              if out.returncode != 0:
+                  raise RuntimeError(out.stderr.strip())
+              return json.loads(out.stdout)
+
+          if not TAG.startswith("v"):
+              print(f"FATAL: tag {TAG!r} does not start with 'v'")
+              sys.exit(2)
+          VERSION = TAG[1:]
+
+          try:
+              release = gh_api(f"repos/{REPO}/releases/tags/{TAG}")
+          except RuntimeError as e:
+              print(f"FATAL: could not fetch release {TAG!r} for {REPO}: {e}")
+              sys.exit(2)
+
+          prerelease = bool(release.get("prerelease"))
+          assets = {a["name"]: a for a in release.get("assets", [])}
+
+          versioned_dmg = f"Soft-Return-{VERSION}.dmg"
+          windows_versioned = f"sr-{VERSION}-windows-x86_64.zip"
+          windows_stable = "sr-windows-x86_64.zip"
+          core_names = [versioned_dmg, "Soft-Return-CLI.pkg", "Soft-Return.dmg"]
+          windows_names = [windows_versioned, windows_stable]
+
+          # --- Check 1: asset presence ---
+          for name in core_names:
+              record(f"asset-present:{name}", name in assets,
+                      "" if name in assets else "missing from release assets")
+          if prerelease:
+              for name in windows_names:
+                  record(f"asset-present:{name}", None, "prerelease tag — windows assets not expected", skip=True)
+          else:
+              for name in windows_names:
+                  record(f"asset-present:{name}", name in assets,
+                          "" if name in assets else "missing from release assets")
+
+          DL_DIR = pathlib.Path(tempfile.mkdtemp())
+
+          def download(name):
+              a = assets.get(name)
+              if a is None:
+                  return None
+              dest = DL_DIR / name
+              urllib.request.urlretrieve(a["browser_download_url"], dest)
+              return dest
+
+          def sha256(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          # --- Check 2: Soft-Return.dmg byte-identical to the versioned dmg ---
+          if versioned_dmg in assets and "Soft-Return.dmg" in assets:
+              p1 = download(versioned_dmg)
+              p2 = download("Soft-Return.dmg")
+              same = sha256(p1) == sha256(p2)
+              record("dmg-byte-identical", same, "" if same else f"{versioned_dmg} and Soft-Return.dmg differ")
+          else:
+              record("dmg-byte-identical", False, "cannot compare — one or both dmg assets missing")
+
+          # --- Check 3: windows zips byte-identical + sr.exe strings gate ---
+          if prerelease:
+              record("windows-zips-byte-identical", None, "prerelease tag", skip=True)
+              record("windows-exe-strings", None, "prerelease tag", skip=True)
+          elif windows_versioned in assets and windows_stable in assets:
+              wp1 = download(windows_versioned)
+              wp2 = download(windows_stable)
+              same = sha256(wp1) == sha256(wp2)
+              record("windows-zips-byte-identical", same,
+                      "" if same else f"{windows_versioned} and {windows_stable} differ")
+              try:
+                  with zipfile.ZipFile(wp2) as zf:
+                      exe_names = [n for n in zf.namelist() if n.lower().endswith("sr.exe")]
+                      if not exe_names:
+                          record("windows-exe-strings", False, f"no sr.exe found inside {windows_stable}")
+                      else:
+                          exe_path = DL_DIR / "sr.exe"
+                          exe_path.write_bytes(zf.read(exe_names[0]))
+                          out = subprocess.run(["strings", str(exe_path)], capture_output=True, text=True)
+                          blob = out.stdout
+                          bad_versions = sorted(set(re.findall(r"\d+\.\d+\.\d+[A-Za-z0-9]*", blob)) - {VERSION})
+                          has_banner = "sr v" in blob
+                          ok = not bad_versions and has_banner
+                          parts = []
+                          if bad_versions:
+                              parts.append(f"stray version string(s) in sr.exe: {', '.join(bad_versions)}")
+                          if not has_banner:
+                              parts.append("'sr v' banner prefix not found in sr.exe strings")
+                          record("windows-exe-strings", ok, "; ".join(parts))
+              except Exception as e:
+                  record("windows-exe-strings", False, f"error inspecting {windows_stable}: {e}")
+          else:
+              record("windows-zips-byte-identical", False, "cannot compare — one or both windows zip assets missing")
+              record("windows-exe-strings", False, "cannot inspect — windows zip asset(s) missing")
+
+          # --- Check 4: latest/download links, only when this release IS Latest ---
+          try:
+              latest = gh_api(f"repos/{REPO}/releases/latest")
+              is_latest = latest.get("tag_name") == TAG
+          except RuntimeError:
+              is_latest = False
+
+          stable_link_names = ["Soft-Return.dmg", "Soft-Return-CLI.pkg", "sr-windows-x86_64.zip"]
+          if not is_latest:
+              for name in stable_link_names:
+                  record(f"latest-download-200:{name}", None, "release is not the repo's current Latest", skip=True)
+          else:
+              for name in stable_link_names:
+                  url = f"https://github.com/{REPO}/releases/latest/download/{name}"
+                  code = None
+                  try:
+                      req = urllib.request.Request(url, method="HEAD")
+                      with urllib.request.urlopen(req, timeout=30) as resp:
+                          code = resp.status
+                  except urllib.error.HTTPError as e:
+                      code = e.code
+                  except Exception as e:
+                      code = f"error: {e}"
+                  ok = (code == 200)
+                  record(f"latest-download-200:{name}", ok, "" if ok else f"HTTP {code}")
+
+          # --- Check 5: appcast (raw main branch) ---
+          appcast_url = f"https://raw.githubusercontent.com/{REPO}/main/appcast.xml"
+          try:
+              with urllib.request.urlopen(appcast_url, timeout=30) as resp:
+                  appcast_xml = resp.read()
+              root = ET.fromstring(appcast_xml)
+              marker = f"/releases/download/{TAG}/"
+              matched = None
+              for item in root.iter("item"):
+                  enc = item.find("enclosure")
+                  if enc is not None and marker in enc.get("url", ""):
+                      matched = enc
+                      break
+              if matched is None:
+                  record("appcast-item-present", False, f"no <item> enclosure URL contains {marker!r}")
+              else:
+                  record("appcast-item-present", True)
+                  asset_name = matched.get("url", "").rsplit("/", 1)[-1]
+                  length_attr = matched.get("length")
+                  if asset_name in assets:
+                      p = download(asset_name)
+                      actual_size = p.stat().st_size
+                      ok = (length_attr is not None and int(length_attr) == actual_size)
+                      record("appcast-length-matches", ok,
+                              "" if ok else f"appcast length={length_attr} actual={actual_size}")
+                  else:
+                      record("appcast-length-matches", False, f"enclosure asset {asset_name!r} not found in release assets")
+                  sig = matched.get("{http://www.sparkle-project.org/xml-namespaces/sparkle}edSignature")
+                  record("appcast-edsignature-present", bool(sig), "" if sig else "edSignature attribute missing or empty")
+          except Exception as e:
+              record("appcast-fetch", False, f"error fetching/parsing appcast: {e}")
+
+          # --- Summary ---
+          print()
+          print(f"release-audit: {TAG}  (prerelease={prerelease}, latest={is_latest})")
+          print(f"{'CHECK':38} {'STATUS':6} DETAIL")
+          print("-" * 100)
+          any_fail = False
+          for name, status, detail in results:
+              if status == "FAIL":
+                  any_fail = True
+              print(f"{name:38} {status:6} {detail}")
+          print()
+
+          sys.exit(1 if any_fail else 0)
+          PY

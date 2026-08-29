@@ -1,0 +1,173 @@
+# version-audit.yml
+#
+# Enforces the single-source-of-truth version model (from the private
+# repo's docs/RELEASE-CHECKLIST.md "VERSION SOURCES" section — not
+# public, so the knowledge that section documents is embedded directly
+# in this workflow's script below):
+#
+#   - Sources/SoftReturnCLI/Arguments.swift's `srVersion` is the ONE
+#     engine version, and it is a plain numeric X.Y.Z (no "v" prefix,
+#     no "-beta"/"b34"-style suffix).
+#   - macos/Project.swift carries MARKETING_VERSION and
+#     CURRENT_PROJECT_VERSION in exactly FOUR target blocks (app,
+#     quicklook, importer, thumbnail); all four MARKETING_VERSION
+#     entries must be identical and equal to srVersion; all four
+#     CURRENT_PROJECT_VERSION entries must be identical integers.
+#   - Ruling 24 (2026-08-28): the sr --version banner no longer claims
+#     a version relationship to ctrl-kd ("parity" clause removed). The
+#     word "parity" must not appear anywhere under Sources/.
+#   - Arguments.swift must not carry any other X.Y.Z-looking string
+#     besides srVersion's own value — this is exactly the shape of
+#     defect (stale changelog/doc-comment drift) that shipped in
+#     v4.0.0 uncaught.
+#
+# NOTE (scope, read before extending): the private checklist also names
+# two known benign X.Y.Z lookalikes that are NOT checked by this
+# workflow because they live outside this workflow's scoped files —
+# AboutInfo.swift's plist-read fallback literal and AppDelegate's
+# DEBUG-only download-progress fixture asset name (both under
+# macos/SoftReturn/Support/, not Sources/ or Project.swift). If a
+# future check widens to scan those files too, exempt those two
+# specific literals rather than failing on them.
+#
+# FAILURE HERE IS SIGNAL. This gate should always be green; red means
+# a version-bearing file actually drifted from the single source.
+name: version-audit
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version audit
+        run: |
+          python3 - <<'PY'
+          import re
+          import sys
+          import pathlib
+
+          ARGS_PATH = "Sources/SoftReturnCLI/Arguments.swift"
+          PROJECT_PATH = "macos/Project.swift"
+
+          failures = []
+
+          def fail(check, msg):
+              failures.append(f"[{check}] {msg}")
+
+          def read(path):
+              p = pathlib.Path(path)
+              if not p.exists():
+                  fail("file-exists", f"{path}: not found")
+                  return None
+              return p.read_text()
+
+          args_text = read(ARGS_PATH)
+          project_text = read(PROJECT_PATH)
+          sr_version = None
+
+          # --- Check 1: exactly one `srVersion = "X.Y.Z"`, plain numeric ---
+          if args_text is not None:
+              decl_re = re.compile(r'\bsrVersion\s*=\s*"([^"]*)"')
+              matches = []
+              for i, line in enumerate(args_text.splitlines(), start=1):
+                  m = decl_re.search(line)
+                  if m:
+                      matches.append((i, m.group(1)))
+
+              if len(matches) == 0:
+                  fail("srVersion-count", f"{ARGS_PATH}: no `srVersion = \"...\"` declaration found")
+              elif len(matches) > 1:
+                  loc = ", ".join(f"{ARGS_PATH}:{ln}" for ln, _ in matches)
+                  fail("srVersion-count", f"expected exactly one srVersion declaration, found {len(matches)} at {loc}")
+              else:
+                  ln, val = matches[0]
+                  if not re.fullmatch(r"\d+\.\d+\.\d+", val):
+                      fail("srVersion-format", f'{ARGS_PATH}:{ln}: srVersion = "{val}" is not plain numeric X.Y.Z (no "v" prefix, no suffix)')
+                  else:
+                      sr_version = val
+
+          # --- Check 2: Project.swift MARKETING_VERSION / CURRENT_PROJECT_VERSION ---
+          if project_text is not None:
+              mv_re = re.compile(r'"MARKETING_VERSION"\s*:\s*"([^"]*)"')
+              cpv_re = re.compile(r'"CURRENT_PROJECT_VERSION"\s*:\s*"([^"]*)"')
+              mv_matches, cpv_matches = [], []
+              for i, line in enumerate(project_text.splitlines(), start=1):
+                  for m in mv_re.finditer(line):
+                      mv_matches.append((i, m.group(1)))
+                  for m in cpv_re.finditer(line):
+                      cpv_matches.append((i, m.group(1)))
+
+              if len(mv_matches) != 4:
+                  loc = ", ".join(f"{PROJECT_PATH}:{ln}" for ln, _ in mv_matches)
+                  fail("marketing-version-count", f"expected exactly 4 MARKETING_VERSION entries, found {len(mv_matches)}" + (f" at {loc}" if loc else ""))
+              else:
+                  vals = {v for _, v in mv_matches}
+                  if len(vals) != 1:
+                      detail = ", ".join(f"{PROJECT_PATH}:{ln}={v!r}" for ln, v in mv_matches)
+                      fail("marketing-version-identical", f"MARKETING_VERSION entries are not all identical: {detail}")
+                  elif sr_version is not None and next(iter(vals)) != sr_version:
+                      loc = ", ".join(f"{PROJECT_PATH}:{ln}" for ln, _ in mv_matches)
+                      fail("marketing-version-matches-srversion", f"MARKETING_VERSION={next(iter(vals))!r} (at {loc}) does not match srVersion={sr_version!r}")
+
+              if len(cpv_matches) != 4:
+                  loc = ", ".join(f"{PROJECT_PATH}:{ln}" for ln, _ in cpv_matches)
+                  fail("current-project-version-count", f"expected exactly 4 CURRENT_PROJECT_VERSION entries, found {len(cpv_matches)}" + (f" at {loc}" if loc else ""))
+              else:
+                  vals = {v for _, v in cpv_matches}
+                  if len(vals) != 1:
+                      detail = ", ".join(f"{PROJECT_PATH}:{ln}={v!r}" for ln, v in cpv_matches)
+                      fail("current-project-version-identical", f"CURRENT_PROJECT_VERSION entries are not all identical: {detail}")
+                  else:
+                      v = next(iter(vals))
+                      if not re.fullmatch(r"\d+", v):
+                          loc = ", ".join(f"{PROJECT_PATH}:{ln}" for ln, _ in cpv_matches)
+                          fail("current-project-version-integer", f"CURRENT_PROJECT_VERSION={v!r} (at {loc}) is not a plain integer")
+
+          # --- Check 3: "parity" banned anywhere under Sources/ (ruling 24) ---
+          src_root = pathlib.Path("Sources")
+          if src_root.is_dir():
+              hits = []
+              for path in sorted(src_root.rglob("*")):
+                  if path.is_file():
+                      try:
+                          text = path.read_text(errors="ignore")
+                      except Exception:
+                          continue
+                      for i, line in enumerate(text.splitlines(), start=1):
+                          if re.search(r"parity", line, re.IGNORECASE):
+                              hits.append(f"{path}:{i}")
+              if hits:
+                  shown = "; ".join(hits[:25])
+                  more = f" ... and {len(hits) - 25} more" if len(hits) > 25 else ""
+                  fail("no-parity-in-sources", f"the word 'parity' must not appear anywhere in Sources/ (ruling 24) — {len(hits)} hit(s): {shown}{more}")
+          else:
+              fail("sources-dir", "Sources/ directory not found")
+
+          # --- Check 4: no other X.Y.Z-looking version in Arguments.swift ---
+          if args_text is not None and sr_version is not None:
+              ver_re = re.compile(r"\d+\.\d+\.\d+")
+              stray = []
+              for i, line in enumerate(args_text.splitlines(), start=1):
+                  for m in ver_re.finditer(line):
+                      if m.group(0) != sr_version:
+                          stray.append(f"{ARGS_PATH}:{i}: {m.group(0)!r}")
+              if stray:
+                  fail("no-stray-versions-in-arguments", f"found X.Y.Z-looking string(s) other than srVersion ({sr_version!r}): " + "; ".join(stray))
+
+          print()
+          if failures:
+              print(f"version-audit: FAIL ({len(failures)} check(s))\n")
+              for f in failures:
+                  print(" -", f)
+              sys.exit(1)
+          else:
+              print(f"version-audit: PASS — srVersion={sr_version!r}, all checks green")
+          PY
