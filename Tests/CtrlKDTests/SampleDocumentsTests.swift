@@ -1,6 +1,14 @@
 import Foundation
 import Testing
 
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#elseif canImport(ucrt)
+import ucrt
+#endif
+
 @testable import CtrlKD
 @testable import SoftReturnCLI
 
@@ -116,16 +124,12 @@ private final class Recorder {
             "raw Foundation error dump leaked through instead of a plain sentence")
 }
 
-/// A genuine filesystem round trip (real temp directory, real `chmod`), not the in-memory
-/// recorder above -- proves `--samples` works end to end against real I/O, permission
-/// failure included. Same real-environment construction `main.swift` uses.
-@Test func samplesFlagRealDiskRoundTripAndRealPermissionFailure() throws {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("sr-samples-test-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: dir) }
-
-    let environment = CLIEnvironment(
+/// Real-environment construction (real temp directory, real `chmod`), not the in-memory
+/// recorder above -- shared by the two tests below, which together prove `--samples` works
+/// end to end against real I/O, permission failure included. Same real-environment
+/// construction `main.swift` uses.
+private func sampleDocumentsCLIEnvironment() -> CLIEnvironment {
+    CLIEnvironment(
         readFile: { [UInt8](try Data(contentsOf: URL(fileURLWithPath: $0))) },
         writeFile: { try Data($1).write(to: URL(fileURLWithPath: $0)) },
         createDirectory: { try FileManager.default.createDirectory(
@@ -133,6 +137,17 @@ private final class Recorder {
         writeOut: { _ in }, writeErr: { _ in },
         listDirectory: { try? FileManager.default.contentsOfDirectory(atPath: $0) }
     )
+}
+
+/// The happy path: `--samples DIR` writes all four files, byte-identical, against a real
+/// writable directory. Runs regardless of who owns the process (root or not).
+@Test func samplesFlagRealDiskRoundTrip() throws {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sr-samples-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let environment = sampleDocumentsCLIEnvironment()
 
     #expect(run(["--samples", dir.path], environment: environment) == ExitStatus.ok)
     for base in sampleBaseNames {
@@ -140,6 +155,25 @@ private final class Recorder {
         let expected = try repoSampleBytes(base)
         #expect([UInt8](written) == expected, "\(base).WS not byte-identical on real disk")
     }
+}
+
+// CI also runs this suite inside a Linux Docker container as root, where permission
+// bits are ignored entirely (chmod 555 on our own tempdir does not stop root from
+// writing into it), so the failure path below cannot be exercised there. Gated rather
+// than silently skipped: `swift test` reports it by name as "running as root —
+// permission bits are ignored, the failure path cannot be exercised" instead of quietly
+// vanishing from the count.
+@Test(.enabled(
+    if: geteuid() != 0,
+    "running as root — permission bits are ignored, the failure path cannot be exercised"
+))
+func samplesFlagRealPermissionFailure() throws {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sr-samples-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let environment = sampleDocumentsCLIEnvironment()
 
     // Linux checks the OWNER's own permission bits regardless of who is running the
     // process (no root here), so chmod 555 on our own tempdir really does deny our own
