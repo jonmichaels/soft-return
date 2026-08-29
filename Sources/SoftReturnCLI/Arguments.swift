@@ -10,7 +10,11 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 4.0.0 is the Soft Return v4.0.0 public release
+/// CLI's user-visible contract. 4.0.1 is the v4.0.1 patch release, the first cut built
+/// under docs/RELEASE-CHECKLIST.md top to bottom: no engine/CLI behavior change, released
+/// in lockstep with the app-side fixes it ships alongside (Export As sheet row-spacing/
+/// top-alignment, Batch window row-spacing/vertical-centering, and removal of the dead
+/// cross-product banner-parsing test path). 4.0.0 is the Soft Return v4.0.0 public release
 /// (Jon's ruling 2026-08-17, executed 2026-08-28: sr becomes 4.0.0 at the public
 /// release). 3.2.0 was the b23 exports-overhaul batch (2026-08-17,
 /// ctrl-kd's own modern-reflow branch, merged upstream at e9f6c42): Modern paragraph
@@ -57,7 +61,7 @@ import CtrlKD
 /// capacity/top/lead from `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose);
 /// 1.1.0 added the note-selection flags and the expanded --diagnose fields; 1.0.0 was the
 /// first CLI release.
-public let srVersion = "4.0.0"
+public let srVersion = "4.0.1"
 
 
 /// `sr v2.0.0`.
