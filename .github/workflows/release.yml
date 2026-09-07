@@ -1,0 +1,228 @@
+# release.yml
+#
+# Automates the two release-checklist steps that were previously manual:
+# gating that all required assets are actually uploaded, and bumping the
+# Homebrew tap formula (Formula/sr.rb in the separate homebrew-tap repo).
+# Mirrors ctrl-kd's publish.yml pattern (release: published trigger, a
+# guard job, workflow_dispatch fallback, a tap-bump job driven by the
+# TAP_DEPLOY_KEY repo secret).
+#
+# What this workflow does NOT do: build, sign, notarize, or upload the
+# release assets themselves. Those steps still happen on the Mac worker
+# per the (private) release checklist; this workflow only verifies what
+# landed and pushes the resulting formula bump.
+#
+# Jobs:
+#   guard      - the release tag must equal srVersion in
+#                Sources/SoftReturnCLI/Arguments.swift, the single
+#                machine-readable version source (see version-audit.yml's
+#                header comment for why that file is canonical). Fails
+#                loudly on any mismatch or missing declaration.
+#   asset-gate - the release must carry all 5 required asset names
+#                (stable + versioned dmg, CLI pkg, stable + versioned
+#                windows zip); each is downloaded and checked for
+#                nonzero size, and the stable/versioned pairs must be
+#                byte-identical.
+#   tap        - bumps Formula/sr.rb in jonmichaels/homebrew-tap to the
+#                new tag's source-tarball URL and sha256, pushed as
+#                release-automation. Idempotent (no-op if the formula
+#                already points at this tag). Requires the TAP_DEPLOY_KEY
+#                repo secret (an SSH deploy key scoped to homebrew-tap);
+#                fails with a clear message, rather than hanging, if it
+#                is missing or rejected.
+#
+# FAILURE HERE IS SIGNAL. This gate should always be green; red means a
+# release actually shipped something short of what it claims to ship.
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (vX.Y.Z) to run for"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - id: v
+        name: Tag must equal srVersion (Sources/SoftReturnCLI/Arguments.swift)
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          ARGS="Sources/SoftReturnCLI/Arguments.swift"
+          if [ ! -f "$ARGS" ]; then
+            echo "::error::$ARGS not found at ref $TAG"
+            exit 1
+          fi
+          VER="$(sed -n 's/^public let srVersion = "\(.*\)"/\1/p' "$ARGS")"
+          echo "tag=$TAG srVersion=$VER"
+          if [ -z "$VER" ]; then
+            echo "::error::could not find a \`srVersion = \"X.Y.Z\"\` declaration in $ARGS"
+            exit 1
+          fi
+          if [ "v$VER" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match srVersion $VER (from $ARGS)"
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+  asset-gate:
+    needs: guard
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - name: Verify required release assets are present and byte-consistent
+        run: |
+          python3 - <<'PY'
+          import sys, os, json, subprocess, urllib.request, hashlib, pathlib, tempfile
+
+          REPO = os.environ["REPO"]
+          TAG = os.environ["TAG"]
+          VERSION = os.environ["VERSION"]
+
+          def gh_api(path):
+              out = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+              if out.returncode != 0:
+                  print(f"::error::gh api {path} failed: {out.stderr.strip()}")
+                  sys.exit(1)
+              return json.loads(out.stdout)
+
+          release = gh_api(f"repos/{REPO}/releases/tags/{TAG}")
+          assets = {a["name"]: a for a in release.get("assets", [])}
+
+          versioned_dmg = f"Soft-Return-{VERSION}.dmg"
+          windows_versioned = f"sr-{VERSION}-windows-x86_64.zip"
+          windows_stable = "sr-windows-x86_64.zip"
+          required = [versioned_dmg, "Soft-Return-CLI.pkg", "Soft-Return.dmg",
+                      windows_versioned, windows_stable]
+
+          missing = [n for n in required if n not in assets]
+          if missing:
+              print("::error::missing release asset(s): " + ", ".join(missing))
+              sys.exit(1)
+
+          DL = pathlib.Path(tempfile.mkdtemp())
+
+          def download(name):
+              dest = DL / name
+              urllib.request.urlretrieve(assets[name]["browser_download_url"], dest)
+              size = dest.stat().st_size
+              if size <= 0:
+                  print(f"::error::{name} downloaded as 0 bytes")
+                  sys.exit(1)
+              print(f"downloaded {name}: {size} bytes")
+              return dest
+
+          def sha256(p):
+              return hashlib.sha256(p.read_bytes()).hexdigest()
+
+          failures = []
+
+          p_pkg = download("Soft-Return-CLI.pkg")
+
+          p_ver_dmg = download(versioned_dmg)
+          p_stable_dmg = download("Soft-Return.dmg")
+          if sha256(p_ver_dmg) != sha256(p_stable_dmg):
+              failures.append(f"{versioned_dmg} and Soft-Return.dmg are not byte-identical")
+
+          p_ver_win = download(windows_versioned)
+          p_stable_win = download(windows_stable)
+          if sha256(p_ver_win) != sha256(p_stable_win):
+              failures.append(f"{windows_versioned} and {windows_stable} are not byte-identical")
+
+          if failures:
+              print("::error::" + "; ".join(failures))
+              sys.exit(1)
+
+          print(f"asset-gate: PASS -- all 5 required assets present, non-empty, and byte-consistent for {TAG}")
+          PY
+
+  tap:
+    needs: [guard, asset-gate]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - name: TAP_DEPLOY_KEY must be set
+        run: |
+          if [ -z "${{ secrets.TAP_DEPLOY_KEY }}" ]; then
+            echo "::error::secrets.TAP_DEPLOY_KEY is not set on this repo -- cannot push to homebrew-tap. Set it (an SSH deploy key with write access to jonmichaels/homebrew-tap) and re-run."
+            exit 1
+          fi
+
+      - name: Bump Formula/sr.rb in homebrew-tap
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          set -e
+          mkdir -p ~/.ssh && printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          if ! git clone --depth 1 git@github.com:jonmichaels/homebrew-tap tap 2>clone.err; then
+            cat clone.err >&2
+            echo "::error::could not clone homebrew-tap -- TAP_DEPLOY_KEY may be missing, expired, or lack write access"
+            exit 1
+          fi
+          cd tap
+
+          NEW_URL="https://github.com/jonmichaels/soft-return/archive/refs/tags/${TAG}.tar.gz"
+
+          if grep -qF "$NEW_URL" Formula/sr.rb; then
+            echo "formula already at this version -- nothing to do"
+            exit 0
+          fi
+
+          # GitHub generates tag-tarball archives lazily; retry with backoff.
+          SHA=""
+          for i in 1 2 3 4 5 6 7 8; do
+            if curl -fsSL -o /tmp/sr-tag.tar.gz "$NEW_URL"; then
+              SIZE="$(stat -c%s /tmp/sr-tag.tar.gz 2>/dev/null || stat -f%z /tmp/sr-tag.tar.gz)"
+              if [ "${SIZE:-0}" -gt 0 ]; then
+                SHA="$(sha256sum /tmp/sr-tag.tar.gz | awk '{print $1}')"
+                break
+              fi
+            fi
+            echo "tarball not ready yet (attempt $i/8), retrying..."
+            sleep $((i * 5))
+          done
+          if [ -z "$SHA" ]; then
+            echo "::error::failed to download/hash $NEW_URL after retries"
+            exit 1
+          fi
+          echo "sha256=$SHA"
+
+          sed -i "s|^  url \".*\"|  url \"$NEW_URL\"|" Formula/sr.rb
+          sed -i "0,/^  sha256 \"[0-9a-fA-F]\{64\}\"/s//  sha256 \"$SHA\"/" Formula/sr.rb
+          sed -i "0,/^  sha256 \"TBD\".*/s//  sha256 \"$SHA\"/" Formula/sr.rb
+
+          if git diff --quiet; then
+            echo "formula already at this version -- nothing to do"
+            exit 0
+          fi
+
+          git config user.name "release-automation"
+          git config user.email "release-automation@users.noreply.github.com"
+          git commit -am "sr ${VERSION} (automated)"
+
+          if ! git push origin main; then
+            echo "::error::push to homebrew-tap main failed -- check TAP_DEPLOY_KEY has write access to jonmichaels/homebrew-tap"
+            exit 1
+          fi

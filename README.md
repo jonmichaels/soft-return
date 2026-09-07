@@ -38,6 +38,24 @@ Georgia 14. WordStar v5-v7 with specified fonts continue to use them.
 [ctrl-kd](https://github.com/jonmichaels/ctrl-kd) -- Python converter for WordStar for DOS docs. The first 
 app we made on this journey.
 
+## Release Automation
+
+Publishing a GitHub Release (or a `workflow_dispatch` run with a `tag` input) on this repo
+triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
+
+1. Confirms the release tag matches the app's own version (`srVersion` in
+   `Sources/SoftReturnCLI/Arguments.swift`).
+2. Confirms all required release assets are present, non-empty, and that the stable-name
+   downloads (`Soft-Return.dmg`, `sr-windows-x86_64.zip`) are byte-identical to their versioned
+   counterparts.
+3. Bumps the [Homebrew tap formula](https://github.com/jonmichaels/homebrew-tap) to the new
+   tag's source archive and its sha256, and pushes that commit.
+
+What it does **not** do: build, sign, notarize, or upload the release assets themselves --
+those still happen on a Mac, by hand, before the release is published, per the (private)
+release checklist -- nor does it sign the Sparkle appcast update, which Jon does locally with
+his own EdDSA key.
+
 ## Lineage
 
 I wanted to be able to see the 70-some WordStar 4 files I had from junior high and high school. In about 
