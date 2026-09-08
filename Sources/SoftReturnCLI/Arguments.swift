@@ -245,8 +245,9 @@ let sentenceSpacingChoices = ["auto", "keep", "single"]
 ///
 /// `package` (not `internal`), planning #205 Task 2: `Sources/GenerateSawyerPresetDriftSR`
 /// (a same-package, non-`@testable` executable target) needs this table to render the
-/// `sawyer`-preset self-recorded drift file `CorpusParityTests` checks against — still not
-/// part of this library's PUBLIC API surface, just visible package-wide.
+/// `sawyer`-preset self-recorded drift file the corpus geometry-drift test suite (in
+/// `Tests/CtrlKDTests/`) checks against — still not part of this library's PUBLIC API
+/// surface, just visible package-wide.
 package let pagePresets: [String: PageSettings] = [
     "default": PageSettings(),
     "sawyer": PageSettings(mtLines: 1195.0 / 1440.0 * 6.0, mbLines: 6.0, poCols: 7.0),
