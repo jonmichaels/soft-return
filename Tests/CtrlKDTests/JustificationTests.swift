@@ -150,3 +150,39 @@ private func justifyDoc(_ src: [UInt8]) -> Document {
     let xBB = try #require(wordX(pdf, "BB"))
     #expect(xBB == 2 * 7.2 + 7.2)     // natural, not stretched to the 40-col margin
 }
+
+// -------------------- notes-paginator scope gap (planning #238, cause 1) --------------------
+
+/// Planning #238 scope gap, ctrl-kd port (aeb34ad's sibling fix, same commit as this
+/// file): a document carrying a REAL footnote/endnote/annotation anywhere routes its
+/// ENTIRE Printed body through `resolvePrintedBody` (`hasPlaceableNotes` gates
+/// `layoutPrintedPages` to this path instead of `resolvePlainBody`) -- a SEPARATE
+/// PageLine-building walk that, before this fix, never set `justifyRightX` at all, so
+/// `.oj on` silently stopped stretching ANY line in such a document, not just a line
+/// that itself carries the footnote reference. Two-line `.oj on` block here carries no
+/// note reference of its own; the real footnote sits in a second, unrelated paragraph
+/// purely to route the whole document through the notes paginator and prove the FIRST
+/// paragraph is still justified once it does. Port of ctrl-kd's
+/// `test_justification_still_applies_when_the_document_has_a_real_footnote`.
+@Test func justificationStillAppliesWhenTheDocumentHasARealFootnote() throws {
+    let doc = justifyDoc(bytes(".oj on\r\n") + bytes("AA BB CC") + SOFT + bytes("DD.") + HARD
+        + bytes("\r\nElsewhere.") + ws7Note(bytes("A note.")) + HARD)
+    #expect(!doc.notes.isEmpty && doc.notes[0].kind == .footnote)
+    #expect(hasPlaceableNotes(doc), "fixture must route through resolvePrintedBody")
+    let b = doc.blocks[0]
+    #expect(b.align == .justify)
+    let pdf = emitPDF(doc, mode: .printed)
+    let xAA = try #require(wordX(pdf, "AA"))
+    let xBB = try #require(wordX(pdf, "BB"))
+    let xCC = try #require(wordX(pdf, "CC"))
+    #expect(xAA == 0.0)
+    let base = (144.0 - 8 * 7.2) / 2       // same arithmetic as the plain-path test above
+    let xBBExpected = 2 * 7.2 + (7.2 + base)
+    let xCCExpected = xBBExpected + 2 * 7.2 + (7.2 + base)
+    #expect(xBB == (xBBExpected * 10).rounded() / 10)
+    #expect(xCC == (xCCExpected * 10).rounded() / 10)
+    #expect(xCC + 2 * 7.2 == 144.0)
+    // The paragraph's own last line stays ragged here too (rule 1) -- unaffected by
+    // which pagination path built it.
+    #expect(wordX(pdf, "DD.") == 0.0)
+}

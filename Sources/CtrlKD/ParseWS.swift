@@ -667,6 +667,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // Register b31: `.po` gets the SAME absolute-then-back-dated treatment as
             // `.lh` above, for the same reason -- see `Line.poCols`.
             curLine.poCols = fmt.poCols ?? defaultPoCols
+            curLine.poeCols = fmt.poeCols
+            curLine.pooCols = fmt.pooCols
             // Register b32-N10 (mirrored from ctrl-kd b48148c): the `.sr` roll in force
             // as this line ends -- same "read the running state at close time" capture as
             // lead48/poCols/kerning just above. Never back-dated -- see `Line.roll48`.
@@ -1253,6 +1255,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             blank.lead48 = fmt.lead48 ?? defaultLh48
             // Register b31: same treatment as `lead48` just above -- see `Line.poCols`.
             blank.poCols = fmt.poCols ?? defaultPoCols
+            blank.poeCols = fmt.poeCols
+            blank.pooCols = fmt.pooCols
             // Register b32-N10: same treatment as `lead48`/`poCols` just above -- see
             // `Line.roll48`.
             blank.roll48 = fmt.subSuperRoll48 ?? defaultSr48

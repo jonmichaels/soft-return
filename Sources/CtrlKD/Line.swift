@@ -85,6 +85,17 @@ public struct Line: Hashable, Sendable {
     /// margin, 2.05in left of real WordStar 7 output. Register b31.
     public var poCols: Double?
 
+    /// The `.poe`/`.poo` (planning #231, even/odd page offset) IN FORCE ON THIS LINE,
+    /// same print-columns unit as `poCols` above, `nil` each meaning "no override in
+    /// force yet." Unlike `poCols`, there is NO document-wide default to back-date
+    /// against — a document that never uses `.poe`/`.poo` never sets either field on
+    /// any line, zero cost. Which of the two (if either) actually governs a given line
+    /// depends on the PARITY of the page it lands on, not knowable until pagination —
+    /// `PDFLayout.swift`'s `closePage` reads these once that is known; nothing here
+    /// resolves a final left origin. Port of ctrl-kd's `Line.poe_cols`/`poo_cols`.
+    public var poeCols: Double?
+    public var pooCols: Double?
+
     /// The `.sr` sub/superscript roll IN FORCE ON THIS LINE, in 1/48in units (WordStar's
     /// own unit for the command) — STATEFUL exactly like `lead48`/`poCols` above
     /// (register b32-N10, mirrored from ctrl-kd b48148c): a sub/superscript roll re-fires
@@ -136,7 +147,8 @@ public struct Line: Hashable, Sendable {
     public init(spans: [Span] = [], soft: Bool = false, softpage: Bool = false,
                 lead48: Double? = nil, overprint: Bool = false,
                 brkRaw: [UInt8]? = nil, togEnd: [UInt8] = [], fixups: [Fixup] = [],
-                kerning: Bool = true, poCols: Double? = nil, roll48: Double? = nil) {
+                kerning: Bool = true, poCols: Double? = nil, roll48: Double? = nil,
+                poeCols: Double? = nil, pooCols: Double? = nil) {
         self.spans = spans
         self.soft = soft
         self.softpage = softpage
@@ -148,6 +160,8 @@ public struct Line: Hashable, Sendable {
         self.fixups = fixups
         self.poCols = poCols
         self.roll48 = roll48
+        self.poeCols = poeCols
+        self.pooCols = pooCols
     }
 
     /// All span text joined, e.g. for search or format-agnostic display.

@@ -67,6 +67,19 @@ struct FormatState {
     /// `blockFormat` and therefore never closes a block.
     var poCols: Double? = nil
 
+    /// `.poe`/`.poo` (planning #231, even/odd page offset) — independently STATEFUL,
+    /// same family as `poCols` above (no corpus evidence a later plain `.po` clears
+    /// them, so the conservative reading — every command in this struct is
+    /// independently stateful — stands until evidence says otherwise). `nil` each: "no
+    /// override in force." Carried per line (`Line.poeCols`/`pooCols`) for the same
+    /// reason `poCols` is: which of the two ever governs a given physical line depends
+    /// on the PARITY of the page it lands on, not known until pagination
+    /// (`PDFLayout.swift`'s `closePage`) — this struct can only record what was in
+    /// force, never resolve the final answer. Port of ctrl-kd's `state['poe_cols']`/
+    /// `state['poo_cols']`.
+    var poeCols: Double? = nil
+    var pooCols: Double? = nil
+
     /// Everything stamped onto a `Block` when it opens. A change to ANY of these has to
     /// close the current block, because a single block cannot hold two values of it:
     /// `.oc on` mid-paragraph means the lines after it are centred and the ones before
@@ -240,6 +253,17 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // `.po` case. Register b31.
         guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
         state.poCols = resolveColsArg(value, unit)
+    case "POE":
+        // Planning #231: even-page offset — RUNNING state, same shape as `.po` just
+        // above, but governs only the EVEN-page parity. See `FormatState.poeCols` for
+        // the "independently stateful, never cleared by a later plain `.po`" reading
+        // this follows.
+        guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
+        state.poeCols = resolveColsArg(value, unit)
+    case "POO":
+        // Same as `.poe` just above, ODD-page parity. See `FormatState.pooCols`.
+        guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
+        state.pooCols = resolveColsArg(value, unit)
     case "LM", "RM", "PM":
         // Print columns at 10 CPI, matching `.po`; a unit suffix converts, since the
         // archive writes both `.rm 65` and `.rm 6.5"`.

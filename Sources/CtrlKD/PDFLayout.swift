@@ -62,6 +62,19 @@ public enum PDFMetrics {
 /// 48ths. Lines this emitter MAKES rather than reads (footnote areas, wrapped Modern text,
 /// blank fillers) leave it `nil` by construction: they are the emitter's own furniture and
 /// belong on the document's default lead.
+/// Planning #231: a line's own candidate left origin for EACH page parity -- a named
+/// `Hashable` struct rather than a bare tuple (Swift tuples don't conform to
+/// `Hashable`/`Equatable`, which `PageLine`/`Page` both need for their own collection
+/// conformances). Port of ctrl-kd's `PageLine.parity_left` `(even_pt, odd_pt)` pair.
+public struct ParityLeft: Hashable, Sendable {
+    public var even: Double
+    public var odd: Double
+    public init(even: Double, odd: Double) {
+        self.even = even
+        self.odd = odd
+    }
+}
+
 public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplaceableCollection,
                         ExpressibleByArrayLiteral, Hashable, Sendable {
     public var spans: [Span]
@@ -161,6 +174,26 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     /// (ctrl-kd aeb34ad).
     public var justifyRightX: Double?
 
+    /// `parityLeft` (planning #231, `.poe`/`.poo` even/odd page offset): `(evenPt,
+    /// oddPt)` -- this line's own resolved left origin for EACH page parity, or `nil`
+    /// for a line no `.poe`/`.poo` ever governs. `resolvePlainBody`/`resolvePrintedBody`
+    /// cannot resolve which of the two applies at BUILD time (that depends on which
+    /// page this line lands on, a pagination question); `left` stays `nil` until the
+    /// page-filling loop's own `closePage` (`layoutPrintedPagesPlain` -- the one place
+    /// that actually knows this line's page's parity) picks the right member of the
+    /// pair and overwrites it. Port of ctrl-kd's `PageLine.parity_left`.
+    ///
+    /// NOT resolved by the notes-aware paginator (`layoutPrintedPages`, used when
+    /// `hasPlaceableNotes(doc)`) -- same as ctrl-kd's own `_paginate_printed_notes` --
+    /// a documented, evidence-based scope limit: zero corpus documents combine a real
+    /// footnote/endnote/annotation with `.poe`/`.poo` (checked directly against the 41
+    /// real documents this feature's answer-key re-record touched), so there is
+    /// nothing to verify a resolution against; left unresolved in BOTH engines rather
+    /// than risk one engine "fixing" a path the other cannot verify, which would break
+    /// `AnswerKeyParityTests`' sr == ctrl-kd cell-for-cell contract for the first real
+    /// document that combines them.
+    public var parityLeft: ParityLeft?
+
     public init() {
         spans = []
         lead = nil
@@ -174,12 +207,14 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         left = nil
         roll = nil
         justifyRightX = nil
+        parityLeft = nil
     }
 
     public init(_ spans: [Span], soft: Bool = false, lead: Double? = nil,
                 overprint: Bool = false, fi: Double? = nil, bi: Int? = nil,
                 image: ImageRef? = nil, ws4Spacing: Bool = false, kerning: Bool = true,
-                left: Double? = nil, roll: Double? = nil, justifyRightX: Double? = nil) {
+                left: Double? = nil, roll: Double? = nil, justifyRightX: Double? = nil,
+                parityLeft: ParityLeft? = nil) {
         self.spans = spans
         self.soft = soft
         self.lead = lead
@@ -192,6 +227,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         self.left = left
         self.roll = roll
         self.justifyRightX = justifyRightX
+        self.parityLeft = parityLeft
     }
 
     public init(arrayLiteral elements: Span...) {
@@ -1341,6 +1377,9 @@ private func resolvePrintedBody(
         // `pixReservedAdvance`.
         var li = 0
         while li < block.lines.count {
+            // planning #238 scope gap: same pre-increment index `resolvePlainBody`
+            // uses to spot a block's own last line.
+            let lineIdx = li
             let line = block.lines[li]
             li += 1
             let baseSpans = line.spans.map { sp -> Span in
@@ -1387,6 +1426,19 @@ private func resolvePrintedBody(
             // means agrees with the document default" contract `line.lead48` above
             // already has (`ParseWS.swift`'s back-dating pass).
             let ownLeft = line.poCols.map { resolveLeftPt($0, size: sizeForLeft) }
+            // Planning #231 (.poe/.poo even/odd page offset): see
+            // `resolvePlainBody`'s own identical comment -- duplicated here for the
+            // same reason every other quantity in this sibling function is (different
+            // local names for the same thing). See `PageLine.parityLeft`'s own doc
+            // comment for why this candidate, unlike `resolvePlainBody`'s, is never
+            // actually resolved on this (notes-aware) path.
+            var ownParityLeft: ParityLeft?
+            if line.poeCols != nil || line.pooCols != nil {
+                let fallbackPt = ownLeft ?? printedLeft(doc, size: sizeForLeft)
+                ownParityLeft = ParityLeft(
+                    even: line.poeCols.map { resolveLeftPt($0, size: sizeForLeft) } ?? fallbackPt,
+                    odd: line.pooCols.map { resolveLeftPt($0, size: sizeForLeft) } ?? fallbackPt)
+            }
             // Fix C (b26-print-fidelity-2): same blank/entering-line split as
             // `resolvePlainBody` — see its own comment, `styleLeadPt`'s `raw` parameter,
             // and `enteringLeadPt`.
@@ -1443,9 +1495,30 @@ private func resolvePrintedBody(
             // A PageLine, not a bare list of spans, so the line's own `.lh` survives the
             // footnote paginator too — body lines keep their lead whether or not the
             // document has notes.
+            //
+            // Planning #238 scope gap (ctrl-kd `_body_stream_printed`, same commit):
+            // this function is `resolvePlainBody`'s own sibling for a document with
+            // placeable footnotes/endnotes (`layoutPrintedPages`/`hasPlaceableNotes`
+            // routes here instead of `resolvePlainBody` whenever any real note
+            // exists), but it never set `justifyRightX` -- a `.oj on` paragraph in a
+            // document that ALSO carries a real footnote anywhere lost justification
+            // on every line, not just a line bearing the reference itself. Same rule,
+            // same measured exception (a block's own last physical line stays
+            // ragged) -- see `resolvePlainBody`'s own comment for the captures this
+            // was measured against; duplicated rather than shared since the two
+            // functions' loops read from different local names for otherwise-
+            // identical quantities.
+            var justifyRightX: Double? = nil
+            if block.align == .justify, lineIdx < block.lines.count - 1 {
+                let poOriginPt = ownLeft ?? printedLeft(doc, size: sizeForLeft)
+                let rmCols = block.rightMargin ?? 65.0
+                justifyRightX = poOriginPt + rmCols * pdfPtPerCol
+            }
             items.append(.line(PageLine(outSpans, soft: line.soft, lead: ownLead,
                                         overprint: line.overprint, bi: bi,
-                                        kerning: line.kerning, left: ownLeft), due: due))
+                                        kerning: line.kerning, left: ownLeft,
+                                        justifyRightX: justifyRightX,
+                                        parityLeft: ownParityLeft), due: due))
         }
     }
     return items
@@ -1854,6 +1927,36 @@ func poAt(_ checkpoints: [(blockIndex: Int, po: Double)], _ bi: Int) -> Double {
         po = cp.po
     }
     return po
+}
+
+/// Planning #231: `.poe`/`.poo` (even/odd page-offset) checkpoints, keyed by `dotName`
+/// ("POE"/"POO") -- EMPTY if the document never uses that command (unlike
+/// `poCheckpoints` above, NO block-0 seed: WordStar has no hardcoded default for a
+/// parity-specific offset, "never set" genuinely means "no override," resolved by
+/// falling back to whichever of `.po`/the other parity governs instead -- see
+/// `leftForParity`). Port of ctrl-kd's `_poe_poo_checkpoints`.
+func poeOrPooCheckpoints(_ doc: Document, dotName: String) -> [(blockIndex: Int, po: Double)] {
+    var checkpoints: [(blockIndex: Int, po: Double)] = []
+    for dp in doc.dotPositions {
+        guard let (name, arg) = dotCommandNameAndArg(Array(dp.text.utf8)) else { continue }
+        let upperName = String(decoding: name.map(asciiUppercased), as: UTF8.self)
+        guard upperName == dotName else { continue }
+        guard let (value, unit) = parseDotNumber(arg) else { continue }
+        let resolved = resolveColsArg(value, unit)
+        if checkpoints.isEmpty || resolved != checkpoints[checkpoints.count - 1].po {
+            checkpoints.append((dp.blockIndex, resolved))
+        }
+    }
+    return checkpoints
+}
+
+/// The resolved `poCols` for a page of the given parity (planning #231): its OWN
+/// parity override if one is in force (`poe`/`poo`, each already `poAt`-resolved or
+/// `nil` -- see `poeOrPooCheckpoints`), else whatever plain `.po` governs. Brief's own
+/// rule: "odd pages use .poo (or .po), even pages .poe (or .po)." Port of ctrl-kd's
+/// `_left_for_parity`.
+func leftForParity(_ po: Double, _ poe: Double?, _ poo: Double?, isEven: Bool) -> Double {
+    isEven ? (poe ?? po) : (poo ?? po)
 }
 
 /// `[(blockIndex, pnValue), ...]` in ascending block order -- a `.pn` RE-ANCHORS the
@@ -3215,6 +3318,20 @@ private func resolvePlainBody(
             // means agrees with the document default" contract `line.lead48` above
             // already has (`ParseWS.swift`'s back-dating pass).
             let ownLeft = line.poCols.map { resolveLeftPt($0, size: sizeForLeft) }
+            // Planning #231 (.poe/.poo even/odd page offset): which of the two ever
+            // governs a given line depends on the PARITY of the page it lands on --
+            // not known at this build stage (pagination is a later, separate pass) --
+            // so this only ever records a CANDIDATE `(even, odd)` pair; `closePage`
+            // (the one place page parity is actually known) picks the real one once
+            // pagination assigns this line to a page. `nil` (the overwhelming common
+            // case: a document that never uses `.poe`/`.poo`) costs nothing.
+            var ownParityLeft: ParityLeft?
+            if line.poeCols != nil || line.pooCols != nil {
+                let fallbackPt = ownLeft ?? printedLeft(doc, size: sizeForLeft)
+                ownParityLeft = ParityLeft(
+                    even: line.poeCols.map { resolveLeftPt($0, size: sizeForLeft) } ?? fallbackPt,
+                    odd: line.pooCols.map { resolveLeftPt($0, size: sizeForLeft) } ?? fallbackPt)
+            }
             // Register b32-N10 (mirrored from ctrl-kd b48148c): this line's own `.sr`
             // roll, already resolved — `Line.roll48` is never `nil` on a real parsed line
             // (its own doc comment), so this is simply the 1/48in -> points conversion
@@ -3337,7 +3454,8 @@ private func resolvePlainBody(
                                             fi: firstLineOfBlock ? fiPt : nil, bi: bi,
                                             ws4Spacing: ws4SpacingLine,
                                             kerning: line.kerning, left: ownLeft, roll: ownRoll,
-                                            justifyRightX: justifyRightX)))
+                                            justifyRightX: justifyRightX,
+                                            parityLeft: ownParityLeft)))
                 firstLineOfBlock = false
             }
         }
@@ -3415,6 +3533,15 @@ func layoutPrintedPagesPlain(
     let poCheckpointsList = poCheckpoints(doc)
     let globalPo = poAt(poCheckpointsList, 0)
     var curPo = globalPo
+    // Planning #231: `.poe`/`.poo` -- see `poeOrPooCheckpoints`. No block-0 seed
+    // (unlike `poCheckpointsList` above): "never used" is a real, different answer
+    // from "used at the document default," and `leftForParity` already treats a `nil`
+    // value as "fall back to `curPo`" -- exactly what a document that never writes
+    // `.poe`/`.poo` needs, byte-identical to before this feature existed.
+    let poeCheckpointsList = poeOrPooCheckpoints(doc, dotName: "POE")
+    let pooCheckpointsList = poeOrPooCheckpoints(doc, dotName: "POO")
+    var curPoe: Double? = poeCheckpointsList.isEmpty ? nil : poAt(poeCheckpointsList, 0)
+    var curPoo: Double? = pooCheckpointsList.isEmpty ? nil : poAt(pooCheckpointsList, 0)
     // `closePage`'s "does this page need its own render-time override" test can NOT
     // compare against `globalPl`/`globalHm`/`globalFm`/`globalPo` above: those are seeded at
     // WordStar's hardcoded default (correct for BEFORE any real occurrence), but the
@@ -3441,12 +3568,15 @@ func layoutPrintedPagesPlain(
     /// very next page, which only the organic-close recompute site can reproduce. This
     /// also strengthens `.mt`/`.mb` for organic breaks (previously recomputed only at the
     /// explicit-break site).
-    func recomputeGeom(_ bi: Int) -> (mt: Double, mb: Double, pl: Double, hm: Double, fm: Double, po: Double) {
+    func recomputeGeom(_ bi: Int) -> (mt: Double, mb: Double, pl: Double, hm: Double, fm: Double,
+                                      po: Double, poe: Double?, poo: Double?) {
         let (mt, mb) = mtMbAt(mtMbCheckpointsList, bi)
         let pl = plAt(plCheckpointsList, bi)
         let (hm, fm) = hmFmAt(hmFmCheckpointsList, bi)
         let po = poAt(poCheckpointsList, bi)
-        return (mt, mb, pl, hm, fm, po)
+        let poe: Double? = poeCheckpointsList.isEmpty ? nil : poAt(poeCheckpointsList, bi)
+        let poo: Double? = pooCheckpointsList.isEmpty ? nil : poAt(pooCheckpointsList, bi)
+        return (mt, mb, pl, hm, fm, po, poe, poo)
     }
 
     var pages: [Page] = []
@@ -3509,8 +3639,27 @@ func layoutPrintedPagesPlain(
             pg.hmLines = curHm
             pg.fmLines = curFm
         }
-        if curPo != docPo {
-            pg.poCols = curPo
+        // Planning #231: this page's own PARITY -- `pages.count` is exactly the count
+        // of pages already closed, so the page closing right now is page number
+        // `pages.count + 1`, known for the FIRST time here (nothing upstream of
+        // pagination can know it). `leftForParity` falls back to `curPo` whenever
+        // neither `.poe` nor `.poo` is in force, so a document that never uses either
+        // resolves to `curPo` on every page, byte-identical to before this feature
+        // existed.
+        let isEvenPage = (pages.count + 1) % 2 == 0
+        let parityPo = leftForParity(curPo, curPoe, curPoo, isEven: isEvenPage)
+        if parityPo != docPo {
+            pg.poCols = parityPo
+        }
+        // Body text: `resolvePlainBody` could not resolve a `.poe`/`.poo`-governed
+        // line's own left origin at BUILD time (which page, and therefore which
+        // parity, a line lands on is a pagination question, not a parse-order one) --
+        // it left a `(even, odd)` candidate pair on `.parityLeft` instead. Resolved
+        // now, in place, the one moment this loop actually knows this page's parity.
+        for i in pg.lines.indices {
+            if let parityLeft = pg.lines[i].parityLeft {
+                pg.lines[i].left = isEvenPage ? parityLeft.even : parityLeft.odd
+            }
         }
         pages.append(pg)
     }
@@ -3546,13 +3695,15 @@ func layoutPrintedPagesPlain(
             // page only, so a page whose geometry never changes never recomputes to a
             // different number (see `printedCapFor`'s docstring).
             if page.isEmpty, let bi = line.bi {
-                let (mt, mb, pl, hm, fm, po) = recomputeGeom(bi)
+                let (mt, mb, pl, hm, fm, po, poe, poo) = recomputeGeom(bi)
                 curMt = mt
                 curMb = mb
                 curPl = pl
                 curHm = hm
                 curFm = fm
                 curPo = po
+                curPoe = poe
+                curPoo = poo
                 capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
                 budget = Double(capacity - 1) * defaultLead
             }
@@ -3583,13 +3734,15 @@ func layoutPrintedPagesPlain(
                 // `page.isEmpty` gate above, since `page` is not empty until closePage/
                 // openNewPage runs right here, mid-iteration.
                 if let bi = line.bi {
-                    let (mt, mb, pl, hm, fm, po) = recomputeGeom(bi)
+                    let (mt, mb, pl, hm, fm, po, poe, poo) = recomputeGeom(bi)
                     curMt = mt
                     curMb = mb
                     curPl = pl
                     curHm = hm
                     curFm = fm
                     curPo = po
+                    curPoe = poe
+                    curPoo = poo
                     capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
                     budget = Double(capacity - 1) * defaultLead
                 }
