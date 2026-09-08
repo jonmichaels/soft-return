@@ -414,11 +414,30 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // Body text already carried a mid-document `.po` change correctly (`Line.poCols`,
     // applied per line in `resolvePlainBody`/`resolvePrintedBody`) -- this pins the
     // `runningOps` (header/footer) side of the fix directly: a document whose SECOND page
-    // moves `.po` to 5 columns must render that page's own running head 21.6pt to the LEFT
-    // of the first page's, matching WS7, not at the document's unchanged global offset.
+    // moves `.po` to 5 columns AND resets `.mt` must render that page's own running head
+    // 21.6pt to the LEFT of the first page's, matching WS7, not at the document's
+    // unchanged global offset.
+    //
+    // UPDATE 2026-09-08 (#241, MACROS/HOLYMAC/-HOLYMAC.WS): this fixture used to change
+    // ONLY `.po`, with no `.mt`/`.mb`/`.hm`/`.fm` alongside it -- SCRIPT.WS's real bytes
+    // were never actually isolated that way (`.po.5"` sits immediately before `.mt1"`
+    // there, confirmed directly), so this test could not distinguish "the header tracks
+    // `.po` alone" from "the header tracks `.po` only when it accompanies a genuine
+    // page-geometry reset." HOLYMAC.WS is the discriminating real-WS7 case that reading
+    // never had: its own box-diagram examples set `.po .3i` (paired only with `.rm`,
+    // widening the measure for the diagram) with NO `.mt`/`.mb`/`.hm`/`.fm` change at
+    // all, and WS7's real capture shows the running head does NOT move for it -- staying
+    // at the SAME 72pt left edge on every page, including the ones whose own page-open
+    // `.po` snapshot happens to land mid-diagram. `runningOps` now only lets a page's own
+    // `.po` reposition the header/footer when that same page ALSO carries an
+    // `.mt`/`.mb`/`.hm`/`.fm` change (see `PDFWriter.swift`'s `pageGeomChanged`) -- this
+    // fixture gained its own `.mt1"` alongside `.po5` to keep matching SCRIPT.WS's real
+    // construction instead of the narrower, now-corrected reading. Direct port of
+    // ctrl-kd's own identical fixture update, `test_mid_document_po_repositions_the_
+    // running_head` (commit 9e7c779).
     var data = bytes(".he TITLE") + HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
-    data += bytes(".pa") + HARD + bytes(".po5") + HARD
+    data += bytes(".pa") + HARD + bytes(".po5") + HARD + bytes(".mt1\"") + HARD
     for i in 1...20 { data += bytes("Page2 line \(i).") + HARD }
     let doc = parseWS(data)
     #expect(doc.page?.poCols == 8.0)      // global: unaffected (pre-text-last-wins), same

@@ -340,11 +340,12 @@ private func rtfSlSequence(_ r: String) -> [Int] {
 }
 
 @Test func autoVMILeadingReachesPrintedRTFAsTwoDistinctSlValues() {
-    // The exact fixture behind `autoVMILeadingMatchesMeasuredLyingGapProfile` (16pt
-    // Title/Author style, 12pt Body style, both auto/-2) -- the real LYING.WS/
-    // WARPRAYR.WS b33 clipping case: a 16pt title on a document whose OWN plain default
-    // is 12pt. Pre-fix this was a single `\sl-240\slmult0` throughout (12pt, clipping
-    // the 16pt title in Word/TextEdit); now two distinct values.
+    // The exact fixture behind `blankLineBetweenStylesAdvancesAtItsOwnBlocksLeading`
+    // (16pt Title/Author style, 12pt Body style, both auto/-2, a blank line between them
+    // -- LYING.WS's own real shape) -- the real LYING.WS/WARPRAYR.WS b33 clipping case: a
+    // 16pt title on a document whose OWN plain default is 12pt. Pre-fix this was a single
+    // `\sl-240\slmult0` throughout (12pt, clipping the 16pt title in Word/TextEdit); now
+    // two distinct values.
     //
     // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original comment
     // justified the twip values by pointing at "the PDF gaps already proven above"
@@ -354,11 +355,27 @@ private func rtfSlSequence(_ r: String) -> [Int] {
     // PCL's own 1/10-point unit, so that IS 16.0pt/12.0pt, not a re-derivation of this
     // codebase's own arithmetic. RTF's twip (1/1440in, i.e. 20/pt) is external to this
     // codebase too: 16.0 * 20 = 320, 12.0 * 20 = 240.
+    //
+    // UPDATE 2026-09-08 (#236): this fixture used to butt "Second big line." directly
+    // against "First body line." with NO blank line between the two blocks. #236
+    // (INTERVU.WS's title block, measured directly against WS7's own capture) proved
+    // `enteringLeadPt`'s floor must ALSO engage for an auto (-2) entering block when the
+    // line above is REAL and no blank line already provided separation -- exactly this
+    // fixture's old shape, which floored Body's entering gap up to Big's own 16.0pt.
+    // RTF's `\sl` is collapsed to one value per BLOCK (`rtfBlockLead48`, the ceiling of
+    // what RTF's paragraph-only leading can express), so that floored entering value
+    // became the WHOLE Body block's `\sl`, legitimately collapsing both values to -320
+    // and defeating this test's own "two distinct values" proof. A blank line between
+    // the two blocks (added below, matching LYING.WS's real shape and the sibling PDF
+    // test's own fixture) sits BEFORE the floor's real-adjacency condition, so it is
+    // unaffected by it and still demonstrates genuine per-block differentiation. Direct
+    // port of ctrl-kd's own identical fixture update, `test_auto_vmi_leading_reaches_
+    // printed_rtf_as_two_distinct_sl_values` (commit f274d9b).
     let lib = styleLibrary([
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "Big", record: auto16pt), (name: "Body", record: auto12pt),
     ])
-    let body = styleRef(2) + bytes("First big line.") + HARD + bytes("Second big line.") + HARD
+    let body = styleRef(2) + bytes("First big line.") + HARD + bytes("Second big line.") + HARD + HARD
         + styleRef(3) + bytes("First body line.") + HARD + bytes("Second body line.") + HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
     let r = emitRTF(doc, mode: .printed)
