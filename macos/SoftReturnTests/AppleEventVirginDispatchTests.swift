@@ -17,7 +17,7 @@ import Testing
 /// otherwise-fresh test invocation, guaranteeing no other scripting test has already touched
 /// `NSScriptSuiteRegistry` first.
 /// Job 535: this suite's one test used to read `MultipageMargins.testDocsDirectory`
-/// (`ws4/DOCC.ws`) — gated at the suite level so a bare stranger run skips cleanly. Job
+/// (a private `ws4/` corpus document) — gated at the suite level so a bare stranger run skips cleanly. Job
 /// planning#191 part 2 moved it onto a bundled sample copy instead (`BundledSampleFixture`),
 /// so the private-corpus dependency this gate exists for is gone; the gate itself is left in
 /// place rather than changing this suite's run conditions as a side effect of the fixture fix.
@@ -32,7 +32,7 @@ struct AppleEventVirginDispatchTests {
             .appendingPathComponent("AppleEventVirginDispatchTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        // Job planning#191 part 2: a bundled sample copy, not the private ws4/DOCC.ws
+        // Job planning#191 part 2: a bundled sample copy, not a private ws4/ corpus
         // corpus fixture — see BundledSampleFixture's own doc comment.
         let source = try BundledSampleFixture.copy("OCAPTAIN.WS", into: tempDir)
 

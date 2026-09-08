@@ -20,6 +20,12 @@ private let wsToggles: [UInt8: Style] = [
     0x04: .bold,
 ]
 
+/// A bare 0x09 tab byte's print-time expansion target, in document columns
+/// (WSFORMAT.WS's own file-format reference: "the number of hard spaces required to
+/// reach a modulus 8 print position is generated" — see `decodeSpans`'s own 0x09
+/// branch, planning #202 batch, ported from core.py's `_TAB_MODULUS`).
+private let tabModulus = 8
+
 /// Codes discarded without comment (core.py:164).
 ///
 /// `0x08` (^H overprint) was here until 2026-08-03 and is deliberately NOT any more:
@@ -50,6 +56,88 @@ private let dotCondpage: [UInt8] = Array("CP".utf8)
 
 /// `.ig` — the long-form comment syntax (`..` is the short form). Ruling 2026-08-06 M9.
 private let dotIgnore: [UInt8] = Array("IG".utf8)
+
+// ------------------------------------------------------------ conditionals
+//
+// `.IF`/`.EL`/`.EI` (planning #229, ledger 2026-09-08 08:00). Direct port of
+// core.py's `_eval_if_condition` and its own long docstring, which carries
+// the WSFORMAT.WS operator citation and the REFORM.DOT bare-numeric-argument
+// evidence in full — read that copy for the "why"; this one mirrors its
+// behavior exactly, byte for byte, operator for operator.
+private let ifOperators: [[UInt8]] = [
+    Array("#<>".utf8), Array("#=".utf8), Array("#>".utf8), Array("#<".utf8),
+    Array("<>".utf8), Array("=".utf8), Array(">".utf8), Array("<".utf8),
+]
+
+/// The first (leftmost) occurrence of any `ifOperators` entry in `s`, longest
+/// match winning at a given position — mirrors `_IF_OP_RE`'s alternation
+/// order (core.py), which lists the two/three-byte operators before the
+/// one-byte ones for exactly this reason.
+private func firstIfOperator(in s: [UInt8]) -> (range: Range<Int>, op: [UInt8])? {
+    var i = 0
+    while i < s.count {
+        for op in ifOperators {
+            let end = i + op.count
+            if end <= s.count, Array(s[i..<end]) == op {
+                return (i..<end, op)
+            }
+        }
+        i += 1
+    }
+    return nil
+}
+
+private func stripASCIIWhitespace(_ bytes: [UInt8]) -> [UInt8] {
+    var start = 0, end = bytes.count
+    while start < end && asciiWhitespace.contains(bytes[start]) { start += 1 }
+    while end > start && asciiWhitespace.contains(bytes[end - 1]) { end -= 1 }
+    return Array(bytes[start..<end])
+}
+
+private func ifStripQuotes(_ s: [UInt8]) -> [UInt8] {
+    let t = stripASCIIWhitespace(s)
+    guard t.count >= 2, t.first == t.last, t.first == 0x22 || t.first == 0x27 else {
+        return t
+    }
+    return Array(t.dropFirst().dropLast())
+}
+
+/// A `.IF` argument's truth value: `true`/`false`, or `nil` for "not
+/// evaluated" (a merge-variable reference `&name&`, or an unrecognized
+/// shape — never guessed at). Direct port of `_eval_if_condition`.
+private func evalIfCondition(_ arg: [UInt8]) -> Bool? {
+    let trimmed = stripASCIIWhitespace(arg)
+    if trimmed.contains(0x26) { return nil }            // '&' — merge variable
+    guard let (range, op) = firstIfOperator(in: trimmed) else {
+        // REFORM.DOT's own documented shorthand: "The command if 0 is
+        // equivalent to if 1=0" — a bare argument with no operator is a
+        // numeric truthiness test (0 = false), not an error.
+        guard let n = Double(decodeCP437(trimmed).trimmed()) else { return nil }
+        return n != 0
+    }
+    let leftRaw = ifStripQuotes(Array(trimmed[..<range.lowerBound]))
+    let rightRaw = ifStripQuotes(Array(trimmed[range.upperBound...]))
+    if op.first == 0x23 {                               // '#' — numeric comparison
+        guard let lv = Double(decodeCP437(leftRaw).trimmed()),
+              let rv = Double(decodeCP437(rightRaw).trimmed()) else { return nil }
+        switch Array(op.dropFirst()) {
+        case Array("=".utf8): return lv == rv
+        case Array("<>".utf8): return lv != rv
+        case Array(">".utf8): return lv > rv
+        case Array("<".utf8): return lv < rv
+        default: return nil
+        }
+    }
+    let lv = decodeCP437(leftRaw)
+    let rv = decodeCP437(rightRaw)
+    switch op {
+    case Array("=".utf8): return lv == rv
+    case Array("<>".utf8): return lv != rv
+    case Array(">".utf8): return lv > rv
+    case Array("<".utf8): return lv < rv
+    default: return nil
+    }
+}
 
 /// One physical line of bytes -> `[Span]`. `active` persists across lines (WordStar
 /// styles span line breaks) and `unknown` accumulates for the whole document, so both
@@ -84,6 +172,14 @@ private func decodeSpans(
 ) -> [Span] {
     var spans: [Span] = []
     var buf: [UInt8] = []
+    // Running document-COLUMN count since the start of THIS physical line (planning
+    // #202 batch, bare-0x09 tab-expansion fix, ported from core.py's `col`): every
+    // character this function actually places — in `buf` or as a directly-appended
+    // Span — advances it by exactly its own length; a style toggle, font/colour
+    // change, or dropped control byte never does (zero print width). `raw` starts this
+    // line at column 0 by construction (one CRLF-delimited content line); only the
+    // bare-0x09 branch below reads it.
+    var col = 0
     // `flush` needs to read the font/colour, but both are `inout` and a nested function
     // may not capture an `inout` parameter that outlives the call. Local mirrors,
     // written back before returning, are the idiom the rest of this file would use.
@@ -158,6 +254,7 @@ private func decodeSpans(
                 let text = decodeCP437(Array(raw[i..<end]))
                 spans.append(Span(text: text, styles: active, font: font, colour: colour,
                                   pctlHMI: hmi, pcl: pcl))
+                col += text.count
                 i = end
                 advanced = true
             }
@@ -168,6 +265,7 @@ private func decodeSpans(
                 let text = decodeCP437(Array(raw[i..<end]))
                 spans.append(Span(text: text, styles: active, font: font, colour: colour,
                                   pix: idx))
+                col += text.count
                 i = end
                 advanced = true
             }
@@ -209,6 +307,7 @@ private func decodeSpans(
                 let text = decodeCP437(Array(raw[i..<end]))
                 spans.append(Span(text: text, styles: active, font: font, colour: colour,
                                   tabHMI: absHMI, tabLeader: Int(leader)))
+                col += text.count
                 i = end
                 advanced = true
             }
@@ -222,8 +321,10 @@ private func decodeSpans(
                 flush()
                 let n = current + 1
                 fnCounter = n
-                spans.append(Span(text: String(n), styles: active.union([.sup, .fnref]),
+                let fnrefText = String(n)
+                spans.append(Span(text: fnrefText, styles: active.union([.sup, .fnref]),
                                   font: font, colour: colour))
+                col += fnrefText.count
             }
         }
         if i >= raw.count { break }
@@ -251,6 +352,7 @@ private func decodeSpans(
             } else {
                 buf.append(x)
             }
+            col += 1
             i += 2
             continue
         }
@@ -275,12 +377,26 @@ private func decodeSpans(
             active.remove(.altFont)
         } else if b == 0x0F {
             buf.append(0x20)                    // binding space (core.py:196-197)
+            col += 1
         } else if b == 0x1E {
             // inactive soft hyphen: dropped entirely (core.py:198-199)
         } else if b == 0x1F {
             buf.append(0x2D)                    // active soft hyphen -> '-' (core.py:200-201)
+            col += 1
         } else if b == 0x09 {
-            buf.append(b)                       // tab survives (core.py:202-203)
+            // A BARE tab byte (as opposed to a `.tb`-ruler type-9 tab block, the
+            // `pendingTab` mechanism above -- this file's own note there: 46 archive
+            // files use `.tb`, ZERO contain a bare 0x09, the two never coexist on one
+            // line) expands at PRINT time to the next modulus-8 column, per WordStar's
+            // own file-format reference (WSFORMAT.WS: "09h ^I ... At print time the
+            // number of hard spaces required to reach a modulus 8 print position is
+            // generated") -- planning #202 batch, ported from core.py's identical fix.
+            // `col` is 0-indexed from this physical line's own start; a tab exactly ON
+            // a stop still advances a FULL `tabModulus` columns (the standard tab
+            // convention: it always moves at least one column).
+            let needed = tabModulus - (col % tabModulus)
+            buf.append(contentsOf: repeatElement(0x20, count: needed))
+            col += needed
         } else if b == 0xA0 && !stripHibit {
             // WS5+ soft space: justification/alignment padding WordStar re-stamps at
             // print time (615 bare A0s across the corpus, all in layout contexts --
@@ -289,6 +405,7 @@ private func decodeSpans(
             // through cp437. WS4 needs nothing: its soft spaces are 0x20|0x80 and the
             // bit-7 mask (applied above, before `b` is computed) already restored them.
             buf.append(0x20)
+            col += 1
         } else if b < 0x20 || b == 0x7F {
             // core.py:204-206 — everything else in control range is either known-noise
             // or a diagnostic we want to surface.
@@ -297,6 +414,7 @@ private func decodeSpans(
             }
         } else {
             buf.append(b)
+            col += 1
         }
         i += 1
     }
@@ -426,6 +544,18 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var unknown: [UInt8: Int] = [:]
     var dots: [String] = []
     var dotPositions: [DotPosition] = []
+    // #229 (planning #229, ledger 2026-09-08 08:00): `.IF`/`.EL`/`.EI` nesting
+    // stacks -- direct port of core.py's `if_orig`/`if_active` (see that
+    // file's own comment for the full contract). `ifOrig[k]` is frame k's
+    // OWN evaluated condition (true/false, or nil for "not evaluated" --
+    // see `evalIfCondition`); `ifActive[k]` is whether frame k's CURRENTLY
+    // open branch (before or after its own `.EL`) should render. A line is
+    // suppressed iff ANY open frame is inactive (`!ifActive.allSatisfy { $0
+    // }`). Both are pushed/popped unconditionally by `.IF`/`.EI` regardless
+    // of the CURRENT suppression state, so nesting depth stays correct even
+    // inside an already-suppressed outer block.
+    var ifOrig: [Bool?] = []
+    var ifActive: [Bool] = []
     // Always live, not ws5-only: dot-line comments ('..'/'.ig') exist in WS4 files too
     // and now emit reference marks (ruling 2026-08-06 M9).
     var fnCounter: Int? = 0
@@ -531,6 +661,13 @@ public func parseWS(_ data: [UInt8]) -> Document {
     /// replayed at offset 0 of the next line that actually decodes spans.
     var carriedMarks: [StructuralMark] = []
 
+    /// #240: set by a bare `.rr` (no ruler image on its own line) — the VERY NEXT
+    /// physical entry is that ruler's image, swallowed whole (never decoded as
+    /// content) the same way this entry itself is. See the `.RR` check below
+    /// (head2 == "RR") for the full citation. Port of Python's `parse_ws`
+    /// `consume_next_as_ruler` fix.
+    var consumeNextAsRuler = false
+
     // Round-trip ledger (tasks #20/#21): a running count of EVENTS in emission order —
     // Lines appended anywhere plus form-feed pagebreak blocks — and a locator for the
     // last Line appended, so each physical entry's raw separator can be stamped onto
@@ -608,6 +745,22 @@ public func parseWS(_ data: [UInt8]) -> Document {
         // is still recognized, and a ws4 dot whose '.' carries bit 7 (0xAE) still is too.
         let stripped = raw.map { $0 & 0x7F }
 
+        // #240: this entry is a bare `.rr`'s own ruler-image line (see the flag's
+        // own comment, set below) — consume it whole, exactly like a dot-command
+        // line's own round-trip bookkeeping, and never let it reach
+        // decodeSpans/Block content.
+        if consumeNextAsRuler {
+            consumeNextAsRuler = false
+            let cmd = rstrippingASCIIWhitespace(raw)
+            dots.append(decodeCP437(cmd))
+            rtDots.append(RoundtripDot(anchor: rtTally, raw: physical.text,
+                                       brk: rtBrk ?? []))
+            dotPositions.append(DotPosition(blockIndex: blocks.count,
+                                            lineIndex: cur.lines.count,
+                                            text: decodeCP437(cmd)))
+            continue
+        }
+
         // A line that BEGINS with a 0x0F print control's display string is content, not
         // a dot command -- but its first character is often « (0xAE), which the bit-7
         // masking above turns into '.' (0x2E), swallowing the whole line as an unknown
@@ -635,6 +788,46 @@ public func parseWS(_ data: [UInt8]) -> Document {
                                             lineIndex: cur.lines.count,
                                             text: decodeCP437(cmd)))
             let head2 = Array(cmd.dropFirst().prefix(2)).map(asciiUppercased)
+            // #229: `.IF`/`.EL`/`.EI` themselves ALWAYS execute (push/flip/pop the
+            // stacks above) regardless of the CURRENT suppression state —
+            // round-trip bookkeeping for this dot line already happened,
+            // unconditionally, just above, so one of these nested inside an
+            // already-false outer block still round-trips byte-exact even
+            // though it has no semantic effect of its own.
+            if head2 == Array("IF".utf8) {
+                let cond = evalIfCondition(Array(cmd.dropFirst(3)))
+                ifOrig.append(cond)
+                ifActive.append(cond ?? true)
+                continue
+            }
+            if head2 == Array("EL".utf8) {
+                if let cond = ifOrig.last {
+                    if let c = cond {
+                        ifActive[ifActive.count - 1] = !c
+                    }
+                    // nil (merge variable): stays true either side of `.EL` —
+                    // "leave current behaviour", ledger 2026-09-08 08:00
+                }
+                continue
+            }
+            if head2 == Array("EI".utf8) {
+                if !ifOrig.isEmpty {
+                    ifOrig.removeLast()
+                    ifActive.removeLast()
+                }
+                continue
+            }
+            // Every OTHER dot command's SEMANTIC effect (page geometry,
+            // formatting, pagebreak, header/footer, TOC/index, comments —
+            // everything below this point) is skipped entirely while any
+            // open `.IF` frame is inactive: "false blocks skipped for
+            // layout and text output" (planning #229). The line's own
+            // bytes are already preserved above (dots/rtDots/dotPositions),
+            // so round-trip is unaffected — only the running parser STATE
+            // this line would otherwise have mutated is withheld.
+            if !ifActive.isEmpty, !ifActive.allSatisfy({ $0 }) {
+                continue
+            }
             // '..' and '.ig' are COMMENT lines (ruling 2026-08-06 M9): both WordStar
             // comment syntaxes unify into Note(kind: .comment), each emitting a
             // reference mark at its own position — the text is kept verbatim after the
@@ -666,6 +859,37 @@ public func parseWS(_ data: [UInt8]) -> Document {
             if Array(cmd.dropFirst().prefix(1)).map(asciiLowercased) == [0x72],  // 'r'
                cmd.contains(0x21) {                                             // '!'
                 ruler = true
+            }
+            // #240 (REF/wordstar-file-format.ws): WSFORMAT.WS's own spec for
+            // `.RR` ("Ruler. Embeds a ruler line... The text following the
+            // .RR is the exact image of the ruler line... on the screen")
+            // documents TWO forms: the ruler image on `.rr`'s OWN line
+            // (`.rrP-----L-----R` / `.rr--!---...R` -- CONVERT.WS/-README.WS
+            // both use the bare `P...L...R` shape with NO `!` at all, so
+            // testing for `!`'s presence, as the check just above does for
+            // the unrelated `ruler`/`columnar` detection, would wrongly
+            // single out those two documents' perfectly ordinary same-line
+            // rulers -- already consumed whole as this dot command's own
+            // line, never printed) and a bare `.rr` with NOTHING after it
+            // on its own line, whose image is the NEXT physical line
+            // instead. wordstar-file-format.ws uses the second form
+            // (`.rr\rP----!...R\r\n`, a bare CR -- no LF -- between the
+            // command and its image) right before its own Command/Usage/
+            // Meaning table; nothing previously recognised that next line
+            // as part of the ruler, so it fell through to ordinary
+            // body-text decoding and PRINTED -- one extra visible line,
+            // pushing everything after it down by one line (12pt) for the
+            // rest of the document. The distinguishing test is therefore
+            // whether `.rr`'s OWN line carries anything past the command
+            // itself, not whether that content has a `!` in it.
+            // `consumeNextAsRuler` swallows the next physical entry the
+            // same way this entry itself is swallowed (round-tripped,
+            // never decoded as content) -- see the check at the top of
+            // this loop. Port of Python's `parse_ws` `consume_next_as_
+            // ruler` fix.
+            if head2 == [0x52, 0x52],   // "RR"
+               cmd.dropFirst(3).allSatisfy({ $0 == 0x20 || $0 == 0x09 }) {
+                consumeNextAsRuler = true
             }
             // The block this event applies to: the one still open (if it has content)
             // or the next one to open. Same convention as `pointsAt` just below --
@@ -765,6 +989,18 @@ public func parseWS(_ data: [UInt8]) -> Document {
             continue
         }
 
+        // #229: a plain CONTENT line (not a dot command) inside an inactive
+        // `.IF` branch never happened, per WordStar — "false blocks skipped
+        // for layout AND text output" (planning #229). Skipped whole: none
+        // of this physical line's text, marks, or (rare) embedded form feed
+        // reach the IR. Direct port of core.py's identical gate; see its
+        // comment for corpus-coverage notes (not exercised by anything
+        // currently in the corpus — REFORM.DOT/ERROR.WS suppress only dot
+        // commands, never body text — but implemented per spec).
+        if !ifActive.isEmpty, !ifActive.allSatisfy({ $0 }) {
+            continue
+        }
+
         // A LITERAL form feed is a page break, in any variant. WSFORMAT.TXT: "0Ch ^L
         // Form Feed.  At print time causes page to be ejected.  No footer lines are
         // printed." `parsePrintstream` has always honoured it; `parseWS` did not, so a
@@ -850,6 +1086,16 @@ public func parseWS(_ data: [UInt8]) -> Document {
             lineMarks = carriedMarks.map { (0, $0) } + lineMarks
             carriedMarks = []
         }
+        // #236: did a style-select mark on THIS physical entry just force a
+        // closeBlock() below, before this entry's own separator (blank/line/
+        // para) is handled? Reset per entry. A style change can land on an
+        // otherwise-blank line (WORDSTAR.WS/INTERVU.WS's title blocks: the
+        // paragraph style is re-selected on the SOURCE line immediately
+        // after a title line's own text, before that line's trailing blank
+        // lines), and the blank-line branch must not mistake the block this
+        // just closed for an ordinary prior paragraph. Port of Python's
+        // `parse_ws` `style_closed_here` fix.
+        var styleClosedHere = false
         for (rel, mark) in lineMarks {
             switch mark {
             case .softpage:
@@ -870,6 +1116,20 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // state BY CONSTRUCTION, since it contributes no record fields.
                 if (w0 >> 8) == 0x02 {
                     let slot = w0 & 0xFF
+                    // #236 (WORDSTAR.WS/REF/wordstar-file-format.ws title
+                    // blocks): a style record's line-height VMI of -1 means
+                    // INHERIT, already folded to `nil` by `StyleRecord`.
+                    // Measured against WORDSTAR.WS's own capture (Double-
+                    // Indented Quote, a style with NO font of its own AND an
+                    // inherited line height): its body renders at 16.0pt
+                    // leading, not the document's 12pt default -- the SAME
+                    // 16.0pt the immediately preceding paragraph style (MS
+                    // Body Copy, explicit vmi=320) was already using.
+                    // 'Inherit' means carry the AMBIENT (previously active)
+                    // value forward, not reset to nothing -- resetting
+                    // `styleFmt` to a fresh `StyleFormat()` below must not
+                    // lose it. Port of Python's `parse_ws` `_prev_vmi` fix.
+                    let prevVMI = styleFmt.lineHeightVMI
                     styleFmt = StyleFormat()
                     styleFmt.styleID = slot
                     if let entry = styleSlots[slot] {
@@ -895,6 +1155,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
                             // right test here -- 'inherit' never reaches this branch.
                             if let lh = record.lineHeightVMI {
                                 styleFmt.lineHeightVMI = lh
+                            } else if let prevVMI {
+                                // -1/inherit: carry the ambient value forward
+                                // (see the #236 comment above this block).
+                                styleFmt.lineHeightVMI = prevVMI
                             }
                             // Register C5: the style's own declared colour index. A
                             // present-but-0 value is a real, explicit "Black", distinct
@@ -931,6 +1195,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // 0x03xx temp-pool handle is unresolvable by design, but a selection is
                 // still a block boundary in the file, so this runs either way.
                 closeBlock()
+                styleClosedHere = true
             case .fnref:
                 fnrefAt.append(rel)
             case .font(let index):
@@ -1031,11 +1296,21 @@ public func parseWS(_ data: [UInt8]) -> Document {
             let hasContent = !blank.spans.isEmpty
             let blankRef: (bi: Int?, li: Int)
             if cur.lines.isEmpty, let last = blocks.indices.last,
-               blocks[last].kind == .para {
+               blocks[last].kind == .para, !styleClosedHere {
                 // The text line before this one carried `.para` and already closed
                 // its block, so `cur` is empty. On paper this blank FOLLOWS that
                 // paragraph — attach it there, so a paragraph block still starts
                 // with text and the linear order is unchanged.
+                //
+                // #236: `cur` can ALSO be empty because a style-select mark on
+                // THIS SAME physical (blank) entry just closed the PREVIOUS
+                // block moments ago (WORDSTAR.WS/INTERVU.WS: the paragraph
+                // style is re-selected immediately after a title line's own
+                // text, before its trailing blank lines) -- that blank
+                // belongs to the block just OPENED by this entry's own style
+                // change, not to the one it closed. `styleClosedHere` (set
+                // above, in the style-mark case) distinguishes the two
+                // otherwise-identical "cur is empty" cases.
                 blocks[last].lines.append(blank)
                 blankRef = (last, blocks[last].lines.count - 1)
             } else {
@@ -1287,7 +1562,103 @@ public func parseWS(_ data: [UInt8]) -> Document {
     doc.footerTabs = footerTabs
     // Register C2: raw PCL printer payloads, indexed by a span's own `pcl`.
     doc.pclPrograms = pclPrograms
+    // #228 (planning #228, research/2026-09-08_trailing-pa-rule.md): only
+    // meaningful -- and only computed -- when the document's own last block
+    // really is a forced pagebreak; see `trailingPaHasContentAfter`'s own
+    // docstring for the byte-level rule itself.
+    if doc.blocks.last?.kind == .pagebreak {
+        doc.paEofBlankAfter = trailingPaHasContentAfter(data)
+    }
     return doc
+}
+
+// planning #228, research/2026-09-08_trailing-pa-rule.md (11 minimal WS7 harness
+// probes, dated after the original triage's guess turned out wrong for 3 of its 4
+// grouped documents -- see that doc's own "Corrections" section). The real rule: WS7
+// opens the page after a forced `.pa` break ONLY when at least one more real content
+// paragraph -- even an entirely blank one -- follows that `.pa` before end-of-file. A
+// `.pa` that is truly the last thing in the file (nothing after, not even a blank
+// line) ends printing right there: no next page, no footer, nothing. A second bare
+// `.pa` or a non-printing `..`/`.ig` comment after the first does NOT count as "a line
+// of content" (probes E/H).
+//
+// `sawyer/REF/PAGESIZE.WS` is the only document (of 92 `.pa`-terminated files
+// scanned) that matches this shape, and it does so at the BYTE level, not the block
+// level: WordStar's own saved-file trailer (cursor/block-marker bookkeeping,
+// immediately before the `^Z` padding run) ends with a FIXED 5-byte suffix
+// (`20 00 1d 0d 8a`) for every `.pa`-terminated document that has nothing after its
+// final `.pa` -- confirmed identical across PAGESIZE/DISPLAY/CHECKER/STRENGTH/
+// BOXES/CONVERT despite each file's own preceding offset bytes differing.
+// PAGESIZE.WS's trailer has more bytes after that same suffix, and ALL of them are
+// whitespace (CR/LF/space/tab) -- structurally a genuine saved blank paragraph the
+// parser's own block/line assembly never turns into a `doc.blocks` entry (WordStar's
+// internal bookkeeping block swallows it before the line-decode loop ever sees it),
+// so this is checked directly against the raw bytes rather than against parsed
+// blocks. General on purpose (not special-cased to PAGESIZE.WS by name), so a future
+// document with the same saved-blank-paragraph shape is picked up automatically.
+//
+// The whitespace-only requirement (not "any bytes at all") is load-bearing: a first
+// cut of this check false-positived on 6 corpus documents whose final `.pa` is
+// genuinely followed by MORE real dot-command text that doesn't happen to create a
+// new `doc.blocks` entry (`.av`/`.rr`/`..` comments -- none of which are "a content
+// paragraph" per probe H) -- e.g. sawyer/MICKEE/MICKEE.WS ends `.pa` ... `.. end of
+// file`, which is a comment, not a blank line, and must NOT open a page.
+let trailingPaTrailerSuffix: [UInt8] = [0x20, 0x00, 0x1d, 0x0d, 0x8a]
+let trailingPaWhitespace: Set<UInt8> = [0x0d, 0x0a, 0x20, 0x09]
+
+/// True iff `data` ends in a `.pa`-terminated WordStar file whose own saved trailer
+/// shows at least one more byte of WHITESPACE-ONLY content (a saved blank paragraph)
+/// after the standard block-bookkeeping suffix and before the `^Z` padding run. False
+/// for "nothing after the .pa" (the ordinary case), for a minimal/absent trailer (no
+/// recognizable suffix at all -- a document too short to carry the usual bookkeeping
+/// block, per the research's own SCREEN.WS example), AND for real trailing
+/// dot-command text or comments that happen to sit in the same byte range -- all
+/// three read the same to a caller: no extra page.
+func trailingPaHasContentAfter(_ data: [UInt8]) -> Bool {
+    // find the ^Z padding run (4+ consecutive 0x1a bytes)
+    var z = -1
+    if data.count >= 4 {
+        var i = 0
+        while i <= data.count - 4 {
+            if data[i] == 0x1a, data[i + 1] == 0x1a, data[i + 2] == 0x1a, data[i + 3] == 0x1a {
+                z = i
+                break
+            }
+            i += 1
+        }
+    }
+    guard z >= 0 else { return false }
+    // last occurrence of ".pa" before the padding run
+    let pa: [UInt8] = [0x2e, 0x70, 0x61]
+    var idx = -1
+    if z >= pa.count {
+        var i = z - pa.count
+        while i >= 0 {
+            if Array(data[i..<i + pa.count]) == pa {
+                idx = i
+                break
+            }
+            i -= 1
+        }
+    }
+    guard idx >= 0 else { return false }
+    let tail = Array(data[idx..<z])
+    // last occurrence of the trailer suffix within `tail`
+    var suf = -1
+    if tail.count >= trailingPaTrailerSuffix.count {
+        var i = tail.count - trailingPaTrailerSuffix.count
+        while i >= 0 {
+            if Array(tail[i..<i + trailingPaTrailerSuffix.count]) == trailingPaTrailerSuffix {
+                suf = i
+                break
+            }
+            i -= 1
+        }
+    }
+    guard suf >= 0 else { return false }
+    let extra = tail[(suf + trailingPaTrailerSuffix.count)...]
+    guard !extra.isEmpty else { return false }
+    return extra.allSatisfy { trailingPaWhitespace.contains($0) }
 }
 
 /// Split raw line bytes on BARE form feeds only — a wrapped `<1B 0C 1C>` is the cp437
@@ -1477,6 +1848,106 @@ func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? {
     parseDotNumberConsuming(arg).map { ($0.value, $0.unit) }
 }
 
+// ------------------------------------------------------------ dot-command math
+//
+// Planning #202 residuals round, cause 5. Direct port of core.py's identical
+// section — see that file for the full WSFORMAT.TXT citation ("With version
+// 4.0, math was allowed in the arguments for easier entry of complex page
+// layouts") and the corpus evidence (sawyer/UTIL/DOSYMSEQ.WS's `.lh 12/72"`,
+// confirmed against its own WS7 capture; sawyer/REF/-HOW-TO.RJS's mid-
+// document `.lh14/72"`, confirmed against the 14pt Helvetica heading WS7
+// renders at that exact spot).
+//
+// Grammar (no unary sign — a dot-command number never started with `+`/`-`
+// in the old grammar either, and admitting one would be an un-evidenced
+// behaviour change): `expr := term (('+'|'-') term)*`, `term := primary
+// (('*'|'/') primary)*`, `primary := NUMBER | '(' expr ')'`. NUMBER is
+// exactly `parseDotBareNumber`'s own digit grammar (the body this function
+// used to have, unchanged), so the plain bare-number case — the
+// overwhelming majority of every dot command in the corpus — parses to the
+// identical float it always has.
+let dotExprWhitespace: Set<UInt8> = [0x20, 0x09, 0x0A, 0x0D, 0x0B, 0x0C]
+
+func skipDotExprWS(_ s: [UInt8], _ i: Int) -> Int {
+    var i = i
+    while i < s.count && dotExprWhitespace.contains(s[i]) { i += 1 }
+    return i
+}
+
+/// A bare digit run at `s[i:]` — the SAME digit grammar the old
+/// `parseDotNumberConsuming` always used (dot consumed only if at least one
+/// digit follows it), just callable at an arbitrary position so the
+/// expression parser can use it for a NUMBER token wherever the grammar
+/// allows one (a fraction's numerator/denominator, inside parens, either
+/// side of an operator).
+func parseDotBareNumber(_ s: [UInt8], _ i: Int) -> (value: Double, end: Int)? {
+    var j = i
+    let numStart = j
+    while j < s.count && isASCIIDigit(s[j]) { j += 1 }
+    let leadingDigitsEnd = j
+    if j < s.count && s[j] == 0x2e {
+        let dotPos = j
+        var k = j + 1
+        while k < s.count && isASCIIDigit(s[k]) { k += 1 }
+        if k > dotPos + 1 {
+            j = k                                   // dot + at least one digit: include both
+        } else {
+            j = leadingDigitsEnd                    // dot with no digits after: don't consume it
+        }
+    }
+    guard j > numStart else { return nil }
+    // Same overflow guard the old scanner always had: reject anything that
+    // isn't a finite number (a page length of 10^308 lines is damage, not
+    // a measurement) rather than let `Int(x)` trap downstream.
+    guard let value = Double(String(decoding: s[numStart..<j], as: UTF8.self)),
+          value.isFinite else {
+        return nil
+    }
+    return (value, j)
+}
+
+private func parseDotExprPrimary(_ s: [UInt8], _ i: Int) -> (value: Double, end: Int)? {
+    let i = skipDotExprWS(s, i)
+    if i < s.count, s[i] == 0x28 {                  // '('
+        guard let r = parseDotExpr(s, i + 1) else { return nil }
+        let j = skipDotExprWS(s, r.end)
+        guard j < s.count, s[j] == 0x29 else { return nil }   // ')' required
+        return (r.value, j + 1)
+    }
+    return parseDotBareNumber(s, i)
+}
+
+private func parseDotExprTerm(_ s: [UInt8], _ i: Int) -> (value: Double, end: Int)? {
+    guard var acc = parseDotExprPrimary(s, i) else { return nil }
+    while true {
+        let k = skipDotExprWS(s, acc.end)
+        guard k < s.count, s[k] == 0x2a || s[k] == 0x2f else { break }   // '*' or '/'
+        guard let rhs = parseDotExprPrimary(s, skipDotExprWS(s, k + 1)) else { break }
+        if s[k] == 0x2a {
+            acc = (acc.value * rhs.value, rhs.end)
+        } else if rhs.value != 0 {
+            acc = (acc.value / rhs.value, rhs.end)
+        } else {
+            return nil                              // division by zero: reject, never crash
+        }
+    }
+    return acc
+}
+
+/// A fraction (`12/72`) or a parenthesized `+`/`-`/`*`/`/` expression
+/// (`((8.5-7.8)/2)`) at `s[i:]` — see the module note above for the full
+/// grammar and evidence. `nil` if `s[i:]` has no number at all.
+private func parseDotExpr(_ s: [UInt8], _ i: Int) -> (value: Double, end: Int)? {
+    guard var acc = parseDotExprTerm(s, i) else { return nil }
+    while true {
+        let k = skipDotExprWS(s, acc.end)
+        guard k < s.count, s[k] == 0x2b || s[k] == 0x2d else { break }   // '+' or '-'
+        guard let rhs = parseDotExprTerm(s, skipDotExprWS(s, k + 1)) else { break }
+        acc = (s[k] == 0x2b ? acc.value + rhs.value : acc.value - rhs.value, rhs.end)
+    }
+    return acc
+}
+
 /// Like `parseDotNumber`, but also reports how far the match consumed —
 /// Python's `m.end()`: leading spaces + number + trailing spaces + the
 /// optional unit. `.co`'s gutter parse needs it: the gutter follows the
@@ -1484,35 +1955,16 @@ func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? {
 /// (`.co 2  1.00"` is real), so "scan for a comma" loses space-separated
 /// gutters. Found 2026-08-04 when the archive cross-check flagged one
 /// document: BOOKLET's two-column gutter vanished from the Swift HTML.
+///
+/// #202 cause 5: this is now the ONE parse every dot command that takes a
+/// measurement shares (see the module note above `parseDotExprPrimary`) —
+/// a fraction/expression, with the SAME optional unit suffix a plain
+/// number already allowed, extended once rather than duplicated per call
+/// site (there are none left to update: every caller already went through
+/// this single function).
 func parseDotNumberConsuming(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?, end: Int)? {
-    var i = 0
-    while i < arg.count && isDotSpace(arg[i]) { i += 1 }
-
-    let numStart = i
-    while i < arg.count && isASCIIDigit(arg[i]) { i += 1 }
-    let leadingDigitsEnd = i
-
-    if i < arg.count && arg[i] == 0x2e {
-        let dotPos = i
-        var j = i + 1
-        while j < arg.count && isASCIIDigit(arg[j]) { j += 1 }
-        if j > dotPos + 1 {
-            i = j                                  // dot + at least one digit: include both
-        } else {
-            i = leadingDigitsEnd                    // dot with no digits after: don't consume it
-        }
-    }
-    guard i > numStart else { return nil }          // matched nothing at all
-
-    // A dot command from a 35-year-old file can carry an arbitrarily long numeral, and
-    // `Double("999...9")` happily returns +infinity. That flowed unguarded into the page
-    // geometry and trapped in `Int(x)` during printed-PDF layout — a crash, not a hang.
-    // Reject anything that isn't a finite number: a page length of 10^308 lines is not a
-    // measurement, it is damage, and the caller's default is the right answer.
-    guard let value = Double(String(decoding: arg[numStart..<i], as: UTF8.self)),
-          value.isFinite else {
-        return nil
-    }
+    guard let r = parseDotExpr(arg, 0), r.value.isFinite else { return nil }
+    let i = r.end
 
     var j = i
     while j < arg.count && isDotSpace(arg[j]) { j += 1 }
@@ -1530,7 +1982,7 @@ func parseDotNumberConsuming(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?, 
             end = k
         }
     }
-    return (value, unit, end)
+    return (r.value, unit, end)
 }
 
 /// Convert a dot-command argument's optional unit suffix to inches. Returns `nil` for
@@ -1937,6 +2389,19 @@ private func parsePageDot(
         if hasText { return }
         guard let (value, _) = parseDotNumber(arg) else { return }
         page.pcCol = value
+    // GAP, reported not implemented (planning #202 cause 6, 2026-09-08): `.POE`/
+    // `.POO` (page offset for even/odd pages — WSFORMAT.WS: ".PO can optionally
+    // specify even or odd number page offsets") and the matching `.H1E`/`.H1O`/
+    // `.F1E`/`.F1O` family are real, distinct 3-letter dot commands — confirmed
+    // against sawyer/REF/-HOW-TO.RJS's own prose (`.poe .8"` / `.poo 5.8"` with
+    // `.h1e`/`.h1o` for a facing-pages "galleys" layout). They fall through here
+    // as ordinary unrecognized commands (preserved verbatim for round-trip, no
+    // layout effect) because nothing in this engine's pagination model tracks a
+    // page's own odd/even PARITY — see ctrl-kd's identical comment (core.py,
+    // next to `_PAGE_DOT_KEYS`) for the full citation and why this needs parity
+    // threaded through pagination as a new axis, ruled out of this round per the
+    // brief ("implement if the layout already distinguishes odd/even pages ...
+    // else report the gap"; it does not).
     case "PT", "PSA", "PSB":
         // WordTsar's own invented dot commands (its source calls them "not a Wordstar
         // command"). A real WordStar file never contains these -- their presence IS

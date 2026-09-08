@@ -154,6 +154,98 @@ private func paraStructures(_ doc: Document) -> [RowStructure] {
     #expect(!s.centered)
 }
 
+/// One type-9 "Tabs and dot leaders" symmetrical sequence, `cols` columns wide (HMI =
+/// `cols * 180`, `core.TAB_HMI_PER_COL`), a plain space leader (`tabType: 0x20`) unless
+/// told otherwise. Matches `test_ctrlkd.py`'s own `tab_block` test helper byte-for-byte:
+/// `size`(LE16) + `absHMI`(LE16) + `tabType`(1) + a filler byte -- `_tabColumns`'
+/// Swift/Python ports both only read offsets 0-1 (size) and 4 (tabType), so the filler
+/// byte's own value is unobserved either side.
+private func tabBlock(cols: Int, absHMI: Int = 1000, tabType: UInt8 = 0x20) -> [UInt8] {
+    let size = cols * 180
+    func le16(_ n: Int) -> [UInt8] { [UInt8(n & 0xFF), UInt8((n >> 8) & 0xFF)] }
+    return ws7Block(0x09, payload: le16(size) + le16(absHMI) + [tabType, 0x0D])
+}
+
+@Test func internalTabRunRowIsNotFalselyCentered() throws {
+    // Issue #206: WSFORMAT.WS's own Symmetric-Sequences table row ("4" + a WordStar
+    // tabs-and-dot-leaders symmetrical sequence + "Endnote", no `.oc` tag) used to
+    // false-positive `classifyRows`' spaces-centering heuristic -- the row's own lead
+    // (all from the tab-run's absolute-column jump, not typed spaces) happened to land
+    // close to the row's arithmetic centre, so it read as hand-typed centering padding.
+    // Real WS7 (paper-scan-verified) and this engine's own Printed PDF both show the row
+    // LEFT-aligned, never centered. `hasInternalTabRun` (Layout.swift) excludes any row
+    // whose tab-run splits label from value -- a SECOND tab-run past the row's own
+    // leading edge -- from `centerVia == .spaces` entirely (a title/byline with only a
+    // single LEADING tab-run, e.g. ARTICLES/FORMFEED.WS's own "-30-", is unaffected --
+    // see titleCenteredViaASingleLeadingTabRunStillCenters below). Reproduced here via a
+    // synthetic symmetric-sequence tab block padded so the OLD heuristic would have
+    // called it centered -- not the real corpus file.
+    //
+    // Issue #204's own history lives here too: this exact row used to be (wrongly)
+    // treated as centered, and a since-removed `mergeTabPositionTags`-equivalent
+    // mechanism on the ctrl-kd side collapsed its tab-run into one `<span>` purely to
+    // match sr's then-observed byte shape (sr itself never had an explicit mechanism --
+    // its own `htmlCenteredRow`/`sliceSpans` happened to drop the tab tags as a side
+    // effect of an unrelated, incomplete port). Once the row is correctly NOT centered,
+    // it renders through the ordinary paragraph path instead -- which keeps the tab-run
+    // in its own `&nbsp;`-converted run, unmerged, exactly like every other plain
+    // paragraph's tab-run (confirmed byte-for-byte against a ctrl-kd build carrying the
+    // identical #206 fix, same round).
+    let body = bytes("4") + tabBlock(cols: 14) + bytes("Endnote")
+    let pad = (65 - "4".count - 14 - "Endnote".count) / 2
+    let doc = try parse([UInt8](repeating: 0x20, count: pad) + body + HARD, variant: nil)
+    let s = paraStructures(doc)[0]
+    #expect(!s.centered)
+    #expect(s.centerVia == nil)
+    let html = emitHTML(doc, mode: .modern)
+    #expect(!html.contains("<p style=\"text-align:center"))
+    // The tab-run keeps its own separate &nbsp; run -- an internal tab jump is real
+    // table structure, never merged into the surrounding text.
+    #expect(html.contains(String(repeating: "&nbsp;", count: 14)))
+}
+
+@Test func titleCenteredViaASingleLeadingTabRunStillCenters() throws {
+    // Regression guard for #206's own precision: a title/byline typed AT a tab stop
+    // chosen to look centered -- WordStar's own leading-space-only shape, no different
+    // in kind from a hand-typed indent -- must NOT lose its centering just because the
+    // padding happens to come from a real tab-stop span rather than literal spaces.
+    // Found against ARTICLES/FORMFEED.WS's own "TURNING OFF FORM FEEDS" title and
+    // "-30-" end-of-article marker during #206's own corpus-wide verification (both
+    // real, both tab-positioned, both correctly still centered after the fix).
+    // `hasInternalTabRun` only disqualifies a row whose tab-run splits label from value
+    // -- a SECOND tab jump past the row's own leading edge -- never a single leading one.
+    let title = "A Tab-Positioned Title"
+    let padCols = (65 - title.count) / 2
+    let doc = try parse(tabBlock(cols: padCols) + bytes(title) + HARD, variant: nil)
+    let s = paraStructures(doc)[0]
+    #expect(s.centered)
+    #expect(s.centerVia == .spaces)
+    #expect(s.centerText == title)
+    let html = emitHTML(doc, mode: .modern)
+    #expect(html.contains(
+        "<p style=\"text-align:center;line-height:1.15\">A Tab-Positioned Title</p>"))
+}
+
+@Test func ordinaryTabRunRowKeepsItsOwnNbspSpan() throws {
+    // Regression guard, formerly "the #204 fix is scoped to centered rows only":
+    // WSFORMAT.WS's OWN "00h ^@ <tab-run> Fix the print position..." row -- a plain,
+    // un-centered, long paragraph carrying the identical internal-tab-run SHAPE as the
+    // #206 table rows above -- keeps its `&nbsp;`-run exactly as before either issue was
+    // filed. Not itself a false-centering case (far too long for `classifyRows`' own
+    // slack/ideal arithmetic to ever call it centered), so #206's `hasInternalTabRun`
+    // guard never even has to act on it -- this test exists purely so nobody widens that
+    // guard's scope into touching a row this engine's own tracked bytes say must stay
+    // untouched. Plain `parse(_:variant:)` (auto-detect), matching the Python fixture's
+    // own bare `core.parse(data)` -- not `modernDoc()`'s forced ws4 variant.
+    let data = bytes("00h ^@") + tabBlock(cols: 9)
+        + bytes("Fix the print position at print time, a normal plain "
+               + "paragraph long enough to stay unclassified.") + HARD
+    let doc = try parse(data, variant: nil)
+    let html = emitHTML(doc, mode: .modern)
+    #expect(html.contains(
+        "<p>00h ^@" + String(repeating: "&nbsp;", count: 9) + "Fix the print"))
+}
+
 @Test func ordinaryMultilineBlockStaysOneParagraph() {
     // Regression guard: a block with NO list/def/center structure at all -- a
     // signature block with several hard-broken lines -- must still render as ONE <p>

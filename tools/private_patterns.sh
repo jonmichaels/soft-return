@@ -93,7 +93,23 @@ PAT_HOSTS='(hum[u]ng\.us|chon[k]y|borg[c]ube|noi[s]y|hea[r]th|grogn[a]rd|\btac[o
 #    way. Real IPv4 is always 4.
 PAT_NET='\b(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})\b'
 
-PAT="($PAT_NAMES|$PAT_SHAPE|$PAT_HOSTS|$PAT_NET)"
+# 5. Private WordStar document aliases (planning #243, 2026-09-08). Found
+#    LIVE on the PUBLIC github.com/jonmichaels/soft-return repo's main
+#    branch: Tests/CtrlKDTests/PCLFidelityTests.swift and Support/
+#    run_pcl_fidelity_gate.py (both cross to public as-is, NOT in
+#    PAT_NEVER_CROSS_DIRS/_FILES above -- Tests/CtrlKDTests is the
+#    "already public-clean" engine test dir per Monorepo-Layout-
+#    Proposal.md) carried the six real short v1/v3 aliases for Jon's own
+#    private WS4 papers, plus the 64 v4 `<group>-v4-<NNN>` private-corpus-
+#    group aliases -- both scrubbed by that same commit, this pattern is
+#    what keeps them from coming back. \b-anchored because two of the six
+#    (H[E]R, PA[R]T) are ordinary lowercase English words too; this
+#    pattern is uppercase-only (no -i flag on the scanners here either) so
+#    it never fires on "their"/"depart"/"partway" prose.
+PAT_DOCNAMES='\b(G[A]Y|H[E]R|IN[D]IAN|I[W]W|PA[R]T|SU[D]AN)\b'
+PAT_PRIVGROUP='(j[o]n-floppies|w[s]7-private|fixtures-w[s]5)-v4-[0-9]'
+
+PAT="($PAT_NAMES|$PAT_SHAPE|$PAT_HOSTS|$PAT_NET|$PAT_DOCNAMES|$PAT_PRIVGROUP)"
 
 # Known, reviewed, NON-hostname English usages of the real-word names in
 # category 3. A raw PAT hit inside one of these phrases is a false positive,
@@ -105,7 +121,7 @@ PAT="($PAT_NAMES|$PAT_SHAPE|$PAT_HOSTS|$PAT_NET)"
 # single-char-class technique as the patterns above, for the same reason:
 # these are ordinary English words, but writing them out in full would put
 # the literal grep-able strings in this file for no functional reason.
-PAT_SAFE_COLLOCATIONS='(not just noi[s]y|too noi[s]y|very noi[s]y|noi[s]y (neighbou?r|signal|data|background|environment|channel)|(warm|cozy|by the|kitchen) hea[r]th|tac[o] (tuesday|truck|bell|bar|night))'
+PAT_SAFE_COLLOCATIONS='(not just noi[s]y|too noi[s]y|very noi[s]y|noi[s]y (neighbou?r|signal|data|background|environment|channel)|(warm|cozy|by the|kitchen) hea[r]th|tac[o] (tuesday|truck|bell|bar|night)|PA[R]T [AB]\b|clips PA[R]T of|PA[R]T of the)'
 
 # Known generic PLACEHOLDER names -- deliberately allowed by the brief this
 # guard was built against ("/Users/yourname", "/Users/user"): a placeholder

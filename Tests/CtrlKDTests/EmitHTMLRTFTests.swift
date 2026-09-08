@@ -518,3 +518,93 @@ import Testing
                           proportional: aachenFont.proportional)
     #expect(stack == ["Albertus", "Herculanum", "Colonna MT", "Rockwell", "serif"])
 }
+
+@Test func postscriptDocumentTypefacesMapToCorrectFaceEveryTarget() {
+    // Port of test_postscript_document_typefaces_map_to_correct_face_every_target.
+    //
+    // planning #225 (2026-09-08): the ws7-prints/v4 capture round hit four WordStar
+    // typestyles the PostScript-targeted documents use -- LinePrinter (0), Triumvirate
+    // (175), Symbol (192), ZapfDingbats (82) -- whose PCL substitute typeface IDs (0,
+    // 16602, 16686, 31402) the fidelity gate's own font table had never seen (that half
+    // lives entirely in ctrl-kd's own Python tools, which sr's PCLFidelityTests shells
+    // out to unmodified -- there is no Swift copy of that table to port). This is the
+    // OTHER half: WordStar's own typestyle names, run through the --fonts render-target
+    // table (targetFonts), must resolve to the ruled family in EVERY target the CLI
+    // offers -- never silently falling through to the target's bare generic-style
+    // primary (RULINGS-LEDGER.md "PostScript-document typefaces: mapping approved, all
+    // font targets", 2026-09-08 06:40: "Make sure that the Font Table mapping includes
+    // all outputs (Office, Linux, Google, etc.), not just Mac.").
+    //
+    // Triumvirate (175) is the one that was a REAL gap: its own typestyle name is the
+    // bare string "Triumvirate" (no parenthetical for the family computed property to
+    // strip), which never matched FontMap.swift's old "cg triumvirate" key (that key is
+    // dead -- "CG Triumvirate" only ever appears as a parenthetical alias under
+    // typestyle 4 "Helv", which the family property truncates to "Helv" before it ever
+    // reaches this table). Before the fix, "triumvirate" fell through to
+    // genericPrimary's sans bucket -- which happens to already equal the ruled answer
+    // for office/mac/google (a coincidence, not a mapped entry, same "not
+    // distinguishable from the generic by value alone" point
+    // documentDeclaringAlbertusDoesNotFallThroughToGeneric already makes for
+    // Albertus/Marigold) -- but is WRONG on linux (DejaVu Sans instead of Nimbus Sans,
+    // the URW clone every other Helvetica-family typestyle gets).
+    struct Case {
+        let number: Int
+        let name: String
+        let generic: GenericStyle?
+        let proportional: Bool
+        let perTarget: [FontsTarget: String]
+    }
+    let cases: [Case] = [
+        Case(number: 0, name: "LinePrinter", generic: nil, proportional: false,
+             perTarget: [.office: "Courier New", .mac: "Courier New",
+                         .google: "Courier New", .linux: "Nimbus Mono PS"]),
+        Case(number: 175, name: "Triumvirate", generic: .sans, proportional: true,
+             perTarget: [.office: "Arial", .mac: "Helvetica",
+                         .google: "Arial", .linux: "Nimbus Sans"]),
+        Case(number: 192, name: "Symbol", generic: .sans, proportional: true,
+             perTarget: [.office: "Symbol", .mac: "Symbol",
+                         .google: "Symbol", .linux: "Standard Symbols PS"]),
+        Case(number: 82, name: "ZapfDingbats", generic: .sans, proportional: true,
+             perTarget: [.office: "Zapf Dingbats", .mac: "Zapf Dingbats",
+                         .google: "Zapf Dingbats", .linux: "D050000L"]),
+    ]
+    for c in cases {
+        // The typestyle NUMBER is real WSFORMAT, not a fixture invention.
+        #expect(typestyleNames[c.number] == c.name)
+        let famKey = c.name.lowercased()
+        for target in FontsTarget.allCases {
+            // A dedicated targetFonts entry -- the same "not distinguishable from the
+            // generic by value alone" proof documentDeclaringAlbertusDoesNotFallThroughToGeneric
+            // already establishes for Albertus/Marigold.
+            #expect(targetFonts[target]?[famKey] != nil,
+                    "\(c.name) has no dedicated \(target) targetFonts entry -- falls through to the generic primary")
+            let (primary, _) = rtfFonts(famKey, generic: c.generic, target: target,
+                                        proportional: c.proportional)
+            #expect(primary == c.perTarget[target],
+                    "\(c.name) on \(target): got \(String(describing: primary)), expected \(String(describing: c.perTarget[target]))")
+        }
+    }
+
+    // End-to-end proof for one face (Triumvirate, the real gap) that a document actually
+    // carrying this typestyle flows the same answer through emitRTF, on every target --
+    // not just the table lookup.
+    func fontBlock(_ number: Int, styleBits: Int) -> [UInt8] {
+        var payload = le16(180) + le16(240)
+        payload += le16((number & 0x01FF) | styleBits) + [UInt8](repeating: 0, count: 6)
+        return ws7Block(0x02, payload: payload)
+    }
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding for detection, a perfectly ordinary sentence.") + HARD
+    data += fontBlock(175, styleBits: 0x8000) + bytes("Section heading text here.") + HARD
+    data += bytes("Closing prose line keeps the byte ratio looking like text.") + HARD
+    let doc = parseWS(data)
+    #expect(doc.fonts.first?.family == "Triumvirate")
+    let expected: [FontsTarget: String] = [
+        .office: "Arial", .mac: "Helvetica", .google: "Arial", .linux: "Nimbus Sans",
+    ]
+    for target in FontsTarget.allCases {
+        let rtf = emitRTF(doc, mode: .modern, options: EmitOptions(fontsTarget: target))
+        #expect(rtf.contains(#"{\f2 "# + expected[target]!),
+                "\(target): \(rtf)")
+    }
+}

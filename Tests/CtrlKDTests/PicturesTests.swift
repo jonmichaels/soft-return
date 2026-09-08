@@ -481,6 +481,41 @@ private func footnoteAndIsolatedPixDoc() -> Document {
     #expect(!err.contains { $0.contains("ctrl-kd:") })
 }
 
+@Test func cliPDFEmbedsSiblingPixWithRelativeDocumentPath() throws {
+    // Round 2026-09-07 field bug, end-to-end through the real CLI resolve/report/embed
+    // pipeline (not just the resolver in isolation -- see
+    // resolvePixFindsSiblingWithRelativeDocumentPath above): `cd <dir>; sr -t pdf -o
+    // out.pdf 1SCREEN.WS` found 0 images before this fix; the identical document opened
+    // by its absolute path found 1. This proves the fix holds through argument parsing,
+    // `resolveDocumentPictures`, and PDF embedding together, not just the helper.
+    let block = wsBlock(cmd: 0x10, content: Array(#"C:\WS\INSET\PIX\WORDSTAR.PIX"#.utf8))
+    let source = bytes("Before.\r\n\r\n") + block + bytes("\r\n\r\nAfter.\r\n")
+    let pixData = buildPixBytes(gcols: 2, grows: 1, gfore: 1, pageRows: 1, pageCols: 8,
+                                stpRows: 1, stpCols: 1, indexImg: [[1, 0, 0, 0, 0, 0, 0, 0]])
+    var written: [String: [UInt8]] = [:]
+    var err: [String] = []
+    let env = CLIEnvironment(
+        readFile: { path in
+            switch path {
+            case "1SCREEN.WS": return source
+            case "./WORDSTAR.PIX": return pixData
+            default: throw TestFSError.notFound
+            }
+        },
+        writeFile: { path, data in written[path] = data },
+        createDirectory: { _ in }, writeOut: { _ in }, writeErr: { line in err.append(line) },
+        listDirectory: { path in path == "." ? ["WORDSTAR.PIX"] : nil },
+        isFile: { path in path == "1SCREEN.WS" || path == "./WORDSTAR.PIX" }
+    )
+    let status = run(["--mode", "modern", "-t", "pdf", "-o", "out.pdf", "1SCREEN.WS"], environment: env)
+    #expect(status == ExitStatus.ok)
+    // no "PIX image ... not found" degradation note -- the picture WAS found (the one
+    // line in `err` is the ordinary "path -> destination" success notice).
+    #expect(!err.contains { $0.contains("PIX image") })
+    let pdf = try #require(written["out.pdf"])
+    #expect(contains(pdf, bytes("/Im0 Do")))
+}
+
 // MARK: - CLI resolve layer (piximg.py/pictures.py)
 
 /// An in-memory filesystem: `[path: [entryName]]` for directories, `[path: bytes]` for
@@ -530,6 +565,41 @@ private enum TestFSError: Error { case notFound }
 @Test func resolvePixReturnsNilWhenNothingMatches() throws {
     let env = fakeFSEnvironment(dirs: [:], files: [:])
     #expect(resolvePix(#"C:\PIX\MISSING.PIX"#, docPath: "/doc/LETTER.WS", environment: env) == nil)
+}
+
+@Test func resolvePixFindsSiblingWithRelativeDocumentPath() throws {
+    // Round 2026-09-07 bug (Jon, sr 4.0.3 field report, reproduced on Linux): a
+    // document opened by a RELATIVE path with no directory component at all --
+    // `cd <dir>; sr -t pdf -o out.pdf 1SCREEN.WS` -- never found its sibling .PIX;
+    // the SAME document opened by its ABSOLUTE path did. Root cause: `resolvePix`
+    // computed the document's directory with `dirname()`, which returns "" for a
+    // bare relative filename (mirroring `os.path.dirname`) -- but ctrl-kd's own
+    // `pictures.resolve_document_pictures` computes it with `pathlib.Path(...)
+    // .parent`, which is `Path('.')` for that same input, a real listable
+    // directory. "" reached `environment.listDirectory` and found nothing;
+    // `resolveDocDir`'s fix substitutes "." for the empty case, exactly mirroring
+    // pathlib. The resolved path below carries the "./" `joinPath(".", _)` always
+    // produces -- the real shape a genuine cwd-relative resolve returns, not an
+    // artifact of this fixture.
+    let env = fakeFSEnvironment(
+        dirs: [".": ["WORDSTAR.PIX"]],
+        files: ["1SCREEN.WS": bytes("doc"), "./WORDSTAR.PIX": bytes("pix bytes")])
+    let resolved = resolvePix(#"C:\WS\INSET\PIX\WORDSTAR.PIX"#, docPath: "1SCREEN.WS", environment: env)
+    #expect(resolved == "./WORDSTAR.PIX")
+}
+
+@Test func resolvePixFindsSiblingWithOneLevelRelativeDocumentPath() throws {
+    // The same fix, exercised one more level up `ancestors`' own ascent: a relative
+    // document path that DOES carry one directory component (e.g. "corpus/DOC.WS")
+    // still needs the process's own cwd as a fallback ancestor, matching pathlib's
+    // `Path("corpus").parent == Path(".")` -- `ancestors()`'s own `dirname(cur) ==
+    // ""` substitution (not just `resolveDocDir`'s top-level one) is what supplies
+    // that extra step.
+    let env = fakeFSEnvironment(
+        dirs: [".": ["WORDSTAR.PIX"], "corpus": ["1SCREEN.WS"]],
+        files: ["corpus/1SCREEN.WS": bytes("doc"), "./WORDSTAR.PIX": bytes("pix bytes")])
+    let resolved = resolvePix(#"C:\WS\INSET\PIX\WORDSTAR.PIX"#, docPath: "corpus/1SCREEN.WS", environment: env)
+    #expect(resolved == "./WORDSTAR.PIX")
 }
 
 @Test func resolveDocumentPicturesEndToEnd() throws {

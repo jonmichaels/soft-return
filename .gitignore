@@ -35,3 +35,6 @@ Derived/
 .DS_Store
 __pycache__/
 *.pyc
+
+# per-machine Claude settings (the build host's sandbox fence lives here; never commit)
+.claude/settings.local.json

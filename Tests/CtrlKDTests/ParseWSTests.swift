@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import CtrlKD
 
@@ -59,6 +60,151 @@ let italicOn: [UInt8] = [0x19]
     let doc = parseWS(data)
     #expect(doc.blocks.map(\.kind) == [.para, .pagebreak, .para])
     #expect(doc.dotCommands == [".pa"])
+}
+
+@Test func ifElEiEvaluateConstantConditions() {
+    // Mirrors test_if_el_ei_evaluate_constant_conditions (ctrl-kd tests/test_ctrlkd.py).
+    // #229 (ledger 2026-09-08 08:00, planning #229): see ParseWS.swift's own
+    // conditionals section for the full WSFORMAT.WS/REFORM.DOT citation.
+    var doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=0") + HARD +
+                      bytes(".po .7i") + HARD + bytes(".ei") + HARD + bytes("T.") + HARD)
+    #expect(doc.page?.poCols == 10.0)
+
+    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=1") + HARD +
+                  bytes(".po .7i") + HARD + bytes(".ei") + HARD + bytes("T.") + HARD)
+    #expect(doc.page?.poCols == 7.0)
+
+    // .EL flips a false .IF's suppression
+    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=0") + HARD + bytes(".po .5i") +
+                  HARD + bytes(".el") + HARD + bytes(".po .7i") + HARD + bytes(".ei") +
+                  HARD + bytes("T.") + HARD)
+    #expect(doc.page?.poCols == 7.0)
+
+    // ... and a true .IF's .EL side is the one suppressed
+    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=1") + HARD + bytes(".po .5i") +
+                  HARD + bytes(".el") + HARD + bytes(".po .7i") + HARD + bytes(".ei") +
+                  HARD + bytes("T.") + HARD)
+    #expect(doc.page?.poCols == 5.0)
+
+    // bare numeric argument, no operator: REFORM.DOT's own prose states
+    // outright "The command if 0 is equivalent to if 1=0"
+    doc = parseWS(bytes(".rm 6.5\"") + HARD + bytes(".if 0") + HARD +
+                  bytes(".rm 5.0\"") + HARD + bytes(".ei") + HARD + bytes("T.") + HARD)
+    #expect(doc.blocks[0].rightMargin == 65.0)
+
+    // nesting: an outer false frame suppresses an inner TRUE one too
+    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=0") + HARD + bytes(".if 1=1") +
+                  HARD + bytes(".po .5i") + HARD + bytes(".ei") + HARD + bytes(".ei") +
+                  HARD + bytes("T.") + HARD)
+    #expect(doc.page?.poCols == 10.0)
+
+    // false-branch TEXT is skipped for output too, not just dot commands
+    doc = parseWS(bytes(".if 1=0") + HARD + bytes("Hidden text.") + HARD +
+                  bytes(".ei") + HARD + bytes("Visible text.") + HARD)
+    let texts = doc.blocks.flatMap { $0.lines.map { $0.text() } }
+    #expect(texts == ["Visible text."])
+
+    // a merge-variable condition (&name&) is NOT evaluated -- "leave current
+    // behaviour": both the .if side and the .el side apply in document
+    // order, exactly as before .IF/.EL/.EI were recognized as anything but
+    // inert dot lines.
+    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if &X&=1") + HARD + bytes(".po .5i") +
+                  HARD + bytes(".el") + HARD + bytes(".po .7i") + HARD + bytes(".ei") +
+                  HARD + bytes("T.") + HARD)
+    #expect(doc.page?.poCols == 7.0)
+
+    doc = parseWS(bytes(".if &X&=1") + HARD + bytes("A.") + HARD + bytes(".el") + HARD +
+                  bytes("B.") + HARD + bytes(".ei") + HARD)
+    let texts2 = doc.blocks.flatMap { $0.lines.map { $0.text() } }
+    #expect(texts2 == ["A.", "B."])
+}
+
+@Test func dotCommandFractionsAndArithmetic() {
+    // Mirrors test_dot_command_fractions_and_arithmetic (ctrl-kd tests/test_ctrlkd.py).
+    // #202 residuals round, cause 5 -- see ParseWS.swift's own conditionals-
+    // adjacent section for the full WSFORMAT.TXT citation and corpus evidence.
+
+    // the confirmed real case: a fraction with an inch unit suffix
+    var m = parseDotNumberConsuming(Array("12/72\"".utf8))
+    #expect(m != nil)
+    #expect(abs(m!.value - 12.0 / 72.0) < 1e-9)
+    #expect(m!.unit == Array("\"".utf8))
+
+    // every bare-number case parses to the identical float as before
+    for s in ["66", "6.5\"", "12.5C", ".5", "0"] {
+        let arg = Array(s.utf8)
+        m = parseDotNumberConsuming(arg)
+        #expect(m != nil)
+    }
+
+    // a parenthesized expression, WordStar's own documented "math" feature
+    m = parseDotNumberConsuming(Array("((8.5-7.8)/2)i".utf8))
+    #expect(m != nil)
+    #expect(abs(m!.value - (8.5 - 7.8) / 2) < 1e-9)
+    #expect(m!.unit == Array("i".utf8))
+
+    m = parseDotNumberConsuming(Array("((8.5-7.8)/2)-.3".utf8))
+    #expect(m != nil)
+    #expect(abs(m!.value - ((8.5 - 7.8) / 2 - 0.3)) < 1e-9)
+    #expect(m!.unit == nil)
+
+    // division by zero is rejected, never crashes
+    #expect(parseDotNumberConsuming(Array("1/0".utf8)) == nil)
+    // unbalanced parens are rejected, not partially matched
+    #expect(parseDotNumberConsuming(Array("(1+2".utf8)) == nil)
+    // no leading unary sign
+    #expect(parseDotNumberConsuming(Array("-5".utf8)) == nil)
+
+    // end to end: `.lh 12/72"` resolves to WordStar's own 12pt, not the
+    // pre-fix bug's 18pt (12 read as a bare integer, at the 6-LPI default)
+    let doc = parseWS(bytes(".lh 12/72\"") + HARD + bytes("T.") + HARD)
+    #expect(doc.page?.lh48 == 8.0)                    // 12pt in 1/48in units
+}
+
+@Test func trailingPaHasContentAfterByteDetector() {
+    // Mirrors test_trailing_pa_has_content_after_byte_detector (ctrl-kd
+    // tests/test_ctrlkd.py). Planning #228.
+    let suf = trailingPaTrailerSuffix
+    let pad = Array(repeating: UInt8(0x1a), count: 8)
+
+    #expect(trailingPaHasContentAfter(bytes("...pa") + suf + pad) == false)
+    #expect(trailingPaHasContentAfter(bytes("...pa") + suf + bytes("\r\n") + pad) == true)
+    #expect(trailingPaHasContentAfter(bytes("...pa") + suf + bytes("\r\n\r\n") + pad) == true)
+    #expect(trailingPaHasContentAfter(bytes("...pa") + suf + bytes(" \r\n") + pad) == true)
+    #expect(trailingPaHasContentAfter(
+        bytes("...pa") + suf + bytes(".. end of file\r\n") + pad) == false)
+    #expect(trailingPaHasContentAfter(
+        bytes("...pa") + suf + bytes(".av \"prompt\",any-key\r\n") + pad) == false)
+    #expect(trailingPaHasContentAfter(bytes("...pa") + suf) == false)
+    #expect(trailingPaHasContentAfter(bytes("no pa command here") + pad) == false)
+    #expect(trailingPaHasContentAfter(bytes("...pa\r\n") + pad) == false)
+}
+
+@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
+    // Mirrors test_trailing_pa_opens_page_only_with_saved_blank_paragraph
+    // (ctrl-kd tests/test_ctrlkd.py). Planning #228. Only
+    // sawyer/REF/PAGESIZE.WS actually saved a blank paragraph after its
+    // trailing `.pa`; sawyer/STRENGTH.WS is a same-shape "bare .pa,
+    // nothing after" document that must NOT open an extra page (44
+    // documents just like it regressed on the first attempt at this
+    // fix, precisely because the rule was over-generalised to "any
+    // document ending in a pagebreak").
+    let pagesizeData = try Data(contentsOf: URL(fileURLWithPath:
+        sawyerArchivePath + "/REF/PAGESIZE.WS"))
+    let pagesize = parseWS(Array(pagesizeData))
+    #expect(pagesize.paEofBlankAfter == true)
+    let pages = docToPagelines(pagesize, printed: true)
+    #expect(pages.count == 6)
+    #expect(pages.last?.isEmpty == true)     // no body on the trailing page
+    #expect(pages.last?.explicitBreak == true)
+
+    let strengthData = try Data(contentsOf: URL(fileURLWithPath:
+        sawyerArchivePath + "/STRENGTH.WS"))
+    let strength = parseWS(Array(strengthData))
+    #expect(strength.paEofBlankAfter == false)
+    let strengthPages = docToPagelines(strength, printed: true)
+    #expect(strengthPages.count == 1)        // no extra page opens
 }
 
 @Test func rulerMarksColumnar() {

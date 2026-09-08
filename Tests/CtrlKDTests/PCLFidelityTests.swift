@@ -43,11 +43,50 @@ import ucrt
 ///
 /// A document can fail check 1 while passing check 2 — that is the expected, current
 /// shape: sr reproduces ctrl-kd's own known PCL-fidelity gaps exactly, because the two
-/// PDFs are the same bytes. `swift test`'s overall exit status for `--filter PCLFidelity`
-/// is therefore RED whenever any captured document has a live PCL-fidelity bug, by design
-/// (per this file's own doctrine and `docs/TESTING.md`'s Tier-2/3 law: a skipped or
-/// papered-over check is not a passing check) — the rest of the suite (`swift test` with
-/// no filter) is unaffected by this tier's verdicts.
+/// PDFs are the same bytes.
+///
+/// planning #180 phase 2 ("tests expanded", 2026-09-08): the 243-document ws7-prints/v4/
+/// expansion (`capturedDocsV4`/`inventoryModeDocs` below) softens check 1 ONLY, to a
+/// `withKnownIssue` (still runs, still names every divergence, doesn't fail the overall
+/// run) — untriaged, pending Jon's per-cause ruling, mirroring ctrl-kd's own
+/// `pcl_tolerance.INVENTORY_MODE_DOCS`. Check 2 is NEVER softened, for any document: a
+/// cross-engine mismatch is the finding this whole suite exists to catch (this file's own
+/// "the roadmap's point is that the two engines match"), so it stays a hard `Issue.record`
+/// even for a v4 document. Planning #243 (2026-09-08, URGENT correction: this file ships
+/// to the PUBLIC engine repo as-is, and used to carry private-corpus document names/
+/// aliases live on that public repo's main branch) removed EVERY private-corpus-group
+/// document from `capturedDocsV1V3`/`capturedDocsV4` below entirely -- Tier 3 (private
+/// document PCL fidelity) has no Swift-side coverage at all now, pending a genuinely
+/// private carrier for it (a "stays-in-private-repo tier" Swift target, matching the app
+/// suite's own 3-tier split). `swift test`'s overall exit status for `--filter
+/// PCLFidelity` is therefore RED whenever any of the original 12 public documents has a
+/// live PCL-fidelity bug, or whenever ANY captured PUBLIC document has a real cross-engine
+/// (check 2) mismatch — by design (per this file's own doctrine
+/// and `docs/TESTING.md`'s Tier-2/3 law: a skipped or papered-over check is not a passing
+/// check; `withKnownIssue` still runs and still names every finding, it is not a skip).
+/// A v4 document's own check-1 divergences do NOT turn this filtered run red — that is
+/// the inventory-mode softening above, not a suppression — the rest of the suite
+/// (`swift test` with no filter) is unaffected by this tier's verdicts either way.
+///
+/// planning #224/#226 (ruled 2026-09-08): 20 of the 182 public v4 documents are further
+/// EXCLUDED from the tier entirely — 3 PostScript-targeted documents with an
+/// unclassified typeface ID (postscript),
+/// `sawyer/OLDTIMES.WS` (freeze — WordStar itself hangs printing it, see
+/// the corpus's own ws7-prints/v4/README.md "Recapture 2026-09-08"), the
+/// non-canonical half of several byte-identical duplicate pairs (duplicate — so the same
+/// content is never judged twice), and 2 documents that turn form feeds off with the
+/// `.xl` dot command (formfeed-off — `sawyer/ARTICLES/FORMFEED.WS`, a tutorial, plus
+/// `sawyer/REF/ROUNDED.BRD`, found by scanning the rest of the batch for the same
+/// command — real WS7 overprints multiple pages onto one sheet, unrepresentable as PDF
+/// pages; standing parked issue planning #15, no new issue opened). `capturedDocsV4`
+/// below is UNCHANGED (still all 182
+/// public names, still 194 total with capturedDocsV1V3) — exclusion is decided per-document
+/// from ctrl-kd's own committed manifest (`verdict == "excluded"`, checked the same
+/// place and the same way as `"source-missing"` is, in `pclFidelity(doc:)` below), so
+/// this file needs no separate exclusion list of its own and stays in lockstep with
+/// ctrl-kd's `pt.EXCLUDED_V4` automatically. Full ruling detail (sha256 of every
+/// excluded duplicate, which half was kept): the corpus's own
+/// `ws7-prints/v4/exclusions.json`.
 ///
 /// ## Engine construction
 /// `PCLFidelityDriver.renderPrintedPDF` mirrors `tools/fidelity_gate.py`'s own
@@ -75,11 +114,226 @@ import ucrt
 /// was still being completed as of this writing) is decided live, per document, by
 /// `run_pcl_fidelity_gate.py report NAME` — never hardcoded here — so a name that starts
 /// resolving after a corpus update starts running automatically, with no Swift change.
-private let capturedDocs = [
-    "BOXES", "DOCA", "DOCB", "DOCC", "DOCD", "LJ6DTP", "LYING", "OCAPTAIN",
-    "DOCE", "PREVIEW", "-README", "SAWYER", "-SCREEN", "SCRIPT", "DOCF",
+/// planning #180 phase 2 ("tests expanded", 2026-09-08): the original 18 (v1/v2/v3
+/// captures) -- UNCHANGED, still checked to the fail-loud "check 1" bar below.
+// Planning #243 (2026-09-08, Jon's ruling "Sawyer docs all must be in tier
+// 2"), URGENT correction: this file ships to the PUBLIC engine repo AS-IS
+// (Monorepo-Layout-Proposal.md section 2.1/3, "Tests/CtrlKDTests/ ... move
+// as-is") -- the six private-corpus document aliases this array used to
+// carry, and the 64 private-group v4 aliases `capturedDocsV4` below used to
+// carry, were LIVE on github.com/jonmichaels/soft-return's main branch. This
+// array is PUBLIC-ONLY now (the 12 public v1/v3 documents); Tier 3 (private
+// document PCL fidelity) has NO Swift-side coverage until a genuinely
+// private carrier exists for it -- see this file's own module-level comment
+// for the follow-up this needs (a "stays-in-private-repo tier" Swift target,
+// matching the app suite's already-established 3-tier split, section 2.2 of
+// the same proposal doc).
+private let capturedDocsV1V3 = [
+    "BOXES", "LJ6DTP", "LYING", "OCAPTAIN",
+    "PREVIEW", "-README", "SAWYER", "-SCREEN", "SCRIPT",
     "TWAINLET", "VERSIONS", "WARPRAYR",
 ]
+/// The ws7-prints/v4/ expansion (182 PUBLIC documents, planning #243) -- mirrors ctrl-kd's own
+/// `tools/fidelity_gate.py`'s `CAPTURED_DOCS_V4` EXACTLY (same names, same order:
+/// real sawyer-group keys only, since
+/// this array only exists to tell `run_pcl_fidelity_gate.py`/ctrl-kd's own resolver
+/// which names to ask about -- a name ctrl-kd's own list doesn't carry the same way
+/// would just report `resolvable: false` here, silently drifting from what the Python
+/// side actually tests. Checked to a SOFTER bar (`inventoryModeDocs`, `withKnownIssue`)
+/// below: "check 1" (ctrl-kd's own clean/divergent bar) is untriaged for these, pending
+/// Jon's per-cause ruling, same distinction ctrl-kd's own `pcl_tolerance.
+/// INVENTORY_MODE_DOCS` draws. "check 2" (cross-engine identity against ctrl-kd's own
+/// recorded manifest) is NOT softened for ANY document, v4 included -- see this file's
+/// own header, "the roadmap's point is that the two engines match", and the per-document
+/// source-missing guard added alongside this list (below) for why the 64 private-group
+/// aliases need a THIRD guard, not just this softer bar, to avoid a spurious "mismatch"
+/// against their own placeholder manifest entry.
+private let capturedDocsV4: [String] = [
+    "sawyer__APP__-README_EXT_WS",
+    "sawyer__APP__vDosPlus__-README_EXT_WS",
+    "sawyer__ARTICLES__FORMFEED_EXT_WS",
+    "sawyer__ARTICLES__POWERUSE_EXT_WS",
+    "sawyer__ARTICLES__YOURWAY_EXT_WS",
+    "sawyer__BOX_EXT_WS",
+    "sawyer__CONVERT_EXT_WS",
+    "sawyer__DEFAULT__BOX",
+    "sawyer__DEFAULT__DEFAULT_EXT_WS",
+    "sawyer__DEFAULT__INSET__GRAPHICS_EXT_DOC",
+    "sawyer__DEFAULT__LIST_EXT_DOC",
+    "sawyer__DEFAULT__MAILING_EXT_DOC",
+    "sawyer__DEFAULT__PLAYBILL_EXT_DOC",
+    "sawyer__DEFAULT__PLAYS_EXT_DOC",
+    "sawyer__DEFAULT__PRINT_EXT_TST",
+    "sawyer__DEFAULT__REVIEW_EXT_DOC",
+    "sawyer__DEFAULT__SHAKE_EXT_DOC",
+    "sawyer__DEFAULT__SPELL_EXT_DOC",
+    "sawyer__DICT__-README_EXT_WS",
+    "sawyer__DISPLAY_EXT_WS",
+    "sawyer__FONTS__PS__ERROR_EXT_WS",
+    "sawyer__HIJAAK__PEANUTS_EXT_WS",
+    "sawyer__INSET__CHART_EXT_WS",
+    "sawyer__INSET__GRAPHICS_EXT_DOC",
+    "sawyer__INTERVU_EXT_WS",
+    "sawyer__LAYOUT_EXT_WS",
+    "sawyer__LIST_EXT_DOC",
+    "sawyer__LSRBOX__ASC256_EXT_TXT",
+    "sawyer__LSRBOX__CHECKER_EXT_BRD",
+    "sawyer__LSRBOX__LSRBOX_EXT_WS",
+    "sawyer__LSRBOX__MAXIMUM_EXT_BOX",
+    "sawyer__LSRBOX__OHBORD_EXT_DBL",
+    "sawyer__LSRBOX__OHBORD_EXT_THI",
+    "sawyer__LSRBOX__OHBORD_EXT_THK",
+    "sawyer__LSRBOX__OHSHADED_EXT_BOX",
+    "sawyer__LSRBOX__OHTQBORD_EXT_SHD",
+    "sawyer__LSRBOX__PAGE_EXT_RND",
+    "sawyer__LSRBOX__TEXTLINE_EXT_SHD",
+    "sawyer__LSRBOX__TOP&BOT_EXT_LIN",
+    "sawyer__MACROS__HOLYMAC__-HOLYMAC_EXT_WS",
+    "sawyer__MACROS__HOLYMAC__-README_EXT_WS",
+    "sawyer__MACROS__HOLYMAC__1-3MAC",
+    "sawyer__MACROS__HOLYMAC__4MAC1",
+    "sawyer__MACROS__HOLYMAC__4MAC2",
+    "sawyer__MACROS__HOLYMAC__4MAC3",
+    "sawyer__MACROS__HOLYMAC__5-6MAC",
+    "sawyer__MACROS__HOLYMAC__7MAC1",
+    "sawyer__MACROS__HOLYMAC__7MAC2",
+    "sawyer__MACROS__HOLYMAC__7MAC3",
+    "sawyer__MACROS__HOLYMAC__8MAC",
+    "sawyer__MACROS__HOLYMAC__WOMBAT",
+    "sawyer__MACROS__SAWYER__-MACROS_EXT_DOC",
+    "sawyer__MACROS__SAWYER__-MAKEDTP_EXT_WS",
+    "sawyer__MAILING_EXT_DOC",
+    "sawyer__MICKEE__MICKEE_EXT_WS",
+    "sawyer__OLDTIMES_EXT_WS",
+    "sawyer__PLAYBILL_EXT_DOC",
+    "sawyer__PLAYS_EXT_DOC",
+    "sawyer__PRINTERS__FONTCRIB_EXT_PS",
+    "sawyer__PRINTERS__PS__PSSAMPLE_EXT_WS",
+    "sawyer__PRINTERS__fontcrib_EXT_ws",
+    "sawyer__PRINTER_EXT_PS",
+    "sawyer__PRINT_EXT_TST",
+    "sawyer__PSPRINT_EXT_TST",
+    "sawyer__REF__-ATTRIB_EXT_TST",
+    "sawyer__REF__-HOW-TO_EXT_RJS",
+    "sawyer__REF__-INDEX_EXT_HOW",
+    "sawyer__REF__-LASERJE_EXT_FNT",
+    "sawyer__REF__-PATCHES_EXT_WS",
+    "sawyer__REF__-SHOW-PP_EXT_WS",
+    "sawyer__REF__-TOC-TAG_EXT_WS",
+    "sawyer__REF__64BIT_EXT_WS",
+    "sawyer__REF__ACROBAT_EXT_FIX",
+    "sawyer__REF__ADVANCE_EXT_DOT",
+    "sawyer__REF__ANDROID_EXT_WS",
+    "sawyer__REF__ASCIITAB_EXT_WS",
+    "sawyer__REF__BOOKLET_EXT_HOW",
+    "sawyer__REF__BOOKLET_EXT_RJS",
+    "sawyer__REF__BOOKLET_EXT_WS",
+    "sawyer__REF__BUGS_EXT_WS",
+    "sawyer__REF__BULLET_EXT_WS",
+    "sawyer__REF__CHECKBOX_EXT_WS",
+    "sawyer__REF__CLIPBOAR_EXT_HOW",
+    "sawyer__REF__CODES",
+    "sawyer__REF__COMMENT_EXT_BUG",
+    "sawyer__REF__COURIER_EXT_WS",
+    "sawyer__REF__CREDITS_EXT_WS",
+    "sawyer__REF__CTRL-K_EXT_H1",
+    "sawyer__REF__DELAYS_EXT_WS",
+    "sawyer__REF__DICT_EXT_WS",
+    "sawyer__REF__DOT-WI_EXT_WS",
+    "sawyer__REF__DOTCMDNS_EXT_WS",
+    "sawyer__REF__DOTS_EXT_IF",
+    "sawyer__REF__DPI_EXT_TAG",
+    "sawyer__REF__DVORAK_EXT_WS",
+    "sawyer__REF__EMS_EXT_FIX",
+    "sawyer__REF__FONT-TAG_EXT_CMP",
+    "sawyer__REF__FONTS_EXT_REF",
+    "sawyer__REF__FUZZY_EXT_FIX",
+    "sawyer__REF__GALLEYS_EXT_DOT",
+    "sawyer__REF__HIGHLIGH_EXT_WS",
+    "sawyer__REF__Keyboard scancode specification - Microsoft_EXT_doc",
+    "sawyer__REF__MACBOOK_EXT_AIR",
+    "sawyer__REF__MAC_EXT_OSX",
+    "sawyer__REF__NOTES_EXT_TST",
+    "sawyer__REF__Notes__690_EXT_TXT",
+    "sawyer__REF__PAGESIZE_EXT_WS",
+    "sawyer__REF__PALATINO",
+    "sawyer__REF__PAPERPOR_EXT_EXT",
+    "sawyer__REF__PARAGRAP_EXT_NUM",
+    "sawyer__REF__PDF_EXT_HOW",
+    "sawyer__REF__PP_EXT_WS",
+    "sawyer__REF__PS-FONTS_EXT_REF",
+    "sawyer__REF__PS_EXT_TST",
+    "sawyer__REF__REFORM_EXT_DOT",
+    "sawyer__REF__ROUNDED_EXT_BRD",
+    "sawyer__REF__ROUNDING_EXT_HOW",
+    "sawyer__REF__SCREEN_EXT_WS",
+    "sawyer__REF__SHADES_EXT_WS",
+    "sawyer__REF__STYLESHE_EXT_WS",
+    "sawyer__REF__SUB-SUPE_EXT_TST",
+    "sawyer__REF__SYMBOL_EXT_CHT",
+    "sawyer__REF__TEMPFILE_EXT_WS",
+    "sawyer__REF__TOCTRICK_EXT_WS",
+    "sawyer__REF__U-UMLAUT_EXT_WS",
+    "sawyer__REF__WIN7MEM_EXT_WS",
+    "sawyer__REF__WIN7_EXT_ETC",
+    "sawyer__REF__WINDOS_EXT_HOW",
+    "sawyer__REF__WINDOWS7_EXT_SWP",
+    "sawyer__REF__WINDOWS7_EXT_WS",
+    "sawyer__REF__WINDOWS_EXT_8",
+    "sawyer__REF__WINGDING_EXT_CHT",
+    "sawyer__REF__WORTHING_EXT_TON",
+    "sawyer__REF__WSFORMAT_EXT_WS",
+    "sawyer__REF___TABS_EXT_RR",
+    "sawyer__REF__wordstar-file-format_EXT_ws",
+    "sawyer__REGULAR_EXT_WS",
+    "sawyer__REVIEW_EXT_DOC",
+    "sawyer__RJS_EXT_WS",
+    "sawyer__RTF-RJS__-README2_EXT_WS",
+    "sawyer__RTF-RJS__-README_EXT_WS",
+    "sawyer__RTF-RJS__1-5LINES_EXT_WS",
+    "sawyer__RTF-RJS__1-SINGLE_EXT_WS",
+    "sawyer__RTF-RJS__2-DOUBLE_EXT_WS",
+    "sawyer__RTF-RJS__LINKS_EXT_WS",
+    "sawyer__RTF-RJS__MARKUP_EXT_WS",
+    "sawyer__RTF-RJS__NOTITLE_EXT_WS",
+    "sawyer__RTF-RJS__NOVEL_EXT_WS",
+    "sawyer__RTF-RJS__RTFDS_EXT_WS",
+    "sawyer__RTF-RJS__RTF_EXT_WS",
+    "sawyer__RTF-RJS__SKIPTEST_EXT_WS",
+    "sawyer__SCREEN_EXT_WS",
+    "sawyer__SHAKE_EXT_DOC",
+    "sawyer__SPELL_EXT_DOC",
+    "sawyer__STRENGTH_EXT_WS",
+    "sawyer__TAGS__-README_EXT_WS",
+    "sawyer__TAGS__CHECK",
+    "sawyer__TAGS__CHECKED",
+    "sawyer__TAGS__CLARIFY",
+    "sawyer__TAGS__CONDENSE",
+    "sawyer__TAGS__CUT",
+    "sawyer__TAGS__DW",
+    "sawyer__TAGS__ESTAB",
+    "sawyer__TAGS__EXPAND",
+    "sawyer__TAGS__FIX",
+    "sawyer__TAGS__HOW",
+    "sawyer__TAGS__HUH",
+    "sawyer__TAGS__OK",
+    "sawyer__TAGS__ONCF",
+    "sawyer__TAGS__ONFC",
+    "sawyer__TAGS__R",
+    "sawyer__TAGS__R1",
+    "sawyer__TAGS__R2",
+    "sawyer__TAGS__SHOW",
+    "sawyer__TAGS__SIMPLIFY",
+    "sawyer__TAGS__SPLIT",
+    "sawyer__TAGS__TRANSIT",
+    "sawyer__TAGS__WHEN",
+    "sawyer__TAGS__WHY",
+    "sawyer__UTIL__DOSYMSEQ_EXT_WS",
+    "sawyer__WORDSTAR_EXT_WS",
+    "sawyer__WS-CON__SAMPLE_EXT_WS",
+]
+private let capturedDocs = capturedDocsV1V3 + capturedDocsV4
+private let inventoryModeDocs = Set(capturedDocsV4)
 
 let ctrlkdPrivateCorpusRoot = (ProcessInfo.processInfo.environment["CTRLKD_PRIVATE_CORPUS"]
     .map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }) ?? ""
@@ -432,7 +686,8 @@ enum PCLFidelityDriver {
         // A real armed run must at least be able to reach ctrl-kd and its manifest for
         // one known document — if this fails, every parameterized case below will fail
         // the same way, but this is the one test that names the SETUP problem instead of
-        // 18 identical per-document tracebacks.
+        // 261 identical per-document tracebacks (planning #180 phase 2, 2026-09-08:
+        // 18 original + 243 ws7-prints/v4/ expansion, see capturedDocsV4 above).
         let result = try PCLFidelityDriver.resolve("LYING")
         #expect(result["resolvable"] as? Bool == true,
                 "expected LYING to resolve once CTRLKD_PRIVATE_CORPUS is armed: \(result)")
@@ -456,6 +711,47 @@ enum PCLFidelityDriver {
             // being armed at all is still checked hard, above.
             let reason = resolution["reason"] as? String ?? "not resolvable in this corpus"
             withKnownIssue("PCL fidelity, \(doc): source not available in this corpus — \(reason)") {
+                Issue.record("\(doc): \(reason)")
+            }
+            return
+        }
+        // planning #243 (2026-09-08): NO private-corpus-group document name reaches this
+        // branch any more -- `capturedDocsV1V3`/`capturedDocsV4` above no longer carry
+        // any (see this file's own module-level comment). Dead code, kept only because a
+        // future document COULD still resolve with no recorded manifest entry for an
+        // unrelated reason (a genuine corpus-completeness gap), in which case this same
+        // skip-not-fail treatment is still the right one.
+        let recordedForResolution = resolution["recorded"] as? [String: Any]
+        if recordedForResolution?["verdict"] as? String == "source-missing" {
+            let reason = recordedForResolution?["reason"] as? String
+                ?? "private corpus group -- no real verdict committed to this public manifest"
+            let commentText = "PCL fidelity, \(doc): source-missing in ctrl-kd's own " +
+                "committed manifest (private corpus group) — \(reason)"
+            withKnownIssue(Comment(rawValue: commentText)) {
+                Issue.record("\(doc): \(reason)")
+            }
+            return
+        }
+        // planning #224/#226 (ruled 2026-09-08): ctrl-kd's own committed manifest carries
+        // a verdict 'excluded' placeholder for 20 public documents -- 3 PostScript-targeted
+        // documents with an unclassified typeface ID (postscript), OLDTIMES.WS
+        // (WordStar itself hangs printing this document --
+        // "Recapture 2026-09-08" in the corpus's own ws7-prints/v4/README.md), the
+        // non-canonical half of several byte-identical duplicate pairs (duplicate), and 2
+        // documents that turn form feeds off with .xl 00 -- FORMFEED.WS and
+        // REF/ROUNDED.BRD (formfeed-off, standing parked issue planning #15) -- so the
+        // same content, a document that can never really be compared, or a document
+        // WS7 overprints onto one sheet, isn't judged twice or gated at all. Mirrors
+        // ctrl-kd's own `test_pcl_fidelity.py` check for
+        // this verdict exactly (same order: checked before ever rendering/comparing a
+        // live PDF). Unlike source-missing, this repo is PRIVATE, so the skip reason may
+        // name the real corpus path freely -- see the corpus's own
+        // ws7-prints/v4/exclusions.json for the full ruling, sha256, and which half of
+        // each pair was kept.
+        if recordedForResolution?["verdict"] as? String == "excluded" {
+            let reason = recordedForResolution?["reason"] as? String ?? "excluded (see ctrl-kd's pt.EXCLUDED_V4)"
+            let commentText = "PCL fidelity, \(doc): excluded from the PCL tier — \(reason)"
+            withKnownIssue(Comment(rawValue: commentText)) {
                 Issue.record("\(doc): \(reason)")
             }
             return
@@ -503,13 +799,29 @@ enum PCLFidelityDriver {
         // Check 1 (ctrl-kd's own "clean" bar). Expected, today, to fail for every
         // document ctrl-kd itself reports divergent for (planning issue #202) — that is
         // this test reporting a REAL, already-known bug by name, not a test bug.
+        //
+        // planning #180 phase 2 (v4 expansion, 2026-09-08): for a v4 document
+        // (`inventoryModeDocs`), this is wrapped in `withKnownIssue` — the SAME
+        // distinction ctrl-kd's own `pcl_tolerance.INVENTORY_MODE_DOCS`/
+        // `test_pcl_fidelity.py` draws (print/record every divergence by name, but don't
+        // fail the tier on it, pending Jon's per-cause ruling). The original 18 are
+        // UNCHANGED — still a bare `Issue.record`, still fails this test outright.
         if realBugCount != 0 {
             let shown = divergenceLines.joined(separator: "\n  ")
-            Issue.record("""
+            let message = """
                 \(doc): \(realBugCount) non-font-substitution PCL-fidelity divergence(s) \
                 (counts_by_reason=\(liveCounts)) — see planning issue #202:
                   \(shown)
-                """)
+                """
+            if inventoryModeDocs.contains(doc) {
+                let commentText = "PCL fidelity, \(doc): v4 expansion, untriaged pending " +
+                    "Jon's per-cause ruling (planning #180 phase 2)"
+                withKnownIssue(Comment(rawValue: commentText)) {
+                    Issue.record("\(message)")
+                }
+            } else {
+                Issue.record("\(message)")
+            }
         }
     }
 }

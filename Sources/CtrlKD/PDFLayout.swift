@@ -415,10 +415,35 @@ func styleLeadPt(_ block: Block, _ doc: Document, raw: Bool = false) -> Double? 
 /// the corpus (WARPRAYR's Author block has exactly one real line). Reasoned from the
 /// SAME clipping rationale Finding B's own fallback rests on (a real line's
 /// ascender/descender doesn't stop clipping just because it isn't the block's first),
-/// not from a second measurement. Port of Python's `pdf._entering_lead_pt`.
+/// not from a second measurement.
+///
+/// UPDATE 2026-09-08 (#236, INTERVU.WS/WORDSTAR.WS title blocks): the LYING.WS
+/// cross-check above and the "auto never needs the floor" conclusion it supported only
+/// ever exercised a transition with a BLANK line between the two blocks (Author's own
+/// trailing blank separates it from Subtitle) — the blank line already provides real
+/// separation, at ITS OWN (outgoing) block's lead, before Subtitle's first real line is
+/// even reached, so no extra floor is needed there. INTERVU.WS's title block is the
+/// discriminating case that reading never covered: three single-line AUTO-style
+/// paragraphs stacked with NO blank line between them at all (H1 "Why I Still Use
+/// WordStar:" directly followed by H2 "An Interview...", no intervening blank).
+/// Measured directly against WS7's own capture: H1(18pt)->H2(16pt) advances 18.0pt
+/// (H1's OWN outgoing size, not H2's entering 16.0), and H2->H3(14pt) advances 16.0pt
+/// (H2's own outgoing size) — the identical floor this function already applies for an
+/// explicit vmi, engaging for auto too, but ONLY when the line above is REAL (no blank
+/// line already did the job). The floor therefore applies whenever the block being
+/// ENTERED has an EXPLICIT vmi (unconditionally, as before), OR an auto (-2) vmi AND
+/// the previous block's own LAST line still carries real content (no blank line
+/// intervening) — a genuinely auto style needs no protection when a blank line already
+/// separated it from what came before, but does need it butted directly against
+/// another real line, for the same ascender/descender-clipping reason Finding B's own
+/// fallback exists. Port of Python's `pdf._entering_lead_pt`.
 func enteringLeadPt(_ block: Block, _ doc: Document, prevBlock: Block?) -> Double? {
     guard let own = styleLeadPt(block, doc, raw: false) else { return nil }
-    guard let vmi = block.lineHeightVMI, vmi > 0, let prevBlock else { return own }
+    guard let prevBlock else { return own }
+    let vmi = block.lineHeightVMI
+    let explicit = (vmi ?? 0) > 0
+    let autoAdjacent = vmi == -2 && (prevBlock.lines.last?.spans.isEmpty == false)
+    guard explicit || autoAdjacent else { return own }
     guard let prevRaw = styleLeadPt(prevBlock, doc, raw: true) else { return own }
     return max(own, prevRaw)
 }
@@ -549,6 +574,18 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     /// override (`Line.poCols`, applied in `resolvePlainBody`/`resolvePrintedBody`), this is
     /// the page-granularity twin that mechanism was missing. Port of Python's `Page.po_cols`.
     public var poCols: Double?
+    /// #228 (research/2026-09-08_trailing-pa-rule.md, planning #228): a trailing `.pa`
+    /// followed by at least one more real content paragraph -- even a blank one --
+    /// before EOF opens a final page with no body; real WS7 still stamps its running
+    /// footer/page number there. `explicitBreak` marks a page force-closed by exactly
+    /// that condition (never popped by `finalizePages`'s empty-trailing-page cleanup);
+    /// `explicitBreakBI` is the block index of the `.pa` itself (or, for a fresh
+    /// endnote-only page with no `.bi`-carrying line of its own, the document's own
+    /// highest block index), so the auto-page-number lookup has something to resolve
+    /// against on a page with no lines at all. Both stay at their default (`false`/
+    /// `nil`) for every ordinary page.
+    public var explicitBreak: Bool
+    public var explicitBreakBI: Int?
 
     public init() {
         lines = []
@@ -560,11 +597,14 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         hmLines = nil
         fmLines = nil
         poCols = nil
+        explicitBreak = false
+        explicitBreakBI = nil
     }
 
     public init(_ lines: [PageLine], headers: [Int: String] = [:], footers: [Int: String] = [:],
                mtLines: Double? = nil, mbLines: Double? = nil, plLines: Double? = nil,
-               hmLines: Double? = nil, fmLines: Double? = nil, poCols: Double? = nil) {
+               hmLines: Double? = nil, fmLines: Double? = nil, poCols: Double? = nil,
+               explicitBreak: Bool = false, explicitBreakBI: Int? = nil) {
         self.lines = lines
         self.headers = headers
         self.footers = footers
@@ -574,6 +614,8 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.hmLines = hmLines
         self.fmLines = fmLines
         self.poCols = poCols
+        self.explicitBreak = explicitBreak
+        self.explicitBreakBI = explicitBreakBI
     }
 
     public init(arrayLiteral elements: PageLine...) {
@@ -670,7 +712,7 @@ public func wrapLine(_ spans: [Span], width: Int) -> [PageLine] {
 /// few hundred operators and a page of a few thousand, and changes nothing on paper because
 /// Courier's advance width is the same either way.
 ///
-/// THE FONT RUN IS PART OF THE MERGE TEST, added with printed-mode base-14 fonts
+/// THE FONT RUN IS INCLUDED IN THE MERGE TEST, added with printed-mode base-14 fonts
 /// (`PDFFonts.swift`): two adjacent spans set in different faces are not the same run, and
 /// merging them would set the second one in the first one's font. Python gets this free —
 /// its font index rides in the same `frozenset` as the style codes, so its `styles ==
@@ -1014,7 +1056,13 @@ private func finalizePages(_ rawPages: [Page], printed: Bool, isPrintStream: Boo
     //
     // Explicit interior blanks from `.pa .pa` between content are preserved: only the LAST
     // page is popped, and only while there is more than one.
-    while pages.count > 1, pages[pages.count - 1].isEmpty {
+    //
+    // #228 (research/2026-09-08_trailing-pa-rule.md, planning #228): an empty page
+    // reached via the confirmed trailing-`.pa`-plus-saved-blank-paragraph shape
+    // (`explicitBreak`, set only where a trailing `.pa` opens one — see
+    // `layoutPrintedPagesPlain`/`endnotePages`) is real WS7 output -- its footer/page
+    // number prints even with no body -- and is exempt from this pop.
+    while pages.count > 1, pages[pages.count - 1].isEmpty, !pages[pages.count - 1].explicitBreak {
         pages.removeLast()
     }
     return pages
@@ -1253,6 +1301,23 @@ private func resolvePrintedBody(
         }
         if block.kind == .condpage {
             items.append(.condPage(max(1, block.heading)))
+            continue
+        }
+        if block.origin == .fi {
+            // #241: `.fi` (file insert) on a target this engine cannot resolve
+            // fabricates a visible `[insert: NAME]` placeholder paragraph
+            // (ParseWS.swift's `parseCollectDot`, origin `.fi`) -- useful in
+            // Modern (an editorial note about what the source asked for), but
+            // WS7's real behaviour on an unresolvable `.fi` target is to print
+            // NOTHING: measured directly (sawyer/RTF-RJS's own `.fi C:\WS\
+            // RTF-RJS\LINKS.MRG` probes, a target that exists nowhere in the
+            // corpus) -- WS7's capture goes straight from the line before
+            // `.fi` to the document's own next real text, no gap, no
+            // placeholder line at all. This function (Printed's own
+            // WS7-emulation surface) skips the block entirely -- zero lines,
+            // zero page-advance -- matching WS7; Modern is untouched (still
+            // shows the placeholder, per Jon's ruling: "report what Modern
+            // does and leave it"). Port of Python's `pdf.py` `.fi` skip.
             continue
         }
         // Fix C (b26-print-fidelity-2): same per-block lookup as `resolvePlainBody` —
@@ -1862,8 +1927,8 @@ func resolvePageNumbers(_ checkpoints: [(blockIndex: Int, pn: Int)], _ pages: [P
 /// (commit b6d5d03): ws7-prints/v3 (the PRISTINE.EXE recapture), finding #2 --
 /// documents that never touch `.pn`/`.pg`/`.op`/`.pc` at all print a stock
 /// bottom-of-page automatic number under a genuinely stock WS7 install, confirmed
-/// at the raw PCL byte level across BOXES/DOCA/DOCB/DOCD/DOCE/SAWYER/DOCF/VERSIONS/
-/// -README. Previously seeded OFF, MEASURED (dosbox-x, 16 probes) against Robert J.
+/// at the raw PCL byte level across BOXES/SAWYER/VERSIONS/-README plus several
+/// private-corpus documents. Previously seeded OFF, MEASURED (dosbox-x, 16 probes) against Robert J.
 /// Sawyer's own WSCHANGE-customized install -- the same install-contamination
 /// family as ctrl-kd's `.po` column 7 vs 8 bug (mechanism S, already ported/
 /// reverted here too): Sawyer's WSCHANGE profile turned the automatic number OFF
@@ -2698,6 +2763,22 @@ private func layoutPrintedPages(
     // straight up against it, which is what Jon reported in the b27 review. Port of
     // Python's `_endnote_pages` plus its `_doc_to_pagelines` call site (which page this
     // replaces vs. appends).
+    // #228 (research/2026-09-08_trailing-pa-rule.md): a trailing `.pa` -- the
+    // document's own LAST block -- closes the current page (WordStar's own
+    // "force a new page" signal) even when nothing real follows it before
+    // EOF and no visible extra page ever opens (`doc.paEofBlankAfter` false,
+    // the ordinary case). Forcing `lastPageCost` to `capacity` here makes
+    // `canContinue` below correctly refuse to merge the document's endnotes
+    // onto page 1's remaining room, matching WordStar's own documented
+    // default endnote placement (WSFORMAT.TXT: no `.PE` -> "endnotes will be
+    // printed at the very end of the document ... starting a new page if
+    // they don't fit what's left"). Confirmed against sawyer/DISPLAY.WS and
+    // sawyer/REF/NOTES.TST: both end in a bare `.pa` (nothing after) and
+    // both need their real endnote content on ITS OWN fresh page, not
+    // merged with the footnote already on page 1.
+    if doc.blocks.last?.kind == .pagebreak {
+        lastPageCost = Double(capacity)
+    }
     let endnotes = doc.notes.enumerated().filter { $0.element.kind == .endnote }
     if !endnotes.isEmpty {
         var lines: [PageLine] = []
@@ -2712,6 +2793,19 @@ private func layoutPrintedPages(
         // non-empty page (an empty Python list is falsy) as well as under-capacity.
         let canContinue = lastPageCost < Double(capacity)
             && (pages.last.map { !$0.isEmpty } ?? false)
+        // #228: a FRESH endnote page (not a continuation of the body's own
+        // last page) has no `.bi`-carrying line of its own -- every line
+        // here comes from `endnoteEntryLines`, never a `.bi`-tagged
+        // PageLine -- so the auto-page-number lookup at render time has
+        // nothing to resolve against. `explicitBreakBI` (the document's
+        // own highest block index -- "wherever the document's own state
+        // was by its own end") stands in, the same fallback the trailing-
+        // `.pa` blank page (`layoutPrintedPagesPlain`) already uses.
+        // Confirmed against sawyer/DISPLAY.WS: WS7's own page 2 (the
+        // endnote, on its own page once the trailing-`.pa` continuation
+        // fix above stops it merging with page 1) carries the automatic
+        // page number "2".
+        let lastBI = doc.blocks.count - 1
         var page: Page
         var room: Double
         if canContinue, let last = pages.last {
@@ -2721,14 +2815,14 @@ private func layoutPrintedPages(
                 lines = [[]] + lines
             }
         } else {
-            page = Page([], headers: doc.headers, footers: doc.footers)
+            page = Page([], headers: doc.headers, footers: doc.footers, explicitBreakBI: lastBI)
             room = Double(capacity)
         }
         var endPages: [Page] = []
         for line in lines {
             if room < 1 {
                 endPages.append(page)
-                page = Page([], headers: doc.headers, footers: doc.footers)
+                page = Page([], headers: doc.headers, footers: doc.footers, explicitBreakBI: lastBI)
                 room = Double(capacity)
             }
             page.append(line)
@@ -3066,6 +3160,14 @@ private func resolvePlainBody(
             items.append(.condPage(max(1, block.heading)))
             continue
         }
+        if block.origin == .fi {
+            // #241: see `resolvePrintedBody`'s own identical check for the
+            // full citation -- WS7 prints nothing for an unresolvable `.fi`
+            // target; this function is Printed-only, so the block is
+            // skipped unconditionally (Modern routes through a different
+            // function entirely and is untouched).
+            continue
+        }
         let fiPt = printedPMFiPt(block)
         var firstLineOfBlock = true
         // Fix C (b26-print-fidelity-2): the nearest earlier REAL (`.para`) block,
@@ -3346,10 +3448,20 @@ func layoutPrintedPagesPlain(
         if last.overprint { return 0.0 }                   // this line shares a baseline
         return lead
     }
-    func closePage() {
+    func closePage(explicit: Bool = false, breakBI: Int? = nil) {
         var pg = Page(page,
                       headers: pageHeaders.filter { !$0.value.isEmpty },
                       footers: pageFooters.filter { !$0.value.isEmpty })
+        // #228: only ever true from the post-loop trailing-`.pa` branch below,
+        // and only when `page` (this closing page's own body) is empty -- a
+        // page WITH content already carries real `.bi`-bearing lines, so it
+        // needs no fallback and stays exempt from `finalizePages`'s empty-
+        // trailing-page cleanup on its own (that cleanup only pops truly-
+        // empty pages to begin with).
+        if explicit, page.isEmpty {
+            pg.explicitBreak = true
+            pg.explicitBreakBI = breakBI
+        }
         if curMt != globalMt || curMb != globalMb {
             pg.mtLines = curMt
             pg.mbLines = curMb
@@ -3456,6 +3568,21 @@ func layoutPrintedPagesPlain(
     }
     if !page.isEmpty {
         closePage()
+    } else if case .pageBreak = items.last, doc.paEofBlankAfter {
+        // #228 (research/2026-09-08_trailing-pa-rule.md, planning #228):
+        // "WS7 opens the page after a forced `.pa` break ONLY when at
+        // least one more real content paragraph -- even an entirely
+        // blank one -- follows that `.pa` before end-of-file." The
+        // document's last item was an explicit `.pa`, `page` is empty
+        // by construction (reset when that pagebreak was processed
+        // above, never touched since), and `doc.paEofBlankAfter`
+        // (computed once at parse time from the file's own saved-
+        // trailer bytes -- `trailingPaHasContentAfter` in ParseWS.swift)
+        // confirms this specific document really did save a blank
+        // paragraph after that `.pa`, not just a bare unconditional
+        // pagebreak (the overwhelming majority of `.pa`-terminated
+        // documents, which open no extra page at all).
+        closePage(explicit: true, breakBI: doc.blocks.count - 1)
     }
     return pages
 }

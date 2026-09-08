@@ -417,7 +417,10 @@ func classifyModernBlocks(_ doc: Document) -> [Int: [(line: Line, structure: Row
         let cut = pyCutCols(block)
         for line in mergedLines(block) {
             let text = line.spans.map(\.text).joined()
-            entries.append(.para(indentCols: lm, cutCols: cut, align: block.align, text: text))
+            let internalTabRun = hasInternalTabRun(
+                line.spans.map { (text: $0.text, tabHMI: $0.tabHMI, tabLeader: $0.tabLeader) })
+            entries.append(.para(indentCols: lm, cutCols: cut, align: block.align, text: text,
+                                 internalTabRun: internalTabRun))
             plan.append((bi, line))
         }
     }

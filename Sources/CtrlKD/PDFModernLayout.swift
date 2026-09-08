@@ -56,9 +56,15 @@ enum ModernFlowItem {
     /// c82b2ff): the screenplay pagination ruling's two line shapes, gated on
     /// `detectScreenplayBlocks` — see `modernFlow`'s own doc comment for the full
     /// mechanism.
+    /// `endNotesStart` (round 2026-09-07, Jon's ruling): `true` for exactly the ONE
+    /// `.para` this file builds from `.noteSeparator` — the item that opens the
+    /// end-matter appendix (endnotes/annotations/comments, M1) — `false` for every other
+    /// paragraph, including the end-matter's own note entries. The paginator
+    /// (`modernStreams`) uses it to decide whether the appendix needs a fresh page.
     case para(toks: [ModernToken], align: Alignment,
               notes: [(index: Int, label: String, text: String)],
-              indent: Double, cut: Double, noWrap: Bool, pageMarker: Bool)
+              indent: Double, cut: Double, noWrap: Bool, pageMarker: Bool,
+              endNotesStart: Bool)
     /// An embedded pix image standing alone on its own paragraph — b24 round 22, closing
     /// round 19's documented Modern scope cut. Python's `('image', idx, w, h)` tuple.
     case image(pixIndex: Int, widthPt: Double, heightPt: Double)
@@ -266,16 +272,20 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
         case .noteSeparator:
             let separator = String(repeating: "-", count: 20)
             let sepW = stringWidthPt(separator, "Times-Roman", modernNotePt)
+            // endNotesStart: true -- layout.swift's modernSemanticFlow emits exactly one
+            // .noteSeparator, always immediately before the first .note item, when the
+            // document has any end-matter notes at all. Jon's ruling 2026-09-07 fires on
+            // this flag in modernStreams.
             flow.append(.para(toks: [ModernToken(text: separator, styles: [], family: .times,
                                                  pt: modernNotePt, entry: nil, width: sepW)],
                               align: .left, notes: [], indent: 0.0, cut: 0.0,
-                              noWrap: false, pageMarker: false))
+                              noWrap: false, pageMarker: false, endNotesStart: true))
         case .note(let ni, _, let label, let text):
             let noteText = sentenceSpacing ? sentenceSpacingTexts([text])[0] : text
             flow.append(.para(toks: modernNoteToks(label: label, text: noteText,
                                                     kind: sem.notes[ni].kind),
                               align: .left, notes: [], indent: 0.0, cut: 0.0,
-                              noWrap: false, pageMarker: false))
+                              noWrap: false, pageMarker: false, endNotesStart: false))
         case .para(let align, let indentCols, let cutCols, var runs, let footnotes, _, _, let bi):
             if embedImages, !runs.contains(where: { $0.ref != nil }),
                let sub = spansPixSubstitution(runs.map { (text: $0.text, pix: $0.pix) },
@@ -309,12 +319,23 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 }
                 for piece in modernTokenize(run.text) {
                     let resolved = modernTokFont(piece, font: run.font, fonts: doc.fonts)
-                    let width = modernTokenWidth(resolved.written, styles: styles,
-                                                 family: resolved.family, pt: resolved.pt,
-                                                 entry: resolved.entry)
-                    toks.append(ModernToken(text: resolved.written, styles: styles,
-                                            family: resolved.family, pt: resolved.pt,
-                                            entry: resolved.entry, width: width))
+                    // round 2026-09-07 (ported from ctrl-kd pdf.py's b26-modern item 4):
+                    // a token whose family isn't already Symbol/ZapfDingbats may still
+                    // carry cp437 Greek/math/Dingbats bytes cp1252 can't encode -- same
+                    // fallback Printed's `splitSymbolFallback` applies, factored out
+                    // (`symbolFallbackSplit`) so both paths share one answer.
+                    let fbPieces: [(text: String, family: PDFFamily)] =
+                        (resolved.family == .symbol || resolved.family == .zapfDingbats)
+                        ? [(resolved.written, resolved.family)]
+                        : symbolFallbackSplit(resolved.written, family: resolved.family)
+                    for (fbText, fbFamily) in fbPieces {
+                        let width = modernTokenWidth(fbText, styles: styles,
+                                                     family: fbFamily, pt: resolved.pt,
+                                                     entry: resolved.entry)
+                        toks.append(ModernToken(text: fbText, styles: styles,
+                                                family: fbFamily, pt: resolved.pt,
+                                                entry: resolved.entry, width: width))
+                    }
                 }
             }
             // b26-modern item 3 (screenplay ruling): only lines inside a DETECTED
@@ -356,7 +377,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
             }
             flow.append(.para(toks: toks, align: lineAlign, notes: notes,
                               indent: indentCols.value * colPt, cut: cutCols.value * colPt,
-                              noWrap: noWrap, pageMarker: pageMarker))
+                              noWrap: noWrap, pageMarker: pageMarker, endNotesStart: false))
         }
     }
     return flow
@@ -677,7 +698,8 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
             y -= hPt
             body.append((y, [], .left, 0.0, 0.0,
                          PageLine.ImageRef(pixIndex: pixIndex, widthPt: wPt, heightPt: hPt)))
-        case .para(let toks, let align, let notes, let indent, let cut, let noWrap, let pageMarker):
+        case .para(let toks, let align, let notes, let indent, let cut, let noWrap, let pageMarker,
+                  let endNotesStart):
             if pageMarker, !body.isEmpty {
                 // b26-modern item 3, rule (a): a real screenplay page-number marker
                 // starts a new real page -- if this Modern page already has content on
@@ -688,6 +710,21 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
                 // extra -- `close()` on an empty page would just insert a spurious
                 // blank one, so this only fires when there is something to separate
                 // FROM.
+                close()
+            }
+            if endNotesStart, !body.isEmpty, !notesLines.isEmpty {
+                // Jon's ruling 2026-09-07 (RULINGS-LEDGER.md verbatim): "endnotes go
+                // right at the end of text / image on the last page unless there are
+                // footnotes on that page. Then the endnotes start on a new page."
+                // Endnotes are never interleaved with a footnote block. `notesLines` is
+                // exclusively footnote text here (M1's own split: footnote -> the
+                // per-paragraph page-bottom area; endnote/annotation -> the end-matter
+                // appendix this ONE `.noteSeparator`-opened item begins) -- non-empty
+                // means the CURRENT page already carries at least one footnote, so the
+                // appendix starts fresh instead of continuing directly after the last
+                // body line/image. `!body.isEmpty` guards the same way `pageMarker`'s
+                // check does: a fresh, still-empty page needs no extra break (nothing
+                // to separate FROM).
                 close()
             }
             // rule (c): a screenplay slugline carrying its own right-hand scene number

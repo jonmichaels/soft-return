@@ -64,10 +64,13 @@ import Testing
 @Suite(.serialized)
 struct AppNativeFidelityTests {
 
-    /// The 18 documents `ws7-prints/v3` captures.
+    /// The 12 PUBLIC documents `ws7-prints/v3` captures (planning #243, 2026-09-08:
+    /// six private-corpus document aliases removed -- this file ships to the public
+    /// app repo, and Tier 3, private-document testing, has no coverage here until a
+    /// genuinely private carrier exists for it).
     static let documents = [
-        "BOXES", "DOCA", "DOCB", "DOCC", "DOCD", "LYING", "OCAPTAIN", "DOCE", "PREVIEW",
-        "-README", "SAWYER", "-SCREEN", "SCRIPT", "DOCF", "TWAINLET", "VERSIONS",
+        "BOXES", "LYING", "OCAPTAIN", "PREVIEW",
+        "-README", "SAWYER", "-SCREEN", "SCRIPT", "TWAINLET", "VERSIONS",
         "WARPRAYR", "LJ6DTP",
     ]
 

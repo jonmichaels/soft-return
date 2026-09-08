@@ -215,7 +215,8 @@ public struct RowStructure: Hashable, Sendable {
 /// column geometry and text), or a hard break that resets nesting (a heading, page
 /// break, or multi-column block). Port of `layout.classify_rows`' `entries` tuples.
 public enum StructureEntry: Hashable, Sendable {
-    case para(indentCols: PyNumber, cutCols: PyNumber, align: Alignment, text: String)
+    case para(indentCols: PyNumber, cutCols: PyNumber, align: Alignment, text: String,
+              internalTabRun: Bool = false)
     case hard
 }
 
@@ -280,6 +281,43 @@ private func wideGapCount(_ chars: [Character]) -> Int {
     return count
 }
 
+/// True if a row's own WordStar tab-stop (a run whose `tabHMI`/`tabLeader` are non-nil
+/// -- the "Tabs and dot leaders" symmetrical sequence, type 9 in the parser's own
+/// `_symmetric_blocks`/`parseSymmetric`) lands somewhere OTHER than the row's own
+/// leading edge -- i.e. splits the row into two-or-more tab-positioned pieces (a table
+/// row: "label <tab jump> value") rather than merely nudging the whole line's start
+/// column rightward once (a title or byline typed AT a tab stop chosen, by the original
+/// author, to look roughly centered -- WordStar's own leading-space-only shape, no
+/// different in kind from a hand-typed indent). `runs` is an ordered sequence of
+/// (text, tabHMI, tabLeader) triples -- a `Span`'s own fields, or a `SemanticRun`'s.
+///
+/// Planning #206: `classifyRows`' own spaces-centering heuristic reads 'symmetric
+/// leading/trailing padding' as evidence a human typed spaces to hand-center a short
+/// line -- and a chain of tab-stop runs sitting entirely BEFORE the row's first real
+/// character reads exactly like that same evidence (found against
+/// ARTICLES/FORMFEED.WS's own title and byline lines, each a single leading tab-run
+/// with no other tab jump in the row -- correctly still centered here). A SECOND
+/// tab-run, appearing only AFTER real content has already been seen, is a different
+/// thing entirely: WSFORMAT.WS's own Symmetric-Sequences table rows ('4'+tab+'Endnote',
+/// 'Bit #:'+tab+'Usage:', '02h ^B'+tab+'Boldface type...', ...) each carry exactly this
+/// shape, real two-column table structure a symmetric leading-space check can't tell
+/// apart from a title's own single centering tab without it -- WS7's own print
+/// (paper-scan-verified) and this engine's own Printed PDF both show these rows
+/// left-aligned, never centered. Port of ctrl-kd's `layout.has_internal_tab_run`.
+func hasInternalTabRun<S: Sequence>(_ runs: S) -> Bool where S.Element == (text: String, tabHMI: Int?, tabLeader: Int?) {
+    var seenContent = false
+    for run in runs {
+        if run.text.isEmpty { continue }
+        let isTabSpace = run.text.allSatisfy { $0 == " " } && (run.tabHMI != nil || run.tabLeader != nil)
+        if isTabSpace {
+            if seenContent { return true }
+            continue
+        }
+        seenContent = true
+    }
+    return false
+}
+
 /// Python's `str.strip(' ')`: only the space character, both ends.
 private func stripSpaces(_ chars: [Character]) -> [Character] {
     var start = 0
@@ -294,6 +332,7 @@ private struct WorkingRow {
     var cutCols: PyNumber
     var align: Alignment
     var lead: Int
+    var internalTabRun: Bool
     var col: PyNumber
     var text: [Character]        // lead-stripped
     var raw: [Character]         // original, untouched
@@ -314,7 +353,7 @@ private struct WorkingRow {
 /// row that doesn't match one of the rules). Port of `layout.classify_rows`.
 public func classifyRows(_ entries: [StructureEntry]) -> [RowStructure?] {
     var rows: [WorkingRow?] = entries.map { e in
-        guard case .para(let indentCols, let cutCols, let align, let text) = e else {
+        guard case .para(let indentCols, let cutCols, let align, let text, let internalTabRun) = e else {
             return nil
         }
         let chars = Array(text)
@@ -324,6 +363,7 @@ public func classifyRows(_ entries: [StructureEntry]) -> [RowStructure?] {
         let col = PyNumber(value: indentCols.value + Double(lead),
                            isFloat: indentCols.isFloat)
         return WorkingRow(indentCols: indentCols, cutCols: cutCols, align: align, lead: lead,
+                          internalTabRun: internalTabRun,
                           col: col, text: Array(chars[lead...]), raw: chars,
                           kind: nil, marker: nil, label: nil, body: nil)
     }
@@ -423,7 +463,7 @@ public func classifyRows(_ entries: [StructureEntry]) -> [RowStructure?] {
             row.centered = true
             row.centerVia = .tag
             row.centerText = String(content)
-        } else if row.align == .left, wideGapCount(content) < 2 {
+        } else if row.align == .left, wideGapCount(content) < 2, !row.internalTabRun {
             // Undeclared centering: no tag at all, just spaces padding the line so it
             // SITS centred within this row's own printable measure. Symmetric
             // leading/trailing padding (within a little rounding slack -- an odd
@@ -439,6 +479,15 @@ public func classifyRows(_ entries: [StructureEntry]) -> [RowStructure?] {
             // before this guard existed. A genuine centered line carries at most one
             // incidental wide gap (a sentence-ending double-space); 2+ is a column
             // layout, not prose.
+            //
+            // Planning #206: `internalTabRun` (`hasInternalTabRun`, above) is that SAME
+            // "2+ gaps -> column layout" guard's own blind spot closed -- a two-column
+            // table row built from real WordStar tab stops ("4"+tab+"Endnote") often has
+            // only ONE internal gap post-strip (the wideGapCount guard alone lets it
+            // through), but the gap is a tab-stop's absolute-column jump, not typed
+            // padding; a title/byline whose OWN leading tab-run is its only tab-stop
+            // span (ARTICLES/FORMFEED.WS's own "-30-") is unaffected -- see that
+            // function's own doc comment.
             let width = Double(fullCols) - row.indentCols.value - row.cutCols.value
             let slack = width - Double(content.count)
             // A near-full measure leaves almost no room to be off-centre in the first
@@ -892,8 +941,10 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
         switch it {
         case .para(let align, let indentCols, let cutCols, let runs, _, _, _, _):
             let text = runs.map(\.text).joined()
+            let internalTabRun = hasInternalTabRun(
+                runs.map { (text: $0.text, tabHMI: $0.tabHMI, tabLeader: $0.tabLeader) })
             structEntries.append(.para(indentCols: indentCols, cutCols: cutCols, align: align,
-                                       text: text))
+                                       text: text, internalTabRun: internalTabRun))
             structIdx.append(idx)
         case .pageBreak, .cond:
             structEntries.append(.hard)

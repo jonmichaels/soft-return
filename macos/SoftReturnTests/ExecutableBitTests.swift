@@ -42,7 +42,7 @@ private func mode(of url: URL) throws -> UInt16 {
 
 /// An extensionless file that is already fine must not be touched or counted.
 @Test @MainActor func anAlreadyGoodFileIsNotCounted() throws {
-    let url = try scratchFile(name: "DOCB", mode: 0o644)
+    let url = try scratchFile(name: "GOODFILE", mode: 0o644)
     #expect(ExecutableBitRepair.needsRepair(at: url) == false)
     #expect(ExecutableBitRepair.clearIfNeeded(at: url) == false)
 }

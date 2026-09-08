@@ -53,6 +53,15 @@ let fontAlternates: [String: [String]] = [
     "antique olive":          ["Optima", "Verdana"],
     "cg times":               ["Times New Roman"],
     "cg triumvirate":         ["Arial", "Helvetica"],
+    // WS typestyle 175's OWN name is plain "Triumvirate" (no parenthetical,
+    // so `_font_family`'s Swift port never truncates it to "cg triumvirate"
+    // above -- that key never actually fires from real data). Added
+    // planning #225 (2026-09-08): the LaserJet driver substitutes this
+    // typestyle with the printer's resident Arial (PCL typeface ID 16602,
+    // HP PCL5 Comparison Guide + IBM technote + groff devlj4/AR, all citing
+    // this exact ID) -- same modern alternates as the "cg triumvirate"
+    // entry. Direct port of ctrl-kd's own fontmap.py fix.
+    "triumvirate":            ["Arial", "Helvetica"],
     "garamond":               ["Garamond", "EB Garamond"],
     "optima":                 ["Optima", "Candara"],
     "clarendon":              ["Clarendon", "Rockwell"],
@@ -217,7 +226,7 @@ let targetFonts: [FontsTarget: [String: (primary: String, falt: String?)]] = [
         ("letter gothic|gothic", "Consolas", "Courier New"),
         ("prestige", "Courier New", nil),
         ("univers", "Arial", "Helvetica Neue"),
-        ("cg triumvirate|ps sansser qual", "Arial", "Helvetica"),
+        ("cg triumvirate|triumvirate|ps sansser qual", "Arial", "Helvetica"),
         ("antique olive", "Candara", "Verdana"),
         ("optima", "Candara", "Optima"),
         ("garamond", "Garamond", "EB Garamond"),
@@ -251,7 +260,7 @@ let targetFonts: [FontsTarget: [String: (primary: String, falt: String?)]] = [
         ("letter gothic|gothic", "Menlo", "Courier New"),
         ("prestige", "Courier New", nil),
         ("univers", "Helvetica Neue", "Arial"),
-        ("cg triumvirate|ps sansser qual", "Helvetica", "Arial"),
+        ("cg triumvirate|triumvirate|ps sansser qual", "Helvetica", "Arial"),
         ("antique olive", "Optima", "Verdana"),
         ("optima", "Optima", "Candara"),
         ("garamond", "Hoefler Text", "Garamond"),
@@ -272,7 +281,7 @@ let targetFonts: [FontsTarget: [String: (primary: String, falt: String?)]] = [
         ("cntry schlbk|newcntschlbk|new century schoolbook|century", "Georgia", "Century Schoolbook"),
         ("american classic", "Georgia", "Century Schoolbook"),
         ("helv|helvetica|univers", "Arial", nil),
-        ("cg triumvirate|ps sansser qual", "Arial", nil),
+        ("cg triumvirate|triumvirate|ps sansser qual", "Arial", nil),
         ("helv narrow|helv cond.|helvetica narrow", "PT Sans Narrow", "Arial Narrow"),
         ("palatino", "Lora", "Palatino Linotype"),
         ("tms rmn|times|cg times", "Times New Roman", nil),
@@ -301,7 +310,7 @@ let targetFonts: [FontsTarget: [String: (primary: String, falt: String?)]] = [
         ("cntry schlbk|newcntschlbk|new century schoolbook|century", "C059", "DejaVu Serif"),
         ("american classic", "C059", "DejaVu Serif"),
         ("helv|helvetica|univers", "Nimbus Sans", "Liberation Sans"),
-        ("cg triumvirate|ps sansser qual", "Nimbus Sans", "Liberation Sans"),
+        ("cg triumvirate|triumvirate|ps sansser qual", "Nimbus Sans", "Liberation Sans"),
         ("helv narrow|helv cond.|helvetica narrow", "Nimbus Sans Narrow", "DejaVu Sans"),
         ("palatino", "P052", "DejaVu Serif"),
         ("tms rmn|times|cg times", "Nimbus Roman", "Liberation Serif"),

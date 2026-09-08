@@ -6,7 +6,7 @@ import Testing
 /// PCL font-selection command for a superscript/subscript span in a fixed-pitch document is
 /// not merely a smaller glyph at the ambient pitch -- it is a DEDICATED, narrower pitch, an
 /// independent field of the same font-select command, restored to the body's own values
-/// immediately on exit. Two independent real WS7 captures (-SCREEN.pcl, DOCC.pcl -- both
+/// immediately on exit. Two independent real WS7 captures (-SCREEN.pcl, a private paper's own .pcl -- both
 /// Courier, typeface id 4099) carry the byte-identical font-select pair
 /// `ESC(sp12v10.00hsb4099T` (body: 12pt, 10.00cpi = 7.2pt/char cell) /
 /// `ESC(sp9.25v13.04hsb4099T` (sup/sub: 9.25pt, 13.04cpi = 5.5pt/char cell). These two
@@ -51,16 +51,16 @@ import Testing
     #expect(tail.x == 120.7)               // 115.2 + 5.5 (13.04cpi cell), NOT 115.2 + 7.2
 }
 
-/// WS4 shape (DOCC.WS4's own oracle): a span with NO font block at all (`entry` is
+/// WS4 shape (a private WS4 paper's own oracle): a span with NO font block at all (`entry` is
 /// `nil`). Before mechanism G, `spanPitch(nil, pt)` fell back to `pt * 0.6` where `pt` was
 /// already `sized`'s REDUCED size (8, the old flat 2/3 ratio) -- narrowing the cell TWICE
 /// (once for the smaller drawn glyph, again via the reduced `pt`) to 4.8pt, 0.7pt narrower
-/// than WS7's real 5.5pt, landing everything after it 0.7pt too far LEFT -- exactly DOCC's
+/// than WS7's real 5.5pt, landing everything after it 0.7pt too far LEFT -- exactly that paper's
 /// own recorded residual sign and magnitude. `seg.size` (the span's UNREDUCED declared size)
 /// now drives the body-cell lookup instead, so a fontless span's own body cell (12pt document
 /// default * 0.6 = 7.2pt) narrows ONCE, to the same 5.5pt the WS7-font-block shape gets.
-/// 'cd.' (3 chars, no font block, no space before the toggle -- matching DOCC's own
-/// 'Indians.^T1^T' shape exactly) ends its body run at left + 3*7.2; the sup '1' then
+/// 'cd.' (3 chars, no font block, no space before the toggle -- matching that paper's own
+/// equivalent shape exactly) ends its body run at left + 3*7.2; the sup '1' then
 /// occupies 5.5pt, not 4.8pt.
 @Test func supInFontlessWS4SpanIsNotNarrowedTwice() throws {
     var data: [UInt8] = bytes("cd.")

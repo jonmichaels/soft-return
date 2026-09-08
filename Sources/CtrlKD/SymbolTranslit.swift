@@ -201,6 +201,24 @@ private func dingbatCode(_ scalar: Unicode.Scalar) -> Unicode.Scalar? {
     return nil
 }
 
+/// Which base-14 symbol face (if any) carries `scalar` in its own byte codes: `.math` for
+/// the Adobe Symbol encoding, `.symbols` for ZapfDingbats (checked in that order -- the
+/// two encodings never overlap, so order doesn't matter for correctness, only for which
+/// check runs first). `nil` if neither face has it.
+///
+/// For a caller deciding whether a character the body face (cp1252) cannot carry has ANY
+/// substitute face at all -- the same question `fontTranslitKind` answers from a font
+/// block's own declared bits, asked instead per character, for prose that carries a
+/// handful of cp437 Greek/math or Dingbats bytes with no Symbol/Dingbats font block in
+/// play at all (`PDFDriverLJ6DTP.swift`'s `splitSymbolFallback`/`symbolFallbackSplit`).
+/// Port of `symbolmap.symbol_fallback_kind` (round 2026-09-07).
+public func symbolFallbackKind(_ ch: Character) -> SymbolTranslit? {
+    guard ch.unicodeScalars.count == 1, let scalar = ch.unicodeScalars.first else { return nil }
+    if symbolReverse[scalar.value] != nil { return .math }
+    if dingbatCode(scalar) != nil { return .symbols }
+    return nil
+}
+
 /// Inverse of `transliterate`: real Unicode -> the bytes to set in the Symbol/ZapfDingbats
 /// font itself. Unmappable characters -> `?`.
 ///

@@ -499,73 +499,96 @@ func splitGraphics(_ segs: [LineSegment]) -> [LineSegment] {
     return out
 }
 
-// ------------------------------------------------- cp437 Greek/math fallback
+// ---------------------------------------- cp437 Greek/math/Dingbats fallback
 //
-// cp1252 (Printed PDF's declared `/WinAnsiEncoding`, `esc`) carries none of the
-// Greek/math repertoire cp437 puts at 0xE0-0xEE -- real WS7 prints this fine (measured:
-// jon_vault's -SCREEN.pcl + .measurements.json, the "αßΓπ..." line), because the driver
-// routed those bytes through the Symbol PostScript font, not through the body face's own
-// encoding. `pdfFamily` already recognises a WHOLE span's font block as `.symbol` (a real
-// `.symbol`-typestyle font); this is the same face-bypass for the common case, PLAIN
-// COURIER PROSE that happens to carry a handful of cp437 Greek/math bytes with no font
-// block declaring Symbol at all. A character cp1252 cannot carry but `symbolReverse` can
-// (the same Adobe Symbol repertoire the real `.math` path already writes) gets its own
-// segment, face switched to Symbol and untransliterated to the face's own byte code --
-// everything else in the run (including cp1252-representable look-alikes like micro sign
-// / sharp-s, which are NOT this bug) stays on its own declared face untouched. Mirrors
-// `splitGraphics`'s declared-font bypass for box glyphs exactly.
+// cp1252 (Printed PDF's declared `/WinAnsiEncoding`, `esc`; Modern PDF's body faces the
+// same) carries none of the Greek/math repertoire cp437 puts at 0xE0-0xEE -- real WS7
+// prints this fine (measured: jon_vault's -SCREEN.pcl + .measurements.json, the
+// "αßΓπ..." line), because the driver routed those bytes through the Symbol
+// PostScript font, not through the body face's own encoding. The same is true of cp437's
+// own Dingbats repertoire wherever it turns up outside `graphicChars`' card-suit/smiley
+// vector shapes (those stay vectors -- see `spanRender`'s own doc comment and the
+// `graphicChars` guard below). `pdfFamily` already recognises a WHOLE span's font block
+// as `.symbol`/`.zapfDingbats` (a real `.symbol`/`.dingbat`-typestyle font); this is the
+// same face-bypass for the common case, PLAIN COURIER PROSE that happens to carry a
+// handful of cp437 Greek/math/Dingbats bytes with no Symbol/Dingbats font block in play
+// at all. A character cp1252 cannot carry but `symbolFallbackKind` can (the same Adobe
+// Symbol/ZapfDingbats repertoire the real `.math`/`.symbols` path already writes) gets
+// its own segment, face switched to Symbol or ZapfDingbats and untransliterated to the
+// face's own byte code -- everything else in the run (including cp1252-representable
+// look-alikes like micro sign / sharp-s, which are NOT this bug) stays on its own
+// declared face untouched. Mirrors `splitGraphics`'s declared-font bypass for box glyphs
+// exactly, and (via the `graphicChars` check below) never fights it for the same
+// character.
+//
+// `splitSymbolFallback` is Printed's own `[LineSegment]` shape; `symbolFallbackSplit` is
+// the same run-finding logic factored out to `(text, family)` pairs so Modern's per-token
+// loop (`PDFModernLayout.swift`) can call it too (round 2026-09-07, ported from ctrl-kd
+// `pdf.py`: Modern used to skip this fallback entirely -- every cp437 Greek/math/Dingbats
+// byte in a fontless or plain-body Modern token rode straight to cp1252 encoding and came
+// out '?'; Printed already had this fix, Modern's own `modernTokFont` never called it).
 private func cp1252OK(_ ch: Character) -> Bool {
     guard ch.unicodeScalars.count == 1, let scalar = ch.unicodeScalars.first else { return false }
     return cp1252Byte(for: scalar) != nil
 }
 
-private func isSymbolFallbackChar(_ ch: Character) -> Bool {
-    guard ch.unicodeScalars.count == 1, let scalar = ch.unicodeScalars.first else { return false }
-    return symbolReverse[scalar.value] != nil
+/// `[(pieceText, pieceFamily), ...]` for one already-resolved `(text, family)`
+/// span/token: text broken at cp1252-fallback boundaries, a piece that needs Symbol or
+/// ZapfDingbats peeled onto that face (untransliterated to its own byte codes),
+/// everything else -- including any `graphicChars` member, which `splitGraphics`/
+/// `modernTokenWidth`'s own vector-fill path owns, not this one -- staying on `family`
+/// untouched. A single-piece result with the input text unchanged means no fallback was
+/// needed. Port of ctrl-kd `pdf.py`'s `_symbol_fallback_split`.
+func symbolFallbackSplit(_ text: String, family: PDFFamily) -> [(text: String, family: PDFFamily)] {
+    let chars = Array(text)
+    if chars.isEmpty || chars.allSatisfy({ graphicChars.contains($0) || cp1252OK($0) }) {
+        return [(text, family)]                 // fast path: no fallback needed
+    }
+    var runs: [(start: Int, end: Int, kind: SymbolTranslit?)] = []
+    var runKind: SymbolTranslit? = nil
+    var started = false
+    var bufStart = 0
+    for (i, ch) in chars.enumerated() {
+        let kind: SymbolTranslit? = (graphicChars.contains(ch) || cp1252OK(ch))
+            ? nil : symbolFallbackKind(ch)
+        if !started {
+            runKind = kind
+            started = true
+        } else if kind != runKind {
+            runs.append((bufStart, i, runKind))
+            bufStart = i
+            runKind = kind
+        }
+    }
+    runs.append((bufStart, chars.count, runKind))
+    var pieces: [(text: String, family: PDFFamily)] = []
+    for (start, end, kind) in runs {
+        let piece = String(chars[start..<end])
+        if let kind {
+            pieces.append((untransliterate(piece, kind),
+                           kind == .math ? .symbol : .zapfDingbats))
+        } else {
+            pieces.append((piece, family))
+        }
+    }
+    return pieces
 }
 
 /// Break a `splitGraphics`-already-split segment further so any character cp1252 cannot
-/// carry but Adobe Symbol can gets its own segment, face switched to Symbol and
+/// carry but Adobe Symbol or ZapfDingbats can gets its own segment, face switched and
 /// untransliterated to that face's own byte code. Port of `_split_symbol_fallback`.
 func splitSymbolFallback(_ segs: [LineSegment]) -> [LineSegment] {
     var out: [LineSegment] = []
     for seg in segs {
-        if seg.family == .symbol || seg.family == .zapfDingbats || seg.text.isEmpty {
+        if seg.family == .symbol || seg.family == .zapfDingbats {
             // already on the real Symbol/Dingbats face (untransliterated face codes, not
-            // Unicode -- nothing here could ever match), or empty -- nothing to split.
+            // Unicode -- nothing here could ever match).
             out.append(seg)
             continue
         }
-        let chars = Array(seg.text)
-        if chars.allSatisfy(cp1252OK) {
-            out.append(seg)                     // fast path: no fallback needed
-            continue
+        for (piece, fam) in symbolFallbackSplit(seg.text, family: seg.family) {
+            out.append(seg.withText(piece, family: fam))
         }
-        func emit(_ piece: ArraySlice<Character>, isSymbol: Bool) {
-            if isSymbol {
-                out.append(LineSegment(text: untransliterate(String(piece), .math),
-                                       styles: seg.styles, family: .symbol, size: seg.size,
-                                       entry: seg.entry, indent: seg.indent,
-                                       colour: seg.colour, pctlHMI: seg.pctlHMI,
-                                       pcl: seg.pcl, tabHMI: seg.tabHMI,
-                                       tabLeader: seg.tabLeader))
-            } else {
-                out.append(seg.withText(String(piece)))
-            }
-        }
-        var runIsSymbol: Bool? = nil
-        var bufStart = 0
-        for (i, ch) in chars.enumerated() {
-            let isSymbol = !cp1252OK(ch) && isSymbolFallbackChar(ch)
-            if runIsSymbol == nil {
-                runIsSymbol = isSymbol
-            } else if isSymbol != runIsSymbol {
-                emit(chars[bufStart..<i], isSymbol: runIsSymbol!)
-                bufStart = i
-                runIsSymbol = isSymbol
-            }
-        }
-        emit(chars[bufStart...], isSymbol: runIsSymbol ?? false)
     }
     return out
 }

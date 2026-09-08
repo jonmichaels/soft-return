@@ -72,7 +72,7 @@ import Testing
             .appendingPathComponent("AppleEventDispatchTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        // Job planning#191 part 2: a bundled sample copy, not the private ws4/DOCC.ws
+        // Job planning#191 part 2: a bundled sample copy, not a private ws4/ corpus
         // corpus fixture — see BundledSampleFixture's own doc comment.
         let source = try BundledSampleFixture.copy("OCAPTAIN.WS", into: tempDir)
 

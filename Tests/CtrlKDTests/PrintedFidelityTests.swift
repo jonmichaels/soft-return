@@ -295,7 +295,7 @@ import Testing
     // of it: zero typed indent keeps the full `fi` (`pmFirstLineIndentStillAppliesWith
     // NoTypedIndent`, and `pmShiftsPrintedPDFFirstLineStartX`), a typed indent AT OR
     // PAST `.pm`'s column adds nothing more (the sibling test above) -- a typed indent
-    // PART way there is the one point on that line the pre-fix code never got right
+    // PARTWAY there is the one point on that line the pre-fix code never got right
     // either (it always double-counted), so this pins the formula, not a specific
     // oracle reading. Direct port of ctrl-kd 8956ad4's
     // `test_pm_first_line_indent_tops_up_a_shorter_typed_indent`.

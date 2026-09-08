@@ -90,30 +90,84 @@ private func fontlessBoxLine(_ cp437Bytes: [UInt8]) -> [UInt8] {
     let txt = emitText(doc, mode: .printed)
     #expect(txt.contains(line))                     // text formats: untouched
 
-    let pdf = emitPDF(doc, mode: .printed)
-    let fonts = baseFonts(pdf)
-    #expect(fonts.values.contains("Symbol"))
-    let sym = try! #require(fontName(for: "Symbol", in: pdf))
-    let cour = try! #require(fontName(for: "Courier", in: pdf))
-    let shown = contentSpans(pdf)
-    #expect(!shown.contains { $0.text.contains("?") })    // the whole point
-    // split exactly at the cp1252-representable ß/µ, same order as the source
-    #expect(shown.contains { $0.font == sym && $0.size == 12 && $0.text == "a" })
-    #expect(shown.contains { $0.font == cour && $0.size == 12 && $0.text == "\u{00DF}" })
-    #expect(shown.contains { $0.font == sym && $0.size == 12 && $0.text == "GpSs" })
-    #expect(shown.contains { $0.font == cour && $0.size == 12 && $0.text == "\u{00B5}" })
-    #expect(shown.contains { $0.font == sym && $0.size == 12 && $0.text == "tFQWdfe" })
+    // Printed's fontless body face is Courier at the doc size (12); Modern's is Times at
+    // modernBodyPt (14) -- pdfFamily/modernTokFont's own documented per-mode split,
+    // unrelated to this bug. The Symbol split itself (which pieces switch face, in what
+    // order) must be the SAME sequence either way, so check that at whichever size/body
+    // face each mode actually uses.
+    //
+    // Round 2026-09-07 (Jon, ctrl-kd 4.5.1/sr 4.0.3 field report): Modern PDF -- the
+    // CLI's own default mode -- had this exact bug too, and worse: `--mode modern` runs
+    // unless a document requests Printed, so the original b26 fix (Printed-only,
+    // `lineOpsPrinted`'s `splitSymbolFallback`) left the DEFAULT export path emitting
+    // literal '?' for this line. The fix (`symbolFallbackSplit`, shared by both paths via
+    // `modernFlow`'s per-token loop) makes Modern match Printed exactly -- same Symbol
+    // face, same per-character split, same bytes.
+    for (mode, bodyFont): (EmitMode, String) in [(.printed, "Courier"), (.modern, "Times-Roman")] {
+        let pdf = emitPDF(doc, mode: mode)
+        let fonts = baseFonts(pdf)
+        #expect(fonts.values.contains("Symbol"))
+        let sym = try! #require(fontName(for: "Symbol", in: pdf))
+        let body = try! #require(fontName(for: bodyFont, in: pdf))
+        let shown = contentSpans(pdf)
+        #expect(!shown.contains { $0.text.contains("?") })    // the whole point
+        let sz = try! #require(shown.first { $0.font == sym && $0.text == "a" }?.size)
+        // split exactly at the cp1252-representable ß/µ, same order as the source
+        #expect(shown.contains { $0.font == sym && $0.size == sz && $0.text == "a" })
+        #expect(shown.contains { $0.font == body && $0.size == sz && $0.text == "\u{00DF}" })
+        #expect(shown.contains { $0.font == sym && $0.size == sz && $0.text == "GpSs" })
+        #expect(shown.contains { $0.font == body && $0.size == sz && $0.text == "\u{00B5}" })
+        #expect(shown.contains { $0.font == sym && $0.size == sz && $0.text == "tFQWdfe" })
+    }
 
-    // Modern PDF and both RTF modes are untouched -- this fix is Printed PDF only
-    // (`PDFWriter.swift`'s `lineOpsPrinted`, never shared with Modern/RTF).
-    let pdfModern = emitPDF(doc, mode: .modern)
-    #expect(!baseFonts(pdfModern).values.contains("Symbol"))
     let rPrinted = emitRTF(doc, mode: .printed)
     let rModern = emitRTF(doc, mode: .modern)
     // RTF was never routed through cp1252 at all (\uNNNN unicode escapes, this fix's
-    // PDFWriter.swift never touched) -- alpha/Gamma/Sigma/Omega present either way.
+    // PDFWriter.swift/PDFModernLayout.swift never touched) -- alpha/Gamma/Sigma/Omega
+    // present either way.
     #expect(rPrinted.contains(#"\u945"#) && rPrinted.contains(#"\u915"#))
     #expect(rModern.contains(#"\u945"#) && rModern.contains(#"\u915"#))
+}
+
+@Test func symbolFallbackSplitGeneralisesToZapfDingbats() {
+    // `symbolFallbackSplit`/`symbolFallbackKind` answer `.math` (Symbol) OR `.symbols`
+    // (ZapfDingbats), not just `.math` -- the same fallback this round wired into Modern
+    // covers both faces a genuine `.symbol`/`.dingbat` font block already covers. Port of
+    // ctrl-kd's `test_symbol_fallback_split_generalises_to_zapfdingbats`.
+    //
+    // Exercised directly on the helper rather than through a parsed WS document: cp437
+    // (the only body encoding a real WordStar document carries) has no Dingbats
+    // repertoire of its own outside the four `graphicChars` card-suit glyphs
+    // (club/diamond/heart/spade, already vector fills -- deliberately excluded from this
+    // path), so there is no cp437 byte sequence that reaches `symbolFallbackKind` with a
+    // `.symbols` verdict via a parsed document. A real ZapfDingbats run reaches PDF only
+    // through a document's own font block (`fontTranslitKind`, already covered by
+    // `symbolRunStylingIsSynthesizedBoldItalicBoldItalic`'s sibling tests for both modes)
+    // -- this test is the fallback CODE PATH's correctness, not a claim that today's
+    // corpus can trigger it.
+    let scissors = "\u{2701}"                        // U+2701 SCISSORS: real ZapfDingbats,
+                                                       // no cp1252 code point, not graphicChars.
+    #expect(symbolFallbackKind(Character(scissors)) == .symbols)
+    #expect(!graphicChars.contains(Character(scissors)))
+    // the four graphicChars card-suit glyphs stay vector fills, never diverted here, even
+    // though `symbolFallbackKind` recognises their bytes too.
+    for suit in "\u{2663}\u{2666}\u{2665}\u{2660}" {
+        #expect(graphicChars.contains(suit))
+        let pieces = symbolFallbackSplit(String(suit), family: .courier)
+        #expect(pieces.count == 1 && pieces[0].text == String(suit) && pieces[0].family == .courier)
+    }
+    let text = "ok" + scissors + "done"
+    let pieces = symbolFallbackSplit(text, family: .courier)
+    #expect(pieces.map(\.text) == ["ok", untransliterate(scissors, .symbols), "done"])
+    #expect(pieces.map(\.family) == [.courier, .zapfDingbats, .courier])
+    // a piece mixing Symbol- and ZapfDingbats-fallback characters splits into three
+    // pieces, not two -- the two encodings never merge into one run even though both
+    // divert off the body face.
+    let mixed = "a" + "\u{03B1}" + scissors           // 'a', alpha (Symbol), scissors
+    let mixedPieces = symbolFallbackSplit(mixed, family: .courier)
+    #expect(mixedPieces.map(\.text) == ["a", untransliterate("\u{03B1}", .math),
+                                         untransliterate(scissors, .symbols)])
+    #expect(mixedPieces.map(\.family) == [.courier, .symbol, .zapfDingbats])
 }
 
 @Test func symbolRunStylingIsSynthesizedBoldItalicBoldItalic() {

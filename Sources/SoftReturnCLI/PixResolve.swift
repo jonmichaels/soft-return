@@ -76,13 +76,23 @@ private func tailSuffixes(_ parts: [String]) -> [[String]] {
 }
 
 /// `start` itself, then each parent, nearest first, up to `maxUp` levels or the
-/// filesystem root, whichever comes first. Port of `_ancestors`.
+/// filesystem root, whichever comes first. Port of `_ancestors` -- ported against
+/// `pathlib.Path.parent`'s contract (which `_ancestors` actually walks), not
+/// `os.path.dirname`'s: a bare relative path component (no `/` at all, e.g.
+/// "subdir", or the "." this walk's own base case produces) has `dirname() == ""`,
+/// but its pathlib parent is `Path(".")` -- a real, listable ancestor -- not the
+/// empty string. Round 2026-09-07: this is the same substitution `resolveDocDir`
+/// makes at the top of the walk, needed again here for every step ABOVE it, or a
+/// relative document path with exactly one directory component (e.g.
+/// "subdir/DOC.WS") stopped one level short of ctrl-kd's own ascent, silently
+/// skipping the process's own working directory as a fallback probe location.
 private func ancestors(_ start: String, maxUp: Int) -> [String] {
     var out = [start]
     var cur = start
     for _ in 0..<maxUp {
-        let parent = dirname(cur)
-        if parent == cur || parent.isEmpty { break }
+        let d = dirname(cur)
+        let parent = d.isEmpty ? "." : d      // "" -> cwd, pathlib's own base case
+        if parent == cur { break }
         out.append(parent)
         cur = parent
     }
@@ -106,6 +116,30 @@ private func ciResolve(_ base: String, _ components: [String],
     return environment.isFile(cur) ? cur : nil
 }
 
+/// The directory to search near `docPath`, mirroring `resolve_pix`'s own
+/// `doc_dir = doc_path if doc_path.is_dir() else doc_path.parent` -- computed with
+/// `pathlib.Path`, NOT `os.path.dirname`. That distinction matters for exactly one
+/// input shape: a RELATIVE document path with no directory component at all (e.g.
+/// `sr -t pdf -o out.pdf 1SCREEN.WS`, run from the document's own directory).
+/// `Path("1SCREEN.WS").parent` is `Path('.')` -- a real, listable path meaning "the
+/// current directory" -- but this module's own `dirname()` (a deliberate mirror of
+/// `os.path.dirname`, used elsewhere for output-filename naming, where `os.path`'s
+/// contract IS the right one) returns `""` for that same input, and `""` is not a
+/// directory `environment.listDirectory` can list (`FileManager.contentsOfDirectory
+/// (atPath: "")` finds nothing, same as POSIX `opendir("")`).
+///
+/// Round 2026-09-07 (Jon, sr 4.0.3 field report, reproduced on Linux): this was
+/// the whole bug -- a RELATIVE document path could never find a sibling `.PIX` file,
+/// while the SAME document opened by its ABSOLUTE path worked, because an absolute
+/// path's `dirname()` is never empty. ctrl-kd was never affected: `pathlib.Path`'s
+/// `.parent` already returns `.` here, not `''`. The fix is this one substitution,
+/// not a change to `dirname()` itself -- `dirname()`'s other callers (output
+/// filenames) still want the `os.path` answer.
+func resolveDocDir(_ docPath: String, environment: CLIEnvironment) -> String {
+    let raw = environment.isFile(docPath) ? dirname(docPath) : docPath
+    return raw.isEmpty ? "." : raw
+}
+
 /// Resolve a pix tag's payload to a real file path near `docPath` (the WordStar
 /// document that referenced it), per the ruled resolution order above. Returns `nil`
 /// if no candidate exists. Port of `resolve_pix`.
@@ -114,7 +148,7 @@ func resolvePix(_ tagPayload: String, docPath: String, environment: CLIEnvironme
     let parts = parseDOSPath(tagPayload)
     guard !parts.isEmpty else { return nil }
 
-    let docDir = environment.isFile(docPath) ? dirname(docPath) : docPath
+    let docDir = resolveDocDir(docPath, environment: environment)
     let ancs = ancestors(docDir, maxUp: maxAncestors)
 
     for anc in ancs {
@@ -139,7 +173,7 @@ func probePixCandidates(_ tagPayload: String, docPath: String, environment: CLIE
     let parts = parseDOSPath(tagPayload)
     guard !parts.isEmpty else { return [] }
 
-    let docDir = environment.isFile(docPath) ? dirname(docPath) : docPath
+    let docDir = resolveDocDir(docPath, environment: environment)
     let ancs = ancestors(docDir, maxUp: maxAncestors)
 
     var out: [String] = []

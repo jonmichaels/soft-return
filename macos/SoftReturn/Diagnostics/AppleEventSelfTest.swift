@@ -30,14 +30,14 @@ enum AppleEventSelfTest {
     static let resultDefaultsKey = "aeSelfTest.result"
 
     /// The fixture this test converts. Provisioned externally, at
-    /// `<sandbox container>/Data/tmp/AESelfTestFixture/DOCC.ws`, before the app is launched:
+    /// `<sandbox container>/Data/tmp/AESelfTestFixture/PRIVATE-SAMPLE.ws`, before the app is launched:
     /// the sandboxed app can read its OWN container freely, but `SoftReturn.entitlements`
     /// grants no access to an arbitrary path outside it, so the fixture cannot be read from the
     /// source tree the way the unit tests (hosted, unsandboxed, inside the test runner) do.
     private static var fixtureURL: URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("AESelfTestFixture", isDirectory: true)
-            .appendingPathComponent("DOCC.ws")
+            .appendingPathComponent("PRIVATE-SAMPLE.ws")
     }
 
     /// Job 144 debug aid: `UserDefaults`/`cfprefsd` proved unreliable to read back from outside

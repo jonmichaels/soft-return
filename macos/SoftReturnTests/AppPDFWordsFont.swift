@@ -68,7 +68,7 @@ struct PDFFont {
         //   into `,` and lost the word, which the round-trip proof caught immediately.
         //
         // - `/MacRomanEncoding` is what QUARTZ writes, and it is the ONLY named encoding in
-        //   any app PDF measured — checked on -SCREEN, BOXES, LYING, DOCC and SCRIPT, none
+        //   any app PDF measured — checked on -SCREEN, BOXES, LYING and SCRIPT, none
         //   of which carries a `/Differences` array either. Handling only WinAnsi meant every
         //   such byte fell through to the raw-scalar branch, which is Latin-1, and MacRoman
         //   and Latin-1 share nothing above 0x7F. Measured cost on -SCREEN: the engine's

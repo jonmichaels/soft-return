@@ -580,6 +580,15 @@ struct LineSegment {
                    indent: indent, colour: colour, pctlHMI: pctlHMI, pcl: pcl,
                    tabHMI: tabHMI, tabLeader: tabLeader)
     }
+
+    /// Same as `withText(_:)`, but also switches `family` -- `splitSymbolFallback`'s own
+    /// need (a piece diverted to Symbol/ZapfDingbats keeps every other field, text and
+    /// face both change).
+    func withText(_ newText: String, family newFamily: PDFFamily) -> LineSegment {
+        LineSegment(text: newText, styles: styles, family: newFamily, size: size, entry: entry,
+                   indent: indent, colour: colour, pctlHMI: pctlHMI, pcl: pcl,
+                   tabHMI: tabHMI, tabLeader: tabLeader)
+    }
 }
 
 // Mechanism G (ctrl-kd f328838, research: 2026-09-06_ws7-blank-lines-and-superscript-
@@ -587,7 +596,7 @@ struct LineSegment {
 // *Reference* manual (ch. 10 "Style," Sub/Superscript, p. 10-8/9) states the reduced size
 // is "the x-height... of the original height" and gives ONE worked example — 12pt Times
 // Roman -> 8.1pt (ratio 0.675) — but that ratio is Times Roman's own, not a universal
-// constant: raw PCL from two independent real WS7 captures (DOCC.pcl, -SCREEN.pcl —
+// constant: raw PCL from two independent real WS7 captures (a private paper's own .pcl, -SCREEN.pcl —
 // byte-identical `ESC(sp9.25v13.04hsb4099T` font-select command in both, typeface 4099 =
 // Courier) measures Courier's own ratio at 9.25pt from a 12pt body = 0.7708, a DIFFERENT
 // number. Confirms the manual's own wording: this is a real, font-specific x-height
@@ -718,7 +727,7 @@ func spanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
 //     back to `pt * 0.6`, where `pt` was already the REDUCED sup/sub size (`sized`'s own
 //     return) — narrowing the cell TWICE (once for the smaller drawn glyph, a second time
 //     implicitly via `pt`) to 4.8pt, 0.7pt narrower than WS7's real 5.5pt, landing everything
-//     after it that same 0.7pt too far LEFT (DOCC). Passing `bodyPt` (the span's own
+//     after it that same 0.7pt too far LEFT (a private paper). Passing `bodyPt` (the span's own
 //     UNREDUCED declared size, `seg.size` at the call site) rather than the already-reduced
 //     `pt` fixes both shapes with the one call: `spanPitch(entry, bodyPt)` always answers
 //     "the span's own BODY cell," which this then scales down by the measured ratio.
@@ -1652,7 +1661,26 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
             // page of every document that never changes `.po` mid-document) leaves
             // `pageLeft` at the SAME `left` value computed once above, byte-identical to
             // before this fix.
-            let pageLeft = page.poCols.map { resolveLeftPt($0, size: size) } ?? left
+            // #241 (MACROS/HOLYMAC/-HOLYMAC.WS): SCRIPT.WS's own oracle above
+            // ALWAYS pairs its `.po .5"` reset with an `.mt`/`.mb` change on the
+            // very same page (measured: `.po.5"` immediately followed by
+            // `.mt1"`/`.mb0`, twice, in the real file) -- a genuine page-geometry
+            // reset. HOLYMAC's box-diagram examples set `.po .3i` (with `.rm 79`,
+            // widening the measure for the diagram) and revert it a few lines
+            // later WITHOUT ever touching `.mt`/`.mb`/`.hm`/`.fm` -- a purely
+            // local body-margin excursion for one figure, not a page-layout
+            // change. Measured directly: WS7's running head sits at the SAME
+            // 72pt left edge on every page of this document, even the three
+            // whose own page-open `.po` snapshot happens to land mid-diagram.
+            // Gating `pageLeft` on a genuine geometry change co-occurring
+            // (mt/mb/hm/fm) keeps SCRIPT.WS's own confirmed behaviour unchanged
+            // while no longer letting a diagram's own transient `.po` leak into
+            // the header/footer position. Port of Python's `pdf.py`
+            // `page_geom_changed` fix.
+            let pageGeomChanged = page.mtLines != nil || page.mbLines != nil
+                || page.hmLines != nil || page.fmLines != nil
+            let pageLeft = (pageGeomChanged ? page.poCols : nil)
+                .map { resolveLeftPt($0, size: size) } ?? left
             // Register b31, E3 item 2: resolve THIS page's own automatic-number state.
             // `--headers off` already suppresses page numbers per its own documented
             // scope ("headers, footers, and page numbers"); `.on`/`.off` need no
@@ -1665,6 +1693,15 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                 autoPageNumber = true
             } else if let checkpoints = pgnumCheckpointsList, let pageMaxBi = page.compactMap(\.bi).max() {
                 autoPageNumber = pgnumAt(checkpoints, pageMaxBi)
+            } else if let checkpoints = pgnumCheckpointsList, let fallbackBi = page.explicitBreakBI {
+                // #228: a page with no lines at all has no `.bi` to read -- true
+                // of both an ordinary degenerate page (kept `false`, as before)
+                // and our confirmed trailing-`.pa` page, which DOES need a
+                // number (WS7 stamps one). `explicitBreakBI` (the `.pa`
+                // block's own index, or an endnote-only page's own fallback --
+                // see `endnotePages`) stands in for "wherever the document's
+                // own state was when this page opened."
+                autoPageNumber = pgnumAt(checkpoints, fallbackBi)
             } else {
                 autoPageNumber = false
             }

@@ -587,6 +587,14 @@ public struct Document: Hashable, Sendable {
     /// WHICH release's behaviour this document was parsed under, not just which variant
     /// was detected. Mirrors Python's `meta['era']`.
     public var era: String?
+    /// #228 (planning #228, research/2026-09-08_trailing-pa-rule.md): only meaningful
+    /// when `blocks.last?.kind == .pagebreak` — true iff the document's own saved
+    /// trailer shows a genuine blank paragraph after that final `.pa` (WordStar's own
+    /// saved-file trailer bytes, checked directly rather than through `blocks` — see
+    /// `trailingPaHasContentAfter` in ParseWS.swift). Set by `parseWS`, mutated after
+    /// construction like `pclPrograms`/`headerFonts` above; `false` for every document
+    /// not built by `parseWS`. Mirrors Python's `doc.meta['pa_eof_blank_after']`.
+    public var paEofBlankAfter: Bool = false
 
     public init(
         blocks: [Block] = [],

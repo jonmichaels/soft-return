@@ -51,6 +51,69 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     #expect(labelY > 300)                                        // not bottom-anchored
 }
 
+@Test func modernPDFEndnoteAppendixStartsNewPageWhenLastPageHasFootnotes() throws {
+    // Jon's ruling 2026-09-07 (RULINGS-LEDGER.md verbatim): "endnotes go right at the
+    // end of text / image on the last page unless there are footnotes on that page.
+    // Then the endnotes start on a new page." Endnotes are never interleaved with a
+    // footnote block. Port of ctrl-kd's
+    // test_modern_pdf_endnote_appendix_starts_new_page_when_last_page_has_footnotes.
+    //
+    // Real case: the Sawyer archive's -SCREEN.WS has exactly one footnote and one
+    // endnote on what would otherwise be its only page -- before this fix Modern PDF
+    // rendered ONE page with both the footnote (page-bottom) and the endnote appendix
+    // (after the body) crammed onto it; after, the footnote stays on page 1 and the
+    // endnote appendix is pushed to a fresh page 2. This fixture is the same shape,
+    // synthetic and self-contained.
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
+    data += bytes("A footnote line")
+    data += ws7Note(bytes("A page-bottom footnote."), cmd: 0x03, number: 0)
+    data += bytes(" and an endnote line")
+    data += ws7Note(bytes("The endnote text itself."), cmd: 0x04, number: 0)
+    data += bytes(" both here.") + HARD
+    data += bytes("A closing line of ordinary prose keeps the byte ratio honest.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .modern)
+    let streams = pdfContentStreams(pdf)
+    #expect(streams.count == 2)                       // the whole point: a new page
+    let page1 = contentSpans(streams[0])
+    let page2 = contentSpans(streams[1])
+    // the footnote stays on page 1, at the page bottom (below the body)
+    let fnY = try #require(page1.first { $0.text == "footnote." }?.y)
+    let bodyY = try #require(page1.first { $0.text == "honest." }?.y)
+    #expect(fnY < bodyY)                              // footnote below body, same page
+    // the endnote appendix opens page 2 -- no footnote text there at all
+    #expect(!page2.contains { $0.text == "footnote." })
+    #expect(page2.contains { $0.text == "i." })        // end-matter entry label
+    #expect(page2.contains { $0.text == "itself." })
+    let sepY = try #require(page2.first { $0.text == "--------------------" }?.y)
+    #expect(sepY > 700)                               // separator opens the fresh page
+}
+
+@Test func modernPDFEndnoteAppendixContinuesLastPageWithNoFootnotes() throws {
+    // The other half of the same ruling: a multi-page document whose LAST page carries
+    // no footnotes gets its endnote appendix directly after the last text line, on that
+    // same page -- no forced break. The new-page rule fires only when the page the
+    // appendix would land on already has a footnote reserved; page count/position on
+    // EARLIER pages is irrelevant. Port of ctrl-kd's
+    // test_modern_pdf_endnote_appendix_continues_last_page_with_no_footnotes.
+    var data = ws7Block(0x00)
+    for _ in 0..<60 {
+        data += bytes("Filler line to consume vertical space on the page.") + HARD
+    }
+    data += bytes("The referenced line")
+    data += ws7Note(bytes("The endnote text itself."), cmd: 0x04, number: 0)
+    data += bytes(" continues after.") + HARD
+    data += bytes("A closing line of ordinary prose keeps the byte ratio honest.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .modern)
+    let streams = pdfContentStreams(pdf)
+    #expect(streams.count == 2)                       // filler alone forces page 2
+    let lastPage = contentSpans(streams[streams.count - 1])
+    let lastBodyY = try #require(lastPage.first { $0.text == "honest." }?.y)
+    let labelY = try #require(lastPage.first { $0.text == "i." }?.y)
+    #expect(lastBodyY - labelY > 0 && lastBodyY - labelY < 80)   // flows just below body,
+                                                                  // SAME page -- no forced break
+}
+
 @Test func modernPDFBlockMarginsIndentAndNarrowTheMeasure() throws {
     // Ruling 2 (M2): a block's own .lm/.rm are the document's explicit choices and win
     // in Modern exactly as its fonts do. WordStar's stamped .lm spaces come off the

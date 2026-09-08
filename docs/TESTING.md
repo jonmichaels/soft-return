@@ -5,6 +5,30 @@
 This project's tests are organized into three tiers, from "just works" to
 "only the maintainer can run this."
 
+## Privacy guard — one-time setup for every clone
+
+This is the PRIVATE repo; nothing here may name a real machine, a real
+home-directory path, or this repo's own name, because a squash snapshot of
+(most of) this tree periodically becomes the PUBLIC soft-return repo. Run
+once per clone:
+
+```
+tools/install-hooks.sh
+```
+
+This points `core.hooksPath` at the tracked `tools/githooks/` (pre-commit,
+commit-msg, pre-push) so the privacy guard runs automatically on every
+commit and push, rather than depending on someone remembering to run
+`tools/audit_private.sh` by hand. The pattern itself lives in
+`tools/private_patterns.sh` (shape-based -- see its own header comment);
+`tools/audit_private.sh` runs the same pattern over the whole tracked
+tree (decoding `*.base64`/`*.b64` fixtures first) and is what the release
+checklist gates a public snapshot on. `tools/test_audit_private.sh` is
+its regression test -- run it after touching either the pattern or the
+audit script; it proves both a real leak still gets caught (plain text
+AND base64) and that known-safe content (generic macOS folder examples,
+placeholder paths, this repo's own private-only directories) does not.
+
 ## Tier 1 — bundled samples
 
 Runs everywhere, no setup: `swift test` at the repo root exercises the
@@ -172,13 +196,17 @@ ctrl-kd's `tests/answer_key.json` directly (no Swift-side copy), reads its docum
 generically (no hardcoded count), and checks the Swift engine, called the identical way,
 byte-for-byte over every one of the 4668 cells.
 
-**Known, real divergence:** `REF/WSFORMAT.WS` `html.modern` — one document, one cell —
-mismatches between the two engines (planning issue #204, `docs/KNOWN-ISSUES-REGISTER.md`).
-Confirmed present at 4668/4668 cells as of the 2026-09-06 full-corpus key (verified
-2026-09-06): 4667 cells match byte-for-byte; this is the ONLY mismatch, and it is a
-pre-existing, already-tracked one, not something the full-corpus key introduced. The private
-overlay below mirrors the identical divergence for its own copy of the same document
-(`fixtures-ws5/WSFORMAT.WS`), which is expected, not a second bug.
+**Self-recorded, not truth (round 2026-09-07, the Modern-PDF-Symbol-fallback bug).**
+This key detects DRIFT between the two engines and against ctrl-kd's own prior output --
+it proves nothing about whether either engine is RIGHT. A rendering both engines agree on
+is recorded once and compared forever after; if that rendering was wrong the day it was
+recorded (as Modern PDF's `?`-for-Greek/Dingbats bug was, silently, until Jon read an
+actual export), the key just enshrines the wrong answer -- both sides "pass" by matching
+each other, not by being correct. Nothing in this suite, or in `tools/answer_key.py`, or
+in the private overlay below, would ever have caught that bug on its own; it took a human
+looking at a real PDF. The missing tier is a VIEWER-LEVEL check -- actually rendering a
+cell and confirming what's on the page, not just hashing bytes against a prior hash of the
+same engine's own bytes (planning #214, still open).
 
 **Format map — ctrl-kd <-> sr** (both engines register EXACTLY these six; neither has a
 format the other lacks, as of this writing — no DOCX emitter exists in this repo):
@@ -281,6 +309,25 @@ document:
    always pass — a failure here means the two engines' Printed-PDF output has actually
    diverged for this document, a genuine cross-engine bug, not merely an unfixed
    WS7-fidelity gap.
+
+**Tier size and inventory mode (planning #180 phase 2, "tests expanded", 2026-09-08).**
+261 documents total: the original 18 (v1/v2/v3 captures, `capturedDocsV1V3` in the Swift
+file) unchanged — both checks above apply exactly as written — plus 243 from ctrl-kd's
+`ws7-prints/v4/` expansion (`capturedDocsV4`, 291 real captures minus 48 mail-merge files
+that print empty by WordStar's own design). For the 243, check 1 is softened to
+`withKnownIssue` (still runs, still names every divergence by document, does not fail the
+filtered run) — untriaged, pending Jon's per-cause ruling, mirroring ctrl-kd's own
+`pcl_tolerance.INVENTORY_MODE_DOCS`. **Check 2 is never softened, for any document** — a
+cross-engine mismatch is the one thing this whole suite exists to catch. 64 of the 243 (the
+private-corpus-group documents — jon-floppies/fixtures-ws5/ws7-private, named as
+`<group>-v4-<NNN>` aliases) are committed in ctrl-kd's own PUBLIC manifest as content-free
+`source-missing` placeholders (a real report can embed literal document text in
+`divergences`, which must never enter that public repo) and are therefore skipped here too
+(`withKnownIssue`, checked against `resolution["recorded"]["verdict"]` before ever running
+check 2) — their real comparison only ever happens in this kind of locally-armed run,
+never lands in ctrl-kd's committed file. First armed run against the full v4 corpus
+(2026-09-08): 0 cross-engine (check 2) mismatches across all 261 documents — the two
+engines still fully agree, including on the untriaged batch.
 
 Neither this file nor its Python driver (`Tests/CtrlKDTests/Support/
 run_pcl_fidelity_gate.py`) re-implements ctrl-kd's tolerance curves, font-tier table, or
@@ -387,15 +434,6 @@ CTRLKD_PRIVATE_CORPUS=/path/to/the/corpus CTRLKD_SRC=/path/to/ctrl-kd/src \
     python3 tools/answer_key_private.py --check    # verify it's still current, no rewrite
 ```
 
-**Known, real divergence (not a bug in this overlay):** `fixtures-ws5/WSFORMAT.WS`
-`html.modern` fails both here and in the PUBLIC `AnswerKeyParityTests` suite's
-`REF/WSFORMAT.WS` entry — `PROVENANCE.md` records these as byte-identical copies of the same
-source, and sr's own rendering is byte-identical between the two (same `got` hash both
-places); only the RECORDED value differs from what sr currently produces. This is a
-pre-existing divergence in the public key too (confirmed present before this overlay was
-added) — a real, already-recorded fact about sr's HTML-modern output for this one document,
-not something this overlay introduced or should paper over.
-
 ## Test isolation guard (planning #191)
 
 Planning issue #191: a real recorded Apple Event fixture, replayed through
@@ -403,7 +441,7 @@ the installed `convert` handler, carried a file alias to a real file under
 the maintainer's home directory and no destination override — the app's own
 "write beside the source" behavior then wrote an RTF beside that real file
 on every full-suite run. Every test that used to read that fixture's
-direct-object path unmodified, or read the private `ws4/DOCC.ws` corpus
+direct-object path unmodified, or read a private `ws4/` corpus
 fixture as a convert/export source, now copies a bundled sample document
 into a temp directory it owns first (`BundledSampleFixture.copy(_:into:)`
 in `SoftReturnTests`) — see that type's own doc comment.

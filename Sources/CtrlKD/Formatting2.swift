@@ -347,25 +347,30 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
 /// also writes it as a fraction of an inch (`3/48"`, `4/48i`) and in points (`5pt`), both
 /// of which convert. A roll of 0 is meaningful — it means do not shift at all — so this
 /// returns nil only for an argument it cannot read, never for a legitimate zero.
+///
+/// #202 cause 5: the fraction check below uses `parseDotBareNumber` directly, NOT
+/// `parseDotNumber` — `parseDotNumber` now understands `<num>/<den>` as arithmetic
+/// too (the general dot-command-math fix), and calling it FIRST here would already
+/// have divided `num` by the denominator before this function's own `/`-scan ever
+/// ran, double-applying the division (`4/48i` -> 0.0833, then divided by 48 again).
+/// Checking the SR-specific fraction shape first with the bare-number primitive
+/// keeps this function's own, already-correct "a unit-less fraction is inches"
+/// reading exactly as it was.
 func parseSRArg(_ arg: [UInt8]) -> Double? {
-    guard let (num, unitAfterNum) = parseDotNumber(arg) else { return nil }
-    // A fraction: `<num> / <den>` with an optional unit. Both paths multiply by 48
-    // because a unit-less fraction is already a fraction OF AN INCH (`3/48` == 3/48in),
-    // which is exactly what the 48ths unit expresses.
-    var i = 0
-    var seenDigits = false
-    while i < arg.count {
-        let c = arg[i]
-        if c >= 0x30 && c <= 0x39 || c == 0x2E { seenDigits = true; i += 1; continue }
-        if c == 0x20 || c == 0x09 { i += 1; continue }
-        break
-    }
-    if seenDigits, i < arg.count, arg[i] == 0x2F {                  // '/'
-        guard let (den, _) = parseDotNumber(Array(arg[(i + 1)...])), den != 0 else {
-            return nil
+    if let (num, afterNum) = parseDotBareNumber(arg, skipDotExprWS(arg, 0)) {
+        let i = skipDotExprWS(arg, afterNum)
+        if i < arg.count, arg[i] == 0x2F {                          // '/'
+            // A fraction: `<num> / <den>` with an optional unit. Both paths multiply
+            // by 48 because a unit-less fraction is already a fraction OF AN INCH
+            // (`3/48` == 3/48in), which is exactly what the 48ths unit expresses.
+            guard let (den, _) = parseDotBareNumber(arg, skipDotExprWS(arg, i + 1)),
+                  den != 0 else {
+                return nil
+            }
+            return (num / den) * 48.0
         }
-        return (num / den) * 48.0
     }
+    guard let (num, unitAfterNum) = parseDotNumber(arg) else { return nil }
     guard num.isFinite else { return nil }
     if let inches = dotArgInches(num, unitAfterNum) { return inches * 48.0 }
     return num

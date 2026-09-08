@@ -407,7 +407,7 @@ import Testing
                 "dispatchRawAppleEvent recorded a NEW tap arrival — if this ever fails, the two dispatch layers are no longer separate and the test above should be revisited to assert through the real tap instead")
     }
 
-    /// Job planning#191 part 2: `source` used to be the private corpus's `ws4/DOCC.ws`,
+    /// Job planning#191 part 2: `source` used to be a private corpus `ws4/` document,
     /// read straight out of `TestDocs/` — this now hands back a copy of a bundled sample
     /// (`BundledSampleFixture`) placed right inside `tempDir` instead, so this suite's dozen
     /// dispatch experiments never open a document outside a directory they themselves created

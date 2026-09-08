@@ -5,6 +5,14 @@
 Jon's ruling: **4.0.3 ships now; every remaining Soft Return fix defers to
 4.0.4 as long as nothing is broken.**
 
+**SHIPPED 2026-09-08 ~01:40**: GitHub release
+[v4.0.3](https://github.com/jonmichaels/soft-return/releases/tag/v4.0.3)
+published (Latest), 5 assets uploaded and byte-verified from a fresh
+download, app+DMG+pkg signed/notarized(Accepted)/stapled, Homebrew tap
+formula bumped + CLT-only/macos-14+15 CI matrix green (real `brew install`
+both macOS versions), Windows exe rebuilt from the release source. Only the
+appcast entry remains, pending Jon's `sign_update` on the published DMG.
+
 | suite | result |
 |---|---|
 | `SoftReturnTests` (app) | **1002 tests, 995 passed, 7 failed, 0 skipped, 51 known issues**, 1823s |
@@ -444,7 +452,7 @@ logged `started`, none logged a result, and the last line never changed.
 I read that as a slow run and went looking for a performance problem in
 ctrl-kd's new gate rules — which is the wrong tree entirely: the gate is
 sub-second on every document (measured standalone: -SCREEN 876 chars 0s,
-DOCC 13876 chars 0s, SCRIPT 20877 chars 0s). `cancel.env` said it
+a private paper 13876 chars 0s, SCRIPT 20877 chars 0s). `cancel.env` said it
 outright: **`cancel: runner chain was gone; wrote nat4.rc=143`**. The
 xcodebuild chain had already exited. macOS wrote no crash report.
 
@@ -477,7 +485,7 @@ Per document, live counts by reason before and after:
 
 | document | before | after |
 |---|---|---|
-| DOCC | `{extra-word-in-engine: 36, word-unmatched: 36}` = 72 | `{}` = 0 — all 36 footnote markers merged into their words |
+| a private paper | `{extra-word-in-engine: 36, word-unmatched: 36}` = 72 | `{}` = 0 — all 36 footnote markers merged into their words |
 | SCRIPT | `{extra-word-in-engine: 2, word-unmatched: 2}` = 4 | `{}` = 0 — both `│Figure` rows gone |
 | -SCREEN | `{exact-drift: 3, extra-word-in-engine: 3, word-unmatched: 5}` = 11 | `{exact-drift: 4}` = 4, under the ceiling of 20 |
 | other 15 | clean | clean |
@@ -551,7 +559,7 @@ naming a missing export.
 
 ## 2026-09-07: the three failing Native-tier documents, root-caused
 
-`AppNativeFidelityTests` failed on DOCC, -SCREEN and SCRIPT. Three
+`AppNativeFidelityTests` failed on a private paper, -SCREEN and SCRIPT. Three
 distinct causes, one of them mine and now fixed, two of them not mine.
 
 ### 1. FIXED (mine): the extractor never handled `/MacRomanEncoding`
@@ -559,7 +567,7 @@ distinct causes, one of them mine and now fixed, two of them not mine.
 `AppPDFWordsFont` recognised `/WinAnsiEncoding` and nothing else, so every
 other declared encoding fell through to the raw-scalar branch — which is
 Latin-1. **`/MacRomanEncoding` is the only named encoding in any app PDF
-measured** (checked on -SCREEN, BOXES, LYING, DOCC and SCRIPT; none
+measured** (checked on -SCREEN, BOXES, LYING, a private paper and SCRIPT; none
 carries a `/Differences` array either), because that is what Quartz
 writes. MacRoman and Latin-1 share nothing above 0x7F.
 
@@ -569,13 +577,13 @@ the engine's `αßΓπΣσµτΦΘΩδφε` and could never match. **I had repor
 as a missing app glyph. It was this.** Fixed, and verified: the run now
 reads `αßΓπΣσµτΦΘΩδφε` and has dropped out of the diff entirely.
 
-### 2. NOT MINE — the rise asymmetry (DOCC 72 of 72, -SCREEN 8 of 11)
+### 2. NOT MINE — the rise asymmetry (a private paper 72 of 72, -SCREEN 8 of 11)
 
 The engine encodes superscript and subscript with the PDF `Ts` operator —
 75 of them in -SCREEN's PDF — keeping the text-matrix baseline on the
 line. ctrl-kd's gate ignores `Ts` by design, so the raised character is
 reported on the line's own baseline, which is what the WordStar capture
-also shows: `E=mc2`, `H2O`, `TrekTM,`, `Indians.1` — one word, one
+also shows: `E=mc2`, `H2O`, `TrekTM,`, `the.1` — one word, one
 baseline.
 
 **The app's PDF contains ZERO `Ts` operators.** Quartz has no `Ts`
@@ -586,7 +594,7 @@ Quartz bakes into the text matrix. Measured on -SCREEN: the engine emits
 2.08pt off the line instead of on it.
 
 So the two producers report the same visual result on two different
-baselines, and every raised character is an unmatched pair: DOCC's 36
+baselines, and every raised character is an unmatched pair: that private paper's 36
 footnote markers account for all 72 of its divergences, and -SCREEN's
 `2`, `2`, `TM`, `2`, `2`, `11` for 8 of its 11.
 
@@ -959,8 +967,8 @@ READER was wrong.
 Jon's standard is that Soft Return runs the SAME tests on its views as
 ctrl-kd and `sr`. Both gates named in the morning entry below have now
 been run armed on a dedicated dispatch host, through the drop box (runner
-REV 7, armed with `CTRLKD_SAWYER_ARCHIVE` + `CTRLKD_PRIVATE_CORPUS` +
-`CTRLKD_SRC`).
+REV 7, armed with
+`CTRLKD_SAWYER_ARCHIVE` + `CTRLKD_PRIVATE_CORPUS` + `CTRLKD_SRC`).
 
 ### Gate 1 — answer key over the app's exports: GREEN (108/108)
 
@@ -1037,7 +1045,7 @@ claim the shared layer's own walk already makes.
 > **So the transitive claim below no longer applies to Native.** Its
 > fidelity is now measured DIRECTLY against `ws7-prints/v3`, not inherited
 > from the engine's own PCL result. Current state, 18 documents: 15 clean;
-> DOCC, -SCREEN and SCRIPT failing, and all three root-caused on
+> a private paper, -SCREEN and SCRIPT failing, and all three root-caused on
 > 2026-09-07 to gate-side rules rather than app defects — the rise
 > asymmetry (the engine writes `Ts`, Quartz has none and bakes the offset
 > into the text matrix) and box-drawing characters being geometry on one

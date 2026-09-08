@@ -151,11 +151,57 @@ enum PrivateCorpusSupport {
     private static let ws4JonFloppiesFixtures: [(basename: String, subpath: String)] = [
         ("ARABY.ws", "WORK/ARABY.WS4"),
         ("GULLIVER.ws", "WORK/GULLIVER.WS4"),
-        ("DOCC.ws", "WORK/DOCC.WS4"),
+        // planning #243 (2026-09-08): the sixth fixture here -- one of the six private WS4
+        // paper names Jon's ruling named for removal from anything public -- is resolved
+        // via `resolvePrivateAlias` below instead of a literal in this array. Its `subpath`
+        // is a REAL corpus path this test resolves against a real file on disk, so
+        // renaming the string alone (without also renaming the file in the private corpus)
+        // would break this test's ability to find its fixture -- resolving it from the
+        // corpus's own alias map at run time keeps both in lockstep without ever putting
+        // the real name in this file's tracked bytes. See `resolvePrivateAlias`.
         ("INDIAN2.ws", "WORK/INDIAN2.WS4"),
         ("KINGLEAR.ws", "WORK/KINGLEAR.WS4"),
         ("PRUFROCK.ws", "WORK/PRUFROCK.WS4"),
     ]
+
+    /// Resolves one private-corpus fixture by an OPAQUE alias instead of a literal capture
+    /// name/path in this file's tracked source (planning #243, 2026-09-08 -- this was the
+    /// one string `tools/audit_private.sh` still caught in this tree after every other
+    /// leaked name was rewritten or removed: one of the six private-paper basename/subpath
+    /// literals this array used to carry, a real corpus path a test resolves against a
+    /// real file, not just a display string).
+    ///
+    /// Reads `<CTRLKD_PRIVATE_CORPUS>/ws7-prints/v1/sources.json`'s `aliases` map (opaque
+    /// alias -> real capture key, e.g. `"private-ws4-c"` names one of the six) and
+    /// `captures` map (capture key -> `{"source": "jon-floppies/<subpath>"}`) at RUN TIME,
+    /// only when armed
+    /// -- the real capture key and path exist only in that private corpus repo's own
+    /// tracked JSON (fine there, per that repo's own README: names are an accepted,
+    /// already-public convention within the private corpus), never in this repo's tracked
+    /// bytes. `sources.json` itself is this same corpus's `ws7-prints/v1/` capture manifest
+    /// (also the source `ws7-prints/v1/*.measurements.json` files verify against).
+    ///
+    /// Returns `nil` -- never crashes -- when unarmed, when `sources.json` is missing/
+    /// malformed, or when the alias/capture entry isn't found; callers route a `nil`
+    /// through the same "record this source as missing" path `copyIfPresent` already uses
+    /// for every other absent fixture, so an alias that fails to resolve shows up as a
+    /// named vacuity-guard miss, not a silent gap.
+    private static func resolvePrivateAlias(_ alias: String) -> (basename: String, subpath: String)? {
+        guard let corpus = privateCorpusRoot else { return nil }
+        let sourcesURL = corpus.appendingPathComponent("ws7-prints/v1/sources.json")
+        guard let data = try? Data(contentsOf: sourcesURL),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let aliases = root["aliases"] as? [String: String],
+              let captureKey = aliases[alias],
+              let captures = root["captures"] as? [String: Any],
+              let capture = captures[captureKey] as? [String: Any],
+              let source = capture["source"] as? String,
+              source.hasPrefix("jon-floppies/")
+        else { return nil }
+        let subpath = String(source.dropFirst("jon-floppies/".count))
+        let stem = ((subpath as NSString).lastPathComponent as NSString).deletingPathExtension
+        return (basename: "\(stem).ws", subpath: subpath)
+    }
 
     /// The curated Sawyer WS7 documents this gate bundles (Tier 1's flat, historical
     /// `TestDocs/ws7` shape), and each one's REAL relative path in the archive — most are at
@@ -228,6 +274,14 @@ enum PrivateCorpusSupport {
         for fixture in ws4JonFloppiesFixtures {
             copyIfPresent(missing: &missing, from: jonFloppies.appendingPathComponent(fixture.subpath),
                           to: ws4.appendingPathComponent(fixture.basename))
+        }
+        // The one fixture resolved by alias, not by literal name/path (see
+        // `resolvePrivateAlias`'s doc comment).
+        if let aliased = resolvePrivateAlias("private-ws4-c") {
+            copyIfPresent(missing: &missing, from: jonFloppies.appendingPathComponent(aliased.subpath),
+                          to: ws4.appendingPathComponent(aliased.basename))
+        } else {
+            missing.append("(private-ws4-c: alias unresolved -- check <corpus>/ws7-prints/v1/sources.json)")
         }
 
         // ws4 + ws7: Jon-authored WS7 test documents, from ws7-private/. TESTING4.WS/its

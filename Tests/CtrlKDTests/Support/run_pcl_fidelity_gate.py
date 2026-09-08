@@ -311,8 +311,8 @@ def _summarize(report: dict) -> dict:
     # LIST at MAX_LISTED_PER_REASON (40) entries per reason so the checked-in manifest
     # stays reviewable, but `counts_by_reason` always carries the true total (see that
     # function's own docstring). A document with more than 40 divergences for one reason
-    # (DOCC's 83 `exact-drift` entries, seen while developing this driver) would
-    # otherwise silently under-report by the amount the cap trimmed.
+    # (a private WS4 paper's own 83 `exact-drift` entries, seen while developing this
+    # driver) would otherwise silently under-report by the amount the cap trimmed.
     real_bug_count = sum(v for reason, v in counts.items() if reason != ACCEPTED_REASON)
     divergences = report.get('divergences', [])
     real = [d for d in divergences if d['reason'] != ACCEPTED_REASON]
@@ -332,6 +332,14 @@ def cmd_report(doc_name: str, pdf_path: str | None, engine_words_path: str | Non
                engine_chars_path: str | None = None) -> dict:
     fg, pt = _load_ctrlkd_modules()
     recorded = pt.load_manifest()['documents'].get(doc_name)
+    # Planning #243 (2026-09-08): ctrl-kd's own public manifest no longer
+    # carries any entry for a private-corpus-group document (not even a
+    # placeholder) -- `recorded` is simply None for one of those, same as
+    # any other name with no committed manifest entry. This driver ships
+    # to the PUBLIC engine repo as-is (Monorepo-Layout-Proposal.md section
+    # 2.1), so it carries no private-document name list of its own either;
+    # Tier 3 (private document PCL fidelity) needs a genuinely private
+    # carrier -- not yet built, see PCLFidelityTests.swift's own note.
 
     # Resolvability is decided ENTIRELY by ctrl-kd's own `fg.resolve_doc_paths` (the
     # same function `pcl_tolerance.doc_report()` calls first) -- no separate
