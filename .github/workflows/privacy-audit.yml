@@ -1,0 +1,40 @@
+# Public-repo CI shim -- NOT run in this (private) repo, which has no
+# .github/workflows/ at all (CI is a public-repo-only concern; every
+# public workflow is a hand-maintained "shim" restored after a squash
+# snapshot overwrites the tree, the same way README.md/LICENSE differ
+# between the two repos -- see docs/RELEASE-CHECKLIST.md's Publish
+# section).
+#
+# At release time, copy this file to the public repo's
+# `.github/workflows/privacy-audit.yml`, alongside `tools/audit_private.sh`
+# and `tools/private_patterns.sh` (crossing as-is -- both are already
+# public-safe: shape-based patterns via bracketed-char-class obfuscation,
+# zero real hostnames/paths in clear text; the SAME technique already
+# ships in the public ctrl-kd repo's own copy of tools/private_patterns.sh,
+# which is the precedent this relies on). Do NOT copy
+# tools/answer_key_private.py, tools/githooks/, tools/install-hooks.sh, or
+# tools/test_audit_private.sh unless a later pass decides the public repo
+# should also offer contributor-side hooks -- this workflow only needs the
+# pattern + the audit script.
+#
+# Why a public CI job at all, when the private repo's own pre-commit/
+# pre-push hooks already gate everything that reaches this snapshot: those
+# hooks are LOCAL, private-repo-only, and can be bypassed (--no-verify) or
+# simply not installed in whatever checkout produces a given snapshot. A
+# public CI job is the one check that runs unconditionally, in public,
+# after the fact, on the exact bytes that got pushed -- the same
+# "verify the artifact, not the process" principle as the release
+# checklist's stranger-verify job.
+name: privacy-audit
+
+on:
+  push:
+    branches: [main, beta]
+  pull_request:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tools/audit_private.sh

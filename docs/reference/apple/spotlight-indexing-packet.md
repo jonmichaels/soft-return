@@ -36,7 +36,7 @@ Source: https://developer.apple.com/documentation/foundation/nsmetadataquery
 - `-r`: "Ask the server to reimport files for UTIs claimed by the listed
   plugin" — a REQUEST the server schedules (may defer indefinitely on
   battery); per-file `mdimport <path>` requests process in seconds
-  (verified a real Mac ×2). NEVER call -r automatically (registry #7).
+  (verified twice on a real Mac). NEVER call -r automatically (registry #7).
 
 ## SDK headers the worker reads directly (no packet needed)
 - Metadata.framework/Headers/MDImporter.h — interface UUIDs/ABI.
