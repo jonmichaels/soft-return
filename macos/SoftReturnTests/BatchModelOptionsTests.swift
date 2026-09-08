@@ -107,9 +107,17 @@ private func batchHeadersFixtureBytes() -> [UInt8] {
 
 /// Job 520 (N5, b33 page-numbering UI): `BatchModel.pageNumbers` reaching the actual
 /// `ExportEngine.render` call, the model-level half of the Batch window's own new pulldown.
-/// `batchHeadersFixtureBytes` carries no page-numbering dot command of its own, so per the
-/// b33 ruling ("auto: ... if the document has no page-numbering dot command at all,
-/// numbering is OFF") `.auto` and `.on` must disagree — the same "compare produced bytes"
+/// `batchHeadersFixtureBytes` carries no page-numbering dot command of its own. The override
+/// this test exists to prove reaches the emitter is therefore checked against `.off`, not
+/// `.on`: engine commit 5756263 (`ws7-prints/v3` finding #2) established that stock WordStar
+/// 7 NUMBERS such a document, so `.auto` now agrees with `.on` and it is `.off` that
+/// disagrees. The b33 reading this used to cite ("auto + no dot command == off") was measured
+/// against Robert J. Sawyer's WSCHANGE-customized install and is superseded.
+///
+/// The test is not weakened by the swap — it still proves a per-run override changes the
+/// produced bytes and never writes back to Settings, which is its whole point. Comparing
+/// `.auto` to `.on` would now compare two identical renders and pass for the wrong reason,
+/// which is worse than failing. Same "compare produced bytes"
 /// technique `AppKitRenderedPDFHonorsEmitOptionsTests.modernPDFPicturesFlagChangesExportedBytes`
 /// already uses for a flag with no unique, greppable text of its own. `style = .printed`
 /// (not the Modern/Native default) so the run goes through the library's own PDF emitter —
@@ -120,9 +128,9 @@ private func batchHeadersFixtureBytes() -> [UInt8] {
     defer { try? FileManager.default.removeItem(at: autoDir) }
     try Data(batchHeadersFixtureBytes()).write(to: autoDir.appendingPathComponent("SOURCE.WS"))
 
-    let onDir = try makeTempDirectory("pagenumbers-override-on")
-    defer { try? FileManager.default.removeItem(at: onDir) }
-    try Data(batchHeadersFixtureBytes()).write(to: onDir.appendingPathComponent("SOURCE.WS"))
+    let offDir = try makeTempDirectory("pagenumbers-override-off")
+    defer { try? FileManager.default.removeItem(at: offDir) }
+    try Data(batchHeadersFixtureBytes()).write(to: offDir.appendingPathComponent("SOURCE.WS"))
 
     let settingsBefore = SettingsStore.shared.defaultPageNumbers
 
@@ -134,19 +142,20 @@ private func batchHeadersFixtureBytes() -> [UInt8] {
     await autoModel.run(progress: {})
     #expect(autoModel.convertedCount == 1)
 
-    let onModel = BatchModel()
-    onModel.add(urls: [onDir], includeSubfolders: false)
-    onModel.formats = [.pdf]
-    onModel.style = .printed
-    onModel.pageNumbers = .on
-    await onModel.run(progress: {})
-    #expect(onModel.convertedCount == 1)
+    let offModel = BatchModel()
+    offModel.add(urls: [offDir], includeSubfolders: false)
+    offModel.formats = [.pdf]
+    offModel.style = .printed
+    offModel.pageNumbers = .off
+    await offModel.run(progress: {})
+    #expect(offModel.convertedCount == 1)
 
     let autoBytes = try Data(contentsOf: autoDir.appendingPathComponent("SOURCE.pdf"))
-    let onBytes = try Data(contentsOf: onDir.appendingPathComponent("SOURCE.pdf"))
-    let message = "forcing page numbers ON on a document with no page-numbering dot command must "
-        + "change the printed PDF's own bytes (per the b33 ruling: auto + no dot command == off)"
-    #expect(onBytes != autoBytes, "\(message)")
+    let offBytes = try Data(contentsOf: offDir.appendingPathComponent("SOURCE.pdf"))
+    let message = "forcing page numbers OFF on a document with no page-numbering dot command must "
+        + "change the printed PDF's own bytes — stock WS7 numbers it under auto "
+        + "(ws7-prints/v3 finding #2)"
+    #expect(offBytes != autoBytes, "\(message)")
 
     #expect(SettingsStore.shared.defaultPageNumbers == settingsBefore,
             "a per-run Batch override must never write back to SettingsStore.shared")

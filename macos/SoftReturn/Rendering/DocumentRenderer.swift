@@ -315,6 +315,27 @@ struct PinnedBaseline: Sendable {
     /// in-QL) layout pass removes it from cause (2) — both app and QuickLook call this same
     /// `DocumentRenderer` function and get the identical number.
     let k: Double
+    /// THIS FRAGMENT'S OWN HEIGHT — the lead the renderer assigned it.
+    ///
+    /// `paragraphStyle` already pins `minimumLineHeight == maximumLineHeight == lead`, and
+    /// AppKit does not always honour it: a run set in a face whose natural line height
+    /// exceeds the lead comes back TALLER. Measured on WINGDING.CHT, a Wingdings chart whose
+    /// lines read `76   L ✬` — Courier Prime for the code, Helvetica Neue for the letter,
+    /// Zapf Dingbats for the mark, each its own homogeneous run, every face the app's OWN
+    /// correct choice — the clamp reads [14.00, 14.00] and the fragment comes back 14.34.
+    /// PRINTER.PS reaches 17.00 against the same 14.00.
+    ///
+    /// Nothing about the FONT SELECTION is wrong there, so no font fix can help: coverage-
+    /// aware resolution was wired and measured (it made the fragment 14.39 and changed
+    /// nothing else), and there is no mixed run to split. The excess accumulates —
+    /// 44 lines x 0.34pt is 14.96pt, more than one whole line — until the page runs out of
+    /// room and the last line is pushed onto the next, which is the ten page boundaries the
+    /// pagination oracle reports across six Sawyer charts.
+    ///
+    /// So the delegate that already pins this fragment's ORIGIN and BASELINE pins its HEIGHT
+    /// too. That is the same mechanism finishing its own job, in the one place that already
+    /// decides fragment geometry — not a second clamp layered over one that failed.
+    let height: Double
 }
 
 /// Job 413: `line` with every span's `.sup`/`.sub` style bit cleared — used ONLY to probe
@@ -358,6 +379,24 @@ struct RunningLine {
     /// (the document's base Courier at its own size — "already advances at exactly that
     /// grid" per that call site's own citation).
     var leadingOffset: Double = 0
+    /// MECHANISM O (engine commit 840cf4c, mirroring ctrl-kd 55d2b52): how far THIS PAGE's
+    /// own `.po` (page offset) moves the running head/foot's left edge away from the
+    /// document's global one — signed, and zero for every page of every document that never
+    /// changes `.po` mid-document.
+    ///
+    /// The engine resolves a page-local left (`Page.poCols`, set by
+    /// `layoutPrintedPagesPlain` from `poCheckpoints`) and hands it to `runningOps` ALONE:
+    /// `emitPDF`'s own `pageStream` keeps the document's global `left` unchanged, because
+    /// body text already carries a per-LINE `.po` override (`Line.poCols` -> the public
+    /// `PageLine.left` this renderer reads as `extraLeftPt`). The running head was the one
+    /// row with no page-granularity twin. SCRIPT.WS's worked-example figures are the real
+    /// case: they reset `.po` to `.5"` alongside their `.mt`/`.hm` changes, and WS7's own
+    /// capture moves the running head's left edge with it.
+    ///
+    /// Stored as an OFFSET rather than an absolute x because `drawRunningLines` places every
+    /// running line from `rendered.textFrame.origin.x` — the document's global left, already
+    /// in view coordinates — and this is the only thing that varies per page.
+    var pageLeftOffset: Double = 0
 }
 
 /// One header/footer state change in Modern's own flow (job 393, 391 root cause 2) — see
@@ -731,6 +770,28 @@ func printedLJ6DTPSubstitute(_ text: String, entry: FontChange?) -> String {
 /// untouched — Jon ruled that PDF output looks good as is; this removal is scoped to the
 /// native viewer's own text attributes only.
 
+/// A PRINTED FACSIMILE DOES NOT EXPAND TABS TO COCOA'S STOPS.
+///
+/// `NSParagraphStyle` defaults to twelve tab stops at 28pt, and this renderer never set
+/// otherwise for the Printed family — so a literal tab in the source jumped to a 28pt stop
+/// inside a page that is fixed pitch everywhere else. Measured 2026-09-07 against the
+/// engine's own PDF: RNFOREST.TXT begins with a tab, the engine draws that line's ink at the
+/// margin (x=72.00) and the app put it at x=100.00. 72 + 28 = 100, exactly, on all six of
+/// RNFOREST/RECYCLE/WETLAND's .TXT and .WS4 pairs.
+///
+/// The engine does not expand the tab at all — its own word there is literally `\tThe`, one
+/// run starting at the margin, so the tab occupies the cell grid like any other character.
+/// Jon's standing rule is that the Printed view reproduces the engine's output, so that is
+/// what this reproduces: no stops, and one column per tab.
+///
+/// (Whether the ENGINE is right about a raw tab in a plain-text file is a separate question
+/// that only a real WS7 print of a tabbed .TXT can answer. None of the 18 PCL captures has
+/// one; filed as a phase-2 capture question, and it does not block this.)
+private func printedTabStops(_ style: NSMutableParagraphStyle, columnWidthPt: Double) {
+    style.tabStops = []
+    style.defaultTabInterval = CGFloat(columnWidthPt)
+}
+
 /// Job 226: disables `NSAttributedString`'s default kerning on every Printed-style string
 /// this renderer builds. `PDFWriter.lineOpsPrinted`/`runningOps`'s whole positioning model —
 /// `spanPitch`, `spanTarget`, `tzScale`, the running-head/footer `Td` math — assumes a FIXED
@@ -752,6 +813,85 @@ func printedLJ6DTPSubstitute(_ text: String, entry: FontChange?) -> String {
 /// correctness fix on its own terms; the header's remaining pixel drift is NOT closed and
 /// its root cause is still open — see this job's report/LESSONS, not a re-derivation here.
 private let printedNoKerning: Float = 0
+
+/// Disables AppKit's default LIGATURES on every Printed-style string this renderer builds,
+/// for exactly the reason `printedNoKerning` above disables kerning — and unlike that one,
+/// this is CONFIRMED by a measurement rather than applied on principle.
+///
+/// A Printed facsimile is fixed pitch: every character occupies one 7.2pt Courier cell,
+/// because that is what WordStar on a LaserJet put on the paper. `NSAttributedString`
+/// defaults to `.ligature: 1`, so AppKit was drawing `fi` as a SINGLE glyph in one cell
+/// where the capture has two. Everything after it on the line then sits exactly one column
+/// left.
+///
+/// Caught by the PCL coordinate tier against the real WS7 captures, 2026-09-07, on
+/// SCRIPT.WS page 10: the capture's `file` came back from the app's own PDF as one ligature
+/// glyph plus `le`, and the four words after it on that line each measured -7.18, -7.22,
+/// -7.26 and -7.28pt against the capture — one Courier column, accumulating by a hundredth
+/// as the line runs on. The engine renders the same document CLEAN against the same
+/// capture, because `emitPDF` places every character itself and never asks a font to
+/// ligate.
+///
+/// PRINTED ONLY. Modern is a modern reading surface and its typography is deliberately not
+/// a facsimile, so this is applied where `printedNoKerning` is and nowhere else.
+private let printedNoLigatures: Int = 0
+
+/// MECHANISM G (engine commit f79ff29, mirroring ctrl-kd f328838) — the SIZE half.
+///
+/// A sup/sub span is SET SMALLER, and WS7's real reduction is a per-FAMILY x-height ratio,
+/// not the flat 2/3 this renderer (and the engine, before mechanism G) used everywhere.
+/// Measured from real WS7 PCL: Courier's is 9.25/12. Every other family keeps the flat 2/3,
+/// exactly as the engine's own `supSubXHeightRatio` table does — Courier is the only face
+/// with a captured sup/sub example in the corpus, and the engine deliberately declines to
+/// extrapolate. Values and call-site semantics mirror `PDFWriter.swift`'s
+/// `supSubXHeightRatio`/`supSubDefaultRatio`.
+private let printedSupSubCourierRatio = 9.25 / 12.0
+private let printedSupSubDefaultRatio = 2.0 / 3.0
+
+/// MECHANISM G — the PITCH half (`PDFWriter.swift`'s `supSubCellRatio`).
+///
+/// WS7 does not merely draw a smaller glyph inside the body's fixed-pitch cell: it
+/// RESELECTS a narrower pitch for the span, restoring the body's own value on exit. A
+/// 7.2pt (10 cpi) Courier body cell narrows to 5.5pt (13.04 cpi) — measured to the
+/// decipoint against -SCREEN.pcl's raw x-positions. Applied proportionally to whatever the
+/// span's own body cell actually is.
+private let printedSupSubCellRatio = 5.5 / 7.2
+
+/// Banker's rounding, matching the engine's own `roundHalfToEven` — `sized()` rounds a
+/// reduced point size with it, and 12 * (9.25/12) lands exactly on 9.25, a .25 case where
+/// the rounding MODE is what decides the answer. Swift's `.toNearestOrEven` is the same
+/// rule; spelled out here because the engine's helper is `internal`.
+private func printedRoundHalfToEven(_ x: Double) -> Int { Int(x.rounded(.toNearestOrEven)) }
+
+/// Whether this span's face is the engine's `PDFFamily.courier` — the only family with a
+/// measured mechanism-G ratio of its own.
+///
+/// Mirrors `PDFFonts.swift`'s `pdfFamily`, in its own order: a span with NO font block at
+/// all is Courier (every WS4 file and every print stream); a symbol/dingbat transliteration
+/// is not; otherwise the DECISIVE monospace bit decides. That last test goes through
+/// `printedMacIsMonospace` -> the engine's own shared public `resolveFont`, which is the
+/// same call `pdfFamily`'s `!entry.proportional` short-circuit and its `monoFamilies`
+/// prefix scan between them amount to — see `printedMacIsMonospace`'s own doc comment on
+/// why this app asks that one question rather than reimplementing the bit test.
+private func printedFamilyIsCourier(_ entry: FontChange?) -> Bool {
+    guard let entry else { return true }
+    let name = (entry.typestyleName ?? "").lowercased()
+    if name.hasPrefix("symbol") || name.contains("dingbat") { return false }
+    switch entry.symbolMap {
+    case .math, .symbols: return false
+    case .cp437, .cp850: break
+    }
+    return printedMacIsMonospace(entry)
+}
+
+/// The engine's `spanPitch` (`PDFWriter.swift`): a font block's own declared width word
+/// when it has one (1/1800in units, `hmiPerPoint` = 1800/72 = 25), else Courier's 0.6em at
+/// the span's declared size. `width1800` is `public` on `FontChange`, so this reads the
+/// same field the emitter does rather than re-deriving a pitch from AppKit metrics.
+private func printedSpanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
+    if let width = entry?.width1800, width != 0 { return Double(width) / (1800.0 / 72.0) }
+    return Double(pt) * 0.6
+}
 
 /// Job 226: a running head/foot carries WordStar's OWN embedded print-control bytes
 /// verbatim — `parseHeadFoot`/`decodeHeadFootText` (`ParseWS.swift:1366`/`1401`) keep the
@@ -979,6 +1119,23 @@ enum DocumentRenderer {
                                    pixResults: exportFlags.pictures ? state.pixResults : [],
                                    pictures: .embed)
         let capacity = metrics.capacity
+        // A mid-document `.po` can move a line LEFT of the document's default one, and an
+        // AppKit head indent cannot express that: `firstLineHeadIndent`/`headIndent` are
+        // offsets INTO the text container, and a negative value is clamped to zero, so such a
+        // line silently rendered at the container's own left edge instead of where the engine
+        // puts it. SCRIPT.WS is the proving case — its worked-example pages reset `.po` to
+        // `.5"`, so `PageLine.left` is 36.0 against a document default of 57.6, and all ~74 of
+        // its body lines on those pages sat 21.6pt (three columns) too far right.
+        //
+        // The fix is to anchor the container at the document's LEFTMOST line rather than at
+        // its default `.po`, so every per-line indent is a non-negative offset from that
+        // anchor and nothing needs clamping. A document that never moves left of its default
+        // (every document that does not change `.po` mid-document, and every one that only
+        // moves right) resolves `printedLeftAnchor` to exactly `metrics.left`, leaving its
+        // frame and every indent bit-for-bit as before.
+        let printedLeftAnchor = pages.reduce(metrics.left) { anchor, page in
+            page.lines.reduce(anchor) { min($0, $1.left ?? metrics.left) }
+        }
         // Job 210: driver-aware colour, gated exactly like the engine's own
         // `colourMap` (`PDFWriter.swift:708`) — non-empty only for LJ6DTP documents, so
         // every other driver's `span.colour` (if any) stays inert, same as before this job.
@@ -1052,6 +1209,29 @@ enum DocumentRenderer {
             guard i > 0 else { return metrics.lead }   // first line on page: cosmetic
             return page[i - 1].overprint ? nearZeroLead : (page[i].lead ?? metrics.lead)
         }
+        /// This line's OWN height, as against `advanceLead`'s gap from the line before it.
+        ///
+        /// The two coincide everywhere except a page's FIRST line, and `advanceLead`'s
+        /// `guard i > 0 else { return metrics.lead }` is right for what its name says: the
+        /// gap before line 0 positions nothing, because nothing precedes it. But that same
+        /// value was also being used as line 0's FRAGMENT HEIGHT, which is not cosmetic at
+        /// all — it is how much of the page the line consumes.
+        ///
+        /// Measured, MARKUP.WS page 1: line 0's own lead is 2.00pt, `metrics.lead` is
+        /// 15.00pt, and the page came out 57.00pt against the engine's 44.00pt budget. One
+        /// line, the whole 13.00pt excess, every other line matching its lead exactly.
+        ///
+        /// A 2pt lead is a REAL WordStar value — `.lh` is in 1/48in units — so the facsimile
+        /// must clamp to it exactly as the engine does, not fall back to the document
+        /// default (Athena, 2026-09-07). This also finishes what job 427 started: it already
+        /// established that a page's first line takes its position from its OWN lead rather
+        /// than the document default, and pinned `firstBaseline` to
+        /// `page.first?.lead ?? metrics.lead` for exactly that reason. The fragment height
+        /// was the half of that rule which never got applied.
+        func ownLead(_ page: Page, at i: Int) -> Double {
+            guard i > 0 else { return page[i].lead ?? metrics.lead }
+            return advanceLead(page, at: i)
+        }
         // Register b31 (job 506): `extraLeftPt` shifts a paragraph's own left edge past
         // `metrics.left`, the document DEFAULT `.po` — needed because `.po` is now
         // stateful per line (`Line.poCols`/`PageLine.left`, the same "carries the rest,
@@ -1072,6 +1252,7 @@ enum DocumentRenderer {
             style.minimumLineHeight = CGFloat(lead)
             style.maximumLineHeight = CGFloat(lead)
             style.lineBreakMode = .byClipping
+            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             if extraLeftPt != 0 {
                 style.firstLineHeadIndent = CGFloat(extraLeftPt)
                 style.headIndent = CGFloat(extraLeftPt)
@@ -1086,10 +1267,11 @@ enum DocumentRenderer {
         func naturalParagraphStyle() -> NSParagraphStyle {
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byClipping
+            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             return style
         }
         func lineAndTerminator(_ line: PageLine, lead: Double) -> NSAttributedString {
-            let extraLeftPt = (line.left.map { $0 - metrics.left }) ?? 0
+            let extraLeftPt = (line.left ?? metrics.left) - printedLeftAnchor
             let paragraph = paragraphStyle(lead: lead, extraLeftPt: extraLeftPt)
             // Job 371 item 1 (PIX IN VIEWS): a resolved `.PIX` tag became its OWN `PageLine`
             // at the `docToPagelines` call above (`spans` empty by construction — see
@@ -1102,7 +1284,8 @@ enum DocumentRenderer {
             if let image = line.image {
                 let piece = NSMutableAttributedString(attributedString: Self.pixAttachmentString(
                     state.pixResults, index: image.pixIndex,
-                    widthPt: image.widthPt, heightPt: image.heightPt, paragraph: paragraph))
+                    widthPt: image.widthPt, heightPt: image.heightPt, paragraph: paragraph,
+                    descentClearancePt: Self.printedPixDescentPt(metrics.size)))
                 piece.append(lineTerminator(font: courier(size: CGFloat(metrics.size)),
                                             paragraph: paragraph))
                 return piece
@@ -1110,7 +1293,8 @@ enum DocumentRenderer {
             let piece = NSMutableAttributedString(attributedString: attributedLine(
                 coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
                 paragraph: paragraph, fonts: doc.fonts, defaultSize: metrics.size,
-                colourMap: colourMap, disableKerning: true, useCourierPrime: true))
+                colourMap: colourMap, disableKerning: true, useCourierPrime: true,
+                printedSupSub: true))
             piece.append(lineTerminator(font: courier(size: CGFloat(metrics.size)),
                                         paragraph: paragraph))
             return piece
@@ -1147,13 +1331,20 @@ enum DocumentRenderer {
         // page's first line's own lead equalled the document default (true of every fixture
         // before this pin, since `size`/`lead` happened to coincide everywhere they'd been
         // measured), but WRONG the moment a page opens on a line with its OWN lead — an
-        // oversized title chief among them, whose natural (`styleLeadPt`, 1.2x its own font
-        // size) lead is nothing like the document's plain-Courier default. Confirmed via the
-        // engine's real PDF content stream (`Td`) for WARPRAYR.WS: title baseline at
-        // paper-top-distance 79.2pt = top(60) + 1.2*16 (its own 16pt lead), not the app's old
-        // 72pt = top(60) + metrics.size(12) — a 7.2pt miss, matching
-        // `warprayrTitleTopAgreesWithEngine`'s measured 7.5pt (pixel-scan/font-substitution
-        // noise makes up the rest, well inside its own tolerance once the anchor is right).
+        // oversized title chief among them, whose natural (`styleLeadPt`) lead is nothing
+        // like the document's plain-Courier default. Confirmed via the engine's real PDF
+        // content stream (`Td`) for WARPRAYR.WS: its title baseline sits at
+        // `top + its own 16pt Title lead`, not at the app's old `top + metrics.size(12)`.
+        //
+        // The ARITHMETIC here is unchanged and still correct — this pin reads the lead the
+        // engine computed (`page.first?.lead`) rather than deriving one — but the worked
+        // numbers this comment used to quote (79.2pt = top(60) + 1.2*16) are stale twice
+        // over, and are dropped rather than restated: mechanism T (engine commit d6626a0)
+        // put stock WordStar's auto-leading factor at 1.0, not 1.2, so the Title lead is
+        // 16.0pt; and mechanism U (2e33e9e) made `printedTop` reserve `.mt` alone, moving
+        // `top` itself. Both land here for free through `printedMetrics`/`docToPagelines` —
+        // there is no factor and no top margin written down on this side to update, which
+        // is exactly why this pin reads the engine's answer instead of recomputing it.
         var perPageFirstBaselines: [Double] = []
         perPageFirstBaselines.reserveCapacity(pages.count)
         // Job 427: hoisted from below `pages.enumerated()` (was computed once, after the
@@ -1231,7 +1422,7 @@ enum DocumentRenderer {
             attributedLine(coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
                            paragraph: naturalParagraphStyle(), fonts: doc.fonts,
                            defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
-                           useCourierPrime: true)
+                           useCourierPrime: true, printedSupSub: true)
         }
         // Job 227: LJ6DTP.WS's 72pt "LJ6DTP" banner title, immediately followed by its own
         // `.lh .05"` (3.6pt) shadow copy — the reference archive document `PDFWriter
@@ -1278,12 +1469,13 @@ enum DocumentRenderer {
                 return Self.pixAttachmentString(
                     state.pixResults, index: image.pixIndex,
                     widthPt: image.widthPt, heightPt: image.heightPt,
-                    paragraph: naturalParagraphStyle(), reservedLeadPt: reservedLead)
+                    paragraph: naturalParagraphStyle(), reservedLeadPt: reservedLead,
+                    descentClearancePt: Self.printedPixDescentPt(metrics.size))
             }
             return attributedLine(coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
                            paragraph: naturalParagraphStyle(), fonts: doc.fonts,
                            defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
-                           useCourierPrime: true)
+                           useCourierPrime: true, printedSupSub: true)
         }
         // Job 225: this function no longer tries to make each page's own block of lines
         // RENDER to any particular height — it emits page N's own real lines and nothing
@@ -1317,7 +1509,8 @@ enum DocumentRenderer {
             let pageDoc = hasPageOverride ? Self.effectivePageDoc(doc, for: page) : doc
             let pageTop = hasPageOverride ? printedMetrics(pageDoc).top : metrics.top
             runningLines.append(exportFlags.headers
-                ? Self.runningLines(for: page, pageNo: startNo + index, doc: pageDoc, metrics: metrics)
+                ? Self.runningLines(for: page, pageNo: startNo + index, doc: pageDoc,
+                                    metrics: metrics, leftAnchor: printedLeftAnchor)
                 : [])
             // Job 425: this page's own real anchor — see the citation on `perPageFirstBaselines`
             // above. `page.first?.lead` (not `pages[index].first?.lead` re-derived) since
@@ -1355,7 +1548,8 @@ enum DocumentRenderer {
                 // longer owns making the CONTAINER match the sheet's visual height.
                 let piece = lineAndTerminator(PageLine(), lead: metrics.lead)
                 let blankK = Self.isolatedFragmentK(piece, width: metrics.pageWidth - metrics.left)
-                pinnedBaselines[output.length] = PinnedBaseline(page: index, y: pageFirstBaseline, k: blankK)
+                pinnedBaselines[output.length] = PinnedBaseline(
+                    page: index, y: pageFirstBaseline, k: blankK, height: metrics.lead)
                 pinnedPageBottoms.append(pageFirstBaseline + metrics.lead - blankK)
                 output.append(piece)
                 flags.append(false)
@@ -1427,7 +1621,11 @@ enum DocumentRenderer {
                     if oversized, j + 1 < page.count {
                         fragmentLead = advanceLead(page, at: j + 1)
                     } else {
-                        fragmentLead = lead
+                        // `ownLead`, not `lead`: identical for every line but a page's
+                        // first, where `advanceLead` deliberately answers the document
+                        // default because the GAP before line 0 positions nothing. Its
+                        // HEIGHT is not cosmetic — see `ownLead`'s own doc comment.
+                        fragmentLead = ownLead(page, at: i)
                     }
                     // Job 412: `lead` (not `fragmentLead`) is this GROUP's own gap from the
                     // fragment before it — `fragmentLead` only exists to give an oversized
@@ -1452,7 +1650,7 @@ enum DocumentRenderer {
                         content, fallback: courier(size: CGFloat(metrics.size)), fonts: doc.fonts,
                         defaultSize: metrics.size, useCourierPrime: true)
                     pinnedBaselines[pageStartOffset + pageChunk.length] = PinnedBaseline(
-                        page: index, y: engineY + compensation, k: k)
+                        page: index, y: engineY + compensation, k: k, height: fragmentLead)
                     pageChunk.append(piece)
                     // Job 412: whatever this holds when the loop ends is the PAGE's own
                     // LAST group — exactly what `RenderedDocument.pinnedPageBottoms` needs
@@ -1535,9 +1733,9 @@ enum DocumentRenderer {
         // `textFrame` below (sizing, and every non-Printed path's shared anchor) and as the
         // BASE every page's own `perPageTextTop` entry adds its own override delta to.
         let textFrame = CGRect(
-            x: metrics.left,
+            x: printedLeftAnchor,
             y: textTop,
-            width: max(1, metrics.pageWidth - metrics.left),
+            width: max(1, metrics.pageWidth - printedLeftAnchor),
             height: CGFloat(capacity) * metrics.lead
         )
         let leadingHeadroom = Self.leadingHeadroom(oversizedSelfPasses, firstBaselines: perPageFirstBaselines)
@@ -1638,6 +1836,7 @@ enum DocumentRenderer {
             style.minimumLineHeight = CGFloat(lead)
             style.maximumLineHeight = CGFloat(lead)
             style.lineBreakMode = .byClipping
+            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             return style
         }
         // Job 267 (field bug 3, mark wrapping): a line whose marks make it wider than the
@@ -1657,11 +1856,13 @@ enum DocumentRenderer {
             style.minimumLineHeight = CGFloat(lead)
             style.maximumLineHeight = CGFloat(lead)
             style.lineBreakMode = .byWordWrapping
+            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             return style
         }
         func naturalParagraphStyle() -> NSParagraphStyle {
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byClipping
+            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             return style
         }
         let defaultParagraph = paragraphStyle(lead: metrics.lead)
@@ -2121,8 +2322,11 @@ enum DocumentRenderer {
             let realPageIndex = correlatable ? currentRealPageIndex : groupIndex
             realPageIndexByPage.append(realPageIndex)
             runningLines.append(pages.indices.contains(realPageIndex)
+                // The annotated (Show Invisibles) path anchors its own frame at `metrics.left`
+                // — it is an informational reflow layer, exempt from the facsimile gates, and
+                // does not carry the per-line `.po` anchoring the plain path needs.
                 ? Self.runningLines(for: pages[realPageIndex], pageNo: startNo + realPageIndex,
-                                    doc: doc, metrics: metrics)
+                                    doc: doc, metrics: metrics, leftAnchor: metrics.left)
                 : [])
         }
         if output.length > 0 { output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1)) }
@@ -3789,10 +3993,141 @@ enum DocumentRenderer {
     /// in `PDFWriter.swift:194`) — spec constants, not derived engine arithmetic, so vendoring
     /// them here carries none of the `spanPitch`/`tzScale` drift risk this file's other doc
     /// comments warn about.
+    /// WordStar's own AUTOMATIC page number: whether it is switched ON for `page`.
+    ///
+    /// PAGE NUMBERING IS ON BY DEFAULT (engine commit 5756263, mirroring ctrl-kd b6d5d03 —
+    /// `ws7-prints/v3` finding #2). A genuinely stock WS7 install numbers a document even
+    /// when it never touches `.pn`/`.pg`/`.op`/`.pc`; the older "silent by default" reading
+    /// was measured against Robert J. Sawyer's own WSCHANGE-customized install, the same
+    /// contamination family as mechanisms S/T/U/W. So `checkpoints` seeds ON.
+    ///
+    /// Port of the engine's `pgnumCheckpoints`/`pgnumAt` (`PDFLayout.swift`, both
+    /// `internal`) against the public `Document.dotPositions`. `.pn`/`.pg` switch it on,
+    /// `.op` off, and the LAST checkpoint at or before this page's own highest block index
+    /// wins — the same "checkpoint at or before this block" contract `plAt`/`hmFmAt` use.
+    /// A page carrying no block index at all resolves OFF, matching the engine's own final
+    /// `else` branch rather than inheriting a neighbouring page's state.
+    ///
+    /// The dot-command name scan is the engine's: the 1-3 ASCII letters after the dot, no
+    /// word boundary required, because a real WS7 file overwhelmingly writes `.pn0`/`.pg`
+    /// with no space before a following digit.
+    nonisolated static func printedAutoPageNumberOn(page: Page, doc: Document) -> Bool {
+        guard let pageMaxBi = page.compactMap(\.bi).max() else { return false }
+        var on = true
+        for dp in doc.dotPositions {
+            var scalars = Array(dp.text.unicodeScalars)
+            guard scalars.first == "." else { continue }
+            scalars.removeFirst()
+            let letters = scalars.prefix(while: { CharacterSet.letters.contains($0) })
+            guard (1...3).contains(letters.count) else { continue }
+            let name = String(String.UnicodeScalarView(letters)).uppercased()
+            let value: Bool
+            switch name {
+            case "PN", "PG": value = true
+            case "OP": value = false
+            default: continue
+            }
+            if dp.blockIndex <= pageMaxBi { on = value }
+        }
+        return on
+    }
+
+    /// Left edge (points) of the automatic page number's text, from `.po`/`.pc`. Port of the
+    /// engine's `autoPageNumberXPt` (`PDFLayout.swift`, `internal`).
+    ///
+    /// Measured, not derived from the manual: the number is LEFT-anchored at column
+    /// `(poCols + pcCol - 1)` in the same 10-CPI frame `.po` uses, regardless of how many
+    /// digits it has. `.pc 0` and `.pc` never declared at all are the SAME internal state
+    /// and both resolve to the fixed measured column 33.5 — the manual's "centered between
+    /// the margins" wording does not hold as measured. `8.0` is the WS7 manual's own default
+    /// `.po`, matching the engine's own fallback in this function.
+    nonisolated static func printedAutoPageNumberXPt(_ doc: Document) -> Double {
+        let po = doc.page?.poCols ?? 8.0
+        let pcRaw = doc.page?.pcCol
+        let pc = (pcRaw != nil && pcRaw != 0) ? Double(pcRaw!) : 33.5
+        return (po + pc - 1) * 7.2
+    }
+
+    /// MECHANISMS Q and X (engine commits 6d12d7e and 53d3114, mirroring ctrl-kd 605e27b /
+    /// 1017391 / e989028): re-evaluate a `.h#`/`.f#` line's own right-align tab against THIS
+    /// page's actual page-number width.
+    ///
+    /// A right/center/decimal-align tab typed into a running-head argument has its padding
+    /// BAKED to literal spaces at parse time, sized for whatever the `#` substitution was
+    /// assumed to be wide when the file was last saved — always one column, because
+    /// WordStar's own screen shows the literal `#` token, never the eventual number. Real
+    /// WS7 re-evaluates the tab at PRINT time instead: measured on -README.WS pages 9->10,
+    /// the header's "WordStar" moves 7.2pt LEFT the instant the page number grows a second
+    /// digit, while the number's own right edge — the tab's real target column — never moves.
+    ///
+    /// `absHMI` is where the BAKED padding ends, in 1/1800in units from the document's own
+    /// left reference, so it already encodes `targetCol - savedSuffixWidth` at the saved
+    /// (1-digit) width. Adding the stored suffix's own width back recovers `targetCol`;
+    /// subtracting THIS page's actual substituted suffix width gives the padding to use now.
+    ///
+    /// MECHANISM X is the `- 1` that is NOT here. That bias was fit against the 2-digit case
+    /// while -README's header was still 24pt too low (mechanism W's own bug), which masked
+    /// every horizontal residual behind a much larger vertical one. With W fixed, the
+    /// pristine capture showed both digit-width buckets uniformly one column left of the
+    /// biased formula: WS7's suffix-final print column is INCLUSIVE of the tab's target.
+    ///
+    /// Fixed-pitch only (`entry == nil`), exactly like the engine: a proportional header face
+    /// has no single column width to divide the HMI target by, and no oracle in the corpus
+    /// combines the two, so that case keeps its baked padding untouched.
+    private static func printedHFRetab(_ text: String, tabRec: HFTabMark?,
+                                       substituting render: (String) -> String) -> String {
+        guard let tabRec else { return text }
+        let chars = Array(text)
+        let charIdx = tabRec.charIdx
+        let cols = tabRec.cols
+        guard charIdx >= 0, charIdx + cols <= chars.count else { return text }
+        let suffix = String(chars[(charIdx + cols)...])
+        let strippedSuffix = String(String.UnicodeScalarView(
+            suffix.unicodeScalars.filter { $0.value >= 0x20 }))
+        // `tabHMIPerCol` is 180 (`SymmetricBlocks.swift`) — a WordStar file-format constant,
+        // vendored like this function's other spec literals. Banker's rounding matches the
+        // engine's own `roundHalfToEven` at the exact .5 cases this division produces.
+        let savedTargetCol = printedRoundHalfToEven(Double(tabRec.absHMI) / 180.0)
+            + strippedSuffix.count
+        let newCols = max(0, savedTargetCol - render(strippedSuffix).count)
+        return String(chars[0..<charIdx]) + String(repeating: " ", count: newCols) + suffix
+    }
+
+    /// `leftAnchor` is the x `PagedDocumentView.drawRunningLines` will actually start from —
+    /// `RenderedDocument.textFrame.origin.x`, which is the document's LEFTMOST line, not
+    /// necessarily its default `.po` (see `printedLeftAnchor` in `renderPrinted`). Every
+    /// offset this function records is measured from it, so a document whose body reaches
+    /// left of its own default does not drag its running heads left with it.
     private static func runningLines(
-        for page: Page, pageNo: Int, doc: Document, metrics: PrintedPageMetrics
+        for page: Page, pageNo: Int, doc: Document, metrics: PrintedPageMetrics,
+        leftAnchor: Double
     ) -> [RunningLine] {
-        guard !(page.headers.isEmpty && page.footers.isEmpty) else { return [] }
+        // A real footer PRE-EMPTS the automatic number (WSFORMAT.WS: it is "active only when
+        // the footers are not in use"), so at most one of the two ever draws on a page.
+        let footerInUse = page.footers.values.contains { !$0.isEmpty }
+        let showAutoNum = !footerInUse && Self.printedAutoPageNumberOn(page: page, doc: doc)
+        // The auto number is a running line in its own right, so a page with NO `.h#`/`.f#`
+        // at all still has something to draw — this guard used to return early on exactly
+        // that case, which is why page numbers never appeared on screen for a document that
+        // never sets `.pn`/`.op`. Mirrors the engine's own
+        // `guard printed, !headers.isEmpty || !footers.isEmpty || showAutoNum`.
+        guard !(page.headers.isEmpty && page.footers.isEmpty && !showAutoNum) else { return [] }
+
+        // MECHANISM O (engine commit 840cf4c / ctrl-kd 55d2b52) — see
+        // `RunningLine.pageLeftOffset`'s own doc comment for the full citation. The engine's
+        // `resolveLeftPt` (`PDFLayout.swift`) is `internal`, so its two-line formula is
+        // vendored here rather than imported: `poCols * 7.2`, clamped into the sheet at
+        // `pageWidth - size * 0.6`. `pdfPtPerCol` (7.2 = 10 cpi) and the 0.6em Courier
+        // advance are WordStar/PCL spec constants, the same class this function's own header
+        // comment already vendors the 66/8/2 line defaults from — not derived engine
+        // arithmetic, so they carry none of the drift risk a computed formula would.
+        // `nil` (every page of every document that never changes `.po` mid-document) leaves
+        // the offset at zero and every such page byte-identical to before this fix.
+        let pageLeftOffset: Double = page.poCols.map { cols in
+            let pageLeft = max(0.0, min(cols * 7.2,
+                                        metrics.pageWidth - Double(metrics.size) * 0.6))
+            return pageLeft - leftAnchor
+        } ?? metrics.left - leftAnchor
 
         // Job 240 (b13, Part 1): the cp1252 esc-degradation this used to chain
         // (`printedEscDegrade`) is gone — MAC VIEWING RULING, see that removal's own doc
@@ -3863,6 +4198,7 @@ enum DocumentRenderer {
                                            defaultSize: metrics.size, useCourierPrime: true)
                 result.append(NSAttributedString(string: text, attributes: [
                     .font: runFont, .foregroundColor: NSColor.black, .kern: printedNoKerning,
+                    .ligature: printedNoLigatures,
                 ]))
             }
             guard result.length > 0 else { return nil }
@@ -3904,9 +4240,60 @@ enum DocumentRenderer {
             if let entry, let styled = styledLine(text, entry: entry) {
                 return RunningLine(text: styled.text, baselineFromTop: baseline,
                                    drawOriginOffset: styled.drawOriginOffset, kind: kind,
-                                   leadingOffset: styled.leadingOffset)
+                                   leadingOffset: styled.leadingOffset,
+                                   pageLeftOffset: pageLeftOffset)
             }
-            let degraded = rendered(text)
+            // Mechanisms Q/X — see `printedHFRetab`. Gated on `entry == nil` to mirror the
+            // engine exactly: a line that HAS a font block keeps its baked padding even when
+            // its styled path declined to build (the engine never reaches its retab branch
+            // for such a line either).
+            let tabRec = entry == nil
+                ? (kind == .header ? doc.headerTabs[lineNo] : doc.footerTabs[lineNo])
+                : nil
+            let retabbed = Self.printedHFRetab(text, tabRec: tabRec) {
+                $0.replacingOccurrences(of: "#", with: String(pageNo))
+            }
+            // MECHANISM M (engine commit f79ff29, mirroring ctrl-kd 74acc60): a FONTLESS
+            // `.h#`/`.f#` line whose own text carries an inline style toggle (a `^Y` italic,
+            // say) must have that toggle INTERPRETED, not dropped. The engine's `hfLineOps`
+            // takes its run-by-run path "whenever the line carries a control byte, not only
+            // when a font block is present" — before that fix the byte leaked into the PDF
+            // as a literal, phantom-advancing every word after it.
+            //
+            // This renderer had the mirrored half of the same bug from the other direction:
+            // `styledLine` (job 489) is reached ONLY when the line has a font block, so a
+            // fontless toggled line fell through to the plain path below, where
+            // `printedStripControlChars` deleted the toggle byte and nothing ever applied
+            // the style it announced — the words were right, the italics were missing.
+            //
+            // Plain Courier with the run's own bold/italic, matching the engine's own
+            // fallback face for a line with no `.h#`/`.f#` font block of its own. A line with
+            // no control byte at all stays on the exact prior single-run path, byte for byte.
+            if entry == nil, retabbed.unicodeScalars.contains(where: { $0.value < 0x20 }) {
+                let substituted = retabbed.replacingOccurrences(of: "#", with: String(pageNo))
+                let runs = printedHeadFootRuns(substituted)
+                let result = NSMutableAttributedString()
+                for run in runs {
+                    let runText = printedStripControlChars(run.text)
+                    guard !runText.isEmpty else { continue }
+                    result.append(NSAttributedString(string: runText, attributes: [
+                        .font: Self.styled(font, with: run.styles),
+                        .foregroundColor: NSColor.black,
+                        .kern: printedNoKerning,
+                        .ligature: printedNoLigatures,
+                    ]))
+                }
+                if result.length > 0 {
+                    return RunningLine(text: result, baselineFromTop: baseline,
+                                       drawOriginOffset: drawOriginOffset, kind: kind,
+                                       pageLeftOffset: pageLeftOffset)
+                }
+                // Nothing left once the toggles are consumed (LJ6DTP.WS's own footer is two
+                // rule-drawing control bytes and no visible text at all) — a running line
+                // with nothing to show is exactly one that should not exist.
+                return nil
+            }
+            let degraded = rendered(retabbed)
             guard !degraded.isEmpty else { return nil }
             // No `.paragraphStyle` attribute — matches `drawOriginOffset`'s own measurement,
             // which uses the same absence (`NSParagraphStyle()`, unconstrained) rather than
@@ -3916,23 +4303,34 @@ enum DocumentRenderer {
                 .font: font,
                 .foregroundColor: NSColor.black,
                 .kern: printedNoKerning,
+                .ligature: printedNoLigatures,
             ])
             return RunningLine(text: attributed, baselineFromTop: baseline,
-                               drawOriginOffset: drawOriginOffset, kind: kind)
+                               drawOriginOffset: drawOriginOffset, kind: kind,
+                               pageLeftOffset: pageLeftOffset)
         }
 
         let mt = doc.page?.mtLines ?? 3.0
-        // Job 425 (b26 wave-2 pin, `Provenance.machineDefault` fix — engine commit 45b9726,
-        // PDFWriter.swift: "hm's participation is keyed on mtSource, not hmSource" — see that
-        // commit's own extensive citation table): `hm` only subtracts from the header's own
-        // base line when `.mt` was DECLARED IN THE FILE ITSELF (`mtSource == .file`) — a
-        // preset-applied or factory-default `.mt` (`.default`/`.machineDefault`) leaves `hm`
-        // out entirely, regardless of `hm`'s own provenance. Previously unconditional here —
-        // invisible on every fixture whose `.mt` happened to be file-declared, wrong the
-        // moment a preset (or a factory default) supplies it instead; the running head sat a
-        // whole `hm` (2 lines, 24pt) too high. Confirmed against the engine's real emitPDF for
-        // OLDTIMES.WS (bare AND sawyer-preset both moved 24pt when this pin landed).
-        let hm = doc.page?.mtSource == .file ? (doc.page?.hmLines ?? 2.0) : 0.0
+        // MECHANISM W (engine commit 53d3114, mirroring ctrl-kd e989028 — SUPERSEDES job
+        // 425's `mtSource == .file` gate that stood here): `.hm` participates in `headBase`
+        // UNCONDITIONALLY. Every measurement that ever justified gating it on `mtSource`/
+        // `hmSource` (-README, SCRIPT, LJ6DTP, HMFM_PROBE) was captured through Robert J.
+        // Sawyer's own WSCHANGE-customized `WS.EXE` (`ws7-prints/v1`/`v2`) — the same
+        // personalized install mechanisms S (`.po` factory column) and T (auto-leading
+        // factor) already found had been mistaken for stock WordStar 7. `-README` is the
+        // corpus's ONLY header-bearing document with `mtSource`/`hmSource` BOTH `.default`,
+        // and a `PRISTINE.EXE` (factory, no WSCHANGE) recapture of it measures its header at
+        // 12.0pt — `headBase` 0 = mt(3) - hm(2) - topHead(1), hm FULLY SUBTRACTED — not the
+        // 35.7pt/`headBase` 2 every gated formula predicts for that combination.
+        //
+        // This does NOT reopen SCRIPT/LJ6DTP: both are `mtSource == .file` on every oracle
+        // page (LJ6DTP via its own per-page `.mt` swap), so every gate this history tried
+        // already had `hm` participating there. Dropping the gate changes nothing for a
+        // document that ever states `.mt` or `.hm` itself; it only changes the all-default
+        // case, which until the pristine recapture had never been checked against a
+        // non-Sawyer install at all. Mirrors the engine's own `runningOps`
+        // (`PDFWriter.swift`: `let hm = doc.page?.hmLines ?? 2.0`) line for line.
+        let hm = doc.page?.hmLines ?? 2.0
         let topHead = Double(page.headers.keys.max() ?? 1)
         let headBase = max(0.0, mt - hm - topHead)
 
@@ -3949,6 +4347,37 @@ enum DocumentRenderer {
         for n in page.footers.keys.sorted() {
             guard let text = page.footers[n], !text.isEmpty else { continue }
             if let built = line(text, atLine: footLine + Double(n - 1), lineNo: n, kind: .footer) { out.append(built) }
+        }
+        if showAutoNum {
+            // WordStar's automatic number rides the SAME row a footer line 1 would
+            // (`footLine + 1 - 1 == footLine`) — measured: every probe showing both together
+            // landed at the identical y a real `.fo` line 1 uses. `showAutoNum` already
+            // excludes the case a real footer is in use, so this never collides with the
+            // loop just above.
+            //
+            // Plain Courier, no font lookup — the engine emits it with its own
+            // `FONTS[(False, False)]` fallback face rather than any `.f#` font block.
+            //
+            // Placed by `pageLeftOffset` because the number is anchored ABSOLUTELY from the
+            // paper's left edge (`.po` + `.pc`), not at the text column every other running
+            // line starts from: `drawRunningLines` adds this to `textFrame.origin.x`, which
+            // is `metrics.left`, so the offset carries the difference. This also subsumes
+            // mechanism O for this one line — `printedAutoPageNumberXPt` reads `.po` from the
+            // page-local `doc` this function was handed (`pageDoc` at the call site), the
+            // same document the engine passes its own `autoPageNumberXPt`.
+            let baseline = footLine * metrics.lead + Double(metrics.size)
+            if baseline <= metrics.pageHeight {
+                let attributed = NSAttributedString(string: String(pageNo), attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.black,
+                    .kern: printedNoKerning,
+                    .ligature: printedNoLigatures,
+                ])
+                out.append(RunningLine(
+                    text: attributed, baselineFromTop: baseline,
+                    drawOriginOffset: drawOriginOffset, kind: .footer,
+                    pageLeftOffset: Self.printedAutoPageNumberXPt(doc) - leftAnchor))
+            }
         }
         return out
     }
@@ -4128,7 +4557,16 @@ enum DocumentRenderer {
         }), span.styles.contains(.sup) || span.styles.contains(.sub) else { return 0 }
         let font = resolvedFont(for: span, fallback: fallback, fonts: fonts,
                                 defaultSize: defaultSize, useCourierPrime: useCourierPrime)
-        return Double(scriptMetrics(for: font, raise: span.styles.contains(.sup)).offset)
+        // Mechanism G: this probe is Printed-only (its one caller is inside `renderPrinted`),
+        // so it must measure the SAME reduced face the real run gets — otherwise the
+        // compensation it folds into the line's own leading is computed off a 2/3 face while
+        // the glyph is drawn at WordStar's ratio, and the raise it corrects for is wrong by
+        // the difference.
+        let entry = span.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
+        let ratio = printedFamilyIsCourier(entry)
+            ? printedSupSubCourierRatio : printedSupSubDefaultRatio
+        return Double(scriptMetrics(for: font, raise: span.styles.contains(.sup),
+                                    ratio: ratio).offset)
     }
 
     // MARK: - Spans to attributed text
@@ -4144,7 +4582,8 @@ enum DocumentRenderer {
         _ span: Span, to line: NSMutableAttributedString, leading: inout Bool,
         font: NSFont, paragraph: NSParagraphStyle, fonts: [FontChange], defaultSize: Int,
         colourMap: [Int: Double], disableKerning: Bool, useCourierPrime: Bool = false,
-        pixResults: [PixResult] = [], pixMeasureWidthPt: Double = 0
+        pixResults: [PixResult] = [], pixMeasureWidthPt: Double = 0,
+        printedSupSub: Bool = false
     ) {
         // Job 371 item 1 (PIX IN VIEWS): a resolved `.PIX` tag, INLINE — the shape Modern's
         // own reflow keeps `span.pix` in (unlike Printed, whose `docToPagelines` already
@@ -4249,6 +4688,7 @@ enum DocumentRenderer {
                 ]
                 indentAttributes.merge(driverColourAttributes(span.colour, colourMap)) { _, new in new }
                 if disableKerning { indentAttributes[.kern] = printedNoKerning }
+                if disableKerning { indentAttributes[.ligature] = printedNoLigatures }
                 line.append(NSAttributedString(
                     string: String(span.text.prefix(pad)), attributes: indentAttributes))
                 if pad == span.text.count {
@@ -4271,11 +4711,12 @@ enum DocumentRenderer {
             Self.appendProportionalRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                to: line)
+                printedSupSub: printedSupSub, to: line)
         } else {
             line.append(Self.attributedRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
-                colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime))
+                colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
+                printedSupSub: printedSupSub))
         }
         if span.text.contains(where: { !$0.isWhitespace }) {
             leading = false
@@ -4317,13 +4758,15 @@ enum DocumentRenderer {
     private static func appendProportionalRun(
         _ span: Span, font: NSFont, paragraph: NSParagraphStyle,
         fonts: [FontChange], defaultSize: Int, colourMap: [Int: Double],
-        disableKerning: Bool, useCourierPrime: Bool, to line: NSMutableAttributedString
+        disableKerning: Bool, useCourierPrime: Bool, printedSupSub: Bool = false,
+        to line: NSMutableAttributedString
     ) {
         let segments = Self.splitOnColumnSpaceRuns(span.text)
         guard segments.count > 1 || segments.first?.isGrid == true else {
             line.append(Self.attributedRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
-                colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime))
+                colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
+                printedSupSub: printedSupSub))
             return
         }
         for segment in segments where !segment.text.isEmpty {
@@ -4334,13 +4777,15 @@ enum DocumentRenderer {
                 ]
                 gridAttributes.merge(driverColourAttributes(span.colour, colourMap)) { _, new in new }
                 if disableKerning { gridAttributes[.kern] = printedNoKerning }
+                if disableKerning { gridAttributes[.ligature] = printedNoLigatures }
                 line.append(NSAttributedString(string: segment.text, attributes: gridAttributes))
             } else {
                 let piece = Span(text: segment.text, styles: span.styles, font: span.font,
                                  colour: span.colour, pctlHMI: span.pctlHMI)
                 line.append(Self.attributedRun(
                     piece, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
-                    colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime))
+                    colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
+                    printedSupSub: printedSupSub))
             }
         }
     }
@@ -4407,7 +4852,8 @@ enum DocumentRenderer {
         disableKerning: Bool = false,
         useCourierPrime: Bool = false,
         pixResults: [PixResult] = [],
-        pixMeasureWidthPt: Double = 0
+        pixMeasureWidthPt: Double = 0,
+        printedSupSub: Bool = false
     ) -> NSAttributedString {
         let line = NSMutableAttributedString()
         // Port of `splitIndent` (`PDFWriter.swift:389-421`): still true until the first
@@ -4418,7 +4864,8 @@ enum DocumentRenderer {
             appendSpan(span, to: line, leading: &leading, font: font, paragraph: paragraph,
                       fonts: fonts, defaultSize: defaultSize, colourMap: colourMap,
                       disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                      pixResults: pixResults, pixMeasureWidthPt: pixMeasureWidthPt)
+                      pixResults: pixResults, pixMeasureWidthPt: pixMeasureWidthPt,
+                      printedSupSub: printedSupSub)
         }
         // A line with no spans at all (a blank PageLine) would otherwise be represented
         // on screen by nothing but its OWN terminator newline — a control character, which
@@ -4571,9 +5018,18 @@ enum DocumentRenderer {
     ///   top rather than at its tiny AppKit fragment's top — see that call site's own doc
     ///   comment. `0` for every OTHER caller (the ordinary inline/non-oversized picture case),
     ///   which never reaches that code path and so never looks at this value.
+    /// MECHANISM Y's own term, named once so both Printed call sites and the test that pins
+    /// them read the same number: the preceding line's DESCENT, which an embedded picture's
+    /// top edge must clear. `0.25 * size`, the same baseline-to-cell-bottom fraction the
+    /// engine's box-drawing cells already use, taken against the document's own default
+    /// printed size exactly as `pageStream` does (a pix tag reserves blank PHYSICAL lines at
+    /// that size, never a per-line override).
+    static func printedPixDescentPt(_ size: Int) -> Double { 0.25 * Double(size) }
+
     private static func pixAttachmentString(
         _ pixResults: [PixResult], index: Int, widthPt: Double, heightPt: Double,
-        paragraph: NSParagraphStyle, reservedLeadPt: Double = 0
+        paragraph: NSParagraphStyle, reservedLeadPt: Double = 0,
+        descentClearancePt: Double = 0
     ) -> NSAttributedString {
         let attachment = NSTextAttachment()
         if pixResults.indices.contains(index), let png = pixResults[index].png,
@@ -4582,7 +5038,35 @@ enum DocumentRenderer {
         } else {
             attachment.image = NSImage()
         }
-        attachment.bounds = CGRect(x: 0, y: reservedLeadPt, width: max(0, widthPt), height: max(0, heightPt))
+        // MECHANISM Y (engine commit c9fea86, mirroring ctrl-kd 9546ae6). `PDFWriter.swift`'s
+        // `pageStream` image branch is now
+        //
+        //     let imgY = y + (reserved - img.heightPt) - 0.25 * Double(size)
+        //
+        // where `y` is the preceding line's own baseline. `reservedLeadPt` here is that same
+        // `(reserved - img.heightPt)` band-slack term, and an `NSTextAttachment`'s
+        // `bounds.origin.y` is its BOTTOM edge relative to the baseline — the same quantity
+        // and the same sign convention as `imgY` — so the engine's new term subtracts here
+        // exactly as it does there.
+        //
+        // Why it exists: WS7 does not start the raster flush with that baseline. Measured
+        // against three independent PRISTINE.EXE captures (PREVIEW, -SCREEN, -README, all
+        // embedding the same INSET/PIX/WORDSTAR.PIX), the picture's real top edge sits a
+        // further `0.25 * size` — the preceding line's own DESCENT — below it, because the
+        // picture cannot start until that line's full cell has cleared.
+        //
+        // Verified end to end rather than reasoned about: before this engine commit, the
+        // Printed PDF placed PREVIEW.WS's picture at `... 57.60 286.10 cm /Im0 Do`; after it,
+        // at `57.60 283.10` — three points lower, every other number identical, at this
+        // document's 12pt size. That prediction was written down BEFORE the engine change
+        // landed and then checked against it, which is what makes the sign here trustworthy:
+        // a raised-versus-lowered mistake in an attachment's `bounds.origin.y` is easy to
+        // make and looks plausible either way on screen.
+        //
+        // Printed only. Modern's inline `span.pix` call site passes no clearance, matching
+        // the engine, whose own Modern layout has no equivalent term.
+        attachment.bounds = CGRect(x: 0, y: reservedLeadPt - descentClearancePt,
+                                   width: max(0, widthPt), height: max(0, heightPt))
         let result = NSMutableAttributedString(attachment: attachment)
         result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
         return result
@@ -4637,7 +5121,8 @@ enum DocumentRenderer {
     private static func attributedRun(
         _ span: Span, font: NSFont, paragraph: NSParagraphStyle,
         fonts: [FontChange], defaultSize: Int, colourMap: [Int: Double] = [:],
-        disableKerning: Bool = false, useCourierPrime: Bool = false
+        disableKerning: Bool = false, useCourierPrime: Bool = false,
+        printedSupSub: Bool = false
     ) -> NSAttributedString {
         // Job 226: same lookup `resolvedFont` already needs — shared here so the LJ6DTP
         // character substitution below gates on the SAME font entry, not a second lookup.
@@ -4664,6 +5149,7 @@ enum DocumentRenderer {
         // `driverColourAttributes`'s own doc comment.
         attributes.merge(driverColourAttributes(span.colour, colourMap)) { _, new in new }
         if disableKerning { attributes[.kern] = printedNoKerning }
+        if disableKerning { attributes[.ligature] = printedNoLigatures }
         if span.styles.contains(.underline) {
             attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
         }
@@ -4701,9 +5187,43 @@ enum DocumentRenderer {
         if span.styles.contains(.sup) || span.styles.contains(.sub) {
             let base = attributes[.font] as? NSFont ?? font
             let isGraphic = text.contains(where: { graphicChars.contains($0) })
-            let (scaled, offset) = scriptMetrics(for: base, raise: span.styles.contains(.sup))
+            // MECHANISM G (engine commit f79ff29 / ctrl-kd f328838). Printed takes WordStar's
+            // own per-family x-height ratio; Native/Modern keep the flat Cocoa 2/3 (`nil`).
+            let isCourier = printedSupSub && printedFamilyIsCourier(entry)
+            let ratio: Double? = printedSupSub
+                ? (isCourier ? printedSupSubCourierRatio : printedSupSubDefaultRatio)
+                : nil
+            let (scaled, offset) = scriptMetrics(for: base, raise: span.styles.contains(.sup),
+                                                 ratio: ratio)
             attributes[.font] = scaled
             if !isGraphic { attributes[.baselineOffset] = offset }
+            // MECHANISM G, the PITCH half. WS7 reselects a NARROWER fixed-pitch cell for the
+            // span itself — the body cell scaled by `printedSupSubCellRatio` — where AppKit
+            // would simply advance at the smaller face's own natural 0.6em. The gap is small
+            // per character (0.1pt at a 12pt Courier body: WS7's 5.5pt cell against the 9pt
+            // reduced face's own 5.4pt) and CUMULATIVE, so every glyph after the span lands
+            // progressively wrong without it. Closed with `.kern`, the same attribute the
+            // rest of this renderer uses to put a run on WordStar's grid rather than the
+            // font's.
+            //
+            // `bodyPt` is the span's own UNREDUCED declared size — `base.pointSize`, before
+            // the reduction just applied — which is exactly what the engine passes
+            // (`seg.size`, not `sized()`'s return). Passing the reduced size instead is the
+            // double-narrowing bug mechanism G's own commit message calls out by name.
+            //
+            // Courier only: no other face has a captured sup/sub-in-fixed-pitch example in
+            // the corpus, and the engine's `supSubSpanPitch` declines to extrapolate. A
+            // proportional span never reaches this branch's kern anyway — it goes through
+            // `appendProportionalRun` — but the family test is kept explicit so the rule is
+            // the engine's, not an accident of routing.
+            if isCourier {
+                let bodyPt = Int(base.pointSize.rounded())
+                let bodyCell = printedSpanPitch(entry, bodyPt)
+                if bodyCell != 0 {
+                    let target = bodyCell * printedSupSubCellRatio
+                    attributes[.kern] = Float(target - Double(scaled.pointSize) * 0.6)
+                }
+            }
         }
         // Job 399 (Class 6 gate-debt): a footnote reference used to get an app-invented
         // `NSColor.darkGray` tint here ("reads as a reference without inventing a glyph") —
@@ -4913,8 +5433,19 @@ enum DocumentRenderer {
     /// at `base`'s own descender). Either edge, matched exactly rather than cleared with
     /// margin: the point is fitting inside a line built for `base`, not looking as large as
     /// possible while doing it.
-    static func scriptMetrics(for base: NSFont, raise: Bool) -> (font: NSFont, offset: CGFloat) {
-        let scaledSize = max(1, (base.pointSize * 2 / 3).rounded())
+    /// `ratio` (mechanism G, engine commit f79ff29): the Printed view passes the engine's own
+    /// per-family x-height ratio and takes the engine's own rounding with it — `sized()`
+    /// (`PDFWriter.swift`) reduces to `roundHalfToEven(size * ratio)`, a WHOLE point size,
+    /// because a PDF font size is what it emits. `nil` keeps this function's prior Cocoa
+    /// arithmetic exactly (flat 2/3, `.rounded()`), which is what every Native/Modern caller
+    /// passes: that is a RULED font-class divergence, not an oversight — Native substitutes
+    /// the user's own face for WordStar's, so a ratio measured off Courier's x-height has
+    /// nothing to be true about there. Recorded by name in the Native divergences file.
+    static func scriptMetrics(for base: NSFont, raise: Bool,
+                              ratio: Double? = nil) -> (font: NSFont, offset: CGFloat) {
+        let scaledSize: CGFloat = ratio.map {
+            CGFloat(max(1, printedRoundHalfToEven(Double(base.pointSize) * $0)))
+        } ?? max(1, (base.pointSize * 2 / 3).rounded())
         let scaled = NSFont(descriptor: base.fontDescriptor, size: scaledSize) ?? base
         let offset = raise
             ? base.ascender - scaled.ascender

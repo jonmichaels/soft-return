@@ -3,8 +3,8 @@ import Testing
 
 /// Named-test ports for the HTML and RTF emitters, plus coverage for behavior the 33
 /// job-009 vectors don't discriminate. Every expected value below was produced by running
-/// the Python reference (ctrl-kd 1.1.4) locally — same ground truth as the vectors, just
-/// for inputs the vector set doesn't reach.
+/// the Python reference (ctrl-kd 1.1.4) locally — the same cross-engine recording
+/// (ctrl-kd) the vectors are, just for inputs the vector set doesn't reach.
 
 // MARK: - ports of the Python named tests
 

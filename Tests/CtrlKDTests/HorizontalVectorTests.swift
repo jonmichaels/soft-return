@@ -210,7 +210,12 @@ private func pdfOpsTriples(_ pdf: [UInt8], limit: Int) -> [[String]] {
     for v in file.pdfCases {
         let label = "horizontal pdf vector \(v.name)"
         let doc = parseWS(bytesFromHex(v.inputHex))
-        let pdf = emitPDF(doc, mode: .printed)
+        // pageNumbers: .off -- these vectors pin GEOMETRY (`.cw`/`.po` placement of the
+        // first few real content ops), not page numbers; none of these fixtures touch
+        // .pn/.pg/.op, so the stock automatic number (the real `.auto` default since
+        // 2026-09-07, ws7-prints/v3 finding #2) would otherwise BE `ops_first4`'s leading
+        // triple instead of the geometry this vector actually records.
+        let pdf = emitPDF(doc, mode: .printed, options: EmitOptions(pageNumbers: .off))
         let got = pdfOpsTriples(pdf, limit: v.opsFirst4.count)
         #expect(got == v.opsFirst4, "\(label): ops_first4")
     }

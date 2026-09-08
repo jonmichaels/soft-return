@@ -185,11 +185,14 @@ public struct EmitOptions: Hashable, Sendable {
     /// `.auto` (DEFAULT): the document's own dot commands decide -- `.pn` (ANY
     /// occurrence) or `.pg` turns it ON, `.op` turns it OFF, exactly like real WordStar
     /// (measured, dosbox-x, 16 probes -- see `pgnumCheckpoints`/`autoPageNumberXPt` in
-    /// PDFLayout.swift/PDFWriter.swift for the full ground truth). A document that never
-    /// touches any of the four gets no number, byte-identical to before this option
-    /// existed (109/110 corpus documents; the ctrl-kd sweep). `.on` forces stock default
-    /// numbering (bottom row a footer would use; `.pc` repositions it) even on a silent
-    /// document. `.off` suppresses it unconditionally. A declared footer (even with no
+    /// PDFLayout.swift/PDFWriter.swift for the full ground truth). REVERSED 2026-09-07
+    /// (ported from ctrl-kd b6d5d03, ws7-prints/v3 finding #2): a document that never
+    /// touches any of the four now gets the STOCK automatic number, same as `.on` --
+    /// the earlier "no number" default was measured against Robert J. Sawyer's own
+    /// WSCHANGE-customized install, not stock WS7 (see `pgnumCheckpoints`'s own
+    /// docstring for the full trace). `.on` forces stock default numbering (bottom row
+    /// a footer would use; `.pc` repositions it) even on a document that explicitly
+    /// turned it off with `.op`. `.off` suppresses it unconditionally. A declared footer (even with no
     /// `#` of its own) always pre-empts it, in every mode (WSFORMAT.WS's own text:
     /// "active only when the footers are not in use") -- a header does not. `--headers
     /// off`'s own documented scope ("headers, footers, and page numbers") reaches this

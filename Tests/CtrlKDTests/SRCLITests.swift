@@ -268,7 +268,10 @@ private func noFSEnvironment() -> CLIEnvironment {
         options.files = ["PAPER.WS"]
         return options
     }()))
-    guard case .run(let options) = command else { return }
+    guard case .run(let options) = command else {
+        Issue.record("expected a run, got \(command)")
+        return
+    }
     #expect(options.formats == ["rtf"])
     #expect(options.mode == .modern)
 }
@@ -429,13 +432,13 @@ private func noFSEnvironment() -> CLIEnvironment {
     // This repo never carries a dev stamp (DevStamp.swift is nil here; the app's build
     // script injects real values into its own checkout) — so the committed shape is the
     // clean release string, and the dev shape is exercised through the split-out helper.
-    #expect(versionLine(devDate: srDevDate) == "sr v4.0.2")
-    #expect(versionLine(devDate: "2026-08-14") == "sr v4.0.2 (dev 2026-08-14)")
+    #expect(versionLine(devDate: srDevDate) == "sr v4.0.3")
+    #expect(versionLine(devDate: "2026-08-14") == "sr v4.0.3 (dev 2026-08-14)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
     #expect(recorder.out == [versionOutput])
-    #expect(versionOutput.hasSuffix("sr v4.0.2"))
+    #expect(versionOutput.hasSuffix("sr v4.0.3"))
     #expect(versionOutput.contains("_____       ______     ____"))  // the SOFT RETURN Slant banner leads
     #expect(recorder.written.isEmpty)
 
@@ -957,17 +960,71 @@ private func noFSEnvironment() -> CLIEnvironment {
 /// `run-text-not-utf8` and `run-data-truncated`: every assertion on written output was a
 /// `contains` or a prefix, so truncating either arm of the `EmitOutput` switch slipped
 /// through. What the CLI writes must be exactly what the library produced — no more, no less.
+///
+/// FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version
+/// computed "expected" by calling `convert`/`convertData` — the exact same `emitter.emit`
+/// call `run()` makes internally — so a bug that corrupted the emitter's own output would
+/// corrupt both sides identically and this test could never catch it; only a CLI-plumbing
+/// truncation (impossible against the in-memory `Recorder`, which just stores whatever
+/// bytes it's handed — see its doc comment) could ever fail it. Replaced with independent
+/// expectations: the markdown is hand-derived from `makeProse()`'s own literal construction
+/// (55 x's + " words" + 50 y's + " continuing" + "ends here." joined by the modern
+/// reflow's soft-break-to-space rule, blank line between paragraphs — no call to `convert`
+/// anywhere in this test), and the PDF is checked against a byte-for-byte literal captured
+/// once from `convertData` on 2026-09-06 (a real recorded oracle, not a re-derivation) plus
+/// PDF-format structural facts (`%PDF-` header, `%%EOF` trailer) that are true of the format
+/// itself, independent of this emitter.
 @Test func writtenBytesAreExactlyTheLibrarysOutput() throws {
     let recorder = Recorder(files: ["/archive/PAPER.WS": makeProse()])
     #expect(run(["-t", "markdown", "-t", "pdf", "-d", "/out", "/archive/PAPER.WS"],
                 environment: recorder.environment) == ExitStatus.ok)
 
-    let markdown = try convert(makeProse(), to: "markdown", options: EmitOptions(title: "PAPER"))
-    #expect(recorder.written["/out/PAPER.md"] == Array(markdown.utf8))
+    // Hand-derived from makeProse()'s own byte construction (Fixtures.swift), not from
+    // calling convert(): modern markdown reflow joins soft-wrapped lines with a space and
+    // separates paragraphs with a blank line.
+    let expectedMarkdown = String(repeating: "x", count: 55) + " words "
+        + String(repeating: "y", count: 50) + " continuing ends here.\n\nSecond paragraph.\n"
+    #expect(recorder.written["/out/PAPER.md"] == Array(expectedMarkdown.utf8))
 
-    let pdf = try convertData(makeProse(), to: "pdf", options: EmitOptions(title: "PAPER"))
-    #expect(recorder.written["/out/PAPER.pdf"] == pdf)
-    #expect(pdf.count > 400, "the comparison is only worth something if the PDF has content")
+    // Recorded literal (planning #199): captured once from `convertData(makeProse(), to:
+    // "pdf", options: EmitOptions(title: "PAPER"))` on 2026-09-06. A future divergence is a
+    // reviewed diff to this literal, never a silent pass.
+    let expectedPDFBase64 = [
+        "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIg",
+        "MCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFs4IDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBv",
+        "YmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvQ291cmllciAvRW5jb2Rp",
+        "bmcgL1dpbkFuc2lFbmNvZGluZyA+PgplbmRvYmoKNCAwIG9iago8PCAvVHlwZSAvRm9udCAvU3VidHlw",
+        "ZSAvVHlwZTEgL0Jhc2VGb250IC9Db3VyaWVyLUJvbGQgL0VuY29kaW5nIC9XaW5BbnNpRW5jb2Rpbmcg",
+        "Pj4KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAv",
+        "Q291cmllci1PYmxpcXVlIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nID4+CmVuZG9iago2IDAgb2Jq",
+        "Cjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0NvdXJpZXItQm9sZE9ibGlx",
+        "dWUgL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcgPj4KZW5kb2JqCjcgMCBvYmoKPDwgL1R5cGUgL0Zv",
+        "bnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvVGltZXMtUm9tYW4gL0VuY29kaW5nIC9XaW5BbnNp",
+        "RW5jb2RpbmcgPj4KZW5kb2JqCjggMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVk",
+        "aWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSAzIDAgUiAvRjIgNCAw",
+        "IFIgL0YzIDUgMCBSIC9GNCA2IDAgUiAvRjUgNyAwIFIgPj4gPj4gL0NvbnRlbnRzIDkgMCBSID4+CmVu",
+        "ZG9iago5IDAgb2JqCjw8IC9MZW5ndGggNDc2ID4+CnN0cmVhbQpCVCAvRjUgMTQgVGYgMCBUcyA3Mi4w",
+        "IDcwMy4yIFRkICh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4",
+        "eHh4eHh4KSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA0NjAuNSA3MDMuMiBUZCAod29yZHMpIFRqIEVU",
+        "CkJUIC9GNSAxNCBUZiAwIFRzIDcyLjAgNjg2LjQgVGQgKHl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5",
+        "eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5KSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA0MjUuNSA2ODYu",
+        "NCBUZCAoY29udGludWluZykgVGogRVQKQlQgL0Y1IDE0IFRmIDAgVHMgNDg4LjkgNjg2LjQgVGQgKGVu",
+        "ZHMpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRzIDcyLjAgNjY5LjYgVGQgKGhlcmUuKSBUaiBFVApCVCAv",
+        "RjUgMTQgVGYgMCBUcyA3Mi4wIDYzNi4wIFRkIChTZWNvbmQpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRz",
+        "IDExNi43IDYzNi4wIFRkIChwYXJhZ3JhcGguKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCAx",
+        "MAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBu",
+        "IAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyMTAgMDAwMDAgbiAKMDAwMDAwMDMxMCAwMDAwMCBu",
+        "IAowMDAwMDAwNDEzIDAwMDAwIG4gCjAwMDAwMDA1MjAgMDAwMDAgbiAKMDAwMDAwMDYxOSAwMDAwMCBu",
+        "IAowMDAwMDAwNzg1IDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgMTAgL1Jvb3QgMSAwIFIgPj4Kc3Rh",
+        "cnR4cmVmCjEzMTIKJSVFT0YK",
+    ].joined()
+    let expectedPDF = try #require(Data(base64Encoded: expectedPDFBase64))
+    #expect(recorder.written["/out/PAPER.pdf"] == Array(expectedPDF))
+    let written = recorder.written["/out/PAPER.pdf"] ?? []
+    #expect(String(decoding: written.prefix(5), as: UTF8.self) == "%PDF-",
+             "structural fact about the PDF format, independent of this emitter")
+    #expect(String(decoding: written.suffix(6), as: UTF8.self) == "%%EOF\n",
+             "the trailer is the last thing written -- a truncation would drop it first")
 }
 
 // MARK: - Path handling

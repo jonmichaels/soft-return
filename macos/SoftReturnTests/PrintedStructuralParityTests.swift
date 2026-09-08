@@ -4,6 +4,14 @@ import Foundation
 import Testing
 @testable import SoftReturn
 
+/// NOTE (2026-09-07): `graphicChars` must now be QUALIFIED in any test file that imports
+/// both modules. There are two sets with that name — `SoftReturn.graphicChars`
+/// (`Rendering/PrintedVectorGraphics.swift`, the characters the APP draws as vectors) and
+/// `CtrlKD.graphicChars` (`PDFDriverLJ6DTP.swift`, the ones the ENGINE draws as vectors) —
+/// and the engine's became public in sr 506b2e0, so a bare name that used to resolve to the
+/// app's is ambiguous. Every bare use in this file meant the APP's set and is qualified as
+/// such; nothing about what these tests assert has changed.
+
 /// Job 201 (b10 leg 3): the PERMANENT structural-parity gate between the app's native Printed
 /// renderer (`DocumentRenderer`, AppKit/`NSTextView`) and the engine's real PDF output
 /// (`emitPDF`, `CtrlKD`) — Jon's ruling that the native renderer stays native forever, and that
@@ -110,7 +118,12 @@ enum EngineTruth {
         /// `PDFWriter.swift`'s `splitIndent`, cited in this job's report), so the position of
         /// operator 0 alone (always `metrics.left`, indent or not) cannot distinguish "centered
         /// correctly" from "centered on the wrong grid."
-        let x: Double
+        ///
+        /// `var`, not `let`, for the same reason `size`/`gray` below are: an oversized or
+        /// overprint-chain line's real ink is drawn by a PASS, not by its (blank) fragment in
+        /// the main flow, so `remapToRawIndices` corrects this off the pass — see that
+        /// function's own `line.x = textLeft + selfInk.inkOffset`.
+        var x: Double
         /// Baseline, measured DOWN from the paper's top edge — the app's own convention
         /// (`GeometryOracleTests.swift`'s `Line.baseline`), so the two sides compare directly.
         /// PDF's own `Td` y is UP from the bottom; converted via `pageHeight - pdfY`.
@@ -225,6 +238,18 @@ enum EngineTruth {
         let size: Double
         let gray: Double
         let isWhitespaceOnly: Bool
+        /// Count of literal spaces this op's own string STARTS with.
+        ///
+        /// A body line's indent usually is not a separate op: `pageStream` emits the whole
+        /// line, leading spaces included, as ONE `Tj` — POWERUSE.WS page 3 lands as
+        /// `57.6 684.0 (     With the release of updated versions of) Tj`. So the op's `x` is
+        /// the line's DRAW ORIGIN, and its ink starts this many columns further right.
+        let leadingSpaces: Int
+
+        /// Where this op's first visible glyph actually sits. Courier advances 0.6em, so a
+        /// column is `size * 0.6` — the same figure `PrintedPageMetrics.charWidth` exposes
+        /// and the engine's own `spanTarget` multiplies by.
+        var inkX: Double { x + Double(leadingSpaces) * size * 0.6 }
     }
 
     /// One `re f` vector fill op, in PDF's own bottom-up coordinates (converted to
@@ -299,8 +324,9 @@ enum EngineTruth {
                 case "Tj":
                     if let td = pendingTd, let bytes = pendingStr {
                         let isWS = bytes.isEmpty || bytes.allSatisfy { $0 == 0x20 }
+                        let lead = bytes.prefix { $0 == 0x20 }.count
                         text.append(TextOp(x: td.x, y: td.y, size: curSize, gray: gray,
-                                           isWhitespaceOnly: isWS))
+                                           isWhitespaceOnly: isWS, leadingSpaces: lead))
                     }
                     pendingStr = nil
                     nums.removeAll()
@@ -453,11 +479,16 @@ enum EngineTruth {
             // formula `DocumentRenderer.runningLines` (`DocumentRenderer.swift`) already
             // ports for its own production rendering.
             var pageMt = doc.page?.mtLines ?? 3.0
-            var pageMtSource = doc.page?.mtSource
             var pageMb = doc.page?.mbLines ?? 8.0
-            if let mt = pageLines.mtLines { pageMt = mt; pageMtSource = .file }
+            if let mt = pageLines.mtLines { pageMt = mt }
             if let mb = pageLines.mbLines { pageMb = mb }
-            let hm = pageMtSource == .file ? (doc.page?.hmLines ?? 2.0) : 0.0
+            // MECHANISM W (engine commit 53d3114): `.hm` participates UNCONDITIONALLY. The
+            // `pageMtSource == .file` gate that stood here mirrored the engine's own former
+            // rule, which was fit against Sawyer's WSCHANGE-customized install; a factory
+            // recapture settled it. Left stale, this harness would compute a headBase the
+            // engine no longer uses and mis-locate every header row on an all-default
+            // document — reporting a divergence that is the harness's own.
+            let hm = doc.page?.hmLines ?? 2.0
             let topHead = Double(pageLines.headers.keys.max() ?? 1)
             let headBase = max(0.0, pageMt - hm - topHead)
             let plLines = doc.page?.plLines ?? 66.0
@@ -472,21 +503,93 @@ enum EngineTruth {
             // ascending (`runningOps`'s two `for n in ...keys.sorted()` loops,
             // `PDFWriter.swift:229`/`234`). `#` is substituted with the real page number
             // (`runningOps`'s `render(_:)`, `PDFWriter.swift:198-205`).
+            // ONE running line can emit MORE THAN ONE `Tj`, so it can consume more than one
+            // op. `hfLineOps`'s run-by-run path splits a line at its style toggles and, for a
+            // proportional face, emits the LEADING WHITESPACE as its own op before the text:
+            // -README.WS's own `.h1` lands as `57.6 780.0 (40 spaces) Tj` followed by
+            // `352.8 780.0 (WordStar 7.0 Archive / 2) Tj`, two ops at the same baseline.
+            //
+            // Taking only the first left this function one op behind for the rest of the
+            // page, and reported the header's position as the x of its own indent (57.6)
+            // rather than of its ink (352.8) — which is not what the app draws either: the
+            // app skips that whitespace run and records its width as `RunningLine
+            // .leadingOffset`, drawing one line at the ink's x. So the row's own first
+            // VISIBLE op is the comparable position, and every op on the row belongs to it.
+            //
+            // Rows are identified by a shared baseline rather than by counting expected runs:
+            // the split depends on the line's own toggles and font block, which this harness
+            // deliberately does not model (it reads the real bytes instead).
+            func takeRunningRow() -> TextOp {
+                let first = ops.removeFirst()
+                var row = [first]
+                while let next = ops.first, abs(next.y - first.y) < 0.01 {
+                    row.append(ops.removeFirst())
+                }
+                return row.first { !$0.isWhitespaceOnly } ?? first
+            }
+
             func consumeRunning(_ dict: [Int: String], kind: StructuralLine.Kind) {
                 let lead = kind == .header ? Double(PDFMetrics.lead) : metrics.lead
                 let base = kind == .header ? headBase : footLine
                 for n in dict.keys.sorted() {
                     guard let text = dict[n], !text.isEmpty, !ops.isEmpty else { continue }
+                    // A running line made ENTIRELY of print-control bytes produces no `Tj` at
+                    // all, so it must not consume an op here. `hfLineOps` sends any line
+                    // carrying a control byte down its run-by-run path (`entry == nil,
+                    // res == nil || !hasControlByte` is false once `res` is non-nil, which it
+                    // always is for Printed), and that path emits nothing for a line with no
+                    // visible runs left once the toggles are consumed.
+                    //
+                    // This was a PRE-EXISTING harness defect, exposed rather than caused by
+                    // the automatic page number below. FORMFEED.WS's `.h1` is two `\u{0F}`
+                    // bytes and nothing else: the harness consumed the page's FIRST op for
+                    // it, which on those pages is really the automatic number, and every
+                    // subsequent op on the page was then read one slot early. It stayed
+                    // invisible while the automatic number went unconsumed at the END of the
+                    // list — one spurious take at the front, one missing take at the back,
+                    // cancelling in the count. Consuming the number correctly is what made
+                    // the front-end error visible.
+                    guard text.unicodeScalars.contains(where: { $0.value >= 0x20 }) else { continue }
                     guard runningLineFits(base: base, lead: lead, n: n) else { continue }
-                    let op = ops.removeFirst()
+                    let op = takeRunningRow()
                     let rendered = text.replacingOccurrences(of: "#", with: String(startNo + i))
-                    page.running.append(StructuralLine(text: rendered, x: op.x,
+                    page.running.append(StructuralLine(text: rendered, x: op.inkX,
                                                        yFromTop: pageHeight - op.y, kind: kind,
                                                        size: op.size, gray: op.gray))
                 }
             }
             consumeRunning(pageLines.headers, kind: .header)
             consumeRunning(pageLines.footers, kind: .footer)
+
+            // PAGE NUMBERING IS ON BY DEFAULT (engine commit 5756263): after the two running
+            // loops, `runningOps` emits WordStar's own AUTOMATIC page number — a bare
+            // Courier `Tj` on the row a footer line 1 would use, pre-empted by any real
+            // footer ("active only when the footers are not in use"). It is a running op like
+            // the others and comes LAST, so it must be consumed here.
+            //
+            // Not consuming it was a REAL harness defect, not a cosmetic one: this function
+            // hands the remaining `ops` on to the body-line reconstruction below, so an
+            // unconsumed running op would be read as the page's first body line and shift
+            // every line after it. It was invisible only while the app emitted no automatic
+            // number either, so both sides were missing the same row.
+            //
+            // The ON/OFF decision reuses `DocumentRenderer.printedAutoPageNumberOn` rather
+            // than restating it — one port of `pgnumCheckpoints`/`pgnumAt`, exercised by both
+            // the thing under test and the truth it is measured against. That is safe HERE,
+            // where the quantity is "which WordStar dot commands are in force", and is the
+            // same reasoning this harness already uses to reach `printedMetrics` instead of
+            // re-deriving margins: what is being compared is the rendered GEOMETRY, which
+            // this file still derives independently from the real PDF ops.
+            let footerInUse = pageLines.footers.values.contains { !$0.isEmpty }
+            if !footerInUse,
+               DocumentRenderer.printedAutoPageNumberOn(page: pageLines, doc: doc),
+               runningLineFits(base: footLine, lead: metrics.lead, n: 1),
+               !ops.isEmpty {
+                let op = takeRunningRow()
+                page.running.append(StructuralLine(text: String(startNo + i), x: op.inkX,
+                                                   yFromTop: pageHeight - op.y, kind: .footer,
+                                                   size: op.size, gray: op.gray))
+            }
 
             // Job 426: a page whose OWN `.mt`/`.mb` differs from the document's global pair
             // (`Page.mtLines`/`mbLines`, non-nil — "Finding 3", b26-print-fidelity-2, the
@@ -638,7 +741,7 @@ enum EngineTruth {
                 // performs for every other still-unconsumed group. `LAYOUT.WS`/every other
                 // fixture's ordinary prose lines are untouched (their own text always contains
                 // a real character).
-                let ownsRealText = text.contains { !$0.isWhitespace && !graphicChars.contains($0) }
+                let ownsRealText = text.contains { !$0.isWhitespace && !SoftReturn.graphicChars.contains($0) }
 
                 if ownsRealText, groupIdx < groups.count, abs(groups[groupIdx].y - y) < 0.15 {
                     let group = groups[groupIdx]
@@ -664,7 +767,21 @@ enum EngineTruth {
                     // "black shadow-copy run at identical Y" (the job brief's hypothesis) was
                     // found in the real bytes at any of the 4 positions — confirmed by direct
                     // inspection of `emitPDF`'s own content stream (this job's report).
-                    page.body[chainStart] = StructuralLine(text: text, x: contentOp.x,
+                    // `inkX`, not `x` — the app side reports the position of the first
+                    // GLYPH (`AppOutput`'s `textFrame.origin.x + fragment.origin.x + loc.x`,
+                    // straight from the layout manager), so the engine side has to name the
+                    // same thing. `contentOp` already skips an op that is ENTIRELY
+                    // whitespace; what was missing is the indent held INSIDE an op that also
+                    // carries text, which is the ordinary shape — `pageStream` emits a body
+                    // line as one `Tj` with its leading spaces in the string.
+                    //
+                    // This is what produced the bulk of this suite's known-issue rows, and it
+                    // was a measurement artefact rather than a renderer defect: every delta
+                    // was an exact multiple of the 7.2pt Courier column (5 columns on
+                    // POWERUSE, 1 on -README's `.la` table, 3 on CONVERT), because it was
+                    // literally the width of an indent one side counted and the other did
+                    // not. Both pages draw the same spaces followed by the same words.
+                    page.body[chainStart] = StructuralLine(text: text, x: contentOp.inkX,
                                                   yFromTop: pageHeight - y, kind: .body,
                                                   size: contentOp.size, gray: contentOp.gray)
                 }
@@ -722,7 +839,22 @@ extension Oracle {
                     let ch = page.manager.characterIndexForGlyph(at: g)
                     if ch < text.length {
                         let scalarValue = text.character(at: ch)
-                        if let scalar = Unicode.Scalar(scalarValue), !CharacterSet.whitespaces.contains(scalar) {
+                        // Skips leading GRAPHIC characters as well as whitespace, because the
+                        // engine's text ops begin after them. A cp437 block/box character is
+                        // drawn by the engine as a VECTOR FILL (`graphicOps`), never as a
+                        // `Tj`, while the app draws it as an ordinary glyph in the same run as
+                        // the text — so the engine's first text op for `"■ Iosevka Fixed"` is
+                        // `72.0 540.0 (Iosevka Fixed)`, two columns in, and the app's first
+                        // glyph is the bullet itself at 57.6. Both put the bullet and the
+                        // words in the same places; only the two readings differed.
+                        //
+                        // A line that is ENTIRELY graphics now finds no content glyph and is
+                        // left unrecorded, which is symmetric with `EngineTruth`'s own
+                        // `ownsRealText` gate — it excludes graphic characters by the same
+                        // rule, so neither side records a position for such a line.
+                        let isGraphic = Unicode.Scalar(scalarValue)
+                            .map { AppOutput.charactersTheEngineStrokesRatherThanSets.contains(Character($0)) } ?? false
+                        if let scalar = Unicode.Scalar(scalarValue), !CharacterSet.whitespaces.contains(scalar), !isGraphic {
                             let loc = page.manager.location(forGlyphAt: g)
                             contentX = textFrame.origin.x + fragment.origin.x + loc.x
                             break
@@ -779,7 +911,47 @@ enum AppOutput {
     /// `structuralBodyLines` reads. `nil` when the pass has no visible ink at all (should not
     /// happen for a real pass — every self-pass/overprint-pass exists precisely because there
     /// IS content to draw).
-    private struct PassInk { let text: String; let size: Double; let gray: Double }
+    private struct PassInk {
+        let text: String
+        let size: Double
+        let gray: Double
+        /// Distance from the pass's own draw origin to its first visible glyph — the width of
+        /// whatever leading indent the pass carries, measured with the pass's OWN attributes.
+        ///
+        /// `drawOversizedSelfPasses` lays a pass out in isolation and draws it at the
+        /// fragment's origin, i.e. the text container's left edge, so this plus
+        /// `textFrame.origin.x` is where the ink really lands. Without it, an oversized line's
+        /// x was read off the BLANK placeholder fragment `renderPrinted` leaves in the main
+        /// flow (`let content = oversized ? PageLine([], soft: base.soft) : base`), whose only
+        /// glyph is `attributedLine`'s single-space filler — which is why every oversized
+        /// title in the corpus reported the identical x of one space past the margin.
+        let inkOffset: Double
+    }
+
+    /// Width of the pass's leading indent: everything before its first glyph that is neither
+    /// whitespace nor a cp437 graphic character, matching the rule the body-line scan uses
+    /// (the engine draws a graphic as a vector fill, never as text, so its own text ops start
+    /// after one). Falls back to the first non-whitespace glyph when a pass is ALL graphics,
+    /// so a purely graphical pass still reports a position rather than none.
+    private static func passInkOffset(_ source: NSAttributedString) -> Double {
+        let string = source.string as NSString
+        func offset(skippingGraphics: Bool) -> Int? {
+            var index = 0
+            while index < source.length {
+                if let scalar = Unicode.Scalar(string.character(at: index)) {
+                    let isGraphic = charactersTheEngineStrokesRatherThanSets.contains(Character(scalar))
+                    if !CharacterSet.whitespaces.contains(scalar), !(skippingGraphics && isGraphic) {
+                        return index
+                    }
+                }
+                index += 1
+            }
+            return nil
+        }
+        guard let index = offset(skippingGraphics: true) ?? offset(skippingGraphics: false),
+              index > 0 else { return 0 }
+        return Double(source.attributedSubstring(from: NSRange(location: 0, length: index)).size().width)
+    }
 
     private static func firstVisibleInk(_ source: NSAttributedString) -> PassInk? {
         guard source.length > 0 else { return nil }
@@ -791,7 +963,9 @@ enum AppOutput {
                 let attrs = source.attributes(at: index, effectiveRange: nil)
                 let size = Double((attrs[.font] as? NSFont)?.pointSize ?? 0)
                 let color = (attrs[.foregroundColor] as? NSColor)?.usingColorSpace(.deviceGray)
-                return PassInk(text: source.string, size: size, gray: Double(color?.whiteComponent ?? 0))
+                return PassInk(text: source.string, size: size,
+                               gray: Double(color?.whiteComponent ?? 0),
+                               inkOffset: passInkOffset(source))
             }
             index += 1
         }
@@ -805,7 +979,8 @@ enum AppOutput {
     /// fragment's own `1 + count`.
     static func remapToRawIndices(
         _ body: [Int: EngineTruth.StructuralLine], overprintCounts: [Int],
-        overprintPasses: [[NSAttributedString]] = [], oversizedSelfPasses: [NSAttributedString?] = []
+        overprintPasses: [[NSAttributedString]] = [], oversizedSelfPasses: [NSAttributedString?] = [],
+        textLeft: Double = 0
     ) -> [Int: EngineTruth.StructuralLine] {
         var raw = 0
         var out: [Int: EngineTruth.StructuralLine] = [:]
@@ -835,10 +1010,24 @@ enum AppOutput {
                     // size when the base's own text has none of its own (the same "ask the
                     // real render path" discipline the `selfInk` branch below already uses) —
                     // otherwise the base's own measured text/size (already correct) stays.
-                    let baseOwnsRealText = line.text.contains { !$0.isWhitespace && !graphicChars.contains($0) }
+                    let baseOwnsRealText = line.text.contains { !$0.isWhitespace && !SoftReturn.graphicChars.contains($0) }
                     if !baseOwnsRealText {
                         line.text = chainInk.text.trimmingCharacters(in: .whitespacesAndNewlines)
                         line.size = chainInk.size
+                        // X moves with the text, and ONLY when the text does. An overprint
+                        // chain whose BASE line owns real content keeps its own measured x:
+                        // the engine's group starts with that base line's own op, so the
+                        // comparable position is the base's, not the chain's last pass.
+                        //
+                        // Taking it unconditionally was a regression I introduced with the
+                        // self-pass fix. FORMFEED.WS page 1 is the proving case — its opening
+                        // pair is a byline overprinted with a right-flush word count, so the
+                        // chain's last pass is "700 words" at x 496.8 while the line's real
+                        // ink is "Copyright 1990 by Robert J. Sawyer" at 21.6. Five rows of
+                        // that document reported the app hundreds of points right of the
+                        // engine, all of them the harness reading the wrong member of the
+                        // chain.
+                        line.x = textLeft + chainInk.inkOffset
                     }
                     line.gray = chainInk.gray
                 } else if let selfInk = selfPass.flatMap(firstVisibleInk) {
@@ -855,6 +1044,13 @@ enum AppOutput {
                     line.text = selfInk.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     line.size = selfInk.size
                     line.gray = selfInk.gray
+                    // ...and X, which was the one field still coming off the blank
+                    // placeholder. This is what put every oversized title at the identical
+                    // "one space past the margin" position (LYING/TESTING/WARPRAYR page 1 all
+                    // read 64.80) while the engine centred them 110-170pt in — the app was
+                    // painting them correctly all along, through a pass this reader never
+                    // measured.
+                    line.x = textLeft + selfInk.inkOffset
                 }
                 out[raw] = line
             }
@@ -923,6 +1119,38 @@ enum AppOutput {
     /// not laid out, so there is no AppKit layout DECISION to ask about — the formula and the
     /// draw position are the same value by construction, unlike body text (which genuinely
     /// needs `Oracle`'s "ask the layout manager what it did" discipline).
+    /// Characters the ENGINE draws as vector geometry rather than emitting a text op for.
+    ///
+    /// This is deliberately wider than `graphicChars`, and the difference is a ruling rather
+    /// than an oversight. `graphicChars` is the set the APP draws as vectors. Job 495 ruled
+    /// that LJ6DTP's rounded Univers corners are NOT in it: the app substitutes `♥♦♣♠` to the
+    /// real Unicode arcs `╭╮╰╯` and draws them as ordinary TEXT, because most system fonts
+    /// carry those glyphs directly and they are a closer visual match to the engine's own
+    /// rounded join than the sharp box corners the earlier port produced.
+    ///
+    /// The engine still strokes them (`arcCorners`/`graphicOps`, `PDFDriverLJ6DTP.swift`) and
+    /// emits no text op, so on LJ6DTP.WS page 3 its first text op for
+    /// `"     ♥        upper-left rou"` is `194.4 622.0 (upper-left)`, while the app's first
+    /// visible glyph is the arc itself at 86.4 — a flat 108pt on all four corner rows. Both
+    /// renderings are correct under the ruling; only the two readings disagreed about where
+    /// comparable text begins.
+    ///
+    /// So the comparison skips them, exactly as it already skips cp437 blocks. Keyed on the
+    /// SUBSTITUTED forms because that substitution runs before anything measures the line.
+    static let charactersTheEngineStrokesRatherThanSets: Set<Character> =
+        SoftReturn.graphicChars.union(printedLJ6DTPCharSubstUnivers.values)
+
+    /// Width of the literal leading spaces a running line still carries in its own text —
+    /// the indent a fixed-pitch line draws for itself. Zero for a line with no leading space,
+    /// and for a proportional line whose indent was skipped into `RunningLine.leadingOffset`
+    /// instead (those characters are not in `text` at all).
+    static func leadingSpaceWidth(of text: NSAttributedString) -> Double {
+        let count = text.string.prefix(while: { $0 == " " }).count
+        guard count > 0 else { return 0 }
+        let prefix = text.attributedSubstring(from: NSRange(location: 0, length: count))
+        return Double(prefix.size().width)
+    }
+
     @MainActor
     static func structuralPages(for state: DocumentState) -> [(running: [EngineTruth.StructuralLine], body: [Int: EngineTruth.StructuralLine], vectors: [EngineTruth.GraphicBox])] {
         let (rendered, _, pages) = Oracle.layOut(state)
@@ -935,7 +1163,30 @@ enum AppOutput {
                     let gray = Double(color?.whiteComponent ?? 0)
                     return EngineTruth.StructuralLine(
                         text: $0.text.string,
-                        x: Double(rendered.textFrame.origin.x) + $0.leadingOffset,
+                        // The x compared on both sides is the position of the line's FIRST
+                        // VISIBLE GLYPH — its ink — not its draw origin. That is the only
+                        // quantity the two sides express the same way, because a running
+                        // line's leading indent reaches the page by two different routes:
+                        //
+                        //   * `pageLeftOffset` — mechanism O's per-page `.po`, and the
+                        //     automatic page number's own absolute `.po`/`.pc` anchor.
+                        //     `PagedDocumentView.drawRunningLines` adds this to every running
+                        //     line's x, so a reader omitting it is not reading what the app
+                        //     paints.
+                        //   * `leadingOffset` — a PROPORTIONAL line's leading whitespace,
+                        //     which `styledLine` skips drawing and records as a width instead
+                        //     (job 489).
+                        //   * literal leading spaces still in `text` — a FIXED-PITCH line
+                        //     draws its own indent, so the ink starts that far past the
+                        //     origin with nothing recorded anywhere. -README.WS's own `.h1`
+                        //     is 41 such spaces: engine ink at 352.8, draw origin 57.6.
+                        //
+                        // Only the third was missing, and it is why this measured the app's
+                        // header at its indent rather than at its text. Measured with the
+                        // line's own attributes, the same way `styledLine` measures the runs
+                        // it skips.
+                        x: Double(rendered.textFrame.origin.x) + $0.leadingOffset + $0.pageLeftOffset
+                            + Self.leadingSpaceWidth(of: $0.text),
                         yFromTop: $0.baselineFromTop,
                         kind: $0.kind == .header ? .header : .footer,
                         size: size, gray: gray)
@@ -1084,7 +1335,8 @@ enum AppOutput {
                 overprintPasses: rendered.overprintPasses.indices.contains(pageIndex)
                     ? rendered.overprintPasses[pageIndex] : [],
                 oversizedSelfPasses: rendered.oversizedSelfPasses.indices.contains(pageIndex)
-                    ? rendered.oversizedSelfPasses[pageIndex] : [])
+                    ? rendered.oversizedSelfPasses[pageIndex] : [],
+                textLeft: Double(pageTextFrame.origin.x))
             return (running: running, body: rawBody, vectors: vectors)
         }
     }
@@ -1092,7 +1344,16 @@ enum AppOutput {
 
 // MARK: - The gate
 
-@Suite struct PrintedStructuralParityTests {
+/// `.serialized` — these lay out HUNDREDS of documents through AppKit on the main actor.
+///
+/// Run alone, the geometry suite finishes in 185 seconds. Inside a full armed run the SAME
+/// tests over the SAME corpus did not finish in 14+ MINUTES, and a previous full run had to
+/// be killed after 35. That ~40x gap is not the tests' own cost — it is what happens when
+/// several corpus-wide `@MainActor` layout walks are scheduled concurrently with each other
+/// and with the suites that drive real windows, QuickLook and the UI target. Serializing
+/// them costs nothing when they are the only thing running and stops the full suite from
+/// thrashing.
+@Suite(.serialized) struct PrintedStructuralParityTests {
     /// Job 535: routes through `PrivateCorpusSupport` — see that file's own doc comment.
     static var ws7Fixtures: [String] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: PrivateCorpusSupport.ws7Directory.path)) ?? []

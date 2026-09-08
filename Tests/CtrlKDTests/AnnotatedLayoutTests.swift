@@ -4,8 +4,11 @@ import Testing
 
 /// Show Invisibles, part 1/4 (job 255): `annotatedLayout`'s five invisible-ink classes.
 /// Synthetic fixtures exercise each class in isolation; the corpus gauntlet at the
-/// bottom runs OLDTIMES.WS/LJ6DTP.WS/BOX.WS when the private archive is present and
-/// passes vacuously otherwise, same convention as every other corpus test in this suite.
+/// bottom runs OLDTIMES.WS/LJ6DTP.WS/BOX.WS from the Sawyer archive
+/// (`CTRLKD_SAWYER_ARCHIVE`, `sawyerArchivePath`/`sawyerArchiveArmed` in
+/// WSChangeTests.swift) — a recorded Skip when unarmed, a hard failure naming the
+/// missing path when armed but incomplete, same convention as every other
+/// Sawyer-archive test in this suite.
 ///
 /// Byte fixtures are built as `var data = ...; data += ...` in short steps rather than
 /// one long chained `+` expression — a handful of spots elsewhere in this suite
@@ -148,6 +151,17 @@ private func styleToggleTokens(_ doc: AnnotatedDocument) -> [String] {
     // past the ~55-line default printed capacity (`PDFMetrics`/`printedCap`'s doc
     // comment). Natural breaks come ONLY from the real paginator (`layoutPrintedPagesPlain`,
     // widened to internal for this), never from a re-derived guess.
+    //
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version's
+    // "expected" page count was `layoutPrintedPagesPlain(doc)` called a SECOND time --
+    // the exact function `annotatedLayout` itself calls (AnnotatedLayout.swift:229) to find
+    // its natural breaks -- so a bug in the paginator's OWN page count would pass here
+    // regardless; only a mismatch between annotatedLayout's break-counting and whatever the
+    // paginator happened to return could ever fail. Independent derivation instead, from
+    // WordStar's own documented defaults (`ParseWS.swift`): no dot commands at all means
+    // `parseWS` synthesizes an all-default `page` whose `textLines` is `.pl 66 - .mt 3 -
+    // .mb 8 = 55` usable lines at the default 6 LPI (`textLinesPerPage`) -- 70 lines over
+    // a 55-line capacity is 2 pages (55 + 15), so exactly 1 natural break.
     var data: [UInt8] = []
     for n in 1...70 {
         data += bytes("Line \(n).")
@@ -156,22 +170,28 @@ private func styleToggleTokens(_ doc: AnnotatedDocument) -> [String] {
     data += [0x1A]
     let doc = parseWS(data)
     #expect(!hasPlaceableNotes(doc))
+    #expect(doc.page?.textLines == 55, "the hand-derived capacity below assumes WordStar's own default page")
     let annotated = annotatedLayout(doc)
 
     let natural = InkKind.pageBreakOrigin("")
     let naturalBreaks = annotated.lines.filter { $0.pageBreakBefore == natural }
-    #expect(!naturalBreaks.isEmpty)
-    // Cross-check against the real paginator directly: number of natural breaks plus
-    // one (the first page needs no "before" break) equals the page count.
+    #expect(naturalBreaks.count == 1, "70 lines / 55-line default capacity = 2 pages, 1 break")
+
+    // The real paginator directly, kept as a SEPARATE, secondary wiring check (not the
+    // source of the expectation above): its own page count must agree too.
     let pages = layoutPrintedPagesPlain(doc)
+    #expect(pages.count == 2)
     #expect(naturalBreaks.count == pages.count - 1)
 }
 
 // ------------------------------------------------------------ corpus gauntlet
 
-@Test func oldtimesSurfacesItsDotCommandsAndComments() {
-    let path = archiveWSPath + "/OLDTIMES.WS"
-    guard let d = FileManager.default.contents(atPath: path) else { return }
+@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+func oldtimesSurfacesItsDotCommandsAndComments() throws {
+    let path = sawyerArchivePath + "/OLDTIMES.WS"
+    guard let d = FileManager.default.contents(atPath: path) else {
+        throw MissingSawyerFixture(path: path)
+    }
     let doc = parseWS([UInt8](d))
     let annotated = annotatedLayout(doc)
 
@@ -187,9 +207,12 @@ private func styleToggleTokens(_ doc: AnnotatedDocument) -> [String] {
     #expect(visibleText(annotated) == plain)
 }
 
-@Test func lj6dtpSurfacesStyleToggleBoundaries() {
-    let path = archiveWSPath + "/LJ6DTP.WS"
-    guard let d = FileManager.default.contents(atPath: path) else { return }
+@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+func lj6dtpSurfacesStyleToggleBoundaries() throws {
+    let path = sawyerArchivePath + "/LJ6DTP.WS"
+    guard let d = FileManager.default.contents(atPath: path) else {
+        throw MissingSawyerFixture(path: path)
+    }
     let doc = parseWS([UInt8](d))
     let annotated = annotatedLayout(doc)
 
@@ -203,10 +226,13 @@ private func styleToggleTokens(_ doc: AnnotatedDocument) -> [String] {
 /// byte-identity proof this repo can make directly; the app-side manifest/oracle gate
 /// (BOX/OLDTIMES/LJ6DTP printed shas) is a separate, later verification this job's brief
 /// scopes to the engine checkout alone (see LESSONS).
-@Test func annotatedLayoutDoesNotAffectSubsequentEmission() throws {
+@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+func annotatedLayoutDoesNotAffectSubsequentEmission() throws {
     for name in ["BOX.WS", "OLDTIMES.WS", "LJ6DTP.WS"] {
-        let path = archiveWSPath + "/" + name
-        guard let d = FileManager.default.contents(atPath: path) else { continue }
+        let path = sawyerArchivePath + "/" + name
+        guard let d = FileManager.default.contents(atPath: path) else {
+            throw MissingSawyerFixture(path: path)
+        }
         let doc = parseWS([UInt8](d))
         let before = emitPDF(doc, mode: .printed)
         _ = annotatedLayout(doc)

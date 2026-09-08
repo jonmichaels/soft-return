@@ -158,8 +158,19 @@ private func rectSpan(_ ops: [[UInt8]]) -> (bottom: Double, top: Double) {
     // Modern's call site now passes `leadFactor: modernLine` explicitly; two
     // vertically-adjacent glyph cells at that exact advance must meet with ZERO gap
     // (and zero overlap).
+    //
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version
+    // computed `advance` as `modernLine * Double(pt)` -- the EXACT SAME expression
+    // `graphicOps`'s own `h = leadFactor * Double(pt)` evaluates internally (this call
+    // passes `leadFactor: modernLine`) -- so `top2 == bottom1` was guaranteed by algebra
+    // regardless of whether that formula is the RIGHT one; only a hand transposition of
+    // `x`/`y` in the rect math could ever have failed it. `16.8` is the same value pinned
+    // as an independent literal (1.2 * 14, cited directly in `graphicOps`'s own doc comment
+    // as "the actual advance" this fix closes the gap against), so a future change to
+    // either `modernLine` or `modernBodyPt` is a reviewed diff here, not a silent pass.
     let pt = modernBodyPt
-    let advance = modernLine * Double(pt)
+    let advance = 16.8
+    #expect(modernLine * Double(pt) == advance, "modernLine/modernBodyPt drifted from the pinned 16.8pt advance")
     let y1 = 700.0
     let ops1 = graphicOps("│", x: 0.0, y: y1, pitch: 8.4, pt: pt, leadFactor: modernLine)
     let ops2 = graphicOps("│", x: 0.0, y: y1 - advance, pitch: 8.4, pt: pt, leadFactor: modernLine)

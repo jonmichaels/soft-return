@@ -241,6 +241,19 @@ public enum RenderProbeKit {
         config.width = max(1, Int((scWindow.frame.width * scale).rounded()))
         config.height = max(1, Int((scWindow.frame.height * scale).rounded()))
         config.showsCursor = false
+        // EXCLUDE THE WINDOW'S SHADOW. `SCContentFilter(desktopIndependentWindow:)` includes
+        // it by default, and it is not a small border: it is a wide dark gradient on every
+        // side, composited into a buffer sized to the window's own frame, so the window's
+        // content sits INSET within the returned image and the outer columns are shadow.
+        //
+        // Measured 2026-09-07: LivePrintedFramingTests reported a "foreign" pixel — neither
+        // desk (0.588 grey) nor page (white) — at 0.439216 grey on the left edge, in BOTH
+        // Native and Printed, and insetting the scan chased it exactly: column 0, then 2,
+        // then 4, always landing on whatever the new first column was. That is not an edge
+        // artifact of a particular width; it is a gradient with no edge to clear. With the
+        // shadow excluded the capture is the window and nothing else, which is what every
+        // colour comparison in that suite assumes it is looking at.
+        config.ignoreShadowsSingleWindow = true
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         return NSBitmapImageRep(cgImage: image)
     }

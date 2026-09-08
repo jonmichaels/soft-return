@@ -192,6 +192,19 @@ func spanFontEntry(_ index: Int?, _ fonts: [FontChange]) -> FontChange? {
 /// the font, so the transliteration is undone: the original byte codes go back on the page
 /// with the real face selected, and a viewer draws the actual glyph -- alpha, not the letter
 /// 'a', with nothing embedded.
+///
+/// cp437 block/shade/box-drawing glyphs (`graphicChars`) are the one exception: those draw
+/// as VECTOR GEOMETRY (`splitGraphics`/the `graphicOps` path) regardless of which font the
+/// span carries -- even a span whose typestyle resolves to Symbol/ZapfDingbats here
+/// (sawyer/-LASERJE.FNT line 9, ctrl-kd 3aceb48: Brush Script's own font block declares
+/// symbolMap == .math, so its twelve-glyph cp437 sample -- '░▒▓│┤╡╢╖╕╣║╗' -- used to hit
+/// this branch same as any other Symbol run). `untransliterate`'s own documented contract
+/// degrades anything it cannot round-trip to '?' -- exactly right for a real Symbol run,
+/// but it ran BEFORE `splitGraphics` ever got a look, so twelve real box/shade glyphs
+/// became twelve literal '?' text characters at the Symbol font's advance instead of the
+/// fills every other family already draws them as. `graphicChars` members keep their true
+/// Unicode code points here so `splitGraphics` finds them downstream unchanged; everything
+/// else in the run still makes the real Symbol/Dingbats round trip.
 func spanRender(_ text: String, font: Int?, fonts: [FontChange], size: Int)
     -> (text: String, family: PDFFamily, size: Int, entry: FontChange?)
 {
@@ -199,7 +212,14 @@ func spanRender(_ text: String, font: Int?, fonts: [FontChange], size: Int)
     let family = pdfFamily(entry)
     var written = text
     if family == .symbol || family == .zapfDingbats, let entry {
-        written = untransliterate(text, fontTranslitKind(entry))
+        let kind = fontTranslitKind(entry)
+        if text.contains(where: { graphicChars.contains($0) }) {
+            written = String(text.map { ch -> String in
+                graphicChars.contains(ch) ? String(ch) : untransliterate(String(ch), kind)
+            }.joined())
+        } else {
+            written = untransliterate(text, kind)
+        }
     }
     // `Tf` has always been written as an integer here; the span's own size comes from the
     // font block's height word, falling back to the document's size. Python's `if pts` is

@@ -1108,8 +1108,14 @@ final class PagedDocumentView: NSView {
             // Courier column grid rather than drawn (`RunningLine.leadingOffset`'s own doc
             // comment) — shifts the draw origin past exactly the width that skipped run
             // would have occupied, matching the engine's own skip-then-`Tj` behaviour.
+            // Mechanism O (engine commit 840cf4c): `running.pageLeftOffset` — nonzero only
+            // on a page whose own `.po` differs from the document's global one, which the
+            // engine applies to the running head/foot row ALONE (see that property's own doc
+            // comment). Body text takes its own per-line `.po` through `PageLine.left`, so
+            // this is the only place the page-granularity value is needed.
             let point = NSPoint(
-                x: rendered.textFrame.origin.x + CGFloat(running.leadingOffset),
+                x: rendered.textFrame.origin.x + CGFloat(running.leadingOffset)
+                    + CGFloat(running.pageLeftOffset),
                 y: pageOrigin.y + CGFloat(running.baselineFromTop) - CGFloat(running.drawOriginOffset)
             )
             running.text.draw(at: point)
@@ -1725,6 +1731,25 @@ extension PagedDocumentView: NSLayoutManagerDelegate {
         let delta = CGFloat(targetY) - k - lineFragmentRect.pointee.origin.y
         lineFragmentRect.pointee.origin.y += delta
         lineFragmentUsedRect.pointee.origin.y += delta
+        // AND THE HEIGHT, for the same reason as the origin: this delegate already decides
+        // where a fragment sits, and its height is the other half of that. `paragraphStyle`
+        // pins `minimumLineHeight == maximumLineHeight == lead` and AppKit does not always
+        // honour it — a run set in a face whose natural line height exceeds the lead comes
+        // back taller. Measured: WINGDING.CHT reads clamp[14.00, 14.00] and gets a 14.34pt
+        // fragment; PRINTER.PS gets 17.00. See `PinnedBaseline.height` for why no font fix
+        // applies (the faces are the app's own correct choices, one homogeneous run each)
+        // and how 0.34pt a line accumulates into a page losing its last line.
+        //
+        // The GLYPHS are untouched: this shrinks the fragment box, not the type. A run that
+        // genuinely wants 14.34pt in a 14.00pt line overlaps its neighbour by a third of a
+        // point, which a facsimile can carry; the container does not clip to fragment rects,
+        // so no ink is cut (asserted by `theScreenMatchesWhatThePDFWouldPrint` and the pixel
+        // oracle, which compare drawn output rather than geometry).
+        if entry.height > 0 {
+            lineFragmentRect.pointee.size.height = CGFloat(entry.height)
+            lineFragmentUsedRect.pointee.size.height = min(
+                lineFragmentUsedRect.pointee.size.height, CGFloat(entry.height))
+        }
         // Overwritten unconditionally, even when `delta == 0`: AppKit's own LIVE proposal
         // for this out-param can still differ from `k` (that live/deterministic gap is
         // exactly what job 413 exists to remove) independent of whether the rect itself

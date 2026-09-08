@@ -210,7 +210,7 @@ struct Job439ModernAppendixLiveTests {
 
         // Native/Printed are unaffected by this revert — regression guard, always arabic.
         let printed = DocumentRenderer.render(state, style: .printed).text.string
-        #expect(printed.contains("An endnote: 1"), "Printed's own inline endnote reference (ground truth)")
+        #expect(printed.contains("An endnote: 1"), "Printed's own structural rule: the inline endnote reference is always arabic")
         #expect(printed.contains("(1)  Endnote"), "Printed's own trailing endnote entry (paper ground truth, m479-scan-doc87.pdf p6)")
     }
 

@@ -11,20 +11,19 @@ import Testing
 /// artifacts (`export-accessory.png`, `frames.txt`) into `outbox/job549/` for Athena's eyeball
 /// pass before anything reaches Jon.
 @Suite @MainActor struct Job549ExportAccessoryLayoutProofTests {
-    /// Repo root derived from this source file's own path (three parents up: this file,
-    /// `SoftReturnTests`, `macos` — job 531's `macos/` restructure) — the same pattern
-    /// `QLCLIByteParityTests.ws7Directory` already uses, so this stays correct on the CI host
-    /// and on any stranger's checkout alike, never a hardcoded worker path.
-    private static var repoRoot: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // SoftReturnTests
-            .deletingLastPathComponent()   // macos
-            .deletingLastPathComponent()   // repo root
-    }
-
+    /// Repo bug fix (planning #191 audit): `preferred` used to be
+    /// `repoRoot.appendingPathComponent("outbox/job549")` — a path INSIDE this checkout,
+    /// which is always writable on any machine that has the repo cloned at all. That defeated
+    /// `resolveOutputDirectory`'s whole fallback contract: the tracked `outbox/job549/
+    /// export-accessory.png` committed at job 549 got silently overwritten by every later test
+    /// run, dirtying the working tree on every `swift test`/`xcodebuild test`, never falling
+    /// back to a throwaway location the way this evidence writer is meant to. `preferred` now
+    /// points outside the checkout (the system temp directory) instead, so a real writable
+    /// location is tried first and a further fallback temp directory is the backstop — never a
+    /// path this repo tracks.
     private static var outputDirectory: URL {
         RenderProbeKit.resolveOutputDirectory(
-            preferred: repoRoot.appendingPathComponent("outbox/job549", isDirectory: true),
+            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("job549", isDirectory: true),
             fallbackName: "job549-evidence")
     }
 

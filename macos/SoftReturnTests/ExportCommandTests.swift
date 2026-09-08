@@ -242,15 +242,15 @@ import Testing
     /// conversion, the thing `ExportCommand` exists to do.
     @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
     func decodedArgumentsRouteThroughDocumentOperationsToARealRTFFile() throws {
-        let source = MultipageMargins.testDocsDirectory
-            .appendingPathComponent("ws4/DOCC.ws")
-        let data = [UInt8](try Data(contentsOf: source))
-
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ExportCommandTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        let destination = tempDir.appendingPathComponent("DOCC.rtf")
+        // Job planning#191 part 2: a bundled sample copy, not the private ws4/DOCC.ws
+        // corpus fixture — see BundledSampleFixture's own doc comment.
+        let source = try BundledSampleFixture.copy("OCAPTAIN.WS", into: tempDir)
+        let data = [UInt8](try Data(contentsOf: source))
+        let destination = tempDir.appendingPathComponent("OCAPTAIN.rtf")
 
         let args = try ExportCommand.decode(
             arguments: [

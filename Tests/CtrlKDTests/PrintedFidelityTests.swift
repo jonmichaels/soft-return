@@ -187,7 +187,10 @@ import Testing
         + bytes("A paragraph whose .pm column equals the left edge itself.") + HARD
     let doc = parseWS(data)
     #expect(doc.blocks[0].paraMargin == 0.0)   // `.pm 1` -> column 1 -> 0 offset
-    let pdf = emitPDF(doc, mode: .printed)
+    // pageNumbers: .off -- this fixture touches no .pn/.pg/.op, so the stock automatic
+    // number (the real `.auto` default since 2026-09-07, ws7-prints/v3 finding #2) would
+    // otherwise be the FIRST span found -- unrelated to the `.pm`/`.po` arithmetic here.
+    let pdf = emitPDF(doc, mode: .printed, options: EmitOptions(pageNumbers: .off))
     let spans = contentSpans(pdf)
     let first = try #require(spans.first)
     #expect(first.x == 57.6)                   // `.po 8` flush left, 8 * 12 * 0.6pt
@@ -235,6 +238,79 @@ import Testing
     let pdf = emitPDF(doc, mode: .printed)
     let xs = contentSpans(pdf).filter { $0.text == "No" }.compactMap(\.x)
     #expect(xs == [86.4, 57.6])    // first: left 57.6 + fi 28.8; continuation: left alone
+}
+
+// MARK: - planning #202 (ctrl-kd 8956ad4): .pm not double-counted with NO font block
+
+@Test func pmFirstLineIndentNotDoubledWithNoFontBlockEither() throws {
+    // Fix A (above) only fires through `splitIndent`'s own indent flag, which -- by
+    // that function's OWN doc comment -- never engages for a span with NO WS5+
+    // proportional font block at all. WARPRAYR.WS's real Quote style (`paraMargin`
+    // from its style record, not a literal `.pm`) carries no font block of its own
+    // either, so Fix A's guard never actually fired for the real corpus document it
+    // is named after -- verified against a stand-in fixture (a Helv font block, the
+    // test above), never against WARPRAYR itself (confirmed 2026-09-06: the real WS7
+    // capture, ws7-prints/v1/WARPRAYR.pcl/.measurements.json page 1 y=448.5 '"God the
+    // all-terrible!...' and page 2 y=326.1 '"O Lord our Father...', both land at
+    // exactly left-edge + their own typed column count, `.pm`'s 5-column contribution
+    // fully absorbed -- STILL rendered doubled by the engine before this fix,
+    // `splitIndent`'s flag never having fired for it). This is the gap:
+    // `printedPMFiPt` (PDFLayout.swift) now reduces `fi` by however many columns the
+    // first physical line's OWN typed leading spaces already cover -- `max(0, pmCols
+    // - typedCols)` -- independent of `splitIndent`'s flag, so the fontless/style-only
+    // case is covered too, not just the WS5+-font-block one Fix A already had. Direct
+    // port of ctrl-kd 8956ad4's
+    // `test_pm_first_line_indent_not_doubled_with_no_font_block_either`.
+    //
+    // A FONTLESS line never reaches `splitIndent`'s peel-the-indent-into-a-mark step
+    // (no font block to gate it), so the typed leading spaces stay literal characters
+    // INSIDE the one span this whole physical line renders as -- there is no separate
+    // word-level x to assert on a bare "Ten"/"Five". What IS directly observable, and
+    // is exactly where the pre-fix bug lived, is the LINE's own starting x: it must
+    // equal the plain left margin (`fi` contributes nothing once the typed indent
+    // already reaches `.pm`'s column) -- not `fi`'s own 36pt added on top.
+    let data = ws7Block(0x00) + bytes(".pm 6") + HARD      // column 6 -> 5 offset cols
+        + bytes("          Ten typed leading spaces, no font block at all.") + HARD
+        + bytes("     Five typed leading spaces on this continuation.") + HARD
+    let doc = parseWS(data)
+    #expect(doc.blocks[0].paraMargin == 5.0)
+    let pdf = emitPDF(doc, mode: .printed)
+    let spans = contentSpans(pdf)
+    let first = try #require(spans.first { $0.text.contains("Ten typed") })
+    let cont = try #require(spans.first { $0.text.contains("Five typed") })
+    // left 57.6 (this emitter's own plain-default `.po` frame -- see
+    // `pmColumnNormalizationMatchesLmFlushLeft`) -- `fi` contributes NOTHING once the
+    // 10 typed columns already reach and pass `.pm`'s own 5, NOT the pre-fix doubled
+    // 57.6+36=93.6.
+    #expect(first.x == 57.6)
+    #expect(cont.x == 57.6)      // continuation was never fi-eligible anyway
+}
+
+@Test func pmFirstLineIndentTopsUpAShorterTypedIndent() throws {
+    // The partial case the sibling test above doesn't reach: a typed indent SHORTER
+    // than `.pm`'s own column still gets topped up to it (not simply discarded) --
+    // `max(0, pmCols - typedCols)` is a reduction, not an on/off gate. Unconfirmed
+    // against a real WS7 capture (no corpus document types a partial indent under a
+    // `.pm`-bearing style), but symmetric with the two measured cases on either side
+    // of it: zero typed indent keeps the full `fi` (`pmFirstLineIndentStillAppliesWith
+    // NoTypedIndent`, and `pmShiftsPrintedPDFFirstLineStartX`), a typed indent AT OR
+    // PAST `.pm`'s column adds nothing more (the sibling test above) -- a typed indent
+    // PART way there is the one point on that line the pre-fix code never got right
+    // either (it always double-counted), so this pins the formula, not a specific
+    // oracle reading. Direct port of ctrl-kd 8956ad4's
+    // `test_pm_first_line_indent_tops_up_a_shorter_typed_indent`.
+    let data = ws7Block(0x00) + bytes(".pm 6") + HARD      // column 6 -> 5 offset cols
+        + bytes("  Two typed leading spaces only, short of the pm column.") + HARD
+    let doc = parseWS(data)
+    #expect(doc.blocks[0].paraMargin == 5.0)
+    let pdf = emitPDF(doc, mode: .printed)
+    let spans = contentSpans(pdf)
+    let line = try #require(spans.first { $0.text.contains("Two typed") })
+    // left 57.6 + topped-up remainder (5-2=3 columns, 21.6) == the SAME x a document
+    // with NO typed indent at all reaches (fi's own full 36pt) MINUS the 2 columns
+    // (14.4) still embedded as literal spaces ahead of "Two" in the string -- 57.6 +
+    // 21.6 = 79.2.
+    #expect(line.x == 79.2)
 }
 
 @Test func pmPsaPsbNeverReachModernPDF() throws {
@@ -318,8 +394,11 @@ import Testing
 
 /// Port of ctrl-kd's `test_sb_suppresses_leading_blank_lines_at_page_top` (b26 round 26
 /// wave 3) -- not new `.sb` coverage (that already exists) but the specific proof that the
-/// WS7-ground-truth `printedTop` fix reaches this end-to-end path: page-top offset is now
-/// (.mt+.hm)*12 = 60pt for this headerless document (was 36pt, `.mt` alone).
+/// WS7-ground-truth `printedTop` fix reaches this end-to-end path. UPDATED (mechanism U,
+/// ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3` PRISTINE.EXE round, commit
+/// 26169cd): page-top offset is `.mt` ALONE = 36pt for a headerless doc -- the
+/// (.mt+.hm)=60pt pairing this test used to assume was measured only against Robert J.
+/// Sawyer's own WSCHANGE-customized install; see `printedTop`'s own doc comment.
 @Test func sbSuppressesLeadingBlankLinesAtPageTop() throws {
     let body = HARD + HARD + bytes("Actual content starts here.") + HARD
     let dataDefault = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15)) + body
@@ -335,10 +414,10 @@ import Testing
         return try #require(span.y)
     }
 
-    // top 60 (.mt 3 + .hm 2, default, headerless) + two 12pt blanks + 12pt lead
-    #expect(try contentY(docDefault) == 696.0)
+    // top 36 (.mt 3 alone, default, headerless) + two 12pt blanks + 12pt lead
+    #expect(try contentY(docDefault) == 720.0)
     // suppressed -- starts right at top + lead
-    #expect(try contentY(docSB) == 720.0)
+    #expect(try contentY(docSB) == 744.0)
 }
 
 @Test func lineNumbersFlagOffSuppressesTheGutter() throws {
@@ -414,17 +493,21 @@ private func pgnumOps(_ pdf: [UInt8]) -> [(x: Double, y: Double, n: String)] {
     }
 }
 
-@Test func pageNumbersAutoDefaultSilentDocumentShowsNothing() throws {
-    // A document with NO `.pn`/`.pg`/`.op`/`.pc` ever gets no automatic number under
-    // `.auto` (the default) -- real WS7 prints nothing at any column either. Omitting
-    // `pageNumbers` entirely and passing `.auto` explicitly must render byte-identical
-    // -- `.auto` IS the silent default, not a new behaviour to opt into.
+@Test func pageNumbersAutoDefaultSilentDocumentShowsStockNumber() throws {
+    // A document with NO `.pn`/`.pg`/`.op`/`.pc` ever still gets the stock automatic
+    // number under `.auto` (the default) -- REVERSED 2026-09-07 (ported from ctrl-kd
+    // b6d5d03, ws7-prints/v3 finding #2: a genuinely stock WS7 install numbers a
+    // silent document by default; the old "prints nothing" evidence was measured
+    // against Robert J. Sawyer's own WSCHANGE-customized install). Omitting
+    // `pageNumbers` entirely and passing `.auto` explicitly must still render
+    // byte-identical -- `.auto` IS the default, not a new behaviour to opt into.
     let data = (1...19).flatMap { bytes("BARELINE-\(String(format: "%03d", $0))") + HARD }
     let doc = parseWS(data)
     let implicit = emitPDF(doc, mode: .printed)
     let explicit = emitPDF(doc, mode: .printed, options: EmitOptions(pageNumbers: .auto))
     #expect(implicit == explicit)
-    #expect(pgnumOps(implicit).isEmpty)
+    let ops = pgnumOps(implicit)
+    #expect(ops.count == 1 && ops[0].x == 291.6 && ops[0].y == 60.0 && ops[0].n == "1")
 }
 
 @Test func pageNumbersAutoPnPresentActivatesIt() throws {
@@ -445,10 +528,12 @@ private func pgnumOps(_ pdf: [UInt8]) -> [(x: Double, y: Double, n: String)] {
 
 @Test func pageNumbersOnForcesItOnASilentDocument() throws {
     // `.on` forces WordStar's stock default numbering even on a document that never
-    // touched `.pn`/`.pg`/`.op`/`.pc` at all -- there is no real WS7 capture of this
-    // exact mode (it does not correspond to a real WordStar UI toggle by itself), but
-    // the POSITION/geometry it uses is the same measured default `.auto`-with-`.pn`
-    // uses above, just forced on from page 1 with no dot-command trigger needed.
+    // touched `.pn`/`.pg`/`.op`/`.pc` at all -- since 2026-09-07 this is also what
+    // `.auto` (the default) already does for such a document (ws7-prints/v3 finding
+    // #2, see the `.auto`-default test above), so `.on` here is redundant with
+    // `.auto` for THIS shape; `.on`'s real job is forcing the number even where a
+    // document's own `.op` would otherwise suppress it under `.auto`. POSITION/
+    // geometry: the same measured default `.auto`-with-`.pn` uses above.
     let data = (1...19).flatMap { bytes("BARELINE-\(String(format: "%03d", $0))") + HARD }
     let doc = parseWS(data)
     let off = emitPDF(doc, mode: .printed, options: EmitOptions(pageNumbers: .off))

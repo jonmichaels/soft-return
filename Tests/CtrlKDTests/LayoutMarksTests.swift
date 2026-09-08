@@ -181,6 +181,15 @@ private func footnoteEndnoteDoc() -> Document {
 }
 
 @Test func inlineRefRunCarriesItsOwnNoteKind() throws {
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version's
+    // per-run loop compared `r.noteKind` to `flow.notes[ref].kind` -- both fields are set
+    // from the identical `refNotes[n-1].kind` read inside `modernSemanticFlow`'s own span
+    // loop (Layout.swift), so a bug that corrupted the SOURCE value would corrupt both
+    // sides equally and this could never fail on that. The independent fact available here
+    // is the FIXTURE's own construction order: `footnoteEndnoteDoc()` (above) builds
+    // exactly one footnote (`ws7Note(..., cmd: 0x03)`) then one endnote (`cmd: 0x04`), in
+    // that order -- known from the input bytes, not from any output the code under test
+    // produces. Pin the mark's kind against THAT.
     let doc = footnoteEndnoteDoc()
     let flow = modernSemanticFlow(doc, notes: EmitOptions.allNotes)
     let refRuns = flow.items.flatMap { item -> [SemanticRun] in
@@ -188,14 +197,17 @@ private func footnoteEndnoteDoc() -> Document {
         return runs.filter { $0.ref != nil }
     }
     #expect(refRuns.count == 2)
+    #expect(refRuns[0].noteKind == .footnote, "footnoteEndnoteDoc's FIRST note (cmd 0x03)")
+    #expect(refRuns[1].noteKind == .endnote, "footnoteEndnoteDoc's SECOND note (cmd 0x04)")
+    // The mirror field still earns its keep: it must agree with the note row a consumer
+    // would reach the OLD way, via `ref` into `flow.notes` -- a real wiring invariant
+    // (drift here means the two fields the schema promises always travel together no
+    // longer do), just not the ONLY check, now that the values above are pinned
+    // independently of it.
     for r in refRuns {
-        // the mark's own 'noteKind' must agree with the SAME note looked up the old
-        // way, via its 'ref' index into flow.notes -- this is a redundant, convenience
-        // copy, not a second source of truth.
         let ref = try #require(r.ref)
         #expect(r.noteKind == flow.notes[ref].kind)
     }
-    #expect(Set(refRuns.compactMap(\.noteKind)) == [.footnote, .endnote])
 }
 
 @Test func wordSchemeCommentZeroWidthAnchorAlsoCarriesNoteKind() throws {

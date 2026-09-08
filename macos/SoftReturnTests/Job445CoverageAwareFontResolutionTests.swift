@@ -4,6 +4,14 @@ import CtrlKD
 import Testing
 @testable import SoftReturn
 
+/// NOTE (2026-09-07): `graphicChars` must now be QUALIFIED in any test file that imports
+/// both modules. There are two sets with that name — `SoftReturn.graphicChars`
+/// (`Rendering/PrintedVectorGraphics.swift`, the characters the APP draws as vectors) and
+/// `CtrlKD.graphicChars` (`PDFDriverLJ6DTP.swift`, the ones the ENGINE draws as vectors) —
+/// and the engine's became public in sr 506b2e0, so a bare name that used to resolve to the
+/// app's is ambiguous. Every bare use in this file meant the APP's set and is qualified as
+/// such; nothing about what these tests assert has changed.
+
 /// Job 445 (b27 item 7 part 1 — job 442's diagnosis, `outbox/job442/report.md`):
 /// `printedCoverageAwareResolvedMacFont` (`DocumentRenderer.swift`) is the new coverage-aware
 /// sibling of `printedResolvedMacFont`, built but NOT YET WIRED into any render path (wiring
@@ -61,7 +69,7 @@ struct Job445CoverageAwareFontResolutionTests {
 
     @Test func boxDrawingRunAdvancesPastCourierPrimeToACoveringFont() throws {
         let entry = try Self.firstCourierClassFontChange()
-        try #require(Self.boxCorner.unicodeScalars.first.map { graphicChars.contains(Character($0)) } == true,
+        try #require(Self.boxCorner.unicodeScalars.first.map { SoftReturn.graphicChars.contains(Character($0)) } == true,
                      "U+250C must be a real graphicChars member for this test to prove anything")
 
         // job 442's own measurement: "Courier Prime" CONSTRUCTS but does not COVER U+250C.

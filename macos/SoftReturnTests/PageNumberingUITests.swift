@@ -15,10 +15,22 @@ import Testing
 
     /// A synthetic WS4 document with page geometry but NO page-numbering dot command of its
     /// own — same shape as `AppKitRenderedPDFHonorsEmitOptionsTests`' own fixtures, duplicated
-    /// here (file-local, per this codebase's own convention) rather than shared. Per the b33
-    /// ruling ("auto: the document's own dot commands decide; if the document has no
-    /// page-numbering dot command at all, numbering is OFF"), `.auto` and `.on` must
-    /// therefore disagree on this fixture.
+    /// here (file-local, per this codebase's own convention) rather than shared.
+    ///
+    /// SUPERSEDED READING, and the reason these two tests inverted (engine commit 5756263,
+    /// mirroring ctrl-kd b6d5d03 — `ws7-prints/v3` finding #2). The b33 ruling said "auto:
+    /// the document's own dot commands decide; if the document has no page-numbering dot
+    /// command at all, numbering is OFF", so `.auto` used to agree with `.off` here. A
+    /// PRISTINE.EXE (factory, no WSCHANGE) recapture settled it the other way: a genuinely
+    /// stock WordStar 7 install NUMBERS a document by default even when it never touches
+    /// `.pn`/`.pg`/`.op`/`.pc`. The old "silent by default" reading was measured against
+    /// Robert J. Sawyer's own WSCHANGE-customized install — the same contamination family as
+    /// the `.po` column, the auto-leading factor, and `.hm`'s participation in the header
+    /// base, all corrected in the same round.
+    ///
+    /// So on this fixture `.auto` now agrees with `.on` and disagrees with `.off`, and the
+    /// two tests below assert exactly that. They are not weakened — they still pin that the
+    /// override is real and reaches the emitter; only which pair matches has changed.
     private static func noDotCommandFixtureBytes() -> [UInt8] {
         func highBitWords(_ text: String) -> [UInt8] {
             var out: [UInt8] = []
@@ -52,26 +64,26 @@ import Testing
 
     // MARK: - ExportEngine.render honors an explicit pageNumbers override
 
-    @Test @MainActor func printedPDFPageNumbersOnDiffersFromAutoOnADocumentWithNoDotCommand() throws {
+    @Test @MainActor func printedPDFPageNumbersAutoMatchesOnForADocumentWithNoDotCommand() throws {
         let state = try Self.noDotCommandState()
         let on = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
                                          notes: NoteSelection(), style: .printed, pageNumbers: .on)
         let auto = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
                                            notes: NoteSelection(), style: .printed, pageNumbers: .auto)
-        let message = "forcing page numbers ON on a document with no page-numbering dot command must "
-            + "change the printed PDF's own bytes (per the b33 ruling: auto + no dot command == off)"
-        #expect(try #require(on.first).bytes != (try #require(auto.first).bytes), "\(message)")
+        let message = "stock WordStar 7 numbers a document that never touches .pn/.pg/.op, so auto "
+            + "must behave identically to an explicit on here (ws7-prints/v3 finding #2)"
+        #expect(try #require(on.first).bytes == (try #require(auto.first).bytes), "\(message)")
     }
 
-    @Test @MainActor func printedPDFPageNumbersOffMatchesAutoOnADocumentWithNoDotCommand() throws {
+    @Test @MainActor func printedPDFPageNumbersOffDiffersFromAutoOnADocumentWithNoDotCommand() throws {
         let state = try Self.noDotCommandState()
         let off = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
                                           notes: NoteSelection(), style: .printed, pageNumbers: .off)
         let auto = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
                                            notes: NoteSelection(), style: .printed, pageNumbers: .auto)
-        let message = "per the b33 ruling, auto on a document with no page-numbering dot command must "
-            + "behave identically to an explicit off"
-        #expect(try #require(off.first).bytes == (try #require(auto.first).bytes), "\(message)")
+        let message = "forcing page numbers OFF must change the printed PDF's own bytes against auto, "
+            + "which now numbers this document (ws7-prints/v3 finding #2)"
+        #expect(try #require(off.first).bytes != (try #require(auto.first).bytes), "\(message)")
     }
 
     // MARK: - Omitting pageNumbers falls back to Settings' own current default

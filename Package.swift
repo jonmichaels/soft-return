@@ -82,10 +82,30 @@ let package = Package(
         // Proof-of-life demo: `swift run ctrlkd-demo` converts synthetic WS4 bytes
         // to Markdown. Not part of the library product.
         .executableTarget(name: "ctrlkd-demo", dependencies: ["CtrlKD"]),
+        // Regenerates TestDocs/oracle/answer_key_sr.json — sr's own self-recorded oracle
+        // for sr-only formats (Planning #198/#195 Task 3). `swift run generate-answer-key-sr`.
+        // See that target's own main.swift for the full account.
+        .executableTarget(name: "generate-answer-key-sr",
+                          dependencies: ["CtrlKD"],
+                          path: "Sources/GenerateAnswerKeySR"),
+        // Regenerates TestDocs/oracle/sawyer_preset_pdf_sr.json — sr's own self-recorded
+        // drift file for the one PDF geometry (page-settings `sawyer` preset + real .PIX
+        // resolution) the shared answer key never covers (planning #205 Task 2, replacing
+        // the retired python-printed-manifest.json's `sawyer` geometry). `swift run
+        // generate-sawyer-preset-drift-sr`. See that target's own main.swift for the full
+        // account. Depends on SoftReturnCLI (not just CtrlKD) for `pagePresets`/
+        // `resolveDocumentPictures` — both `package`-visibility, same-package-only.
+        .executableTarget(name: "generate-sawyer-preset-drift-sr",
+                          dependencies: ["CtrlKD", "SoftReturnCLI"],
+                          path: "Sources/GenerateSawyerPresetDriftSR"),
         .testTarget(
             name: "CtrlKDTests",
             dependencies: ["CtrlKD", "SoftReturnCLI"],
-            exclude: ["Resources/README.md"],
+            // `Support/run_pcl_fidelity_gate.py` (PCLFidelityTests.swift) is invoked as a
+            // subprocess, located via `#filePath` relative to the Swift source file next to
+            // it on disk — never through `Bundle.module` — so it is excluded from resource
+            // bundling the same way `Resources/README.md` is, not `.copy`'d.
+            exclude: ["Resources/README.md", "Support/run_pcl_fidelity_gate.py"],
             resources: [
                 .copy("Resources/job-003-vectors.json"),
                 .copy("Resources/job-004-vectors.json"),

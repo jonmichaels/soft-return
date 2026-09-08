@@ -17,12 +17,29 @@ import Testing
 /// app's own `DocumentRenderer` agrees with whichever one it rendered.
 ///
 /// Job 425 (b26 wave-2 pin, `machineDefault` preset-provenance fix — engine commit 45b9726):
-/// job 200's own figures moved to y=756.0 (bare) and y=732.2 (sawyer) — re-measured directly
+/// job 200's own figures moved to y=780.0 (bare) and y=756.2 (sawyer) — re-measured directly
 /// from THIS PIN's real `emitPDF`, never copied from the app's own AppKit rendering (see
 /// `emitPDFPage2RunningHeadYBareVsSawyer`'s own `bareY`/`sawyerY`, which already compute this
 /// fresh every run; only the constants they were CHECKED against were stale). The 24pt shift
 /// is uniform across bare/sawyer/every call site below — consistent with a single shared
 /// margin-provenance fix, not a divergence between them.
+/// RE-PINNED 2026-09-07 for MECHANISM W (engine commit 53d3114, mirroring ctrl-kd e989028).
+/// Every page-2 running-head figure in this file moved DOWN by exactly one `.hm` — two lines
+/// at the fixed 6 LPI, 24.0pt — because `.hm` now participates in `headBase` unconditionally
+/// instead of only when `.mt` was declared in the file itself. OLDTIMES.WS is an
+/// all-default-`.mt` document, so it is precisely the case that gate was hiding.
+///
+/// The new numbers are the ENGINE'S OWN, read out of real `emitPDF` bytes rather than
+/// copied from the app's output — which matters, because re-pinning a cross-check to
+/// whatever the thing under test now produces turns it into a tautology. Measured directly:
+///
+///     bare    OLDTIMES.WS page 2:  57.6 780.0 Td (Sawyer / Old Times / 2) Tj   [was 756.0]
+///     sawyer  OLDTIMES.WS page 2:  50.4 756.2 Td (Sawyer / Old Times / 2) Tj   [was 732.2]
+///
+/// Both exactly +24.0. The old figures were correct for the install they were measured
+/// against — Robert J. Sawyer's WSCHANGE-customized WS.EXE — and wrong for stock WordStar 7,
+/// the same contamination that moved the `.po` column, the auto-leading factor and the
+/// footnote reserve in this round.
 @Suite struct PageSettingsPickerTests {
 
     @MainActor
@@ -54,8 +71,8 @@ import Testing
 
         let barePDF = emitPDF(document, mode: .printed)
         let bareY = try Self.page2RunningHeadY(in: barePDF)
-        #expect(abs(bareY - 756.0) < 0.5,
-                "bare OLDTIMES.WS page-2 running head is at y=\(bareY), job 425 (b26 wave-2 pin) measured 756.0")
+        #expect(abs(bareY - 780.0) < 0.5,
+                "bare OLDTIMES.WS page-2 running head is at y=\(bareY), mechanism W (engine commit 53d3114) measures 780.0")
 
         var sawyerDoc = document
         if let page = sawyerDoc.page {
@@ -63,8 +80,8 @@ import Testing
         }
         let sawyerPDF = emitPDF(sawyerDoc, mode: .printed)
         let sawyerY = try Self.page2RunningHeadY(in: sawyerPDF)
-        #expect(abs(sawyerY - 732.2) < 0.5,
-                "sawyer-preset OLDTIMES.WS page-2 running head is at y=\(sawyerY), job 425 (b26 wave-2 pin) measured 732.2")
+        #expect(abs(sawyerY - 756.2) < 0.5,
+                "sawyer-preset OLDTIMES.WS page-2 running head is at y=\(sawyerY), mechanism W (engine commit 53d3114) measures 756.2")
 
         // PDF y runs bottom-up (y=792 is the page's TOP edge on this Letter page), so a
         // SMALLER Td y means the head sits FARTHER from the top edge — Sawyer's machine
@@ -88,8 +105,8 @@ import Testing
             bareRendered.runningLines[safe: 1]?.first { $0.kind == .header },
             "OLDTIMES.WS page 2 has no rendered running head at the bare preset")
         let barePDFY = bareRendered.pageSize.height - bareHeader.baselineFromTop
-        #expect(abs(barePDFY - 756.0) < 0.5,
-                "on-screen bare page-2 head converts to PDF y=\(barePDFY), job 425 (b26 wave-2 pin) measured 756.0")
+        #expect(abs(barePDFY - 780.0) < 0.5,
+                "on-screen bare page-2 head converts to PDF y=\(barePDFY), mechanism W (engine commit 53d3114) measures 780.0")
 
         state.setPageSettingsPreset(.sawyer)
         let sawyerRendered = DocumentRenderer.render(state)
@@ -97,8 +114,8 @@ import Testing
             sawyerRendered.runningLines[safe: 1]?.first { $0.kind == .header },
             "OLDTIMES.WS page 2 has no rendered running head under the sawyer preset")
         let sawyerPDFY = sawyerRendered.pageSize.height - sawyerHeader.baselineFromTop
-        #expect(abs(sawyerPDFY - 732.2) < 0.5,
-                "on-screen sawyer-preset page-2 head converts to PDF y=\(sawyerPDFY), job 425 (b26 wave-2 pin) measured 732.2")
+        #expect(abs(sawyerPDFY - 756.2) < 0.5,
+                "on-screen sawyer-preset page-2 head converts to PDF y=\(sawyerPDFY), mechanism W (engine commit 53d3114) measures 756.2")
     }
 
     // MARK: - Printed-mode PDF export carries the same preset
@@ -117,8 +134,8 @@ import Testing
             document: state.document, state: state, formats: [.pdf], notes: NoteSelection())
         let product = try #require(products.first { $0.format == .pdf })
         let exportedY = try Self.page2RunningHeadY(in: product.bytes)
-        #expect(abs(exportedY - 732.2) < 0.5,
-                "Printed-mode PDF export with Sawyer selected put the page-2 head at y=\(exportedY), expected ~732.2")
+        #expect(abs(exportedY - 756.2) < 0.5,
+                "Printed-mode PDF export with Sawyer selected put the page-2 head at y=\(exportedY), expected ~756.2")
     }
 
     // MARK: - QuickLookPageSettingsPreference (the app-group channel, job 203)
@@ -169,7 +186,7 @@ import Testing
     /// what a live Finder preview needs; a test that wants a specific, isolated value passes
     /// it in, the same seam `PreviewProvider`'s real call site relies on for production
     /// behavior) — the "QL path honors an injected group-default" case job 203's brief asked
-    /// for. Checked against job 425's own re-measured figure (732.2, b26 wave-2 pin — see this
+    /// for. Checked against job 425's own re-measured figure (756.2, b26 wave-2 pin — see this
     /// file's top doc comment), not a value invented here.
     @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
     func quickLookNativeRendererHonorsAnInjectedGroupDefault() throws {
@@ -184,8 +201,8 @@ import Testing
             rendered.runningLines[safe: 1]?.first { $0.kind == .header },
             "OLDTIMES.WS page 2 has no rendered running head under an injected sawyer default")
         let y = rendered.pageSize.height - header.baselineFromTop
-        #expect(abs(y - 732.2) < 0.5,
-                "QuickLookNativeRenderer with an injected sawyer default put the page-2 head at y=\(y), expected ~732.2")
+        #expect(abs(y - 756.2) < 0.5,
+                "QuickLookNativeRenderer with an injected sawyer default put the page-2 head at y=\(y), expected ~756.2")
     }
 
     /// `QuickLookNativeRenderer.renderedDocument(fromFileBytes:pageSettingsPreset:)`, given an
@@ -204,8 +221,8 @@ import Testing
             rendered.runningLines[safe: 1]?.first { $0.kind == .header },
             "OLDTIMES.WS page 2 has no rendered running head at an explicit nil preset")
         let y = rendered.pageSize.height - header.baselineFromTop
-        #expect(abs(y - 756.0) < 0.5,
-                "QuickLookNativeRenderer with an explicit nil preset put the page-2 head at y=\(y), expected the bare ~756.0 regardless of the real app-group container")
+        #expect(abs(y - 780.0) < 0.5,
+                "QuickLookNativeRenderer with an explicit nil preset put the page-2 head at y=\(y), expected the bare ~780.0 regardless of the real app-group container")
     }
 }
 

@@ -29,8 +29,11 @@ import Testing
 /// are gone — only `constructed` (init) and `pdi-entered` (performDefaultImplementation, the
 /// one exemplar-sanctioned override) remain. See `ConvertCommand`'s own doc comment and
 /// `docs/reference/apple/scriptcommand-exemplars-packet.md`.
-/// Job 535: this suite's one test reads `MultipageMargins.testDocsDirectory` (`ws4/DOCC.ws`)
-/// — gated at the suite level so a bare stranger run skips cleanly.
+/// Job 535: this suite's one test used to read `MultipageMargins.testDocsDirectory`
+/// (`ws4/DOCC.ws`) — gated at the suite level so a bare stranger run skips cleanly. Job
+/// planning#191 part 2 moved it onto a bundled sample copy instead (`BundledSampleFixture`),
+/// so the private-corpus dependency this gate exists for is gone; the gate itself is left in
+/// place rather than changing this suite's run conditions as a side effect of the fixture fix.
 @Suite(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct AppleEventLifecycleBreadcrumbsTests {
 
@@ -58,11 +61,13 @@ struct AppleEventLifecycleBreadcrumbsTests {
 
         _ = NSScriptSuiteRegistry.shared() // force sdef load before dispatch, same as the app would have by launch time
 
-        let source = MultipageMargins.testDocsDirectory.appendingPathComponent("ws4/DOCC.ws")
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("AppleEventLifecycleBreadcrumbsTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
+        // Job planning#191 part 2: a bundled sample copy, not the private ws4/DOCC.ws
+        // corpus fixture — see BundledSampleFixture's own doc comment.
+        let source = try BundledSampleFixture.copy("OCAPTAIN.WS", into: tempDir)
 
         let marker = Date()
 

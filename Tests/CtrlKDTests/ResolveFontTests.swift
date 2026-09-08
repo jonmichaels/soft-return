@@ -42,38 +42,52 @@ import Testing
     #expect(resolved.isMonospace)
 }
 
-@Test func resolveFontFromFontChangeConvenienceOverloadMatchesTheManualCall() throws {
-    let font = FontChange(offset: 0, width1800: 155, height1440: 240, typestyle: 49710)
-    let viaConvenience = resolveFont(font)
-    let viaManual = resolveFont(family: font.family, generic: font.genericStyle,
-                                proportional: font.proportional)
-    #expect(viaConvenience == viaManual)
-}
+// FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)):
+// `resolveFontFromFontChangeConvenienceOverloadMatchesTheManualCall` (formerly here) was
+// deleted -- `resolveFont(_ font: FontChange)` is a literal one-line forward
+// (`resolveFont(family: font.family, generic: font.genericStyle, proportional:
+// font.proportional)`, FontMap.swift), and the test recomputed that exact same call as its
+// "expected" value: guaranteed equal by construction, and it could not have caught a
+// transcription bug either, since `family: String`, `generic: GenericStyle` and
+// `proportional: Bool` are three DIFFERENT types at those three positions -- an
+// argument-order swap fails to compile before this test would ever run. It tested nothing
+// the type checker doesn't already guarantee.
 
 @Test func fontStackIsAThinWrapperOverResolveFont() throws {
-    // The extraction (b24 round 21 item 5) must not change fontStack's own output --
-    // reconstruct its shape from resolveFont's answer and compare against the real
-    // call, for a representative sweep of family/generic/proportional combinations.
-    let cases: [(family: String, generic: GenericStyle?, proportional: Bool?)] = [
-        ("Helv", .sans, true), ("Courier", .sans, false), ("", .display, true),
-        ("Univ. Roman", .serif, nil), ("Zapf Chancery", .script, true),
-        ("Unmapped Face", .display, false),
+    // The extraction (b24 round 21 item 5) must not change fontStack's own output.
+    //
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version's
+    // "expected" was reconstructed by calling `resolveFont` a SECOND time and re-running
+    // `fontStack`'s own assembly logic over its answer -- since `fontStack` itself just
+    // calls `resolveFont` once and assembles, calling it again with identical arguments
+    // reproduces the identical `ResolvedFont` by construction; only the assembly order
+    // was genuinely being checked. Independent literals instead, hand-derived from
+    // `fontAlternates`'s own table entries (FontMap.swift, cited per case below) and the
+    // documented assembly rule (primary, then alternates, then "monospace" if
+    // `proportional == false` else the CSS generic) -- no call to `resolveFont` anywhere
+    // in this test now.
+    let cases: [(family: String, generic: GenericStyle?, proportional: Bool?, expected: [String])] = [
+        // fontAlternates["helv"] = ["Helvetica", "Arial"]; proportional true -> not
+        // monospace -> generic .sans -> "sans-serif".
+        ("Helv", .sans, true, ["Helv", "Helvetica", "Arial", "sans-serif"]),
+        // fontAlternates["courier"] = ["Courier New"]; proportional FALSE -> monospace
+        // terminus regardless of generic.
+        ("Courier", .sans, false, ["Courier", "Courier New", "monospace"]),
+        // Empty family -> no primary, no alternates entry; generic .display -> "fantasy".
+        ("", .display, true, ["fantasy"]),
+        // fontAlternates["univ. roman"] = ["University Roman", "Georgia"]; proportional
+        // nil (not `== false`) -> not monospace -> generic .serif -> "serif".
+        ("Univ. Roman", .serif, nil, ["Univ. Roman", "University Roman", "Georgia", "serif"]),
+        // fontAlternates["zapf chancery"] = ["Apple Chancery", "Monotype Corsiva"];
+        // generic .script -> "cursive".
+        ("Zapf Chancery", .script, true,
+         ["Zapf Chancery", "Apple Chancery", "Monotype Corsiva", "cursive"]),
+        // Not in fontAlternates at all -> no alternates; proportional false -> monospace.
+        ("Unmapped Face", .display, false, ["Unmapped Face", "monospace"]),
     ]
     for c in cases {
-        let resolved = resolveFont(family: c.family, generic: c.generic, proportional: c.proportional)
-        var expected: [String] = []
-        if let primary = resolved.primary { expected.append(primary) }
-        expected.append(contentsOf: resolved.alternates)
-        if resolved.isMonospace {
-            expected.append("monospace")
-        } else if let generic = resolved.generic {
-            let cssMap: [GenericStyle: String] = [
-                .sans: "sans-serif", .serif: "serif", .script: "cursive", .display: "fantasy",
-            ]
-            if let css = cssMap[generic] { expected.append(css) }
-        }
-        #expect(fontStack(c.family, generic: c.generic, proportional: c.proportional) == expected,
-               "\(c)")
+        #expect(fontStack(c.family, generic: c.generic, proportional: c.proportional) == c.expected,
+               "\(c.family)")
     }
 }
 

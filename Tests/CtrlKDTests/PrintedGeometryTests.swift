@@ -31,6 +31,15 @@ private func geoDoc(
 
 // MARK: - The façade agrees with the emitter, field by field
 
+/// FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version's
+/// "expected" values were computed by calling `resolvedPageHeight`/`printedTop`/
+/// `printedLead`/`printedSize`/`printedLeft`/`printedCap` directly -- the EXACT SAME calls
+/// `printedMetrics` itself makes to build the struct under test (see `PrintedGeometry.swift`
+/// -- `printedMetrics` is nothing but these six calls assembled into a struct literal), so
+/// this could only ever fail if the struct literal transposed two fields; it could never
+/// catch a wrong VALUE, because both sides always call the identical function. Pinned as
+/// independent hand-derived literals instead (each with its derivation), doubling as the
+/// "does the façade transpose any field" wiring check the original was after.
 @Test func printedMetricsMatchTheEmittersOwnHelpers() {
     // Every figure moved off its default, so a stale copy of any one formula shows up.
     let doc = geoDoc(
@@ -39,13 +48,23 @@ private func geoDoc(
     )
     let m = printedMetrics(doc)
 
-    #expect(m.pageHeight == Double(resolvedPageHeight(doc, printed: true)))
-    #expect(m.top == Double(printedTop(doc)))
-    #expect(m.lead == printedLead(doc))
-    #expect(m.size == printedSize(doc))
-    #expect(m.left == printedLeft(doc, size: printedSize(doc)))
-    #expect(m.capacity == printedCap(doc))
-    #expect(m.pageWidth == Double(PDFMetrics.pageWidth))
+    #expect(m.pageWidth == 612.0, "printed mode is always US Letter WIDTH regardless of sheet")
+    #expect(m.pageHeight == 1008.0, "Legal, 14in * 72pt/in")
+    // `mtLines: 5` -- `printedTop` reserves `.mt` alone (mechanism U, ctrl-kd commit
+    // 26169cd; `.hm` is never added, `mtSource` explicit or default): 5 lines * 12pt/line
+    // = 60pt.
+    #expect(m.top == 60.0)
+    // `.lh 6` (1/48in units) -> 6 * 1.5 = 9pt lead.
+    #expect(m.lead == 9.0)
+    // `.cw 10` is 12 CPI elite -> a 10pt font (cw * 1.0, the pitch formula documented on
+    // `printedSize`).
+    #expect(m.size == 10)
+    // `.po` is a FIXED 7.2pt/column regardless of pitch (2026-08-20 dx finding): 12 * 7.2.
+    #expect(m.left == 86.4)
+    // `printedCap` reads `page.textLines` straight through (clamped to a 4-line floor,
+    // `footnoteFloor + 1` -- nowhere near binding here) -- `geoDoc`'s own `textLines: 71`
+    // argument, verbatim.
+    #expect(m.capacity == 71)
 }
 
 @Test func printedMetricsTrackTheDocumentsOwnDotCommands() {
@@ -100,16 +119,35 @@ private func geoDoc(
 /// A print stream has no `page` at all (`parsePrintstream` reads no dot commands). The
 /// emitter falls back to its fixed figures there; the façade must fall back identically
 /// rather than crashing on the nil or inventing a default of its own.
+///
+/// FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version
+/// compared each fallback field to the literal SAME named constant (`PDFMetrics.topPrinted`
+/// etc.) that `printedTop`/`printedLead`/`printedSize`/`printedLeft`'s own `guard let page
+/// = doc.page else { return ... }` branches return — so if that constant's VALUE ever
+/// changed, both sides of the comparison would move together and the test would keep
+/// passing no matter what the number was; it could only ever catch a WIRING mistake (the
+/// façade reading the wrong constant), never a wrong VALUE. Pinned here as independent
+/// literals instead, each with its own derivation, so a change to `PDFMetrics` is a
+/// reviewed diff against a real number, not a silent no-op.
 @Test func printedMetricsFallBackForDocumentsWithoutPageGeometry() {
     let doc = Document(blocks: [Block(lines: [Line(spans: [Span(text: "x")])])])
     let m = printedMetrics(doc)
 
     #expect(doc.page == nil)
-    #expect(m.top == Double(PDFMetrics.topPrinted))
-    #expect(m.lead == Double(PDFMetrics.lead))
-    #expect(m.size == PDFMetrics.size)
-    #expect(m.left == Double(PDFMetrics.margin))
-    #expect(m.pageHeight == Double(PDFMetrics.pageHeight))
+    // `.mt 3` (WordStar's own default top margin, WSCHANGE factory table) resolves to
+    // exactly 36pt (3 lines * 12pt/line) -- see PDFMetrics.topPrinted's own doc comment.
+    #expect(m.top == 36.0)
+    // `.lh 8` (1/48in units) -> 8 * 1.5 = 12pt lead, WordStar's dot-matrix-standard 6 LPI.
+    #expect(m.lead == 12.0)
+    // `.cw 12` (10 CPI pica, the WS7 default) IS a 12pt font by the pitch formula
+    // `printedMetricsTrackTheDocumentsOwnDotCommands` derives above (`cw * 1.0`).
+    #expect(m.size == 12)
+    // No `.po` to read -- the pre-2026-08-20 guess of a flat 1in (72pt) margin, kept as
+    // the print-stream-only fallback (real WS7 `.po` measurement doesn't apply: a print
+    // stream's own offset spaces are already in-band).
+    #expect(m.left == 72.0)
+    // US Letter, 11in * 72pt/in.
+    #expect(m.pageHeight == 792.0)
 }
 
 // MARK: - Modern mode
@@ -117,11 +155,16 @@ private func geoDoc(
 /// Modern renders on the document's declared SHEET (Letter/Legal/A4 -- page size joined
 /// the model 2026-08-06, task #16) but keeps its own 1in margins and metrics: the sheet
 /// is the document's, the typography is Modern's. A `.po` never moves Modern's margin.
+// FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): as above -- the original
+// compared against the same named `PDFMetrics` constants `modernMetrics` itself returns
+// verbatim, so a changed constant value could never be caught here. Independent literals,
+// each derived in the comment.
 @Test func modernMetricsIgnoreTheDocumentsGeometry() {
     let legal = modernMetrics(geoDoc(heightIn: 14, sizeName: "Legal", poCols: 20, cw120: 10))
     #expect(legal.pageHeight == 1008.0)                          // the file's own sheet
-    #expect(legal.left == Double(PDFMetrics.margin))             // 72, not .po-derived
-    #expect(legal.top == Double(PDFMetrics.topModern))
-    #expect(legal.capacity == PDFMetrics.linesModern)
-    #expect(legal.size == PDFMetrics.size)
+    #expect(legal.left == 72.0, "1in margin, not .po-derived")   // Modern's own fixed margin
+    #expect(legal.top == 72.0, "1in top margin")
+    // (792 - 2*72) / 12 = 54 lines/page at Modern's fixed 1in margins and 12pt lead.
+    #expect(legal.capacity == 54)
+    #expect(legal.size == 12, "Modern's own Courier figure, 12pt/6 LPI dot-matrix standard")
 }

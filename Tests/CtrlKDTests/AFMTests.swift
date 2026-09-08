@@ -42,5 +42,11 @@ import Testing
 
     // A face the tables do not carry cannot be measured; 600 is this emitter's own default
     // pitch, not a guess at the missing face.
-    #expect(stringWidth1000("abc", "Bembo") == 3 * afmCourierWidth)
+    //
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): `3 * afmCourierWidth`
+    // was the SAME named constant `stringWidth1000`'s own unknown-face fallback returns
+    // (`AFM.swift`'s `afmCourier` array is `afmCourierWidth` repeated) -- a changed
+    // constant would move both sides together. `1800` is the literal (3 * Courier's
+    // documented fixed 600/1000-em pitch), independent of that symbol.
+    #expect(stringWidth1000("abc", "Bembo") == 1800)
 }

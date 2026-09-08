@@ -3,7 +3,8 @@ import Testing
 
 /// Named-test ports for the registry and `convert()`, plus coverage for behavior the
 /// job-010 vectors don't discriminate. Expected values that aren't in the vector file were
-/// produced by running the Python reference (ctrl-kd 1.1.4) locally — same ground truth.
+/// produced by running the Python reference (ctrl-kd 1.1.4) locally — a cross-engine
+/// recording (ctrl-kd), not real WordStar 7.
 
 // MARK: - ports of the Python named tests
 

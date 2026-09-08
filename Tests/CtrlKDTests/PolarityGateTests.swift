@@ -58,9 +58,17 @@ func inlinePolarityViolations(_ data: [UInt8]) -> [(style: Style, bytes: [UInt8]
             }
         }
     }
+    return violatingTags(rawStyles: rawStyles, cleanedStream: out)
+}
+
+/// The actual filter, factored out so an adversarial unit test (`gateFlagsAGenuineSyntheticLeak`
+/// below) can call the SAME code `inlinePolarityViolations` calls instead of hand-copying its
+/// loop — the original version of that test re-typed this exact filter inline, so a bug
+/// introduced here would never have shown up there (Test-Truth-Audit-2026-09-05 section 2(i)).
+func violatingTags(rawStyles: Style, cleanedStream: [UInt8]) -> [(style: Style, bytes: [UInt8])] {
     var violations: [(style: Style, bytes: [UInt8])] = []
     for (style, byteVals) in tagBytes where rawStyles.contains(style) {
-        if !byteVals.contains(where: { out.contains($0) }) {
+        if !byteVals.contains(where: { cleanedStream.contains($0) }) {
             violations.append((style, byteVals))
         }
     }
@@ -116,11 +124,15 @@ func inlinePolarityViolations(_ data: [UInt8]) -> [(style: Style, bytes: [UInt8]
     // A deliberately-constructed adversarial case, to prove the gate itself actually
     // fires: a `.strike` style with no corresponding 0x18 anywhere in the "cleaned
     // stream" -- the shape a genuine record-boundary leak would produce.
+    //
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version
+    // hand-copied `inlinePolarityViolations`'s filter loop inline instead of calling any
+    // shared code, so a bug in the real loop would never show up here. This now calls
+    // `violatingTags` -- the exact function `inlinePolarityViolations` itself calls --
+    // with the same adversarial input, so the two can no longer drift apart.
     let rawStyles: Style = [.strike]
     let out: [UInt8] = Array("no toggle bytes in this cleaned stream at all".utf8)
-    let violations = tagBytes.filter { style, byteVals in
-        rawStyles.contains(style) && !byteVals.contains(where: { out.contains($0) })
-    }
+    let violations = violatingTags(rawStyles: rawStyles, cleanedStream: out)
     #expect(violations.count == 1)
     #expect(violations.first?.style == .strike)
     #expect(violations.first?.bytes == [0x18])

@@ -19,8 +19,23 @@ import Testing
 /// 12pt block (19.2 + 14.4 — the blank line advances at the PRECEDING block's own leading,
 /// not the next block's).
 ///
-/// Unit for -2 ("auto"): 1.2x the style's own font size — matches this codebase's own
-/// Modern-layout "auto/single-spacing" concept, and is exactly what the oracle measured.
+/// UPDATE (mechanism T, ctrl-kd `tools/PCL-DIVERGENCE-TRIAGE.md`, ported at 21e6d94): the
+/// 2026-08-20 oracle above was captured through Robert J. Sawyer's own WSCHANGE-customized
+/// `WS.EXE` (`ws7-prints/v1`) — the same install mechanism S already found to have
+/// contaminated `.po`. WSCHANGE's own settings chart ("Installing and Customizing (WordStar
+/// 7)", "Changing WordStar Settings in WSCHANGE") names this exact feature: "Automatic
+/// leading, 120% of text size", path BCL, factory DEFAULT OFF. A `PRISTINE.EXE` (factory,
+/// no WSCHANGE) recapture of the SAME documents (`ws7-prints/v3`) shows every one of these
+/// numbers at exactly 1/1.2 of the value above — 16.0pt, 12.0pt, and 28.0pt (16.0 + 12.0)
+/// respectively, with zero exceptions across LYING/WARPRAYR/-SCREEN/PREVIEW. Stock WS7's
+/// real "auto" factor is 1.0 (`autoLeadFactor`, `PDFLayout.swift`); every test below now
+/// pins the STOCK numbers — see `autoLeadFactor`'s own doc comment for the full v1-vs-v3
+/// evidence table.
+///
+/// Unit for -2 ("auto"): `autoLeadFactor` (1.0, stock) x the style's own font size — NOT
+/// this codebase's `modernLine` (`PDFModernLayout.swift`, = 1.2), which is a deliberate,
+/// separate Modern/Word convention (CLAUDE.md: "Modern diverges from paper BY DESIGN") and
+/// stays at 1.2 regardless of this fix.
 ///
 /// Unit for an explicit positive vmi: WSFORMAT.WS's own format-spec text ("Word: Font
 /// height in VMIs (1/1440ths)") documents VMI as the SAME 1/1440in unit a font's own
@@ -31,8 +46,9 @@ import Testing
 /// print, though: no oracle exists for a document that actually uses an explicit vmi
 /// (flagged in `styleLeadPt`'s own doc comment).
 ///
-/// Direct port of `tests/test_style_leading.py` (ctrl-kd, commit 9e87a7a) — same pinned
-/// numbers, same case names (Swift-cased), same fixture shapes.
+/// Direct port of `tests/test_style_leading.py` (ctrl-kd, commit 9e87a7a; mechanism T
+/// numbers re-ported at 21e6d94) — same pinned numbers, same case names (Swift-cased),
+/// same fixture shapes.
 
 /// Distinct baseline Y positions, in the order they were drawn — one entry per `Td`
 /// operator in the content stream (the several `BT..ET` blocks a single `PageLine` can
@@ -50,8 +66,13 @@ private func lineYs(_ pdf: [UInt8]) -> [Double] {
 /// Baseline-to-baseline gaps between consecutive drawn lines, in points, rounded to 4
 /// decimals (float subtraction noise only — the writer itself prints one decimal). Port
 /// of `_gaps`.
+///
+/// `pageNumbers: .off`: this module measures LEADING, not page numbers — the stock
+/// automatic number (`.auto`, the real default since 2026-09-07, ws7-prints/v3 finding
+/// #2, ported from ctrl-kd b6d5d03) would otherwise inject its own `Td` span into
+/// `lineYs`' sequence and corrupt the very first gap measured.
 private func gaps(_ doc: Document, mode: EmitMode = .printed) -> [Double] {
-    let pdf = emitPDF(doc, mode: mode)
+    let pdf = emitPDF(doc, mode: mode, options: EmitOptions(pageNumbers: .off))
     let ys = lineYs(pdf)
     guard ys.count > 1 else { return [] }
     var out: [Double] = []
@@ -69,9 +90,11 @@ private let auto16pt = styleRecord(font: (width: 180, height: 320, typestyle: 0)
 private let auto12pt = styleRecord(font: (width: 180, height: 240, typestyle: 0), vmi: -2)
 
 @Test func autoVMILeadingMatchesMeasuredLyingGapProfile() {
-    // Two consecutive lines under the SAME auto-leading style: 16pt style -> 19.2pt gap,
-    // 12pt style -> 14.4pt gap. Pins the oracle's own numbers (LYING.pcl: Title->Author
-    // 192 decipoints, Body-to-Body 144 decipoints).
+    // Two consecutive lines under the SAME auto-leading style: 16pt style -> 16.0pt gap,
+    // 12pt style -> 12.0pt gap (stock autoLeadFactor=1.0). Pins the ws7-prints/v3
+    // (PRISTINE.EXE) oracle's own numbers (LYING.pcl: Title->Author 160 decipoints,
+    // Body-to-Body 120 decipoints — 1/1.2 of the v1/Sawyer-install numbers this test
+    // pinned before mechanism T).
     let lib = styleLibrary([
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "Big", record: auto16pt), (name: "Body", record: auto12pt),
@@ -82,17 +105,17 @@ private let auto12pt = styleRecord(font: (width: 180, height: 240, typestyle: 0)
     #expect(doc.blocks[0].lineHeightVMI == -2)
     #expect(doc.blocks[0].styleFontPt == 16.0)
     let g = gaps(doc)
-    #expect(g.first == 19.2)                        // within the 16pt block
-    #expect(g.last == 14.4)                         // within the 12pt block
+    #expect(g.first == 16.0)                        // within the 16pt block
+    #expect(g.last == 12.0)                         // within the 12pt block
 }
 
 @Test func blankLineBetweenStylesAdvancesAtItsOwnBlocksLeading() {
     // The exact structural shape of LYING.WS itself: a style-ref, one text line, a BLANK
     // line, then a style switch to a smaller style and its own text line. The blank line
-    // attaches to the OLD (16pt) block, so it advances by 19.2pt, not the new block's
-    // 14.4pt — the combined gap across the blank line is 19.2 + 14.4 = 33.6pt, exactly
-    // LYING.pcl's measured 336-decipoint gap ("by Mark Twain" to "Essay, For
-    // Discussion...").
+    // attaches to the OLD (16pt) block, so it advances by 16.0pt, not the new block's
+    // 12.0pt — the combined gap across the blank line is 16.0 + 12.0 = 28.0pt, exactly
+    // LYING.pcl's ws7-prints/v3 measured 280-decipoint gap ("by Mark Twain" to "Essay,
+    // For Discussion...").
     let lib = styleLibrary([
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "Big", record: auto16pt), (name: "Body", record: auto12pt),
@@ -101,11 +124,11 @@ private let auto12pt = styleRecord(font: (width: 180, height: 240, typestyle: 0)
         + styleRef(3) + bytes("First body line.") + HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
     // the blank Line landed on the OLD (16pt) block, confirming which style the measured
-    // 19.2+14.4 split is attributed to
+    // 16.0+12.0 split is attributed to
     #expect(doc.blocks[0].styleName == "Big")
     #expect(doc.blocks[0].lines.count == 2)          // text line + blank
     #expect(doc.blocks[0].lines[1].spans.isEmpty)
-    #expect(gaps(doc) == [33.6])
+    #expect(gaps(doc) == [28.0])
 }
 
 // 16pt / 12pt styles with an EXPLICIT (not auto) vmi=240 -- WARPRAYR.WS's real
@@ -144,13 +167,16 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
     // Fix C's OTHER direction, WARPRAYR's Quote -> Body (a genuinely AUTO style,
     // vmi=-2, into an EXPLICIT vmi=240=12pt style that fits its own font): the
     // entering Body line's own 12.0pt gap is FLOORED at the outgoing Quote block's
-    // own 14.4pt (1.2 x its 12pt font) -- an EXPLICIT style's first line never sits
-    // closer to what preceded it than that content's own natural lead was. Quote's
-    // trailing blank advances at its own unambiguous 14.4pt (auto has no
-    // raw-vs-fallback distinction). Combined: 14.4 + 14.4 = 28.8pt -- WARPRAYR.pcl's
-    // measured gap ('Thunder thy clarion...' to 'Then came the "long" prayer...', 288
-    // decipoints), NOT 14.4 + 12.0 = 26.4 (the pre-Fix-C bug: Body's own entering gap,
-    // un-floored).
+    // own 12.0pt (autoLeadFactor=1.0 x its 12pt font, stock) -- an EXPLICIT style's
+    // first line never sits closer to what preceded it than that content's own
+    // natural lead was (a no-op at stock's factor, since both sides already land on
+    // 12.0 -- the floor's existence is proven by the Sawyer/v1 numbers instead, see
+    // below). Quote's trailing blank advances at its own unambiguous 12.0pt (auto
+    // has no raw-vs-fallback distinction). Combined: 12.0 + 12.0 = 24.0pt --
+    // WARPRAYR.pcl's ws7-prints/v3 measured gap ('Thunder thy clarion...' to 'Then
+    // came the "long" prayer...', 240 decipoints; was 28.8pt = 14.4 + 14.4 under
+    // Sawyer's install/v1, NOT 14.4 + 12.0 = 26.4, the pre-Fix-C bug: Body's own
+    // entering gap, un-floored).
     let lib = styleLibrary([
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "Quote", record: auto12pt), (name: "Body", record: exp240At12pt),
@@ -158,19 +184,20 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
     let body = styleRef(2) + bytes("Last quote line.") + HARD + HARD
         + styleRef(3) + bytes("First body line.") + HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
-    #expect(gaps(doc) == [28.8])
+    #expect(gaps(doc) == [24.0])
 }
 
 @Test func enteringAnAutoStyleIsNeverFloored() {
     // The negative case the floor must NOT fire for: WARPRAYR's Body -> Quote (an
     // EXPLICIT vmi=240=12pt style into a genuinely AUTO one) -- `enteringLeadPt`'s own
     // guard only floors a block being entered that HAS an explicit vmi; Quote (auto)
-    // is entered at its own natural 14.4pt, never floored up against Body's own
-    // outgoing 12.0pt (which wouldn't raise it anyway) or down. Body's trailing blank
-    // advances at its own 12.0pt (vmi=240 fits its 12pt font -- no raw-vs-fallback
-    // distinction possible here either). Combined: 12.0 + 14.4 = 26.4pt --
-    // WARPRAYR.pcl's measured gap ('...that tremendous invocation--' to '"God the
-    // all-terrible!...', 264 decipoints), unchanged by Fix C.
+    // is entered at its own natural 12.0pt (stock), never floored up against Body's
+    // own outgoing 12.0pt (which wouldn't raise it anyway) or down. Body's trailing
+    // blank advances at its own 12.0pt (vmi=240 fits its 12pt font -- no raw-vs-fallback
+    // distinction possible here either). Combined: 12.0 + 12.0 = 24.0pt --
+    // WARPRAYR.pcl's ws7-prints/v3 measured gap ('...that tremendous invocation--' to
+    // '"God the all-terrible!...', 240 decipoints; was 26.4pt = 12.0 + 14.4 under
+    // Sawyer's install/v1), unchanged by Fix C.
     let lib = styleLibrary([
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "Body", record: exp240At12pt), (name: "Quote", record: auto12pt),
@@ -178,7 +205,7 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
     let body = styleRef(2) + bytes("Last body line.") + HARD + HARD
         + styleRef(3) + bytes("First quote line.") + HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
-    #expect(gaps(doc) == [26.4])
+    #expect(gaps(doc) == [24.0])
 }
 
 @Test func explicitVMIIsAbsolutePointsUnlessTooSmallForItsFont() {
@@ -187,17 +214,18 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
     // fonts (WARPRAYR's Body, DARKNESS's Manuscript/Quotation) -- the value does not scale
     // with the font the way -2/auto does, AS LONG AS it is not smaller than the font
     // itself. Finding B (b26-print-fidelity-2, WARPRAYR.pcl): the SAME 240 at a 16pt font
-    // (WARPRAYR's Author/byline) measures 19.2pt on real WS7 -- 1.2 x 16, the SAME auto
-    // formula an unset vmi gets on that line, because 12pt leading cannot hold 16pt type.
-    // Absolute ONLY when it fits; a fallback, not a scaling rule, so a vmi genuinely
-    // larger than its font (never measured, but not this rule's business to invent a
-    // ceiling for) would stay absolute too -- see `styleLeadPt`'s own doc comment for the
-    // full evidence trail, including the reverted vmi==240-always-auto over-generalisation
-    // this fix replaces with a narrower, font-relative one.
+    // (WARPRAYR's Author/byline) measures 16.0pt on real stock WS7 (mechanism T:
+    // autoLeadFactor=1.0 x 16; was 19.2pt/1.2x16 under Sawyer's install, ws7-prints/v1) --
+    // the SAME auto formula an unset vmi gets on that line, because 12pt leading cannot
+    // hold 16pt type. Absolute ONLY when it fits; a fallback, not a scaling rule, so a
+    // vmi genuinely larger than its font (never measured, but not this rule's business to
+    // invent a ceiling for) would stay absolute too -- see `styleLeadPt`'s own doc comment
+    // for the full evidence trail, including the reverted vmi==240-always-auto
+    // over-generalisation this fix replaces with a narrower, font-relative one.
     let exp16 = styleRecord(font: (width: 180, height: 320, typestyle: 0), vmi: 240)
     let exp12 = styleRecord(font: (width: 180, height: 240, typestyle: 0), vmi: 240)
     let body = styleRef(2) + bytes("Line one.") + HARD + bytes("Line two.") + HARD
-    for (rec, want) in [(exp16, 19.2), (exp12, 12.0)] {
+    for (rec, want) in [(exp16, 16.0), (exp12, 12.0)] {
         let lib = styleLibrary([
             (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
             (name: "Exp", record: rec),
@@ -221,7 +249,7 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
     let body = styleRef(2) + bytes("Line one.") + HARD + bytes("Line two.") + HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
     #expect(doc.blocks[0].styleFontPt == nil)
-    #expect(gaps(doc) == [14.4])                     // 1.2 x document default 12pt
+    #expect(gaps(doc) == [12.0])                     // autoLeadFactor (1.0) x document default 12pt
 }
 
 @Test func lhDotCommandOverridesStyleAutoLeading() {
@@ -256,13 +284,17 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
     // Modern PDF already spaces lines by their own font size (a wholly separate,
     // pre-existing mechanism keyed off each span's font tag, not `Block.lineHeightVMI`) --
     // so it is not enough to check for a particular number; two documents that share
-    // EVERY byte except `lineHeightVMI` (-2 'auto' vs 240 'explicit', which printed mode
-    // renders at two different leadings, 14.4pt vs 12.0pt -- proven below) must render to
-    // BYTE-IDENTICAL Modern PDF output, because Modern never reads that field at all. A
-    // 12pt style font (not WARPRAYR's own 16pt byline): Finding B (b26-print-fidelity-2)
-    // makes vmi=240 fall back to the SAME 1.2x-font auto leading a 16pt font gets (see the
-    // sibling "too small for its font" test above), which would make this test's own two
-    // numbers coincide and stop proving printed reads the field at all.
+    // EVERY byte except `lineHeightVMI` (-2 'auto' vs an EXPLICIT vmi, which printed mode
+    // renders at two different leadings, proven below) must render to BYTE-IDENTICAL
+    // Modern PDF output, because Modern never reads that field at all.
+    //
+    // Mechanism T note: at stock autoLeadFactor=1.0, a 12pt font's auto leading (12.0pt)
+    // now numerically COINCIDES with vmi=240 (=12.0pt, exactly fitting a 12pt font) --
+    // using that combination here would no longer prove printed reads the field at all
+    // (both paths would produce 12.0pt regardless of a bug). So this test uses an
+    // explicit vmi that FITS its font but is not equal to it (vmi=300=15.0pt on the same
+    // 12pt font -- 15.0 >= 12.0, no too-small fallback, stays absolute), which stays
+    // genuinely distinct from the auto value at any factor.
     func docWithVMI(_ vmi: Int) -> Document {
         let rec = styleRecord(font: (width: 180, height: 240, typestyle: 0), vmi: vmi)
         let lib = styleLibrary([
@@ -273,11 +305,11 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
         return parseWS(documentWithStyleLibrary(body: body, library: lib))
     }
 
-    let autoDoc = docWithVMI(-2)
-    let explicitDoc = docWithVMI(240)      // explicit 12.0pt (fits its 12pt font)
+    let autoDoc = docWithVMI(-2)            // -2, auto -> 12.0pt (stock)
+    let explicitDoc = docWithVMI(300)       // explicit 15.0pt, fits its 12pt font
 
-    #expect(gaps(autoDoc, mode: .printed) == [14.4])
-    #expect(gaps(explicitDoc, mode: .printed) == [12.0])
+    #expect(gaps(autoDoc, mode: .printed) == [12.0])
+    #expect(gaps(explicitDoc, mode: .printed) == [15.0])
     #expect(emitPDF(autoDoc, mode: .modern) == emitPDF(explicitDoc, mode: .modern))
 }
 
@@ -312,8 +344,16 @@ private func rtfSlSequence(_ r: String) -> [Int] {
     // Title/Author style, 12pt Body style, both auto/-2) -- the real LYING.WS/
     // WARPRAYR.WS b33 clipping case: a 16pt title on a document whose OWN plain default
     // is 12pt. Pre-fix this was a single `\sl-240\slmult0` throughout (12pt, clipping
-    // the 16pt title in Word/TextEdit); now two distinct values, matching the PDF gaps
-    // already proven above 1:1 (19.2pt/14.4pt * 20 twips/pt).
+    // the 16pt title in Word/TextEdit); now two distinct values.
+    //
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original comment
+    // justified the twip values by pointing at "the PDF gaps already proven above"
+    // (another test's own literal, times 20) -- independently re-derived here instead,
+    // straight from real WS7: LYING.pcl's ws7-prints/v3 (stock, mechanism T) measured 160
+    // decipoints (Title->Author) and 120 decipoints (Body-to-Body) -- decipoints are
+    // PCL's own 1/10-point unit, so that IS 16.0pt/12.0pt, not a re-derivation of this
+    // codebase's own arithmetic. RTF's twip (1/1440in, i.e. 20/pt) is external to this
+    // codebase too: 16.0 * 20 = 320, 12.0 * 20 = 240.
     let lib = styleLibrary([
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "Big", record: auto16pt), (name: "Body", record: auto12pt),
@@ -322,16 +362,31 @@ private func rtfSlSequence(_ r: String) -> [Int] {
         + styleRef(3) + bytes("First body line.") + HARD + bytes("Second body line.") + HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
     let r = emitRTF(doc, mode: .printed)
-    #expect(rtfSlSequence(r) == [-384, -288])        // 19.2pt, 14.4pt in twips
-    #expect(!r.contains(#"\sl-240\slmult0"#))        // the pre-fix flat default
+    // Two DISTINCT values is the proof (the pre-fix bug emitted ONE flat \sl throughout)
+    // -- mechanism T note: at stock autoLeadFactor=1.0 the Body style's own correct
+    // 12.0pt legitimately coincides with the NUMBER the old pre-fix bug also used (both
+    // are -240 twips), so checking for that string's absence would no longer distinguish
+    // "still broken" from "correctly differentiated" -- the sequence check below is the
+    // real assertion.
+    #expect(rtfSlSequence(r) == [-320, -240])        // 16.0pt, 12.0pt in twips
 }
 
 @Test func explicitVMITooSmallForFontReachesPrintedRTFToo() {
     // WARPRAYR.WS's real shape: an EXPLICIT vmi (240=12pt) too small for its own 16pt
-    // font falls back to the SAME auto formula (Finding B), 19.2pt -- confirmed at PDF
-    // level by `enteringLineAfterTooSmallVMIStyleUsesRawNotFallback`'s sibling
-    // `explicitVMIIsAbsolutePointsUnlessTooSmallForItsFont`; this pins the identical
-    // value now reaches RTF's `\sl`.
+    // font falls back to the SAME auto formula (Finding B), 16.0pt at stock (mechanism T;
+    // was 19.2pt under Sawyer's install) -- confirmed at PDF level by
+    // `enteringLineAfterTooSmallVMIStyleUsesRawNotFallback`'s sibling
+    // `explicitVMIIsAbsolutePointsUnlessTooSmallForItsFont`.
+    //
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): independently
+    // re-derived rather than "pins the identical value" from that sibling test. VMI is
+    // WordStar's own 1/1440in unit (external fact, not this codebase's invention): the
+    // 16pt style's font height1440 is 320 (320/1440in * 72pt/in = 16pt); its EXPLICIT
+    // vmi=240 is 240/1440in*72 = 12pt, smaller than its own 16pt font, so Finding B's
+    // documented auto-fallback applies -- 16 * autoLeadFactor (1.0, stock) = 16.0pt,
+    // RTF's twip (20/pt, external to this codebase) makes that -320. The 12pt style's
+    // explicit vmi=240 IS its own font height (240/1440*72 = 12pt = its own font1440
+    // 240), so no fallback: 12 * 20 = -240 directly, no `* autoLeadFactor` involved.
     let lib = styleLibrary([
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "Author", record: exp240At16pt), (name: "Body", record: exp240At12pt),
@@ -340,7 +395,7 @@ private func rtfSlSequence(_ r: String) -> [Int] {
         + styleRef(3) + bytes("First body line.") + HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
     let r = emitRTF(doc, mode: .printed)
-    #expect(rtfSlSequence(r) == [-384, -240])         // 19.2pt fallback, 12.0pt fits
+    #expect(rtfSlSequence(r) == [-320, -240])         // 16.0pt fallback, 12.0pt fits
 }
 
 @Test func lhDotCommandOverridesStyleAutoLeadingInRTFToo() {

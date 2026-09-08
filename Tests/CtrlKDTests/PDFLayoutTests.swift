@@ -316,18 +316,32 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
 
 @Test func printedMidDocumentHmFmRepositionsHeaderAndFooterWithMtUntouched() {
     // `.hm`/`.fm` are stateful too (register b31-dot-command-sweep) -- and, unlike
-    // `.mt`/`.mb`/`.pl`, this is measurable even when `.mt` itself NEVER moves: real WS7
-    // (HMFM_PROBE, dosbox-x) held `.mt` at its factory default for the whole document and
-    // still printed its header/footer at two different PCL rows once a mid-document
-    // `.hm 6`/`.fm 6` (factory default `.hm 2`/`.fm 2`) took effect -- 35.7pt/75.6pt
-    // before, 12.0pt/80.4pt after (both within the usual 0.3pt decipoint residual).
+    // `.mt`/`.mb`/`.pl`, this is measurable in the FOOTER even when `.mt` itself NEVER
+    // moves: real WS7 (HMFM_PROBE, dosbox-x, Robert J. Sawyer's own WSCHANGE-customized
+    // WS.EXE) held `.mt` at its factory default for the whole document and still printed
+    // its footer at two different PCL rows once a mid-document `.hm 6`/`.fm 6` (factory
+    // default `.hm 2`/`.fm 2`) took effect -- 75.6pt before, 80.4pt after (within the
+    // usual 0.3pt decipoint residual). `footLine = pl - mb + fm` was already
+    // unconditional, and 66-8+2=60 vs 66-8+6=64 (*12 = 48pt) matches the measured 48pt
+    // shift exactly, no residual.
     //
-    // This also FALSIFIES the mtSource-only header gate (`runningOps`) -- `.mt` is
-    // `.default` on EVERY page here, yet the header row still moves, because `.hm` itself
-    // was explicitly typed (hmSource == .file) on the pages after it. Fixed to an OR of
-    // the two sources; see `runningOps`'s own doc comment. The footer needed no formula
-    // change -- `footLine = pl - mb + fm` was already unconditional, and 66-8+2=60 vs
-    // 66-8+6=64 (*12 = 48pt) matches the measured 48pt shift exactly, no residual.
+    // HEADER numbers UPDATED 2026-09-07 (mechanism W, PCL-DIVERGENCE-TRIAGE.md,
+    // `-README`'s own `ws7-prints/v3` PRISTINE.EXE recapture): HMFM_PROBE's own header
+    // reading here (35.7pt before the mid-document `.hm 6`, 12.0pt after) was ALSO
+    // Sawyer-install-contaminated, the same class of finding as mechanisms S/T --
+    // register b31's own conclusion from it ("hm participates in the header row only
+    // when mtSource == .file OR hmSource == .file") is SUPERSEDED: hm participates
+    // UNCONDITIONALLY (see `runningOps`'s own doc comment). For THIS fixture's own
+    // values that means the header sits at the SAME row (headBase 0, clipped:
+    // max(0,3-2-1)=0 before, max(0,3-6-1)=0 after) on every page -- `.mt` staying at its
+    // factory default the whole document already puts hm's participation past the clip
+    // floor before `.hm` ever changes, so no visible header movement survives the
+    // correction for this specific mid-document delta; HMFM_PROBE's own apparent header
+    // movement was entirely the retired gate's own artifact, not a real stock behaviour
+    // this fixture can still demonstrate. The CHECKPOINT machinery this test exists to
+    // pin (per-page hm/fm state, independent of `.mt`) is unaffected and still fully
+    // exercised below -- via the footer's own real movement and via
+    // `pages[].hmLines`/`hmFmCheckpoints` directly.
     //
     // Register b31, E3 open items 2+3 (2026-08-25, ctrl-kd 5f3a102): `.hm6`/`.fm6` here
     // sit AFTER 60 lines of real body text, so `parsePageDot` (pre-text-last-wins) no
@@ -340,8 +354,9 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // all (both readings now agree at 2.0), and pages 3-4 are the ones that genuinely
     // deviate and get the explicit override instead -- the override has moved to the
     // pages that actually changed, which is what it should have been pointing at all
-    // along. The measured PCL rows (ysH/ysF below) are real WS7 ground truth and do not
-    // move.
+    // along. The measured FOOTER PCL rows (ysF below) are real WS7 ground truth and do
+    // not move; the HEADER rows (ysH) are this engine's own corrected-formula output, no
+    // longer pinned against HMFM_PROBE's own contaminated reading.
     var data = bytes(".he TITLE") + HARD + bytes(".fo FOOTTXT") + HARD
     for i in 1...60 { data += bytes("Body line \(i).") + HARD }
     data += bytes(".pa") + HARD + bytes(".hm6") + HARD + bytes(".fm6") + HARD
@@ -365,7 +380,7 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     let spans = contentSpans(pdf)
     let ysH = spans.filter { $0.text == "TITLE" }.compactMap(\.y)
     let ysF = spans.filter { $0.text == "FOOTTXT" }.compactMap(\.y)
-    #expect(ysH == [756.0, 756.0, 780.0, 780.0])
+    #expect(ysH == [780.0, 780.0, 780.0, 780.0])
     #expect(ysF == [60.0, 60.0, 12.0, 12.0])
 }
 
@@ -381,6 +396,60 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     #expect(hm == doc.page?.hmLines && fm == doc.page?.fmLines)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.allSatisfy { $0.hmLines == nil && $0.fmLines == nil })
+}
+
+// MARK: - mechanism O (ctrl-kd 55d2b52): per-page .po
+
+@Test func printedMidDocumentPoRepositionsTheRunningHead() {
+    // `.po` (page offset) is stateful too, same mechanism as `.mt`/`.mb`/`.pl`/`.hm`/`.fm`
+    // above (mechanism O, ctrl-kd 55d2b52 -- corrects the SCRIPT-divergence triage's false
+    // "LQ-850 driver" claim). Real WS7 (SCRIPT.WS, sawyer archive): its own worked-example
+    // figures reset `.po` to `.5"` (5 columns) alongside the `.mt`/`.hm` changes
+    // `mtMbCheckpoints`/`hmFmCheckpoints` already track for the SAME figures, and the
+    // figure pages' own running head ("PROFILES MONTH '88 SCRIPT.001...") moves LEFT with
+    // it in WS7's real capture -- this engine used to leave it at the document's global
+    // `.po` (57.6pt, the WS7-manual `.8"` factory default) regardless, a fixed 21.6pt
+    // (3-column) residual on every word of the header line, both figure pages.
+    //
+    // Body text already carried a mid-document `.po` change correctly (`Line.poCols`,
+    // applied per line in `resolvePlainBody`/`resolvePrintedBody`) -- this pins the
+    // `runningOps` (header/footer) side of the fix directly: a document whose SECOND page
+    // moves `.po` to 5 columns must render that page's own running head 21.6pt to the LEFT
+    // of the first page's, matching WS7, not at the document's unchanged global offset.
+    var data = bytes(".he TITLE") + HARD
+    for i in 1...20 { data += bytes("Body line \(i).") + HARD }
+    data += bytes(".pa") + HARD + bytes(".po5") + HARD
+    for i in 1...20 { data += bytes("Page2 line \(i).") + HARD }
+    let doc = parseWS(data)
+    #expect(doc.page?.poCols == 8.0)      // global: unaffected (pre-text-last-wins), same
+                                           // as .hm/.fm/.pl's own sibling tests -- `.po5`
+                                           // sits after 20 real body lines
+    let checkpoints = poCheckpoints(doc)
+    #expect(poAt(checkpoints, 0) == 8.0)
+    #expect(checkpoints[checkpoints.count - 1].po == 5.0)   // the figure's own override
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages.count == 2)
+    #expect(pages[0].poCols == nil)       // untouched: "use the doc global"
+    #expect(pages[1].poCols == 5.0)
+    let pdf = emitPDF(doc, mode: .printed)
+    let spans = contentSpans(pdf)
+    let xs = spans.filter { $0.text == "TITLE" }.compactMap(\.x)
+    #expect(xs == [57.6, 36.0])           // 8 cols vs 5 cols * 7.2pt/col
+}
+
+@Test func printedSingleGeometryDocumentNeverTouchesPoCheckpoints() {
+    // A document that declares `.po` once, up front (or never at all -- every document this
+    // project rendered before SCRIPT.WS's figures), never gets a per-page render-time
+    // override -- byte-identical to before this fix. Mirrors the `.hm`/`.fm`/`.pl` sibling
+    // tests above.
+    var data = bytes(".po5") + HARD
+    for i in 1...20 { data += bytes("Body line \(i).") + HARD }
+    let doc = parseWS(data)
+    let checkpoints = poCheckpoints(doc)
+    #expect(poAt(checkpoints, 0) == 5.0)
+    #expect(poAt(checkpoints, 0) == doc.page?.poCols)
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages.allSatisfy { $0.poCols == nil })
 }
 
 // MARK: - register b31-dot-command-sweep: per-page .pn
@@ -754,7 +823,9 @@ private let fakeBinary = Emitter(name: "fake", ext: ".fake") { doc, _, _ in
     let doc = parseWS(data)
     let pages = docToPagelines(doc, printed: false)
     let flat = pages.flatMap { $0.map { $0.map(\.text).joined() } }
-    #expect(flat.contains("1. Foot text."))
+    // no separating space (planning #202 residuals round, ctrl-kd 1017391, LYING.pcl's
+    // own "1.Did" -- see `footerEntryLines`'s own doc comment)
+    #expect(flat.contains("1.Foot text."))
     #expect(flat.contains("(1) End text."))
     #expect(!flat.contains("[1] Foot text."))
     #expect(!flat.contains("[2] End text."))
@@ -939,28 +1010,34 @@ private func hfDoc(_ n: Int = 120) -> [UInt8] {
 @Test func headerAndFooterLandWhereWordStarPutsThem() {
     // Header placement MEASURED on WordStar 4 (2026-08-03): header on page line 0,
     // footer on line 60 (.pl - .mb + .fm) -- `runningOps` positions both independently
-    // of `printedTop`. Body start was ALSO measured at line 3 (.mt alone) on WS4 at the
-    // time, but that reading is now SUPERSEDED by real WS7 evidence (round 26,
-    // fidelity_gate.py Finding A): -README (ws7-prints/v1), a genuine WS7 capture with a
-    // `.h1` header, prints its body at line 5 (.mt 3 + .hm 2) on every headered page, the
-    // same offset headerless WS7 documents already measure -- `printedTop` reserves
-    // `.hm` unconditionally now. 55 body lines per page is capacity (`printedCap`),
+    // of `printedTop`. Body start line UPDATED (mechanism U, ctrl-kd
+    // `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3` PRISTINE.EXE round, commit 26169cd):
+    // line 3 (`.mt` alone), matching the ORIGINAL WS4 reading -- the intervening
+    // "`.mt`+`.hm` = line 5" reading (round 26, fidelity_gate.py Finding A,
+    // -README/ws7-prints/v1) turned out to be measuring Robert J. Sawyer's own
+    // WSCHANGE-customized WS.EXE, not stock WS7; a PRISTINE.EXE (factory) recapture of 5
+    // default-`.mt` documents all measure `.mt` alone, zero residual -- see
+    // `printedTop`'s own doc comment. 55 body lines per page is capacity (`printedCap`),
     // unaffected by where line 0 sits. Asserted in lines, not points, so it stays
     // readable.
     //
-    // HEADER line ALSO superseded (b26-header-baseline), by the SAME -README capture:
-    // `.hm` at this fixture's DEFAULT value (2, `hfDoc` never states `.hm`) does not
-    // participate in the header's own placement -- WS7's real header baseline for an
-    // all-default document (-README: .mt 3 default, .hm 2 default) is line 2
-    // (mt - topHead, 35.7pt measured, NOT line 0), not line 0. See `runningOps`'s own
-    // doc comment for the full four-point derivation (-README plus three SCRIPT.WS
-    // pages, `.hm` explicit there and mid-document `.mt` changes on two of them) that
-    // settles `.hm`'s default-vs-explicit participation with no exception. FOOTER line
-    // is UNCHANGED and still real WS4 evidence -- checked for the same asymmetry and
-    // explicitly NOT extended to `.fm` (see `runningOps`): this test is the reason why,
-    // and stays the anchor for it. `.fm` here is ALSO at its default value (2), so this
-    // is exactly the discriminating case: header ignores a default `.hm`, footer does
-    // not ignore a default `.fm`.
+    // HEADER line (b26-header-baseline/b31/mechanism W) UPDATED 2026-09-07 (mechanism W,
+    // PCL-DIVERGENCE-TRIAGE.md): `.hm` at this fixture's DEFAULT value (2, `hfDoc` never
+    // states `.hm`) DOES participate in the header's own placement -- a `PRISTINE.EXE`
+    // (stock, no WSCHANGE) recapture of `-README` (`ws7-prints/v3`, mt 3 default/hm 2
+    // default, the exact combination this fixture reproduces) measures its real header
+    // baseline at line 0 (headBase 0 = mt - hm - topHead, 12.0pt measured, NOT line
+    // 2/35.7pt) -- the OLDER "35.7pt/line 2" reading (b26-header-round2, register b31)
+    // turned out to be measuring Robert J. Sawyer's own WSCHANGE-customized WS.EXE, the
+    // same install mechanisms S and T already found personalizes settings mistaken for
+    // WordStar 7's stock behaviour. See `runningOps`'s own doc comment for the full
+    // derivation and why this does not reopen SCRIPT.WS's own (still-clean, still
+    // mt/hm-explicit) header rows. FOOTER line is UNCHANGED and still real WS4 evidence
+    // -- checked for the same asymmetry and explicitly NOT extended to `.fm` (see
+    // `runningOps`): this test is the reason why, and stays the anchor for it. `.fm`
+    // here is ALSO at its default value (2); unlike the header, the footer's own `.fm`
+    // was ALREADY applying unconditionally before mechanism W, so nothing here changes
+    // for it.
     let doc = parseWS(hfDoc())
     let pdf = emitPDF(doc, mode: .printed)
     func lineOf(_ y: Double) -> Int { Int((792.0 - y - 12.0) / 12.0 + 0.5) }
@@ -971,26 +1048,32 @@ private func hfDoc(_ n: Int = 120) -> [UInt8] {
     let hdr = spans.filter { $0.text.contains("HEADER-TEXT") }.compactMap(\.y).map(lineOf)
     let txt = spans.filter { $0.text.hasPrefix("LINE") }.compactMap(\.y).map(lineOf)
     let ftr = spans.filter { $0.text.contains("FOOTER-TEXT") }.compactMap(\.y).map(lineOf)
-    #expect(hdr == [2], "header should sit at mt(3)-topHead(1) = line 2 (.hm 2 is default, ignored), got \(hdr)")
-    #expect(txt.first == 5, "body should start at .mt+.hm = 5, got \(String(describing: txt.first))")
+    #expect(hdr == [0], "header should sit at mt(3)-hm(2)-topHead(1) = line 0 (.hm participates unconditionally), got \(hdr)")
+    #expect(txt.first == 3, "body should start at .mt alone = 3, got \(String(describing: txt.first))")
     #expect(txt.count == 55, "55 body lines per page, got \(txt.count)")
     #expect(ftr == [60], "footer at .pl-.mb+.fm = 60 (.fm UNCHANGED, still applies at its default), got \(ftr)")
 }
 
-@Test func headerBaselineIgnoresADefaultHm() {
-    // b26-header-baseline (-README.WS): the -README shape directly -- ALL default page
-    // geometry (.mt 3 default, .hm 2 default, matching `doc.page?.hmSource == .default`).
-    // WS7's real header baseline there is 35.7pt (top-down), i.e. headBase 2 = mt(3) -
-    // topHead(1) -- NOT mt - hm - topHead (0, the pre-fix bug: 12.0pt, 24pt too high).
-    // Pinned here at 36.0pt (the same 0.3pt decipoint residual every other measured
-    // constant in this project carries).
+@Test func headerBaselineUsesADefaultHmToo() {
+    // mechanism W (PCL-DIVERGENCE-TRIAGE.md, planning task, 2026-09-07), SUPERSEDES
+    // b26-header-baseline: the -README shape directly -- ALL default page geometry
+    // (.mt 3 default, .hm 2 default, matching `doc.page?.hmSource == .default`). A
+    // `PRISTINE.EXE` (stock, no WSCHANGE) recapture of `-README` (`ws7-prints/v3`)
+    // measures its real header baseline at 12.0pt (top-down), i.e. headBase 0 = mt(3) -
+    // hm(2) - topHead(1) -- hm FULLY SUBTRACTED even though both `.mt` and `.hm` are at
+    // their document defaults. The OLDER reading pinned here (35.7pt, headBase 2, hm
+    // zeroed) was `ws7-prints/v1`'s own measurement of Robert J. Sawyer's
+    // WSCHANGE-customized WS.EXE, not stock WordStar 7 -- the same class of install
+    // contamination mechanisms S (`.po`) and T (auto-leading) already found and
+    // corrected. Pinned here at 12.0pt (the same 0.3pt decipoint residual every other
+    // measured constant in this project carries).
     var data = bytes(".he TITLE") + HARD
     for i in 1...9 { data += bytes("Body line \(i).") + HARD }
     let doc = parseWS(data)
     #expect(doc.page?.hmSource == .default)
     let pdf = emitPDF(doc, mode: .printed)
     let ys = contentSpans(pdf).filter { $0.text == "TITLE" }.compactMap(\.y)
-    #expect(ys == [756.0])                    // 792 - 36.0
+    #expect(ys == [780.0])                    // 792 - 12.0
 }
 
 @Test func headerBaselineAppliesADefaultHmOnceMtIsExplicit() {

@@ -28,7 +28,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -58,7 +58,7 @@
     "text_lines": 73
    },
    "printed_cap": 73,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -88,7 +88,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -148,7 +148,7 @@
     "text_lines": 27
    },
    "printed_cap": 27,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 24.0
   },
   {
@@ -178,7 +178,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -208,7 +208,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -238,7 +238,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -268,7 +268,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -298,7 +298,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -328,7 +328,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 48,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -418,7 +418,7 @@
     "text_lines": 23
    },
    "printed_cap": 23,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 28.346456692913385
   },
   {
@@ -448,7 +448,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0
   },
   {
@@ -478,7 +478,7 @@
     "text_lines": 55
    },
    "printed_cap": 55,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 12.0,
    "printed_page_line_counts": [
     55,
@@ -513,7 +513,7 @@
     "text_lines": 27
    },
    "printed_cap": 27,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 24.0,
    "printed_page_line_counts": [
     27,
@@ -585,12 +585,12 @@
     "text_lines": 23
    },
    "printed_cap": 23,
-   "printed_top": 60,
+   "printed_top": 36,
    "printed_lead": 28.346456692913385,
    "pdf_td_y_first3": [
-    "703.7",
-    "675.3",
-    "647.0"
+    "727.7",
+    "699.3",
+    "671.0"
    ]
   }
  ],

@@ -13,17 +13,24 @@ import Testing
 /// "this line is set in face N and starts at stop M": the 0x02 font block, then the 0x09
 /// tab block, then the text) no longer reached that padding. The padding kept the OUTGOING
 /// font instead of the incoming one, and `fontLeadPt` -- which sizes a line's leading to
-/// 1.2 x the LARGEST proportional font tagged ANYWHERE on it, and carries that size
-/// forward through blank lines via `state` -- duly measured the line against the previous,
-/// larger face. OLDTIMES's 18pt title bled onto its 14pt byline: 1.2 x (18 - 14) = 4.8pt
-/// on the byline's own line, 4.8pt again on the blank after it (whose carried `state` was
-/// raised the same way), 9.6pt cumulative for the rest of the document, which cost page 1
-/// a line.
+/// `autoLeadFactor` x the LARGEST proportional font tagged ANYWHERE on it (1.2x when this
+/// defect was found, before mechanism T's correction to stock's real 1.0x -- see
+/// `autoLeadFactor`'s own doc comment), and carries that size forward through blank lines
+/// via `state` -- duly measured the line against the previous, larger face. OLDTIMES's
+/// 18pt title bled onto its 14pt byline: 1.2 x (18 - 14) = 4.8pt on the byline's own line,
+/// 4.8pt again on the blank after it (whose carried `state` was raised the same way),
+/// 9.6pt cumulative for the rest of the document, which cost page 1 a line.
+///
+/// (Mechanism T, `autoLeadFactor`'s own doc comment: the "1.2x" factor this defect's own
+/// arithmetic used has since been corrected to stock WS7's real `autoLeadFactor`, 1.0 --
+/// the defect's SHAPE, a larger outgoing font bleeding into a smaller line's advance, is
+/// unchanged by that fix and is what this test still guards; only the literal point
+/// values below moved from the 1.2x figures to 1.0x ones.)
 ///
 /// Pinned as the ARITHMETIC, not just "unchanged": the 14pt line's own
-/// baseline-to-baseline advance must be 1.2 x 14 = 16.8pt whether its text is reached by a
-/// tab or typed flush, never 1.2 x 18 = 21.6pt. The fixture's two documents differ ONLY in
-/// the tab.
+/// baseline-to-baseline advance must be `autoLeadFactor` x 14 = 14.0pt (stock) whether its
+/// text is reached by a tab or typed flush, never `autoLeadFactor` x 18 = 18.0pt. The
+/// fixture's two documents differ ONLY in the tab.
 @Test func aTabNeverMovesALineVertically() {
     let helv = helvTypestyle()
     let tab = ws7Block(0x09, payload: le16(10) + le16(1000) + bytes(" \r"))
@@ -52,12 +59,13 @@ import Testing
     #expect(typed.count == 3)
     // The tab moves the BYLINE sideways and nothing else: every y identical.
     #expect(tabbed == typed)
-    // ...and the 14pt line's advance is its OWN font's 1.2x lead, not the 18pt title's,
-    // in both spellings.
+    // ...and the 14pt line's advance is its OWN font's autoLeadFactor lead (1.0x stock,
+    // mechanism T -- was 1.2x under Sawyer's install), not the 18pt title's, in both
+    // spellings.
     for measured in [typed, tabbed] {
         let advance = tenth(measured["Byline"]! - measured["Third"]!)
-        #expect(advance == 16.8)                      // 1.2 x 14
-        #expect(advance != 21.6)                      // NOT 1.2 x 18
+        #expect(advance == 14.0)                      // 1.0 x 14
+        #expect(advance != 18.0)                      // NOT 1.0 x 18
     }
 }
 

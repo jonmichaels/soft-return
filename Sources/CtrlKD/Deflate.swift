@@ -68,6 +68,20 @@
 /// on both, not a coincidental same-size stand-in. `Bytef` is `unsigned char`, i.e.
 /// `UInt8`. (Windows' LLP64, where `unsigned long` is 32-bit, would break this
 /// assumption — this package does not target Windows.)
+///
+/// OFFERING BOTH (Jon ruled 2026-08-31, "Yes to offering both on the next
+/// version"): round 21e's `@_extern(c:)` needs `-enable-experimental-feature
+/// Extern`, which does not exist pre-Swift-6.0 toolchains — the floor the
+/// Homebrew formula (Xcode 16 / Swift 6.0+) doesn't share with the SR PKG
+/// floor (macOS 10.15+, an older toolchain). `#if compiler(>=6.0)` keeps
+/// round 21e's declarations for the toolchains that have `Extern`; `#else`
+/// restates round 21d's `@_silgen_name` form — the mechanism this file used
+/// BEFORE 21e's correction (see the file-level doc above) — for the older
+/// floor. Both bind the exact same three C symbols with the exact same
+/// signatures; only the declaration mechanism differs, so `zlibCompress`
+/// below is identical either way and the byte-exact tripwire tests
+/// (`PixTests.swift`) exercise whichever branch actually compiled.
+#if compiler(>=6.0)
 @_extern(c, "compress2")
 func c_compress2(_ dest: UnsafeMutablePointer<UInt8>, _ destLen: UnsafeMutablePointer<UInt>,
                  _ source: UnsafePointer<UInt8>, _ sourceLen: UInt, _ level: Int32) -> Int32
@@ -78,6 +92,18 @@ func c_compressBound(_ sourceLen: UInt) -> UInt
 @_extern(c, "uncompress")
 func c_uncompress(_ dest: UnsafeMutablePointer<UInt8>, _ destLen: UnsafeMutablePointer<UInt>,
                   _ source: UnsafePointer<UInt8>, _ sourceLen: UInt) -> Int32
+#else
+@_silgen_name("compress2")
+func c_compress2(_ dest: UnsafeMutablePointer<UInt8>, _ destLen: UnsafeMutablePointer<UInt>,
+                 _ source: UnsafePointer<UInt8>, _ sourceLen: UInt, _ level: Int32) -> Int32
+
+@_silgen_name("compressBound")
+func c_compressBound(_ sourceLen: UInt) -> UInt
+
+@_silgen_name("uncompress")
+func c_uncompress(_ dest: UnsafeMutablePointer<UInt8>, _ destLen: UnsafeMutablePointer<UInt>,
+                  _ source: UnsafePointer<UInt8>, _ sourceLen: UInt) -> Int32
+#endif
 
 /// zlib's own `Z_OK` (0) — no header is imported to read the real constant from, so
 /// this is restated here rather than imported.

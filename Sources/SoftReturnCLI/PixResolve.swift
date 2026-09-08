@@ -165,7 +165,10 @@ func probePixCandidates(_ tagPayload: String, docPath: String, environment: CLIE
 /// Decoding happens ONCE per document here regardless of how many output formats get
 /// requested — call this once, pass the result array to every emit call for that
 /// document. Port of `resolve_document_pictures`.
-func resolveDocumentPictures(_ doc: Document, docPath: String, environment: CLIEnvironment) -> [PixResult] {
+/// `package` (not `internal`), planning #205 Task 2 -- same reasoning as `pagePresets`
+/// (`Arguments.swift`): `Sources/GenerateSawyerPresetDriftSR` needs real pix resolution to
+/// render the self-recorded `sawyer`-preset drift file.
+package func resolveDocumentPictures(_ doc: Document, docPath: String, environment: CLIEnvironment) -> [PixResult] {
     var results: [PixResult] = []
     for (idx, rawPath) in doc.graphics.enumerated() {
         var r = PixResult(index: idx, rawPath: rawPath)

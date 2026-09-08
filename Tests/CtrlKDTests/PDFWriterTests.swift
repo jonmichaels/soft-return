@@ -294,8 +294,11 @@ import Testing
 @Test func pageStreamSupWinsOverSubWhenBothAreSet() {
     // Python's nested conditional resolves the contradiction toward `sup`; a span carrying
     // both is not something the parser produces, but the branch is there and asymmetric.
+    // Mechanism G (ctrl-kd f328838): a fontless span's family still resolves to Courier
+    // (`pdfFamily(nil) == .courier`), so this now reduces by Courier's own measured 9.25/12
+    // ratio (round(12 * 9.25/12) = 9), not the old flat 2/3 (8).
     let line: Page = [[Span(text: "x", styles: [.sup, .sub])]]
-    #expect(latin1(pageStream(line, top: 72)).contains("/F1 8 Tf 3 Ts"))
+    #expect(latin1(pageStream(line, top: 72)).contains("/F1 9 Tf 3 Ts"))
 }
 
 // MARK: - emit_pdf gaps
@@ -411,15 +414,18 @@ import Testing
 
 @Test func emitPDFHonoursPrintedModeAndTheDocumentsOwnVerdict() {
     // Two ways to reach the printed layout, and the top margin is how you tell: `ws` is
-    // headerless, so `printedTop` reserves BOTH `.mt` (default 3) and `.hm` (default 2) --
-    // (3+2)*12 = 60pt -- and the first (unstyled) line's own lead equals the document
-    // default 12pt: 792-60-12 = 720.0 printed (b26 round 26 wave 3, WS7 ground truth --
-    // was 792-36-12=744.0, `.mt` alone). Modern's own geometry changed under the
-    // Modern-PDF rewrite (ruling 2026-08-05): the first BASELINE is
-    // `PAGE_H - margt - lineHeight`, not `- size` — a visual line's height is `1.2 x` its
-    // own type size (single-spacing), not the fixed 12pt Courier lead — so fontless Times
-    // at the sophisticated 14pt gives 792 - 72 - (1.2 * 14) = 703.2, not the old
-    // Courier-grid 708.0.
+    // headerless, so `printedTop` reserves `.mt` alone (default 3 lines) -- 3*12 = 36pt --
+    // and the first (unstyled) line's own lead equals the document default 12pt:
+    // 792-36-12 = 744.0 printed. UPDATED (mechanism U, ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`,
+    // `ws7-prints/v3` PRISTINE.EXE round, commit 26169cd): `.hm` is never added on top of
+    // `.mt` -- the intervening (.mt+.hm)*12=60pt reading (b26 round 26 wave 3) was measured
+    // only against Robert J. Sawyer's own WSCHANGE-customized install; a PRISTINE.EXE
+    // recapture settles on `.mt` alone, matching the ORIGINAL reading. Modern's own
+    // geometry changed under the Modern-PDF rewrite (ruling 2026-08-05): the first
+    // BASELINE is `PAGE_H - margt - lineHeight`, not `- size` — a visual line's height is
+    // `1.2 x` its own type size (single-spacing), not the fixed 12pt Courier lead — so
+    // fontless Times at the sophisticated 14pt gives 792 - 72 - (1.2 * 14) = 703.2, not
+    // the old Courier-grid 708.0.
     let ws = parseWS(ws4Text("Some words here") + HARD)
     #expect(ws.detection?.variant == .ws4)
     #expect(latin1(emitPDF(ws, mode: .modern)).contains("72.0 703.2 Td"))
@@ -428,7 +434,7 @@ import Testing
     // default 8 columns at the FIXED 7.2pt/column (ctrl-kd ace279b, pitch-independent) --
     // 8 * 7.2 = 57.6pt, the WS7 manual's ".8 inch" (PDFLayout.swift's `printedLeft`), not
     // the old 72.0.
-    #expect(latin1(emitPDF(ws, mode: .printed)).contains("57.6 720.0 Td"))
+    #expect(latin1(emitPDF(ws, mode: .printed)).contains("57.6 744.0 Td"))
 
     // A print stream overrides `modern` — `isPrinted` wins, because reflowing a document
     // whose layout IS its content destroys it.
@@ -464,13 +470,14 @@ import Testing
     let text = latin1(emitPDF(doc, mode: .printed))
     #expect(text.contains("/MediaBox [0 0 612 600]"))
     #expect(!text.contains("/MediaBox [0 0 612 792]"))
-    // Y-origin: this fixture is headerless, so `printedTop` reserves `.mt`+`.hm`
-    // (3+2)*12 = 60pt (b26 round 26 wave 3, WS7 ground truth — was `.mt` alone, 36pt),
-    // and the single (unstyled) line's own lead equals the document default 12pt:
-    // 600 - 60 - 12 = 528.0, not modern's or Letter's 744.0.
+    // Y-origin: this fixture is headerless, so `printedTop` reserves `.mt` alone, 3*12 =
+    // 36pt (mechanism U, ctrl-kd commit 26169cd — was `.mt`+`.hm` = 60pt, b26 round 26
+    // wave 3, since found to be measuring Sawyer's own WSCHANGE-customized install, not
+    // stock WS7), and the single (unstyled) line's own lead equals the document default
+    // 12pt: 600 - 36 - 12 = 552.0, not modern's or Letter's 744.0.
     // Left margin: ctrl-kd 2.0.0's `.po`-derived 57.6pt (8 * 12 * 0.6), not the old fixed
     // 72.0 this emitter used to guess (see `emitPDFHonoursPrintedModeAndTheDocumentsOwnVerdict`).
-    #expect(text.contains("57.6 528.0 Td"))
+    #expect(text.contains("57.6 552.0 Td"))
 
     // Modern mode on the SAME document renders on the file's declared sheet too since
     // page size joined the model (2026-08-06, task #16) -- the custom 50-line page.

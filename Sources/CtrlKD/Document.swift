@@ -304,6 +304,31 @@ public struct HFEvent: Hashable, Sendable {
     }
 }
 
+/// A `.h#`/`.f#` line's own RIGHT/CENTER/DECIMAL-align tab (WSFORMAT type-9 symmetric
+/// sequence), when its typed text carries one — see `Document.headerTabs`/`footerTabs`.
+/// Port of Python's `Document.header_tabs`/`footer_tabs` tuple entry (planning #202,
+/// ctrl-kd 605e27b).
+public struct HFTabMark: Hashable, Sendable {
+    /// Character offset where the tab's own BAKED padding run (already expanded to
+    /// `cols` space characters when the file was last saved, exactly like a body span's
+    /// tab — see `SymmetricBlocks.swift`'s `tabColumns`) sits within the FINAL decoded
+    /// `headers[line]`/`footers[line]` string.
+    public var charIdx: Int
+    /// The tab's own baked column count — WordStar's own screen shows the literal '#'
+    /// token, one column, never the eventual printed page number, so this is always
+    /// sized for a 1-digit substitution.
+    public var cols: Int
+    /// The tab's own absolute target column, in HMI (1/1800in) — content[2:4], the SAME
+    /// field a body span's own tab mark carries.
+    public var absHMI: Int
+
+    public init(charIdx: Int, cols: Int, absHMI: Int) {
+        self.charIdx = charIdx
+        self.cols = cols
+        self.absHMI = absHMI
+    }
+}
+
 /// COMMENT.BUG: a documented WordStar bug (Sawyer, WS archive REF notes, 2013) — see
 /// `ParsePrintstream.swift`'s `detectCommentBug` for the full writeup. Detection is
 /// necessarily a heuristic; read this as "this signature is present", not "this file
@@ -543,6 +568,14 @@ public struct Document: Hashable, Sendable {
     /// mid-file keeps only the last one seen.
     public var headerFonts: [Int: Int] = [:]
     public var footerFonts: [Int: Int] = [:]
+    /// This line's own right/center/decimal-align tab (WSFORMAT type-9), when its typed
+    /// `.h#`/`.f#` text carries one — planning #202, -README.WS's own running head (see
+    /// `HFTabMark`). Absent (the common case — most `.h#`/`.f#` lines have no tab of
+    /// their own) means `runningOps`'s `hfLineOps` falls back to the baked text
+    /// unchanged, byte-identical to before this existed. FINAL STATE, the same
+    /// limitation `headerFonts`/`footerFonts` have.
+    public var headerTabs: [Int: HFTabMark] = [:]
+    public var footerTabs: [Int: HFTabMark] = [:]
     /// Every `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` occurrence, in document order, with the
     /// block it precedes — see `HFEvent`. `headers`/`footers` above are the FINAL state,
     /// a convenience view kept for callers that don't need per-page replay.

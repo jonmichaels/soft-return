@@ -3,9 +3,15 @@ import Testing
 @testable import CtrlKD
 
 /// The Printed-mode footnote/endnote/annotation layout — WordStar 5's page-bottom
-/// footnote area, per the WordStar manual algorithm quoted in the job brief. Ground truth
-/// is the SAME `Fixtures/notes-vectors-1.2.0.json` `NotesVectorTests.swift` uses for
-/// `notes[]`/`meta`, but this file decodes the one field that one deliberately skips:
+/// footnote area, per the WordStar manual algorithm quoted in the job brief.
+///
+/// RELABELED (planning #199, Test-Truth-Audit-2026-09-05 finding): this file's expected
+/// values are a cross-engine recording (ctrl-kd) — `Fixtures/notes-vectors-1.2.0.json`
+/// asserts `file.generator == "ctrl-kd 1.2.0"` (see `printedFootnoteLayoutMatchesAllSix-
+/// Vectors` below) — the PYTHON engine's own output on synthetic inputs, not real
+/// WordStar 7. A divergence here means the Swift port disagrees with Python, never that
+/// either disagrees with WordStar. The SAME file is what `NotesVectorTests.swift` uses for
+/// `notes[]`/`meta`; this file decodes the one field that one deliberately skips:
 /// `printed_pagelines`, the exact expected page-by-page, line-by-line Printed output.
 ///
 /// `Foundation` is imported here for `JSONDecoder`/`Bundle` only; the `CtrlKD` library
@@ -160,17 +166,25 @@ private func manyWords(_ n: Int) -> String {
 //
 // "Except after the last page of regular text, where footnotes are printed at the top of
 // the page." Python renders EVERY area — bottom-of-page and these trailing top-of-page
-// ones alike — through `_render_area`, whose header is always the same 3 lines:
-// blank / 20-dash separator / blank. The Swift trailing loop used `fitFooter` with
-// `leadingBlank: false`, which dropped the leading blank and emitted a 1-line header
-// (separator only) — a shape divergence from the oracle on any document whose notes
-// overflow past the last body page. Ported 2026-08-18: the trailing loop now goes through
-// the same `admitFootnotes`/`renderArea` pair as the in-page area.
-@Test func trailingNotesPageCarriesTheFullThreeLineHeader() {
+// ones alike — through `_render_area`, whose header used to be 3 lines: blank / 20-dash
+// separator / blank. The Swift trailing loop used `fitFooter` with `leadingBlank: false`,
+// which dropped the leading blank and emitted a 1-line header (separator only) — a shape
+// divergence from the ctrl-kd recording on any document whose notes overflow past the
+// last body page. Ported 2026-08-18: the trailing loop now goes through the same
+// `admitFootnotes`/`renderArea` pair as the in-page area.
+//
+// UPDATED (mechanism U, ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3` PRISTINE.EXE
+// round, commit 26169cd): `renderArea`'s header is now 2 lines (rule then blank, no
+// leading blank -- real WS7, both installs, land the separator directly after the body's
+// own last line) even though `areaSize`'s own page-CAPACITY cost stays 3 (see that
+// function's own doc comment for why the two deliberately diverge). A page whose area
+// grows to the terminal ceiling therefore renders ONE FEWER physical line than that
+// ceiling — the capacity budget reserves room for a header line real WS7 never draws.
+@Test func trailingNotesPageCarriesTheFullTwoLineHeader() {
     // One body line referencing one footnote whose text wraps to more lines than the
     // last body page's area can hold (terminal ceiling 54 on the default 55-line page,
-    // minus the 3-line header = 51 lines of note text), so the remainder prints at the
-    // top of its own fresh page.
+    // minus the 3-line header BUDGET = 51 lines of note text), so the remainder prints at
+    // the top of its own fresh page.
     var doc = Document()
     doc.notes = [Note(kind: .footnote, text: manyWords(450), number: 0)]
     doc.blocks = [Block(kind: .para, lines: [Line(spans: [
@@ -183,15 +197,17 @@ private func manyWords(_ n: Int) -> String {
     #expect(texts.count == 2, "expected 2 pages, got \(texts.count)")
     guard texts.count == 2 else { return }
 
-    // Page 1: exactly full — 1 body line + the area grown to the terminal ceiling.
-    #expect(texts[0].count == 55, "page 1 holds \(texts[0].count) lines, expected 55")
+    // Page 1: the area grown to the terminal ceiling (54), but its header only draws 2 of
+    // its 3 budgeted lines -- 1 body line + 53 rendered area lines = 54 physical lines,
+    // ONE short of the ceiling itself (was 55, the ceiling exactly, before mechanism U).
+    #expect(texts[0].count == 54, "page 1 holds \(texts[0].count) lines, expected 54")
 
-    // Page 2, the trailing top-of-page area: the SAME 3-line header as everywhere else
-    // (blank / 20-dash rule / blank), then the continuation marker and the rest.
+    // Page 2, the trailing top-of-page area: the SAME 2-line header as everywhere else
+    // (20-dash rule / blank), then the continuation marker and the rest.
     let dashes = String(repeating: "-", count: 20)
-    #expect(Array(texts[1].prefix(3)) == ["", dashes, ""],
-            "trailing area header must be blank/rule/blank, got \(Array(texts[1].prefix(3)))")
-    #expect(texts[1].count > 3 && texts[1][3] == "...Continued...",
+    #expect(Array(texts[1].prefix(2)) == [dashes, ""],
+            "trailing area header must be rule/blank, got \(Array(texts[1].prefix(2)))")
+    #expect(texts[1].count > 2 && texts[1][2] == "...Continued...",
             "the resumed note leads with its continuation marker")
 
     // No text lost across the split.
@@ -214,7 +230,7 @@ private func manyWords(_ n: Int) -> String {
 // This synthetic fixture reproduces that exact decision on the default 55-line page:
 // 12 one-line annotations already admitted (area 26 with its 3-line header and
 // inter-note blanks), 24 body lines down, and then a reference line carrying 3 more
-// annotations. Correct (Python-oracle) behavior: the line IS admitted (24+1+26 = 51 <= 55),
+// annotations. Correct (per the ctrl-kd cross-engine recording) behavior: the line IS admitted (24+1+26 = 51 <= 55),
 // two of its notes join the area (area 30, page exactly full at 55), and the third
 // defers WHOLE to page 2's area. The old projected check computed 24+1+32 = 57 > 55 and
 // broke the page first — page 1 ended at 50 lines with the reference line overleaf.
@@ -242,11 +258,16 @@ private func manyWords(_ n: Int) -> String {
     #expect(pages.count == 2, "expected 2 pages, got \(pages.count)")
     guard texts.count == 2 else { return }
 
-    // Page 1: exactly full — 25 body lines + the 30-line area (header 3 + 14 notes + 13
-    // inter-note blanks). The reference line is the 25th body line, NOT pushed overleaf.
-    #expect(texts[0].count == 55, "page 1 holds \(texts[0].count) lines, expected 55")
+    // Page 1: the area grown to the terminal ceiling (30, header BUDGET 3 + 14 notes + 13
+    // inter-note blanks) -- but the header only DRAWS 2 of those 3 lines (mechanism U,
+    // ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`, commit 26169cd -- see `areaSize`/`renderArea`'s
+    // own doc comments for why the two deliberately diverge), so page 1 renders 54
+    // physical lines (25 body + 29 area), one short of the 55-line ceiling. The reference
+    // line is still the 25th body line, NOT pushed overleaf.
+    #expect(texts[0].count == 54, "page 1 holds \(texts[0].count) lines, expected 54")
     #expect(texts[0][24].hasPrefix("Tail"), "the reference line must stay on page 1")
-    #expect(texts[0][26] == String(repeating: "-", count: 20), "20-dash rule after one blank")
+    #expect(texts[0][25] == String(repeating: "-", count: 20),
+            "20-dash rule directly follows the body's last line, no leading blank")
     // Finding 4 (b26 visual pass): tags T1-T9 (2 cols) and T10-T15 (3 cols) differ in
     // width, so this mixed-width annotation list hangs to a shared column
     // (`notesMarkerPadCols`) -- three/two spaces here, not the plain single space.
@@ -257,7 +278,7 @@ private func manyWords(_ n: Int) -> String {
     // Page 2: the remaining body line, then the deferred note in a fresh bottom area.
     #expect(texts[1].first == "After")
     #expect(texts[1].contains("T15  note 15"), "the deferred note lands in page 2's area")
-    #expect(texts[1].count == 5, "page 2 is 1 body line + the 4-line area, got \(texts[1].count)")
+    #expect(texts[1].count == 4, "page 2 is 1 body line + the 3-line rendered area, got \(texts[1].count)")
 }
 
 /// Printed layout must use the SAME label rule as the flat emitters. It once had its own
@@ -301,14 +322,25 @@ private func manyWords(_ n: Int) -> String {
 @Test func printedNoteAreaAnchorsAtThePageBottomOnAShortPage() {
     // Finding 2: a short page's footnote/endnote area used to flow-append right after the
     // body -- wherever the body's own y happened to end -- landing mid-page. Real WS7
-    // anchors it at the page bottom instead (measured: -SCREEN.pcl's "1. Footnote"/"(1)
-    // Endnote"/dash-rule at PDF y=84/60/108, i.e. top-down 708/732/684; LYING.pcl's own
-    // single-footnote area lands on the SAME y=84/108 -- its page is full, so flow-append
-    // and bottom-anchor coincide there, which is exactly why the gate never caught this).
-    // This doc's body is two short lines -- nowhere near a full (default) 55-line page --
-    // so a flow-appended area would land far above y=108; anchored, it lands exactly where
-    // WS7 does, at every page-geometry DEFAULT (`.mb` 8 lines -> 84pt reserve, see
-    // `printedNotesReservePt`).
+    // anchors it at the page bottom instead. This doc's body is two short lines -- nowhere
+    // near a full (default) 55-line page -- so a flow-appended area would land far above
+    // the anchor; anchored, it lands at the stock reserve instead.
+    //
+    // UPDATED (mechanism U, ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3`
+    // PRISTINE.EXE round, commit 26169cd): `printedNotesReservePt`'s stock reserve moved
+    // to 120pt (`(.mb + defaultHmLines) * 12`), not the 84pt `(.mb - 1) * 12` this test
+    // used to assume -- see that function's own doc comment for the real-capture evidence
+    // (LYING.pcl/`ws7-prints/v3`, -SCREEN.pcl/`ws7-prints/v1`).
+    //
+    // Re-derived a SECOND time, same day (mechanism U reopened, ctrl-kd commit 135a14a):
+    // the recaptured, COMPLETE `ws7-prints/v3/-SCREEN.pcl` (corpus commit 2be7569 -- the
+    // previous capture was silently truncated at the embedded Inset picture, missing its
+    // own footnote/endnote block entirely) measures reserve = 108pt (`(.mb + 1) * 12`),
+    // not 120pt (`(.mb + defaultHmLines) * 12`) -- see `printedNotesReservePt`'s own doc
+    // comment for the corrected derivation and the now n=2 (`-SCREEN` direct + `LYING`
+    // boundary-consistent) confirmation under stock. This doc's body is two short lines
+    // -- nowhere near a full (default) 55-line page -- so a flow-appended area would land
+    // far above the anchor; anchored, it lands at the stock reserve instead.
     var data = ws7Block(0x00)
     data += bytes("Short body line has a note") + ws7Note(bytes("Footnote text."), cmd: 0x03, number: 0)
     data += bytes(" and an endnote") + ws7Note(bytes("Endnote text."), cmd: 0x04, number: 0)
@@ -317,12 +349,12 @@ private func manyWords(_ n: Int) -> String {
     let pdf = emitPDF(doc, mode: .printed)
     let spans = contentSpans(pdf)
     func y(_ text: String) -> Double? { spans.first { $0.text == text }?.y }
-    #expect(y(String(repeating: "-", count: 20)) == 108.0)
+    #expect(y(String(repeating: "-", count: 20)) == 132.0)
     // Finding 4 (b26 visual pass): "1." and "(1)" differ in width, so this mixed
     // footnote/endnote list hangs to a shared column -- three/two spaces, not the
     // plain single space (`notesMarkerPadCols`).
-    #expect(y("1.   Footnote text.") == 84.0)
-    #expect(y("(1)  Endnote text.") == 60.0)
+    #expect(y("1.   Footnote text.") == 108.0)
+    #expect(y("(1)  Endnote text.") == 84.0)
 }
 
 @Test func printedNoteAreaAnchorIsANoOpOnAnAlreadyFullPage() {
@@ -347,10 +379,14 @@ private func manyWords(_ n: Int) -> String {
     let pdf = emitPDF(doc, mode: .printed)
     let spans = contentSpans(pdf)
     func y(_ text: String) -> Double? { spans.first { $0.text == text }?.y }
-    // natural flow (top 60 + 51 body lines * 12 + this line's own 12 = 96, PDF
-    // bottom-origin) -- ONE line short of the 84pt anchor's own target for a 4-line area
-    // (108), confirming the override did NOT fire and pull the rule down to the anchor
-    // position.
-    #expect(y(String(repeating: "-", count: 20)) == 96.0)
-    #expect(y("1. Note.") == 72.0)
+    // UPDATED (mechanism U, ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3`
+    // PRISTINE.EXE round, commit 26169cd): natural flow (top 36 + 51 body lines * 12 +
+    // this line's own 12 = 60, PDF bottom-origin), one lead below the rule, confirming
+    // the override did NOT fire and pull the rule down to the anchor position. (Was
+    // 96.0/72.0 against the old `.mt`+`.hm`=60pt top and the area's own since-fixed
+    // leading blank -- see `printedTop`/`renderArea`'s own doc comments.)
+    #expect(y(String(repeating: "-", count: 20)) == 132.0)
+    // no separating space (planning #202 residuals round, ctrl-kd 1017391, LYING.pcl's
+    // own "1.Did" -- see `footerEntryLines`'s own doc comment)
+    #expect(y("1.Note.") == 108.0)
 }

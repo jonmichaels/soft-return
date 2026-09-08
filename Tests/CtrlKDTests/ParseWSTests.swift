@@ -84,7 +84,7 @@ let italicOn: [UInt8] = [0x19]
 }
 
 @Test func footnoteMarkerStaysInlineBeforeABlankParagraphLine() {
-    // b26 fix, byte-verified against LYING.WS (the reference vault's pd-samples): a footnote's own
+    // b26 fix, byte-verified against LYING.WS (jon_vault's pd-samples): a footnote's own
     // bytes contribute NOTHING to the cleaned stream (`symmetricBlocks`), so its `.fnref`
     // mark's offset is always wherever the cleaned stream already was -- the ANCHOR text's
     // own end. When that anchor sits at the end of a line immediately followed by a blank
@@ -115,7 +115,10 @@ let italicOn: [UInt8] = [0x19]
     }
     #expect(!soleMarkerLine, "the marker must never be the SOLE content of its own line")
 
-    let pdf = emitPDF(doc, mode: .printed)
+    // pageNumbers: .off -- this fixture touches no .pn/.pg/.op, so the stock automatic
+    // number (the real `.auto` default since 2026-09-07, ws7-prints/v3 finding #2) would
+    // otherwise ALSO render a bare "1", indistinguishable from the footnote marker here.
+    let pdf = emitPDF(doc, mode: .printed, options: EmitOptions(pageNumbers: .off))
     let spans = contentSpans(pdf)
     let anchor = try! #require(spans.first { $0.text == "Anchor text ends here." })
     let marker = try! #require(spans.first { $0.text == "1" })
@@ -479,7 +482,13 @@ let italicOn: [UInt8] = [0x19]
     let doc = parseWS(src)
     #expect(doc.blocks.map(\.kind) == [.para, .pagebreak, .para])
     #expect(doc.unknownCodes.isEmpty, "a handled code must not be reported unknown")
-    #expect(parsePrintstream(src).blocks.map(\.kind) == doc.blocks.map(\.kind))
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version
+    // checked `parsePrintstream(src)` against `doc.blocks.map(\.kind)` -- the OTHER parse
+    // path's own output, not an independent expectation, so a bug shared by both parsers
+    // (e.g. both mishandling a bare form feed the same wrong way) would pass either
+    // comparison. Both paths are now checked against the SAME independent literal instead
+    // of against each other.
+    #expect(parsePrintstream(src).blocks.map(\.kind) == [.para, .pagebreak, .para])
 
     // EVERY bare form feed ejects, the one that OPENS the document included. This port
     // used to guard the eject on something already being open, so a document beginning

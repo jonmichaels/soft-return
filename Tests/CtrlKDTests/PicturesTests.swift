@@ -179,6 +179,23 @@ private func onePixResult(prtOptionsRaw: [UInt8]? = nil) throws -> PixResult {
     #expect(off == bare)
 }
 
+@Test func pdfPrintedMissingPixYieldsPlaceholderTextWithNoXObjectAtAll() throws {
+    // Mirrors ctrl-kd's test_pdf_printed_missing_pix_yields_placeholder_text_with_no_xobject_at_all
+    // (planning #211): a pix tag whose target the resolver can't find keeps the ordinary
+    // "[image: NAME]" placeholder TEXT and draws NO image XObject whatsoever -- not just
+    // "no /Im0 Do", but no /Subtype /Image or /XObject entry in the file at all.
+    let block = wsBlock(cmd: 0x10, content: Array(#"C:\PIX\NOPE.PIX"#.utf8))
+    let doc = parseWS(bytes("Before.\r\n\r\n") + block + bytes("\r\n\r\nAfter.\r\n"))
+    var miss = PixResult(index: 0, rawPath: #"C:\PIX\NOPE.PIX"#)
+    miss.error = .unresolved
+    let pdf = emitPDF(doc, mode: .printed, options: EmitOptions(pictures: .embed, pixResults: [miss]))
+    #expect(!contains(pdf, bytes("/Subtype /Image")))
+    #expect(!contains(pdf, bytes("/XObject")))
+    #expect(!contains(pdf, bytes("/Im0 Do")))
+    let text = contentSpans(pdf).map(\.text).joined(separator: " ")
+    #expect(text.contains("[image: NOPE.PIX]"))
+}
+
 @Test func pdfSharedLineNeverEmbeds() throws {
     // A pix tag sharing its physical line with OTHER real text: substitution is
     // deliberately SKIPPED (never silently drop content) -- it renders as the ordinary
@@ -353,16 +370,22 @@ private func footnoteAndIsolatedPixDoc() -> Document {
 
     // Drawn position: WS7 places the picture FLUSH WITH THE TOP of its reserved band
     // (leaving the leftover 36 - 14.4 = 21.6pt of slack as blank space BELOW the image,
-    // before "Caption after."), not flush with the band's bottom. Top offset 60pt
-    // (default `.mt`+`.hm`) + first line's own 12pt lead = 720 y for "Caption before.";
-    // the image band spends 36pt more (y=684), and the raster itself draws 21.6pt
-    // higher than that bottom edge (y=705.6) -- port of ctrl-kd's `_page_stream` fix.
+    // before "Caption after."), not flush with the band's bottom. Top offset 36pt
+    // (default `.mt` alone -- mechanism U, ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`,
+    // `ws7-prints/v3` PRISTINE.EXE round, commit 26169cd; was `.mt`+`.hm`=60pt) + first
+    // line's own 12pt lead = 744 y for "Caption before."; the image band spends 36pt
+    // more (y=708), and the raster itself draws 21.6pt higher than that bottom edge
+    // (y=729.6) -- port of ctrl-kd's `_page_stream` fix. Mechanism Y (ctrl-kd
+    // PCL-DIVERGENCE-TRIAGE.md, planning #211 follow-up, 9546ae6): that top edge is
+    // actually the PRECEDING line's own baseline, and real WS7 leaves that line's own
+    // descent (0.25 * the document's 12pt default size = 3.0pt) before the raster
+    // starts -- 729.6 - 3.0 = 726.6.
     let pdf = emitPDF(doc, mode: .printed, options: EmitOptions(pictures: .embed, pixResults: [result]))
     let text = latin1(pdf)
-    #expect(text.contains("57.6 720.0 Td"), "\"Caption before.\" baseline")
-    #expect(text.contains("28.80 0 0 14.40 57.60 705.60 cm /Im0 Do"),
-            "image flush with the reserved band's TOP, not its bottom")
-    #expect(text.contains("57.6 672.0 Td"), "\"Caption after.\" baseline, band's bottom + its own lead")
+    #expect(text.contains("57.6 744.0 Td"), "\"Caption before.\" baseline")
+    #expect(text.contains("28.80 0 0 14.40 57.60 726.60 cm /Im0 Do"),
+            "image flush with the reserved band's TOP minus the preceding line's descent (mechanism Y)")
+    #expect(text.contains("57.6 696.0 Td"), "\"Caption after.\" baseline, band's bottom + its own lead")
 }
 
 @Test func pdfPrintedPaginationIsIdenticalOffVsEmbed() throws {

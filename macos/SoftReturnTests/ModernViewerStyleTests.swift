@@ -8,7 +8,8 @@ import Testing
 /// font identity and paragraph structure — title/byline/citation each keeping their own
 /// WS5+ face, size, and alignment — rather than one flat body font (Jon's field report).
 ///
-/// Ground truth for every assertion here is the engine's own Modern RTF for OLDTIMES.WS
+/// The REFERENCE for every assertion here (an engine output, not real WordStar 7) is the
+/// engine's own Modern RTF for OLDTIMES.WS
 /// (`emitRTF(doc, mode: .modern, options: EmitOptions(fontsTarget: .mac))`), read directly
 /// off a probe run against this exact fixture, not invented numbers:
 ///   `{\qc \s3 {\b\fs28 {\f3\fs36 Just Like Old Times}}\par }`               — title
@@ -17,12 +18,12 @@ import Testing
 ///   `{\ql \s5 {\i \f4\fs24      The transference went smoothly...}`        — body copy
 /// `\f2` = Univers -> Helvetica Neue, `\f3` = Aachen -> Rockwell, `\f4` = Courier ->
 /// Courier New (the MAC target table, `printedMacFontRows` in `DocumentRenderer.swift`,
-/// mistake-registry #24) — this RTF ground truth is EMITTED output and stays Courier New
+/// mistake-registry #24) — this RTF reference is EMITTED output and stays Courier New
 /// forever (`OutputParityTests`, the boundary job 306/312's Courier Prime ruling never
 /// crosses). The on-screen Modern VIEW is a separate consumer of the same font-block data
 /// and, per Jon's b19 ruling (2026-08-14), now resolves courier-class rows to the bundled
 /// Courier Prime instead — see `bodyProseKeepsTheDocumentsOwnCourierNotTheUsersGeorgiaSetting`
-/// below, which is the one assertion here where VIEW and RTF-oracle font family diverge.
+/// below, which is the one assertion here where VIEW and RTF-reference font family diverge.
 /// `\fs36`/`\fs28`/`\fs24` are half-points: 18/14/12pt.
 /// Job 535: every test in this suite reads `TestDocs/ws7` — gated at the suite level so a
 /// bare stranger run (no `CTRLKD_PRIVATE_CORPUS`, no in-repo `TestDocs/`) skips all of it

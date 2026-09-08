@@ -601,12 +601,6 @@
       "lead": null
      },
      {
-      "segments": [],
-      "soft": false,
-      "overprint": false,
-      "lead": 444.0
-     },
-     {
       "segments": [
        {
         "text": "--------------------",
@@ -615,7 +609,7 @@
       ],
       "soft": false,
       "overprint": false,
-      "lead": null
+      "lead": 432.0
      },
      {
       "segments": [],

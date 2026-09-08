@@ -16,8 +16,11 @@ import Testing
 /// This file is a SEPARATE suite so it can be run alone via `-only-testing`, in an
 /// otherwise-fresh test invocation, guaranteeing no other scripting test has already touched
 /// `NSScriptSuiteRegistry` first.
-/// Job 535: this suite's one test reads `MultipageMargins.testDocsDirectory` (`ws4/DOCC.ws`)
-/// — gated at the suite level so a bare stranger run skips cleanly.
+/// Job 535: this suite's one test used to read `MultipageMargins.testDocsDirectory`
+/// (`ws4/DOCC.ws`) — gated at the suite level so a bare stranger run skips cleanly. Job
+/// planning#191 part 2 moved it onto a bundled sample copy instead (`BundledSampleFixture`),
+/// so the private-corpus dependency this gate exists for is gone; the gate itself is left in
+/// place rather than changing this suite's run conditions as a side effect of the fixture fix.
 @Suite(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct AppleEventVirginDispatchTests {
 
@@ -25,11 +28,13 @@ struct AppleEventVirginDispatchTests {
     /// `NSScriptSuiteRegistry.shared()` anywhere in this suite. Run in isolation:
     /// `xcodebuild test -only-testing:SoftReturnTests/AppleEventVirginDispatchTests`.
     @Test @MainActor func virginProcessConvertAppleEventProducesAnRTFFile() throws {
-        let source = MultipageMargins.testDocsDirectory.appendingPathComponent("ws4/DOCC.ws")
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("AppleEventVirginDispatchTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
+        // Job planning#191 part 2: a bundled sample copy, not the private ws4/DOCC.ws
+        // corpus fixture — see BundledSampleFixture's own doc comment.
+        let source = try BundledSampleFixture.copy("OCAPTAIN.WS", into: tempDir)
 
         let event = NSAppleEventDescriptor(
             eventClass: ScriptingCodes.fourCharCode("SRsu"),

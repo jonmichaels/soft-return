@@ -49,7 +49,21 @@ final class AccessibilityAuditUITests: XCTestCase {
         var findings: [String] = []
         do {
             try app.performAccessibilityAudit { issue in
-                findings.append("[\(issue.auditType)] \(issue.compactDescription)")
+                // THE ELEMENT, not just the type. The audit names a finding type and a
+                // category; without the element that raised it, "which control is at fault"
+                // is a guess — and two of the four findings on this window share
+                // `rawValue: 8`, so a type alone cannot even tell you how many controls are
+                // involved. `XCUIAccessibilityAuditIssue` carries `element`; printing it
+                // turns the question into a measurement (register, 2026-09-07: print more
+                // data before reading more code).
+                let element = issue.element
+                let described = element.map { candidate in
+                    "elementType=\(candidate.elementType.rawValue) "
+                    + "id=\(candidate.identifier.isEmpty ? "<none>" : candidate.identifier) "
+                    + "label=\(candidate.label.isEmpty ? "<none>" : candidate.label.debugDescription) "
+                    + "hittable=\(candidate.isHittable)"
+                } ?? "element=<nil>"
+                findings.append("[\(issue.auditType)] \(issue.compactDescription) — \(described)")
                 // "Handled" as far as XCTest's own per-issue failure goes — this test raises
                 // ONE clear failure below instead, with every finding in its message, rather
                 // than a separate opaque XCTIssue per finding.

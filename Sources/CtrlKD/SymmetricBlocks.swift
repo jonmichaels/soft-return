@@ -876,7 +876,10 @@ private func splitOnLineBreaks(_ data: [UInt8]) -> [[UInt8]] {
 /// too wide. MEASURED against every type-9 block in the archive (3,617 blocks, later
 /// 4,633): the block's own final byte -- "Tab size in 1/10th" (of an inch, and 0.1in IS
 /// 180 HMI) -- equals size//180 in all of them. Direct port of `_tab_columns`.
-private let tabHMIPerCol = 180
+// Not `private`: `PDFWriter.swift`'s `runningOps`/`hfLineOps` needs the same HMI-per-
+// column conversion (planning #202, mechanism Q) to reverse a `.h#`/`.f#` right-align
+// tab's own baked target column back to HMI at print time.
+let tabHMIPerCol = 180
 private let tabRightTypes: Set<UInt8> = [0x5B, 0x5D]        // '[' documented, ']' undocumented
 
 /// Python's `round()` is round-half-to-even (banker's rounding), unlike Swift's

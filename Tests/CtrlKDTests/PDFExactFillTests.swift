@@ -48,7 +48,8 @@ import Testing
     // every prior test, because nothing in either suite had ever put two empty pages at the
     // end of a document.
     //
-    // Ground truth from the reference at 1.1.6: one page for any number of trailing breaks,
+    // Cross-engine recording (ctrl-kd) from the Python reference at 1.1.6: one page for any
+    // number of trailing breaks,
     // checked for n = 1 through 4 in both modes.
     for n in 1...4 {
         var data = bytes("Page one.") + HARD

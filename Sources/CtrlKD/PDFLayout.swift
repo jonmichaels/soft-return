@@ -209,6 +209,43 @@ func leadPt(_ lh48: Double?) -> Double? {
     return lh48 * 1.5
 }
 
+/// Mechanism T (ctrl-kd `tools/PCL-DIVERGENCE-TRIAGE.md`, 21e6d94): the factor
+/// `styleLeadPt`'s "auto" (vmi == -2) branch, its too-small-explicit-vmi fallback, and
+/// `fontLeadPt`'s WS5+ font-block formula all multiply a governing font size by, for
+/// STOCK WordStar 7's single-spacing leading.
+///
+/// Every prior measurement of this factor (1.2, "19.2pt on a 16pt style", etc. — see this
+/// file's own git history and `StyleLeadingTests.swift` before this fix) was taken from
+/// `ws7-prints/v1`/`v2`, both captured through Robert J. Sawyer's own WSCHANGE-customized
+/// `WS.EXE` — the SAME install mechanism S already found responsible for the `.po`
+/// contamination (column 7 vs the manual's/stock's column 8). WSCHANGE's own settings
+/// chart (`Installing and Customizing (WordStar 7)`, the "Changing WordStar Settings in
+/// WSCHANGE" appendix) lists this exact feature by name, twice (once under the
+/// alphabetical chart, once under its own "Leading" cluster alongside "Leading (line
+/// height)" BCJ/240):
+///
+///     Automatic leading, 120% of text size        BCL     OFF
+///
+/// i.e. "120% of text size" (1.2x) is a WSCHANGE-toggleable setting whose FACTORY DEFAULT
+/// IS OFF. Confirmed directly against a `PRISTINE.EXE` (factory, no WSCHANGE) recapture of
+/// the same 4 documents whose leading this file already modelled from Sawyer's install
+/// (`ws7-prints/v3`): every baseline gap driven by this formula scales by EXACTLY 1/1.2 of
+/// the v1 figure, zero exceptions — LYING/WARPRAYR's Title(16pt)->Author gap: 19.2pt (v1,
+/// Sawyer) -> 16.0pt (v3, pristine); -SCREEN/PREVIEW's font-block gaps: 14.4pt (v1) ->
+/// 12.0pt (v3), and every `fontLeadPt`-governed gap in PREVIEW likewise at exactly 1/1.2.
+/// Every OTHER transition this file measures (explicit vmi that already fits its own
+/// font, `.lh`-governed lines, a blank line's own RAW lead) is IDENTICAL between v1 and
+/// v3 — confirming this factor is the ONLY thing that moved between the two installs.
+///
+/// So: 1.0 (plain single-spacing, no auto-leading padding) is STOCK WordStar 7's real
+/// behaviour; 1.2 was Sawyer's own personalization, exactly like `.po` column 7 and
+/// page-numbering-off before it. The engine models stock. Swift-convention counterpart of
+/// Python's `pdf.AUTO_LEAD_FACTOR` (same value, same call sites) — NOT `modernLine`
+/// (`PDFModernLayout.swift`), which is Modern's own, deliberate, Word-convention 1.2x
+/// single-spacing and stays 1.2 regardless of this constant (CLAUDE.md: "Modern diverges
+/// from paper BY DESIGN").
+let autoLeadFactor = 1.0
+
 /// The baseline-to-baseline leading a WS7 paragraph STYLE dictates for every physical
 /// line in `block` (`Block.lineHeightVMI`/`styleFontPt`, set from the style record's own
 /// font/line-height fields — `parseWS`'s style-selection parse). `nil` when no style
@@ -217,16 +254,28 @@ func leadPt(_ lh48: Double?) -> Double? {
 /// styleless document never shifts.
 ///
 /// vmi == -2 ("auto" — the ONLY value seen on every style in the measured oracle,
-/// LYING.WS/LYING.pcl): real WS7 leading is 1.2x the style's own font size, not the
-/// document's fixed default — measured 2026-08-20 from PCL decipoint baseline gaps:
-/// Title/Author (16pt style) 192 decipoints (19.2pt) apart, Body (12pt) 144 decipoints
-/// (14.4pt) apart, and a blank line between a 16pt block and the next 12pt block
-/// contributing its OWN 19.2pt of the two lines' combined 336-decipoint (33.6pt) gap — a
-/// blank line advances at ITS block's leading, which `styleFontPt` already gives it
-/// (block-level, not read off the line's own spans, precisely because a blank line
-/// carries no spans/font tag of its own — see `Block.styleFontPt`). Falls back to the
-/// document's own printed SIZE (`printedSize`) if the style declared no font of its own
-/// (an all-zero/recordless font triple).
+/// LYING.WS/LYING.pcl): real WS7 leading is `autoLeadFactor`x the style's own font size,
+/// not the document's fixed default — originally measured 2026-08-20 from PCL decipoint
+/// baseline gaps against `ws7-prints/v1` (Sawyer's WSCHANGE-customized install): Title/
+/// Author (16pt style) 192 decipoints (19.2pt) apart, Body (12pt) 144 decipoints (14.4pt)
+/// apart, and a blank line between a 16pt block and the next 12pt block contributing its
+/// OWN 19.2pt of the two lines' combined 336-decipoint (33.6pt) gap — a blank line
+/// advances at ITS block's leading, which `styleFontPt` already gives it (block-level,
+/// not read off the line's own spans, precisely because a blank line carries no
+/// spans/font tag of its own — see `Block.styleFontPt`). Falls back to the document's own
+/// printed SIZE (`printedSize`) if the style declared no font of its own (an all-zero/
+/// recordless font triple).
+///
+/// UPDATE (mechanism T, `autoLeadFactor`'s own doc comment): the 1.2x/19.2pt/14.4pt/
+/// 33.6pt figures above were measured against Sawyer's `ws7-prints/v1` install. A
+/// `PRISTINE.EXE` (factory, no WSCHANGE) recapture of the SAME documents
+/// (`ws7-prints/v3`) shows every one of these gaps at exactly 1/1.2 of the number above
+/// (Title/Author 19.2pt -> 16.0pt, Body-to-Body 14.4pt -> 12.0pt, the blank-line-spanning
+/// 33.6pt -> 28.0pt) — stock WordStar 7's real auto-leading factor is 1.0, not 1.2; see
+/// `autoLeadFactor`'s own doc comment for the manual citation and the full v1-vs-v3
+/// evidence table. Left the rest of this doc comment's OLD (Sawyer-measured) numbers as
+/// written below — still an accurate record of what was measured and when — rather than
+/// editing every instance; only the LIVE factor (`autoLeadFactor`) changed.
 ///
 /// vmi > 0: an EXPLICIT count, in the same 1/1440in VMI unit WSFORMAT.WS documents for a
 /// font's own height word ("Font height in VMIs (1/1440ths)") — so vmi/20.0 is points,
@@ -293,17 +342,20 @@ func styleLeadPt(_ block: Block, _ doc: Document, raw: Bool = false) -> Double? 
         // and a literal 0.0, not just the sentinel's absence.
         var size = block.styleFontPt ?? 0
         if size == 0 { size = Double(printedSize(doc)) }
-        return size * 1.2
+        return size * autoLeadFactor
     }
     if vmi > 0 {
         // Finding B (b26-print-fidelity-2): an explicit vmi too SMALL for the style's
-        // own font falls back to the SAME auto formula (1.2x the style's own size) an
-        // unset vmi already gets — WARPRAYR's Author style (vmi=240=12pt on a 16pt
-        // font; 12pt lead on 16pt type would overlap ascender-to-descender) measures
-        // 19.2pt (1.2x16) for its byline's OWN entry gap. The Body style's vmi=240 on
-        // its OWN 12pt font is the negative case PROVING vmi/20 remains correct when it
-        // fits (240/20 = 12.0 >= 12.0, no fallback) — the already-CONFIRMED 12.0pt body
-        // leading (~20 consecutive lines, zero drift), unmoved by this fix.
+        // own font falls back to the SAME auto formula (autoLeadFactor x the style's
+        // own size) an unset vmi already gets — WARPRAYR's Author style (vmi=240=12pt
+        // on a 16pt font; 12pt lead on 16pt type would overlap ascender-to-descender)
+        // measures 16.0pt (stock, autoLeadFactor x 16 — see mechanism T /
+        // `autoLeadFactor`'s own doc comment for the v1-Sawyer-vs-v3-pristine
+        // measurement this factor is now taken from; was 19.2pt/1.2x16 under Sawyer's
+        // install). The Body style's vmi=240 on its OWN 12pt font is the negative case
+        // PROVING vmi/20 remains correct when it fits (240/20 = 12.0 >= 12.0, no
+        // fallback) — the already-CONFIRMED 12.0pt body leading (~20 consecutive
+        // lines, zero drift), unmoved by this fix.
         //
         // `raw` (Fix C, b26-print-fidelity-2): the fallback above protects a REAL
         // line's ascender/descender from clipping into the line above — a BLANK line
@@ -315,7 +367,7 @@ func styleLeadPt(_ block: Block, _ doc: Document, raw: Bool = false) -> Double? 
         // EXISTING call site's own behaviour, unchanged.
         let pt = Double(vmi) / 20.0
         if let size = block.styleFontPt, !raw, size > 0, pt < size {
-            return size * 1.2
+            return size * autoLeadFactor
         }
         return pt
     }
@@ -331,28 +383,32 @@ func styleLeadPt(_ block: Block, _ doc: Document, raw: Bool = false) -> Double? 
 ///
 /// Full block-transition inventory (WARPRAYR.pcl, WS7 frame, blank-line +
 /// entering-line combined gaps — a blank line carries no glyph, so only the PAIR is
-/// independently measurable):
-///     Author(auto,19.2)   -> Body(vmi 240=12, fits)   24.0 = 12.0 + 12.0
-///     Body(vmi 240=12)    -> Quote(auto,14.4)  x2      26.4 = 12.0 + 14.4
-///     Quote(auto,14.4)    -> Body(vmi 240=12)  x2      28.8 = 14.4 + 14.4
-/// Only the Quote -> Body pairs need MORE than `styleLeadPt` alone gives (26.4, Body's
-/// own 12.0 entering gap) — WS7 floors Body's own entering gap at Quote's own 14.4
-/// instead. Author -> Body does NOT need this floor once Finding B's fallback is
-/// correctly scoped to REAL lines only (`raw: true` for Author's OWN blank line,
-/// above): Author's raw/exported lead is 12.0 (not its 19.2pt entry fallback), so
-/// Body's own entering gap (12.0) is ALREADY >= it, no floor needed — matching the
-/// measured 24.0 exactly with no special case.
+/// independently measurable; stock/v3 numbers, 1.2x/v1-Sawyer numbers alongside where
+/// they differ — mechanism T, `autoLeadFactor`'s own doc comment):
+///     Author(fallback,16.0; was 19.2) -> Body(vmi 240=12, fits)  24.0 = 12.0 + 12.0 (UNCHANGED — all-raw/fitting)
+///     Body(vmi 240=12)    -> Quote(auto,12.0; was 14.4)  x2      24.0 = 12.0 + 12.0 (was 26.4 = 12.0 + 14.4)
+///     Quote(auto,12.0; was 14.4)    -> Body(vmi 240=12)  x2      24.0 = 12.0 + 12.0 (was 28.8 = 14.4 + 14.4)
+/// Only the Quote -> Body pairs need MORE than `styleLeadPt` alone gives (Body's own
+/// 12.0 entering gap) — WS7 floors Body's own entering gap at Quote's own 12.0 instead
+/// (a no-op at stock's factor, since Quote's own and Body's own both land on 12.0
+/// already; the floor's EXISTENCE is still proven by the Sawyer/v1 numbers, where
+/// 12.0 < 14.4 and the floor visibly engages). Author -> Body does NOT need this floor
+/// once Finding B's fallback is correctly scoped to REAL lines only (`raw: true` for
+/// Author's OWN blank line, above): Author's raw/exported lead is 12.0 (not its
+/// fallback value, whatever the live factor makes that), so Body's own entering gap
+/// (12.0) is ALREADY >= it, no floor needed — matching the measured 24.0 exactly with
+/// no special case, at either factor.
 ///
 /// Cross-checked against LYING.WS, which is entirely auto styles (no vmi>0 block
 /// exists there to test the floor itself) but DOES cover the discriminating case this
-/// floor must NOT fire for: Author(auto, 19.2) -> Subtitle(auto, 14.4) measures 33.6 =
-/// 19.2 + 14.4 — Subtitle's OWN entering gap, NOT floored up to Author's outgoing 19.2
-/// (which would give 38.4, wrong). The floor therefore only applies when the block
-/// being ENTERED has an EXPLICIT vmi (this function's own `vmi > 0` guard below) — a
-/// genuinely auto style already computes generously relative to its own font and needs
-/// no protection against the block before it; this is the ONE rule shape that fits
-/// every transition in both measured styled documents, in both directions, with no
-/// unexplained gap.
+/// floor must NOT fire for: Author(auto, 16.0; was 19.2) -> Subtitle(auto, 12.0; was
+/// 14.4) measures 28.0 (was 33.6) = 16.0 + 12.0 — Subtitle's OWN entering gap, NOT
+/// floored up to Author's outgoing 16.0 (which would give 32.0, wrong). The floor
+/// therefore only applies when the block being ENTERED has an EXPLICIT vmi (this
+/// function's own `vmi > 0` guard below) — a genuinely auto style already computes
+/// generously relative to its own font and needs no protection against the block
+/// before it; this is the ONE rule shape that fits every transition in both measured
+/// styled documents, in both directions, with no unexplained gap, at either factor.
 ///
 /// NOT independently confirmed: a SECOND real (non-blank) line inside a too-small-vmi
 /// style also getting the fallback rather than the raw value — no such line exists in
@@ -386,6 +442,13 @@ func enteringLeadPt(_ block: Block, _ doc: Document, prevBlock: Block?) -> Doubl
 /// VERSIONS, TWAINLET, OCAPTAIN, every fontless doc in the corpus, AND -README's
 /// single-fixed-font case — must stay on the byte-identical 12pt grid throughout, full stop.
 ///
+/// UPDATE (mechanism T, `autoLeadFactor`'s own doc comment): every "1.2x"/absolute point
+/// value in this doc comment (14.4, 24.0, …) was measured against Sawyer's `ws7-prints/v1`
+/// install; re-measured 2026-09-07 against the same document's `ws7-prints/v3`
+/// PRISTINE.EXE recapture, which shows the identical shape at exactly 1/1.2 of every v1
+/// number. Stock's real formula is `autoLeadFactor`x, not 1.2x — see `autoLeadFactor`'s
+/// own doc comment for the full evidence table.
+///
 /// `state` is `inout`, owned and threaded by the CALLER across every physical line of the
 /// document in source order (mirrors `pendingSa`'s cross-block carry): a blank line (no
 /// font tag of its own) inherits whatever `state` already holds, exactly as a real
@@ -393,16 +456,17 @@ func enteringLeadPt(_ block: Block, _ doc: Document, prevBlock: Block?) -> Doubl
 /// it.
 ///
 /// RULE (measured 2026-08-20 against PREVIEW.WS/PREVIEW.pcl, `fidelity_gate.py` Finding B —
-/// every gap on the page decomposes to 0.3pt residual under it): 1.2x the largest
-/// PROPORTIONAL font size (`FontChange.proportional == true`) active anywhere on the line,
-/// carried forward through blank lines. A FIXED-PITCH font block (Courier, any declared
-/// point size) NEVER raises the governing size above the document default and, as the LAST
-/// font tag active on a line, RESETS the carried state — WS5+ Courier font blocks change
-/// PITCH (historically elite/pica variants of the one typewriter face), not real vertical
-/// measure, so a 20pt Courier block's own line and every blank line after it print at the
-/// plain 1.2x12=14.4pt default, not 1.2x20. Confirmed on PREVIEW's OWN 12pt intro (no font
-/// tag at all yet — 14.4pt gaps) and its trailing Courier-20pt block (6 blank continuation
-/// lines, all 14.4pt, not 24.0pt) alike — both land on the SAME formula via `state`, not a
+/// every gap on the page decomposes to 0.3pt residual under it): `autoLeadFactor`x the
+/// largest PROPORTIONAL font size (`FontChange.proportional == true`) active anywhere on
+/// the line, carried forward through blank lines. A FIXED-PITCH font block (Courier, any
+/// declared point size) NEVER raises the governing size above the document default and, as
+/// the LAST font tag active on a line, RESETS the carried state — WS5+ Courier font blocks
+/// change PITCH (historically elite/pica variants of the one typewriter face), not real
+/// vertical measure, so a 20pt Courier block's own line and every blank line after it print
+/// at the plain `autoLeadFactor`x12 = 12.0pt (stock) default, not `autoLeadFactor`x20.
+/// Confirmed on PREVIEW's OWN 12pt intro (no font tag at all yet — 12.0pt gaps, 14.4pt
+/// under Sawyer's install) and its trailing Courier-20pt block (6 blank continuation
+/// lines, all 12.0pt, not 20.0pt) alike — both land on the SAME formula via `state`, not a
 /// special case. A line whose OWN leading spaces still carry the OUTGOING tag before a
 /// mid-line font change (WordStar's own encoding: the change lands after the characters it
 /// precedes, not at line start) takes the LARGER of every proportional size found on the
@@ -437,7 +501,7 @@ func fontLeadPt(_ line: Line, fonts: [FontChange], baseSize: Double, state: inou
     // Python's `governing if governing else base_size` — a falsy (nil OR 0.0) governing
     // size falls back to the document's own printed size, not just a nil one.
     let effective = (governing != nil && governing != 0) ? governing! : baseSize
-    return effective * 1.2
+    return effective * autoLeadFactor
 }
 
 /// One paginated page: a collection of `PageLine`s, plus the running head and foot IN
@@ -479,6 +543,12 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     /// command-sweep, `hmFmCheckpoints`) -- same `nil`/"document global" contract again.
     public var hmLines: Double?
     public var fmLines: Double?
+    /// `.po` (page offset) in force when this page's own pagination started (mechanism O,
+    /// `poCheckpoints`) -- same `nil`/"document global" contract again. Feeds `runningOps`'s
+    /// own header/footer LEFT edge only -- body text already carries a per-LINE `.po`
+    /// override (`Line.poCols`, applied in `resolvePlainBody`/`resolvePrintedBody`), this is
+    /// the page-granularity twin that mechanism was missing. Port of Python's `Page.po_cols`.
+    public var poCols: Double?
 
     public init() {
         lines = []
@@ -489,11 +559,12 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         plLines = nil
         hmLines = nil
         fmLines = nil
+        poCols = nil
     }
 
     public init(_ lines: [PageLine], headers: [Int: String] = [:], footers: [Int: String] = [:],
                mtLines: Double? = nil, mbLines: Double? = nil, plLines: Double? = nil,
-               hmLines: Double? = nil, fmLines: Double? = nil) {
+               hmLines: Double? = nil, fmLines: Double? = nil, poCols: Double? = nil) {
         self.lines = lines
         self.headers = headers
         self.footers = footers
@@ -502,6 +573,7 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.plLines = plLines
         self.hmLines = hmLines
         self.fmLines = fmLines
+        self.poCols = poCols
     }
 
     public init(arrayLiteral elements: PageLine...) {
@@ -816,9 +888,16 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
         items.append(.line([Span(text: String(repeating: "-", count: 20))]))
         items.append(.line([]))
         for (i, note) in placeable {
+            // planning #202 residuals round: this legacy dump's own real Python
+            // equivalent (pdf.py:3389) pre-joins `marker + note_text` into ONE span,
+            // unlike the real Printed area/endnote listing's `_note_wrap` (separate
+            // spans) -- `separateSpans: false` keeps this call site matching THAT
+            // pre-joined shape, byte-identical to before `separateSpans` existed.
             let entryLines = note.kind == .endnote
-                ? endnoteEntryLines(note, doc: doc, index: i, width: PDFMetrics.maxCols)
-                : footerEntryLines(note, doc: doc, index: i, width: PDFMetrics.maxCols)
+                ? endnoteEntryLines(note, doc: doc, index: i, width: PDFMetrics.maxCols,
+                                    separateSpans: false)
+                : footerEntryLines(note, doc: doc, index: i, width: PDFMetrics.maxCols,
+                                   separateSpans: false)
             items.append(contentsOf: entryLines.map(LayoutItem.line))
         }
     }
@@ -1054,36 +1133,74 @@ private func noteMarker(_ note: Note, doc: Document, index: Int) -> String {
 /// The footer entry for one footnote/annotation, wrapped to `width` — factory-default
 /// marks: `1.` (trailing period) for a footnote, the bare tag for an annotation.
 ///
-/// `padCols` (Finding 4, b26 visual pass): see `notesMarkerPadCols`. `nil` (the
-/// overwhelming common case — any document whose notes all share one marker width)
-/// keeps the original plain single-space join, byte-identical.
+/// `padCols` (Finding 4, b26 visual pass): see `notesMarkerPadCols`. `nil` for a
+/// FOOTNOTE (the overwhelming common case -- any document whose notes all share one
+/// marker width) means WS7's own capture carries NO padding and NO separating space at
+/// all between the marker and the note text -- measured directly (planning #202
+/// residuals round, ctrl-kd 1017391, LYING.pcl's own single footnote: `"1.Did"`, ONE
+/// literal chunk, zero characters between the period and the capital D). A prior round's
+/// own comment here read that exact same measurement as "ONE space" and left the join
+/// unchanged rather than acting on it; it was misread -- the PCL evidence has never had
+/// a space in it. Every OTHER footnote-bearing document measured so far also uses
+/// markers of ONE width throughout, so this is the path they all take too; none of them
+/// has its own WS7 capture to confirm or contradict the join, so the single confirmed
+/// reading (no separator) is what now governs all of them, not a guess independent of
+/// it. ANNOTATIONS keep the original space: their marker is a free-text tag with no
+/// trailing punctuation of its own (unlike a footnote's period), and no corpus capture
+/// has ever measured one -- widening the fix to a kind with no evidence either way is
+/// exactly the guess this fix itself replaces.
+///
+/// `separateSpans` (planning #202 residuals round, ctrl-kd 1017391): the REAL Printed
+/// footer/endnote area wraps the marker and the note's own text as TWO SEPARATE spans
+/// (Python's `_note_wrap(marker, text, width)`, called `_wrap_line([(marker, ...),
+/// (text, ...)], width)` -- each span is word-tokenized on its OWN, before the two
+/// token streams are concatenated, so the marker's own last token and the note text's
+/// own first word stay separate SEGMENTS even with zero characters between them, same
+/// as before this fix's marker join lost its trailing space). This call site's own
+/// legacy Modern notes-dump caller (`docToPagelines(doc, printed: false)`, ctrl-kd
+/// pdf.py:3389) pre-joins `marker + note_text` into ONE span instead -- unaffected by
+/// this fix, and the only caller that still wants `false` here: at THAT joint, `false`
+/// keeps this call byte-identical to before this parameter existed. Invisible to a
+/// flattened text/PDF comparison either way (a PDF Tj string carries no segment
+/// boundaries), so this only matters where the segment STRUCTURE is itself observed --
+/// `layout.json`'s `printed.pages[].lines[].segments` (planning #202 residuals round,
+/// AnswerKeyParityTests' `LYING.WS.layout.*` divergence, LYING's own "1.Did" case).
 private func footerEntryLines(_ note: Note, doc: Document, index: Int,
                               width: Int, padCols: Int? = nil,
-                              sentenceSpacing: Bool = false) -> [PageLine] {
+                              sentenceSpacing: Bool = false,
+                              separateSpans: Bool = true) -> [PageLine] {
     // N9 (b33 field notes): applied to the note's own text before the marker is
     // prepended -- the marker itself (a bare number/tag) carries no sentence-ending
     // punctuation of its own to interact with.
     let noteText = sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text
-    let text: String
+    let marker: String
     switch note.kind {
     case .footnote:
-        let marker = padMarker("\(noteMarker(note, doc: doc, index: index)).", padCols: padCols)
-        text = "\(marker)\(noteText)"
+        let base = "\(noteMarker(note, doc: doc, index: index))."
+        marker = padCols != nil ? padMarker(base, padCols: padCols) : base
     case .annotation:
-        let marker = padMarker(noteMarker(note, doc: doc, index: index), padCols: padCols)
-        text = "\(marker)\(noteText)"
-    default: text = noteText                 // unreached: endnotes/comments never queue here
+        marker = padMarker(noteMarker(note, doc: doc, index: index), padCols: padCols)
+    default: return wrapLine([Span(text: noteText)], width: width)
+                                              // unreached: endnotes/comments never queue here
     }
-    return wrapLine([Span(text: text)], width: width)
+    if separateSpans {
+        return wrapLine([Span(text: marker), Span(text: noteText)], width: width)
+    }
+    return wrapLine([Span(text: "\(marker)\(noteText)")], width: width)
 }
 
 /// The true-end-of-document entry for one endnote — factory-default mark `(1)`.
-/// `padCols`: see `footerEntryLines`.
+/// `padCols`/`separateSpans`: see `footerEntryLines` (Python's own true-end-of-document
+/// listing, pdf.py:2765, is the SAME `_note_wrap(marker, text, width)` shape).
 private func endnoteEntryLines(_ note: Note, doc: Document, index: Int,
                                width: Int, padCols: Int? = nil,
-                               sentenceSpacing: Bool = false) -> [PageLine] {
+                               sentenceSpacing: Bool = false,
+                               separateSpans: Bool = true) -> [PageLine] {
     let marker = padMarker("(\(noteMarker(note, doc: doc, index: index)))", padCols: padCols)
     let noteText = sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text
+    if separateSpans {
+        return wrapLine([Span(text: marker), Span(text: noteText)], width: width)
+    }
     return wrapLine([Span(text: "\(marker)\(noteText)")], width: width)
 }
 
@@ -1552,8 +1669,12 @@ func plAt(_ checkpoints: [(blockIndex: Int, pl: Double)], _ bi: Int) -> Double {
 
 /// `[(blockIndex, hmLines, fmLines), ...]` in ascending block order -- the `.hm`/`.fm` pair
 /// IN FORCE from that block onward. Mirrors `mtMbCheckpoints` (same anchor, same "pair"
-/// shape -- `.hm`'s own effect on the header row is gated jointly with `.mt`, see
-/// `runningOps`). Port of Python's `_hm_fm_checkpoints`.
+/// shape) -- kept as its own pair/function rather than folded into `mtMbCheckpoints`
+/// because `.hm`/`.fm` were found and fixed together, sharing one dot-command regex,
+/// months after the mt/mb mechanism shipped. `runningOps`'s own `headBase` no longer
+/// gates `hm`'s participation on `mtSource` at all (mechanism W, PCL-DIVERGENCE-
+/// TRIAGE.md) -- it reads whatever `hmLines` this checkpoint pair resolves to for the
+/// page unconditionally. Port of Python's `_hm_fm_checkpoints`.
 ///
 /// Real WS7 evidence (HMFM_PROBE, dosbox-x, register b31-dot-command-sweep): a document
 /// that never touches `.mt` (stays at the factory default throughout) but sets `.hm 6`/
@@ -1605,6 +1726,57 @@ func hmFmAt(_ checkpoints: [(blockIndex: Int, hm: Double, fm: Double)], _ bi: In
         fm = cp.fm
     }
     return (hm, fm)
+}
+
+/// `[(blockIndex, poCols), ...]` in ascending block order -- the `.po` (page offset) IN
+/// FORCE from that block onward. Mirrors `plCheckpoints` exactly (same `dotPositions`
+/// anchor, same "block 0 is the document's own global first-occurrence value" contract,
+/// same hand-built-fixture fallback) -- see `plCheckpoints`'s doc comment. Port of Python's
+/// `_po_checkpoints`.
+///
+/// Body text already carries a mid-document `.po` change correctly: `ParseWS.swift` stamps
+/// `Line.poCols` on every physical line (state carried forward exactly like `.lh`), and
+/// `resolvePlainBody`/`resolvePrintedBody` override their own `left` per line whenever a
+/// line's `poCols` differs from the document default (`resolveLeftPt(line.poCols, ...)`).
+/// `runningOps` (the header/footer row) had NO equivalent -- it always rendered at the
+/// document's global `left`, regardless of which page it was on.
+///
+/// SCRIPT.WS (sawyer archive) is the oracle (mechanism O, ctrl-kd 55d2b52): its own
+/// worked-example figures reset `.po` to `.5"` (5 columns) around block 64 and again around
+/// block 75/84, alongside the `.mt`/`.hm` changes `mtMbCheckpoints`/`hmFmCheckpoints` already
+/// track for the SAME figures. WS7's own capture (`ws7-prints/v1/SCRIPT.pcl`) prints the
+/// running head "PROFILES MONTH '88 SCRIPT.001..." on the figure pages starting at x=36.0pt
+/// (column 5, the figure's own local `.po .5"`) -- this engine, reading only the document's
+/// global `.po` default (8 columns, 57.6pt), rendered it 21.6pt (3 columns) too far right.
+func poCheckpoints(_ doc: Document) -> [(blockIndex: Int, po: Double)] {
+    var po = 8.0    // WS7 manual, "Page Layout": "The default page offset is 8 columns."
+    var checkpoints: [(blockIndex: Int, po: Double)] = [(0, po)]
+    for dp in doc.dotPositions {
+        guard let (name, arg) = dotCommandNameAndArg(Array(dp.text.utf8)) else { continue }
+        let upperName = String(decoding: name.map(asciiUppercased), as: UTF8.self)
+        guard upperName == "PO" else { continue }
+        guard let (value, unit) = parseDotNumber(arg) else { continue }
+        let resolved = resolveColsArg(value, unit)
+        if resolved != checkpoints[checkpoints.count - 1].po {
+            po = resolved
+            checkpoints.append((dp.blockIndex, po))
+        }
+    }
+    if checkpoints.count == 1 {
+        checkpoints[0].po = doc.page?.poCols ?? 8.0
+    }
+    return checkpoints
+}
+
+/// `poCols` in force at block index `bi`, per `checkpoints` (ascending, from
+/// `poCheckpoints`) -- the LAST checkpoint at or before `bi`. Port of Python's `_po_at`.
+func poAt(_ checkpoints: [(blockIndex: Int, po: Double)], _ bi: Int) -> Double {
+    var po = checkpoints[0].po
+    for cp in checkpoints {
+        if cp.blockIndex > bi { break }
+        po = cp.po
+    }
+    return po
 }
 
 /// `[(blockIndex, pnValue), ...]` in ascending block order -- a `.pn` RE-ANCHORS the
@@ -1684,23 +1856,35 @@ func resolvePageNumbers(_ checkpoints: [(blockIndex: Int, pn: Int)], _ pages: [P
 /// checkpoint at or before this block wins" contract, via `pgnumAt` below). Port of
 /// ctrl-kd's `_pgnum_checkpoints` (pdf.py, register b31, E3 item 2, 2026-08-25).
 ///
-/// Seeded OFF -- WordStar's own default state, MEASURED (dosbox-x, 16 probes): a
-/// document that never touches `.pn`/`.pg`/`.op`/`.pc` at all prints NO automatic
-/// number, at any column (`.pc` alone does not turn it on either). `.pn` (ANY
-/// occurrence -- WSFORMAT: "sets the starting page number"; measured: a bare `.pn 5`
-/// with no header/footer/`.pg` at all still printed a bottom-of-page number) and `.pg`
-/// (WSFORMAT's own documented re-enable after `.op`) both turn it ON; `.op` turns it
-/// OFF. Genuinely stateful mid-document (measured: page 1 under `.op` silent, pages
-/// after a mid-document `.pg` numbered, no `.pn` anywhere in that probe at all -- `.pg`
-/// alone activates it).
+/// Seeded ON -- WordStar 7's stock factory default state (WSCHANGE ships the
+/// automatic page number ON, centered at the bottom margin, unless `.op` turns it
+/// off). REVERSED 2026-09-07, ported from ctrl-kd `pdf.py`'s `_pgnum_checkpoints`
+/// (commit b6d5d03): ws7-prints/v3 (the PRISTINE.EXE recapture), finding #2 --
+/// documents that never touch `.pn`/`.pg`/`.op`/`.pc` at all print a stock
+/// bottom-of-page automatic number under a genuinely stock WS7 install, confirmed
+/// at the raw PCL byte level across BOXES/DOCA/DOCB/DOCD/DOCE/SAWYER/DOCF/VERSIONS/
+/// -README. Previously seeded OFF, MEASURED (dosbox-x, 16 probes) against Robert J.
+/// Sawyer's own WSCHANGE-customized install -- the same install-contamination
+/// family as ctrl-kd's `.po` column 7 vs 8 bug (mechanism S, already ported/
+/// reverted here too): Sawyer's WSCHANGE profile turned the automatic number OFF
+/// by default, stock WS7 does not.
+///
+/// `.pn` (ANY occurrence -- WSFORMAT: "sets the starting page number"; measured: a
+/// bare `.pn 5` with no header/footer/`.pg` at all still printed a bottom-of-page
+/// number) and `.pg` (WSFORMAT's own documented re-enable after `.op`) both turn it
+/// ON (a no-op against this new default, since it is already ON); `.op` turns it
+/// OFF -- unaffected by this change, still the only way a document reaches "no
+/// number". Genuinely stateful mid-document (measured: page 1 under `.op` silent,
+/// pages after a mid-document `.pg` numbered, no `.pn` anywhere in that probe at
+/// all -- `.pg` alone activates it).
 ///
 /// This is the engine for `EmitOptions.PageNumberMode.auto` (the default): the
 /// document's own dot commands decide, byte-identical to every existing capture/oracle
 /// for the overwhelming majority of documents that never touch any of these four
-/// commands. `.on`/`.off` bypass this entirely -- see `emitPDF`'s own call site
-/// (PDFWriter.swift).
+/// commands (they now get the stock automatic number instead of none). `.on`/`.off`
+/// bypass this entirely -- see `emitPDF`'s own call site (PDFWriter.swift).
 func pgnumCheckpoints(_ doc: Document) -> [(blockIndex: Int, on: Bool)] {
-    var checkpoints: [(blockIndex: Int, on: Bool)] = [(0, false)]
+    var checkpoints: [(blockIndex: Int, on: Bool)] = [(0, true)]
     for dp in doc.dotPositions {
         // No word-boundary check: a real WS7 file overwhelmingly writes `.pn0`/`.pn22`/
         // `.pg` with NO space before a following digit, and `dotCommandNameAndArg`'s own
@@ -1774,13 +1958,34 @@ func autoPageNumberXPt(_ doc: Document) -> Double {
 }
 
 /// Top-of-text offset in points for printed mode: the bottom edge of WS7's reserved
-/// TOP-MARGIN-PLUS-HEADER-MARGIN zone (lines at 6 LPI -> 12pt each; the defaults `.mt 3` +
-/// `.hm 2` = 5 lines = 60pt). Print streams (no `page` meta) keep the fixed 36pt — their own
-/// top-margin blanks are in the data (minus the machine-margin strip in `docToPagelines`).
-/// Clamped inside the page so garbage `.mt`/`.hm` from a misdetected binary degrades to an
-/// ugly page, never an absurd coordinate space. Deliberately measured against the FIXED
-/// `PDFMetrics.lead` (not `printedLead(doc)`) — this is a page-geometry clamp, not a
+/// TOP-MARGIN zone (`.mt`, lines at 6 LPI -> 12pt each; the default `.mt 3` = 36pt). Print
+/// streams (no `page` meta) keep the fixed 36pt — their own top-margin blanks are in the
+/// data (minus the machine-margin strip in `docToPagelines`). Clamped inside the page so
+/// garbage `.mt` from a misdetected binary degrades to an ugly page, never an absurd
+/// coordinate space. Deliberately measured against the FIXED `PDFMetrics.lead` (not
+/// `printedLead(doc)`) — this is a page-geometry clamp, not a
 /// line-spacing one.
+///
+/// Mechanism U (ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3` PRISTINE.EXE round,
+/// commit 26169cd): `.hm` is NEVER added on top of `.mt`, matching the WS7 manual's own
+/// dot-command reference (already quoted in this codebase for the symmetric `.mb`/`.fm`
+/// case). This function used to add `.hm` (2 lines, 24pt) whenever `.mt` was left at its
+/// document default — see the "INCLUDES `.hm`" history below, all of it measured ONLY
+/// against `ws7-prints/v1`/`v2`, both captured through Robert J. Sawyer's own
+/// WSCHANGE-customized `WS.EXE` (the SAME install mechanisms S and T already found
+/// responsible for the `.po` and auto-leading contaminations). A `PRISTINE.EXE` (factory,
+/// no WSCHANGE) recapture of 5 default-`.mt` documents (OCAPTAIN/BOXES/SAWYER/LYING/
+/// WARPRAYR) settles it: every one measures its first real content line at EXACTLY `.mt`
+/// alone (36pt) + that line's own entering lead, zero residual — 36 (`.mt` alone) + 12
+/// (OCAPTAIN/BOXES/SAWYER's own 12pt entering lead) = 48.0pt exactly; 36 + 16 (LYING/
+/// WARPRAYR's 16pt Title style, at `AUTO_LEAD_FACTOR` 1.0) = 52.0pt exactly. `ws7-prints/v1`'s
+/// uniform ~24-27pt EXTRA gap on the SAME 5 documents is Sawyer's own `.hm`-adds-to-`.mt`
+/// customization, not stock WS7's — invisible to this codebase's own `pcl` tier verdicts
+/// because it is a UNIFORM per-page offset that a per-page median-dy calibration silently
+/// absorbs, the same masking mechanism already named for `.po`, now confirmed on the
+/// vertical axis too.
+///
+/// ---- history below, superseded by the above ----
 ///
 /// NO LONGER SPECIAL-CASED FOR HEADERED DOCUMENTS (round 26 wave 3, ctrl-kd's
 /// `fidelity_gate.py` Finding A — reversing the headerless scoping this function used to
@@ -1790,38 +1995,28 @@ func autoPageNumberXPt(_ doc: Document) -> Double {
 /// running head on the document's first page) at PCL baseline y=35.7pt (`.mt` alone, matching
 /// `runningOps`'s OWN placement, unaffected by this function), but the BODY text on those SAME
 /// headered pages starts at y=71.7pt — byte-for-byte the SAME offset the headerless corpus
-/// measures ((.mt 3 + .hm 2)*12 + 12pt baseline = 72pt, 0.3pt residual). `.hm` is reserved
-/// before the body whether or not a header actually prints on that page — the header's OWN row
-/// (`runningOps`, computed independently from `.mt`/`.hm`/the header's own line count) and the
-/// body's start offset (this function) are two separate quantities the old headers/footers
-/// branch conflated.
+/// measures ((.mt 3 + .hm 2)*12 + 12pt baseline = 72pt, 0.3pt residual). Mechanism U (above)
+/// now confirms the ORIGINAL WS4-era reading was right about STOCK WS7 all along — `.hm` is
+/// always within `.mt`, headered document or not — and -README's own body-vs-header split
+/// (used at the time to argue the opposite) was itself measuring the Sawyer-install `.hm`
+/// contamination on the BODY side while its header (`runningOps`, a separate computation)
+/// happened to stay correct.
 ///
-/// `.hm` ONLY ADDS WHEN `.mt` IS THE DOCUMENT DEFAULT (`mtSource == .default`, `ParseWS.swift`'s
-/// own file-vs-default provenance tag — the SAME field `styleLeadPt`'s `.lh` guard already
-/// reads for a parallel reason). PREVIEW.WS (ws7-prints/v1) is the negative oracle: it declares
-/// its OWN `.mt` explicitly (`mtSource == .file`, 4.98 lines — a WSFORMAT-style non-integer
-/// `.mt`, likely typed as a decimal inch value), and its WS7 capture's first body baseline
-/// (88.5pt) matches `.mt` ALONE (round(4.98*12)=60, +14.4+14.4 for this headerless document's
-/// own two leading blank lines = 88.8pt, 0.3pt residual) — NOT `.mt`+`.hm` (83.76 -> 84, which
-/// would land at 112.8, over 24pt off). Every oracle behind the unconditional `.mt`+`.hm`
-/// finding above (the whole headerless corpus, plus -README's own headered pages) has
-/// `mtSource == .default` — an author who never touched `.mt` gets the print driver's own
-/// factory PAIR (`.mt 3` shipped together with `.hm 2`, WSCHANGE's factory-defaults table),
-/// but one who explicitly set their own top margin does not also inherit that pairing's second
-/// half.
+/// PREVIEW.WS (ws7-prints/v1) is unaffected by this change either way: it declares its OWN
+/// `.mt` explicitly (`mtSource == .file`, 4.98 lines — a WSFORMAT-style non-integer `.mt`,
+/// likely typed as a decimal inch value), and both its `ws7-prints/v1` and `v3` captures
+/// already match `.mt` ALONE (round(4.98*12)=60, +12+12 for this headerless document's own
+/// two leading blank lines at `AUTO_LEAD_FACTOR` 1.0 = 84pt vs the `v3` measured 83.7pt,
+/// 0.3pt residual — the same decipoint-rounding gap every other oracle here shows).
 ///
 /// WSCHANGE's factory-defaults table (Installing and Customizing, WS7 manual, p.2-46/2-45)
-/// independently confirms both defaults used here: "Top margin ... 0.50"" and "Header margin
-/// ... 0.33"" (0.33in = 23.76pt = 1.98 ~ 2 lines, matching the default `hmLines` already
-/// coded). Port of Python's `_printed_top` (pdf.py, ctrl-kd 2.0.0/round 26 wave 3, refined
-/// same day on PREVIEW.WS evidence).
+/// independently confirms the `.mt` default used here: "Top margin ... 0.50"". Port of
+/// Python's `_printed_top` (pdf.py, ctrl-kd 2.0.0/round 26 wave 3, refined same day on
+/// PREVIEW.WS evidence, and again by mechanism U, commit 26169cd).
 func printedTop(_ doc: Document) -> Int {
     guard let page = doc.page else { return PDFMetrics.topPrinted }
     let pageHeight = resolvedPrintedPageHeight(doc)
-    var reserve = page.mtLines
-    if page.mtSource == .default {
-        reserve += page.hmLines
-    }
+    let reserve = page.mtLines
     return max(0, min(roundHalfToEven(reserve * 12), pageHeight - PDFMetrics.lead))
 }
 
@@ -1836,27 +2031,77 @@ func printedTop(_ doc: Document) -> Int {
 /// mid-page, colliding with the WORDSTAR.PIX image; real WS7 prints it at the physical
 /// bottom.
 ///
-/// Measured against TWO independent WS7 captures (ws7-prints/v1), both at every
+/// Originally measured against TWO WS7 captures (ws7-prints/v1), both at every
 /// page-geometry default (`.mb` 8 lines): -SCREEN.pcl's footnote line "1. Footnote" at
 /// y=708pt (dash rule at 684pt) and LYING.pcl's "1.Did not take the prize." also at y=708pt
 /// (dash rule also 684pt — LYING's page is full, so its flow-appended position and this
-/// anchor coincide). Both land on the exact same reserve — 792 - 708 = 84pt — with ZERO
-/// decipoint residual. 84pt is (`.mb` - 1) * 12 = 7 lines, ONE LINE inside the raw `.mb`
-/// reserve (8 lines = 96pt would put the footnote line 12pt too high, at 696pt) — the same
-/// "one line's own lead" adjustment `printedTop` applies at the OTHER end of the page (a
-/// baseline sits one line's lead INSIDE its margin reserve, not flush with its outer edge),
-/// mirrored here for the last line instead of the first.
+/// anchor coincide). Both landed on 84pt = (`.mb` - 1) * 12 = 7 lines, alongside a
+/// (since-fixed) 3-line header model (`areaSize`/`renderArea`) that inserted an extra
+/// leading blank neither real capture ever printed.
 ///
-/// JUDGMENT CALL, recorded rather than hidden: ws7-prints/v1 has no document with an
-/// EXPLICIT non-default `.mb` to confirm the `- 1` line scales correctly rather than being
-/// a fixed offset; both measured documents share the same default. Scaling with `.mb`
-/// (rather than a flat 84pt constant) is the more defensible read of a page-layout engine's
-/// intent, but is not independently confirmed — if a future capture contradicts it, that is
-/// where to look first.
+/// Mechanism U (ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3` PRISTINE.EXE round,
+/// commit 26169cd, same install already found responsible for the `.po`/leading/top-margin
+/// contaminations — mechanisms S, T, and this function's own sibling `printedTop`).
+/// Re-deriving BOTH real captures from scratch with the header-count fix landed (2 lines:
+/// rule then blank, not 3):
+///
+/// -SCREEN (`ws7-prints/v1`, Sawyer): a genuinely SHORT page, so this anchor's own reserve
+/// governs directly. Solving with the 2-line header: reserve = 96.0pt = `.mb * 12` EXACTLY
+/// (8 lines, no adjustment at all) — zero residual. The old `-1` was compensating for the
+/// wrong (3-line) header model, not a real per-install customization.
+///
+/// LYING (`ws7-prints/v3`, pristine): a FULL page, so this document's own natural
+/// (un-anchored) flow places it — once `printedTop`'s fix lands, the body's last real
+/// content line plus the 2-line header's 24pt plus the text's own 12pt entering lead
+/// matches pristine's real measurement with ZERO residual via PURE SEQUENTIAL FLOW; this
+/// document's own oracle only bounds the reserve from BELOW (`reserve >= 120`, its own
+/// 3-line area).
+///
+/// So: `-SCREEN` (Sawyer) needs EXACTLY 96pt (`.mb * 12`); `LYING` (pristine) needs AT
+/// LEAST 120pt (`(.mb + 2) * 12`) to avoid wrongly overriding its own already-correct
+/// natural position — but see the 2026-09-07 correction below: that `>= 120` bound itself
+/// carried a 12pt derivation error, and the real value is 108pt.
+///
+/// 2026-09-07 correction (ctrl-kd commit 135a14a, `-SCREEN` recapture): the reasoning
+/// above compared `target_first` against `natural_y` (648, LYING's own last BODY CONTENT
+/// line) instead of the code's actual comparison point, `bodyY` (`648 + 12 = 660`, the
+/// position of the NEXT line after the body — what `layoutPrintedPages`'s own override
+/// arithmetic uses). That is a 12pt/one-line error in the DERIVATION, not in the code's
+/// own arithmetic, and it inflated the reserve requirement to `>= 120` when the code's
+/// real gate only requires `>= 108`.
+///
+/// The error was invisible until now because -SCREEN's own footnote/endnote block was
+/// believed genuinely ABSENT from the `ws7-prints/v3` PRISTINE.EXE capture (that corpus's
+/// own README finding #3) — it was actually just TRUNCATED at the document's embedded
+/// Inset picture (corpus commit 2be7569, 2026-09-06), so -SCREEN could never corroborate
+/// or refute this constant either way until the recapture. The complete capture measures:
+/// dash rule at V=660.0pt, footnote line ("1." then, tab-separated, "Footnote") at
+/// V=684.0pt, endnote line ("(1)" then "Endnote") at V=708.0pt. -SCREEN's body ends at
+/// V=434.1pt — nowhere near the anchor — so, being a genuinely short page, this anchor
+/// governs the reserve DIRECTLY (not just a lower bound, unlike LYING): solving
+/// `792 - reserve - (areaLen-1)*12 = 660` with `areaLen=3` (rule, blank, text) gives
+/// `reserve = 108.0pt = (.mb + 1) * 12`, not `120pt = (.mb + defaultHmLines) * 12`.
+///
+/// Re-checked against LYING with `reserve = 108`: `override = targetFirst - bodyY =
+/// (792 - 108 - 24) - 660 = 0`, and the code's own gate is `if override > 0`, so `0`
+/// still does NOT engage the anchor — LYING's already-correct pure-sequential-flow
+/// position (684.0pt, matching pristine with zero residual) is completely undisturbed.
+/// So `108` is not a compromise between two installs' needs; it is the exact value both
+/// real stock captures independently agree on: `-SCREEN` governs it directly (short
+/// page), LYING is consistent with it as a boundary case (full page, override lands at
+/// exactly 0 rather than needing to stay strictly negative).
+///
+/// CONFIRMED under stock, n=2 (`-SCREEN` direct + `LYING` boundary-consistent),
+/// superseding the prior n=1 judgment call: `108pt = (.mb + 1) * 12`, not
+/// `(.mb + defaultHmLines) * 12`. The `.hm`-symmetry reading that motivated `+2` doesn't
+/// hold; the footnote area's real cushion above the physical bottom margin is one line,
+/// not `defaultHmLines` lines — `printedTop`'s own `.hm` finding (top of page) and this
+/// reserve (bottom of page) are NOT mirror images after all, contra the earlier note here.
+/// Port of Python's `_printed_notes_reserve_pt` (ctrl-kd commit 135a14a).
 func printedNotesReservePt(_ doc: Document) -> Double {
-    guard let page = doc.page else { return 84.0 }   // print streams: no `.mb` to read;
+    guard let page = doc.page else { return 108.0 }  // print streams: no `.mb` to read;
                                                       // the measured default constant
-    return max(0.0, (page.mbLines - 1) * 12.0)
+    return max(0.0, (page.mbLines + 1) * 12.0)
 }
 
 /// Baseline-to-baseline distance in points for printed mode. Port of Python's
@@ -1979,8 +2224,30 @@ let pdfPtPerCol = 7.2
 /// so the baseline this indent sits against is the document's own left edge — the same
 /// li=0 an unstyled/WS4 Printed RTF paragraph already gets from the SAME round 6 code.
 /// `nil` when the block never set `.pm`. Port of Python's `_printed_pm_fi_pt`.
+///
+/// TYPED-INDENT OFFSET (PCL tier, WARPRAYR.WS, planning #202, ctrl-kd 8956ad4): `.pm`'s
+/// column is where a paragraph's first line auto-indents to when WordStar STARTS it under
+/// that margin — it is not an amount added on top of whatever the author already typed
+/// there by hand. WARPRAYR's two Quote-styled blocks (`paraMargin` 5, from the style
+/// record, not a literal `.pm`) open each stanza with 10 literal leading spaces the author
+/// typed — real WS7 (ws7-prints/v1/WARPRAYR.pcl/.measurements.json, page 1 y=448.5 and
+/// page 2 y=326.1/369.6/513.3/556.5) prints those lines at exactly left-edge + 10 typed
+/// columns (e.g. 50.4 + 72.0 = 122.4pt) — the style's own 5-column indent contributes
+/// NOTHING once the typed text already reaches column 10. Modelled as `max(0, pmCols -
+/// alreadyTypedCols)`: a typed indent SHORTER than `.pm`'s column still gets topped up to
+/// it; one that already reaches or passes it adds nothing further. Blank leading lines are
+/// skipped — this reads the block's first REAL (non-blank) line, the same line the
+/// pageline pass ultimately applies `fi` to.
 func printedPMFiPt(_ block: Block) -> Double? {
-    block.paraMargin.map { $0 * pdfPtPerCol }
+    guard let paraMargin = block.paraMargin else { return nil }
+    var typedCols = 0.0
+    if let firstReal = block.lines.first(where: { line in
+        line.spans.contains { $0.text.contains { !$0.isWhitespace } }
+    }) {
+        let text = firstReal.spans.map { $0.text }.joined()
+        typedCols = Double(text.prefix(while: { $0 == " " }).count)
+    }
+    return max(0.0, (paraMargin - typedCols) * pdfPtPerCol)
 }
 
 /// `(sb, sa)` in points from WordTsar's own `.psa`/`.psb` extensions — b24 round 17
@@ -2041,21 +2308,39 @@ func resolveLeftPt(_ poCols: Double, size: Int) -> Double {
     return max(0.0, min(left, Double(PDFMetrics.pageWidth) - Double(size) * 0.6))
 }
 
-/// Total lines the footnote area occupies: the fixed 3-line header (blank / 20-dash
+/// Total lines the footnote area occupies FOR PAGE-CAPACITY PURPOSES (how many body lines
+/// this paginator admits onto a page before the footnote area needs room, and this area's
+/// own share of `footnoteCeiling`'s budget): the fixed 3-line header (blank / 20-dash
 /// separator / blank — VMI 240 = one blank line at 6 LPI) plus each entry's own lines plus
 /// one blank line between entries (VMI 240 "between notes"). 0 when there's nothing to
 /// show at all. Port of Python's `_area_size`.
+///
+/// DELIBERATELY NOT the same count `renderArea` visually draws (mechanism U, ctrl-kd
+/// `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3` PRISTINE.EXE round, commit 26169cd) — see
+/// that function's own doc comment for why the RENDERED area is 2 lines, not 3. Reducing
+/// this function to 2 as well breaks LYING's own page break (real WS7, both installs, ends
+/// page 1 at the same line this engine already does at every count from 3 up; reducing to
+/// 2 lets one MORE body line fit before the cap, which real WS7 does not do) — so the
+/// capacity/pagination budget for this header is 3 lines even though only 2 of them are
+/// literally drawn. Empirically necessary, not fully explained.
 private func areaSize(_ entries: [[PageLine]]) -> Int {
     guard !entries.isEmpty else { return 0 }
     return 3 + entries.reduce(0) { $0 + $1.count } + (entries.count - 1)
 }
 
-/// The admitted area as page lines: blank / separator / blank, then the entries with one
-/// blank between. Port of Python's `_render_area` — the same line sequence `fitFooter`'s
-/// bottom-of-page path produced (blank, rule, then a blank ahead of each note).
+/// The admitted area as page lines: separator / blank, then the entries with one blank
+/// between. Port of Python's `_render_area`.
+///
+/// UPDATED (mechanism U, ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3` PRISTINE.EXE
+/// round, commit 26169cd): the separator directly follows the body's own last line, with
+/// NO leading blank — confirmed on `ws7-prints/v1`/-SCREEN.pcl and `ws7-prints/v3`/LYING.pcl,
+/// both landing the rule exactly one lead after the body's own last line, not two. The
+/// header this function draws is now 2 lines, not 3 — but `areaSize`'s own page-CAPACITY
+/// cost stays 3 (see that function's own doc comment): the rendered and budgeted line
+/// counts DELIBERATELY diverge.
 private func renderArea(_ entries: [[PageLine]]) -> [PageLine] {
     guard !entries.isEmpty else { return [] }
-    var out: [PageLine] = [[], [Span(text: String(repeating: "-", count: 20))], []]
+    var out: [PageLine] = [[Span(text: String(repeating: "-", count: 20))], []]
     for (k, e) in entries.enumerated() {
         if k > 0 { out.append([]) }
         out.append(contentsOf: e)
@@ -2300,15 +2585,27 @@ private func layoutPrintedPages(
             // to leave off. `bodyY` is the body's own last baseline (top-down points):
             // `lineCost` makes `ownLead / defaultLead` exact, so `bodyLen * defaultLead`
             // is the TRUE point advance the body already spent, not an approximation.
-            // Only APPLIED when it pushes the area DOWN (`override > defaultLead`, more
-            // than the ordinary single-blank-line gap the flow path would use) — a full
-            // page (LYING.WS) already lands within a line of the target on its own, so
-            // this is a no-op there (byte-identical), and a page that somehow overflows
-            // the anchor never moves backward into the body.
+            // APPLIED whenever it pushes the area DOWN AT ALL (`override > 0`) -- NOT
+            // gated on exceeding one whole `defaultLead` gap (planning #202 residuals
+            // round, ctrl-kd 1017391): that gate's own rationale -- "a full page
+            // (LYING.WS) already lands within a line of the target on its own, so this
+            // is a no-op there, byte-identical" -- assumed the flow path's own ordinary
+            // single-blank-line gap could only ever UNDERSHOOT the target when
+            // `override` came out under one lead. LYING is a full page and its own real
+            // WS7 capture (LYING.pcl) measures its footnote line at y=708pt, but the
+            // flow path's plain `defaultLead` gap OVERSHOOTS the anchor by 4.8pt
+            // (natural 676.8pt vs the anchor's own 672.0pt target, `override` a genuine
+            // 7.2pt -- less than one 12pt lead, so the old `> defaultLead` gate skipped
+            // it and left the 4.8pt overshoot standing) -- the assumption held for every
+            // oracle it was checked against, but was never actually correct for a SMALL
+            // positive override, only ever coincidentally close enough not to be caught.
+            // A negative or zero override (the body's own flow already reached or passed
+            // the target) is still left alone -- "never move backward into the body" is
+            // unchanged.
             let bodyY = notesTop + bodyLen * defaultLead
             let targetFirst = notesPageH - notesReserve - Double(area.count - 1) * defaultLead
             let override = targetFirst - bodyY
-            if override > defaultLead {
+            if override > 0 {
                 area[0].lead = override
             }
         }
@@ -2387,7 +2684,7 @@ private func layoutPrintedPages(
     // FIRST endnote, and it is NOT unconditional. WS7's note face is 12-point, so ONE note
     // line advances 120 decipoints — the 2026-08-20 measurement that put a blank line here
     // read the natural 240dp two-line advance as "24pt, one blank line" and generalised it.
-    // Re-measured 2026-08-23 against both WS7 captures (the reference vault's WordStar/ws7-prints/v1/):
+    // Re-measured 2026-08-23 against both WS7 captures (jon_vault WordStar/ws7-prints/v1/):
     //
     //   -SCREEN.pcl  "1. Footnote" V=7080 -> "(1) Endnote"  V=7320 = 240dp
     //                = ONE BLANK LINE, endnotes joining a FOOTNOTE AREA.
@@ -2973,8 +3270,15 @@ func layoutPrintedPagesPlain(
     let (globalHm, globalFm) = hmFmAt(hmFmCheckpointsList, 0)
     var curHm = globalHm
     var curFm = globalFm
+    // mechanism O (ctrl-kd 55d2b52): `.po` too -- see `poCheckpoints`. Feeds `runningOps`'s
+    // own header/footer LEFT edge only (body text's per-LINE `.po` already works,
+    // `Line.poCols`) -- still ride the SAME per-page-start recompute so `Page.poCols` is
+    // known by the time a page closes, exactly like `plLines`/`hmLines`/`fmLines`.
+    let poCheckpointsList = poCheckpoints(doc)
+    let globalPo = poAt(poCheckpointsList, 0)
+    var curPo = globalPo
     // `closePage`'s "does this page need its own render-time override" test can NOT
-    // compare against `globalPl`/`globalHm`/`globalFm` above: those are seeded at
+    // compare against `globalPl`/`globalHm`/`globalFm`/`globalPo` above: those are seeded at
     // WordStar's hardcoded default (correct for BEFORE any real occurrence), but the
     // render loop's fallback ("Page.* left nil means use doc.page AS IS") reads
     // `ParseWS.swift`'s own first-occurrence value, which -- in the exact degenerate case
@@ -2987,7 +3291,8 @@ func layoutPrintedPagesPlain(
     let docPl = doc.page?.plLines ?? defaultPlLines
     let docHm = doc.page?.hmLines ?? 2.0    // WSFORMAT's own hardcoded ".HM" default
     let docFm = doc.page?.fmLines ?? 2.0    // WSFORMAT's own hardcoded ".FM" default
-    /// (mt, mb, pl, hm, fm) in force at block `bi`, for the page about to start there --
+    let docPo = doc.page?.poCols ?? 8.0     // WS7 manual's own default page offset
+    /// (mt, mb, pl, hm, fm, po) in force at block `bi`, for the page about to start there --
     /// shared by BOTH places a fresh page begins: the explicit-break path below (`page`
     /// already empty by the time the next `.line` case's top-of-switch check runs), and
     /// the ORGANIC-overflow close (where `page` is NOT yet empty at the top of THIS
@@ -2998,11 +3303,12 @@ func layoutPrintedPagesPlain(
     /// very next page, which only the organic-close recompute site can reproduce. This
     /// also strengthens `.mt`/`.mb` for organic breaks (previously recomputed only at the
     /// explicit-break site).
-    func recomputeGeom(_ bi: Int) -> (mt: Double, mb: Double, pl: Double, hm: Double, fm: Double) {
+    func recomputeGeom(_ bi: Int) -> (mt: Double, mb: Double, pl: Double, hm: Double, fm: Double, po: Double) {
         let (mt, mb) = mtMbAt(mtMbCheckpointsList, bi)
         let pl = plAt(plCheckpointsList, bi)
         let (hm, fm) = hmFmAt(hmFmCheckpointsList, bi)
-        return (mt, mb, pl, hm, fm)
+        let po = poAt(poCheckpointsList, bi)
+        return (mt, mb, pl, hm, fm, po)
     }
 
     var pages: [Page] = []
@@ -3055,6 +3361,9 @@ func layoutPrintedPagesPlain(
             pg.hmLines = curHm
             pg.fmLines = curFm
         }
+        if curPo != docPo {
+            pg.poCols = curPo
+        }
         pages.append(pg)
     }
     func openNewPage() {
@@ -3089,12 +3398,13 @@ func layoutPrintedPagesPlain(
             // page only, so a page whose geometry never changes never recomputes to a
             // different number (see `printedCapFor`'s docstring).
             if page.isEmpty, let bi = line.bi {
-                let (mt, mb, pl, hm, fm) = recomputeGeom(bi)
+                let (mt, mb, pl, hm, fm, po) = recomputeGeom(bi)
                 curMt = mt
                 curMb = mb
                 curPl = pl
                 curHm = hm
                 curFm = fm
+                curPo = po
                 capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
                 budget = Double(capacity - 1) * defaultLead
             }
@@ -3125,12 +3435,13 @@ func layoutPrintedPagesPlain(
                 // `page.isEmpty` gate above, since `page` is not empty until closePage/
                 // openNewPage runs right here, mid-iteration.
                 if let bi = line.bi {
-                    let (mt, mb, pl, hm, fm) = recomputeGeom(bi)
+                    let (mt, mb, pl, hm, fm, po) = recomputeGeom(bi)
                     curMt = mt
                     curMb = mb
                     curPl = pl
                     curHm = hm
                     curFm = fm
+                    curPo = po
                     capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
                     budget = Double(capacity - 1) * defaultLead
                 }

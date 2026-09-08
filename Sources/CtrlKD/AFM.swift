@@ -249,7 +249,7 @@ let afmWidths: [String: [Int]] = [
 /// An unknown base font falls back to Courier's fixed 600: a face this table does not carry
 /// cannot be measured, and 600 is this emitter's own default pitch, not a guess at the
 /// missing face.
-func stringWidth1000(_ text: String, _ baseFont: String) -> Int {
+public func stringWidth1000(_ text: String, _ baseFont: String) -> Int {
     let table = afmWidths[baseFont] ?? afmCourier
     var total = 0
     for byte in cp1252Encode(text) {
@@ -259,6 +259,6 @@ func stringWidth1000(_ text: String, _ baseFont: String) -> Int {
 }
 
 /// Natural width of `text` in POINTS at `size`.
-func stringWidthPt(_ text: String, _ baseFont: String, _ size: Int) -> Double {
+public func stringWidthPt(_ text: String, _ baseFont: String, _ size: Int) -> Double {
     Double(stringWidth1000(text, baseFont)) * Double(size) / 1000.0
 }

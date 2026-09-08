@@ -123,6 +123,14 @@ let symbolEncoding: [UInt32: Unicode.Scalar] = [
     0xAD: "\u{2191}",   // U+00AD  -> ↑
     0xAE: "\u{2192}",   // U+00AE  -> →
     0xAF: "\u{2193}",   // U+00AF  -> ↓
+    // Adobe Symbol encoding position 0267 octal (0xB7/183) is "periodcentered" --
+    // visually identical to Unicode's own MIDDLE DOT, so self-mapped like the other
+    // same-glyph positions above (U+00B0, U+00B1). Round 2026-09-07 (the PDFWriter
+    // GRAPHIC_CHARS-in-a-Symbol-run fix, ported from ctrl-kd's symbolmap.py): without
+    // this a middle dot reaching `untransliterate` on a Symbol/math-mapped span (font
+    // symbolMap == .math) had no code point in `symbolReverse` and fell to
+    // `untransliterate`'s own '?' degradation same as an unmapped glyph would.
+    0xB7: "\u{00B7}",   // U+00B7  -> ·
 ]
 
 /// ZapfDingbats low half: Unicode's U+2700 block was DEFINED in Zapf order, so 0x21-0x7E
@@ -162,7 +170,7 @@ private func dingbat(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
 /// iteration order is not insertion order, so the loop runs over SORTED codes instead: with
 /// no duplicates the two agree exactly, and if a duplicate is ever added this stays
 /// deterministic rather than varying per run.
-let symbolReverse: [UInt32: Unicode.Scalar] = {
+public let symbolReverse: [UInt32: Unicode.Scalar] = {
     var out: [UInt32: Unicode.Scalar] = [:]
     for code in symbolEncoding.keys.sorted() {
         guard let uni = symbolEncoding[code] else { continue }
@@ -199,7 +207,7 @@ private func dingbatCode(_ scalar: Unicode.Scalar) -> Unicode.Scalar? {
 /// `nil` for `kind` is Python's "this is an ordinary text font" case (`kind not in ('math',
 /// 'symbols')`), and returns the text untouched — so a caller can hand it whatever
 /// `fontTranslitKind` said without testing first.
-func untransliterate(_ text: String, _ kind: SymbolTranslit?) -> String {
+public func untransliterate(_ text: String, _ kind: SymbolTranslit?) -> String {
     guard let kind else { return text }
     var view = String.UnicodeScalarView()
     for scalar in text.unicodeScalars {

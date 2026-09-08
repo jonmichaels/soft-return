@@ -325,6 +325,13 @@ func helvTypestyle() -> Int {
     typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("helv") }!
 }
 
+/// A typestyle number the base-14 mapping resolves to Courier — same reasoning as
+/// `helvTypestyle()`. Used by mechanism G's own fixed-pitch sup/sub fixtures, which need a
+/// REAL WS7 font block (not the fontless default) that still lands on Courier.
+func courierTypestyle() -> Int {
+    typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("courier") }!
+}
+
 /// A WS5+ note block (3=footnote, 4=endnote, 5=annotation, 6=comment) carrying `text`.
 /// Content layout per the WordStar 7.0 spec's Notes section: line-count word, number
 /// word, conversion-flag byte (high nybble = numbering format), then the text.

@@ -35,7 +35,28 @@ private func measurePageBudget(_ url: URL) throws -> (
     state.style.setManually(.printed)
     let metrics = printedMetrics(state.document)
     let rendered = DocumentRenderer.render(state)
-    let capacity = metrics.capacity
+
+    // PAGE 1 IS AS MANY LINES AS THE ENGINE PUTS ON PAGE 1 — not `metrics.capacity`.
+    //
+    // `capacity` is a count of LINE SLOTS at the document's default lead. `.lh` is stateful,
+    // so a line set at its own leading consumes several slots, and a document with
+    // `lh_varies` has FEWER lines on page 1 than `capacity`. NOVEL.WS is the extreme case:
+    // the engine's own page 1 is 31 lines, not 55. Slicing 55 newlines pulled roughly 24
+    // lines off PAGE 2 into the measurement, and this test then reported the app as 505pt
+    // over budget on a page that fits — `required` 1165.22pt against a page the engine lays
+    // out in 612pt.
+    //
+    // Same defect, same fix, as the sibling grid oracle's per-line leads: the harness was
+    // describing a simpler document than the engine actually lays out.
+    let enginePageOne = docToPagelines(state.document, printed: true).first?.lines ?? []
+    let capacity = enginePageOne.isEmpty ? metrics.capacity : enginePageOne.count
+
+    // And the BUDGET is the sum of those lines' own leads, for the same reason. A flat
+    // `capacity * lead` is only the right number for a document whose lines all sit at the
+    // document default.
+    let budget = enginePageOne.isEmpty
+        ? CGFloat(metrics.capacity) * CGFloat(metrics.lead)
+        : CGFloat(enginePageOne.reduce(0.0) { $0 + ($1.lead ?? metrics.lead) })
 
     // Exactly the first `capacity` lines: locate the capacity-th newline and cut BEFORE it,
     // so the slice carries `capacity` lines joined by `capacity - 1` newlines — the same
@@ -76,11 +97,31 @@ private func measurePageBudget(_ url: URL) throws -> (
     return (
         fixture: url.lastPathComponent,
         required: required,
-        budget: CGFloat(capacity) * CGFloat(metrics.lead),
+        budget: budget,
         textTop: rendered.textFrame.origin.y,
         pageHeight: CGFloat(metrics.pageHeight)
     )
 }
+
+/// Wrapped in a `@Suite` so these tests are ADDRESSABLE.
+///
+/// As file-scope `@Test` functions they had no suite name, and on this toolchain no working
+/// free-function form either — so `ONLY_TESTING=SoftReturnTests/<anything>` selected ZERO
+/// tests and the runner reported rc=0 "TEST SUCCEEDED". A green exit code on nothing
+/// executed is the same failure that let four of these very oracles be recorded as fixed on
+/// 2026-09-07 when their verifying runs never ran a single assertion. Runner REV 8 now
+/// fails such a run; this is the other half, so the tests can actually be selected.
+///
+/// `.serialized` — these lay out HUNDREDS of documents through AppKit on the main actor.
+///
+/// Run alone, the geometry suite finishes in 185 seconds. Inside a full armed run the SAME
+/// tests over the SAME corpus did not finish in 14+ MINUTES, and a previous full run had to
+/// be killed after 35. That ~40x gap is not the tests' own cost — it is what happens when
+/// several corpus-wide `@MainActor` layout walks are scheduled concurrently with each other
+/// and with the suites that drive real windows, QuickLook and the UI target. Serializing
+/// them costs nothing when they are the only thing running and stops the full suite from
+/// thrashing.
+@Suite(.serialized) struct PageBudgetMeasurementTests {
 
 /// THE VERDICT. Runs the sound measurement over every fixture and reports the numbers —
 /// this is the evidence job-029 asked for, replacing what was retracted.
@@ -120,4 +161,5 @@ private func measurePageBudget(_ url: URL) throws -> (
         for f in failures { print("SR-24PT-OVERFLOW   \(f)") }
     }
     #expect(failures.isEmpty, "page budget exceeded:\n\(failures.joined(separator: "\n"))")
+}
 }

@@ -262,29 +262,109 @@ func runningOps(
     ///
     /// No font on this line (the overwhelmingly common case — every document that never
     /// opens a `.h#`/`.f#` with a font block) is BYTE-IDENTICAL to before this existed:
-    /// one Tj, the whole string, Courier. `res` is required for the new path (it registers
-    /// whatever base-14 font gets used in the page's own /Font resources); a caller that
-    /// omits it gets the old behaviour rather than a crash.
-    func hfLineOps(_ txt: String, y: Double, fontIdx: Int?) -> [[UInt8]] {
+    /// one Tj, the whole string, Courier — PROVIDED the line has no toggle bytes of its own
+    /// to interpret (mechanism M, ctrl-kd 74acc60, residuals round 2026-09-06): a fontless
+    /// `.h#`/`.f#` line that DOES type an inline style toggle (`hfToggles`, e.g. `^Y` for
+    /// italic) used to skip `hfRuns` entirely and write the raw control byte straight into
+    /// the Tj string — a real PDF viewer (and this repo's own fidelity gate, reproducing
+    /// one) then advances the pen by whatever width its font gives an undefined glyph code,
+    /// landing it as a phantom extra character glued onto the following word. Confirmed on
+    /// -README.WS's own running head (`.h1`, no font block, wrapped in a single `^Y`...`^Y`
+    /// italic pair): the engine's Printed PDF carried a literal `\x19` before "WordStar" on
+    /// every page, shifting "7.0"/"Archive" 7.2-14.4pt right of WS7's own real (correctly
+    /// italic-then-restored, no phantom glyph) position. `res` is required for the
+    /// run-by-run path (it registers whatever base-14 font gets used in the page's own
+    /// /Font resources); a caller that omits it gets the old single-Tj behaviour
+    /// regardless (there is no way to register a font without one), same as before this fix.
+    func hfLineOps(_ txt: String, y: Double, fontIdx: Int?, tabRec: HFTabMark? = nil) -> [[UInt8]] {
+        var txt = txt
         var entry: FontChange? = nil
         if let fontIdx, res != nil, fontIdx >= 0, fontIdx < doc.fonts.count {
             entry = doc.fonts[fontIdx]
         }
-        guard let entry, let res else {
+        // planning #202 (mechanism Q, ctrl-kd 605e27b): a right/center/decimal-align tab
+        // typed into a `.h#`/`.f#` argument gets its own `cols` spaces BAKED into the
+        // text at parse time -- sized for whatever the eventual `#` substitution was
+        // assumed to be wide when the file was LAST SAVED (always 1 column: WordStar's
+        // own screen shows the literal '#' token, never the eventual printed number).
+        // Real WS7 re-evaluates the tab at PRINT TIME against THAT page's own actual
+        // page-number width instead (measured, -README.WS pages 9->10: WS7's own
+        // "WordStar" moves 7.2pt LEFT the instant the page number grows a second digit,
+        // while the number's own right edge -- the tab's real target column -- never
+        // moves).
+        //
+        // `tabRec.absHMI` (content[2:4], "absolute tab size in HMIs" -- the SAME field a
+        // body span's own tab mark carries) is WHERE THE BAKED PADDING ITSELF ENDS,
+        // measured from the document's own left reference -- i.e. it already encodes
+        // `targetCol - savedSuffixWidth`, using the file's OWN (1-digit-'#') suffix
+        // width at save time. Reversing that (`+` the STORED suffix's own
+        // un-substituted width, un-styled control bytes stripped) recovers `targetCol`
+        // without ever hardcoding a right margin. Re-deriving `targetCol` this way,
+        // then subtracting THIS page's own ACTUAL (post-`#`-substitution) suffix
+        // width, reproduces both of -README's real WS7 x positions exactly (352.8pt
+        // pages 2-9, one digit; 345.6pt pages 10-16, two digits).
+        //
+        // UPDATE (mechanism X, PCL-DIVERGENCE-TRIAGE.md, planning task, 2026-09-07):
+        // this formula used to subtract an EXTRA constant 1 from `savedTargetCol` --
+        // "content[2:4] cols 41 + stored suffix width 24 = 65, but the real
+        // print-time target measures 64" -- fit against `ws7-prints/v1`/`v2`'s own
+        // numbers for the 2-digit-page case ONLY, while `-README`'s header row was
+        // STILL 24pt too low (mechanism W's own bug, not yet found), which masked
+        // every header word's own horizontal residual behind its much larger
+        // vertical one -- the `-1` was never actually checked against a page where
+        // the header's own Y position was already correct. Once mechanism W's own
+        // fix landed first, `-README`'s `ws7-prints/v3` PRISTINE.EXE capture showed
+        // BOTH digit-width buckets uniformly 7.2pt (one column) LEFT of this
+        // formula's own output -- the extra `-1` bias, not a real WS7 rule (WS7's
+        // own suffix-final print column is INCLUSIVE of the tab's own
+        // SIZE-convention target column, not exclusive as the reverted comment
+        // claimed). Removed: `savedTargetCol` is simply `round(absHMI / tabHMIPerCol)
+        // + strippedSuffix.count` now, and both digit-width buckets land exactly on
+        // the pristine measurements above with zero residual.
+        //
+        // Fixed-pitch (`entry == nil`, Courier) only: a proportional header face has no
+        // single column width to divide the HMI target by, and no oracle in the corpus
+        // combines the two, so that case is left at the baked `cols` -- unchanged, same
+        // as before this existed.
+        if entry == nil, let tabRec {
+            let chars = Array(txt)
+            let charIdx = tabRec.charIdx
+            let cols = tabRec.cols
+            if charIdx >= 0, charIdx + cols <= chars.count {
+                let suffix = String(chars[(charIdx + cols)...])
+                let strippedSuffix = String(suffix.unicodeScalars.filter { $0.value >= 0x20 })
+                let savedTargetCol = roundHalfToEven(Double(tabRec.absHMI) / Double(tabHMIPerCol))
+                    + strippedSuffix.count
+                let newCols = max(0, savedTargetCol - render(strippedSuffix).count)
+                txt = String(chars[0..<charIdx]) + String(repeating: " ", count: newCols) + suffix
+            }
+        }
+        let hasControlByte = txt.unicodeScalars.contains { $0.value < 0x20 }
+        if entry == nil, res == nil || !hasControlByte {
             var out = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
             out += Array("\(fixedOneDecimalDouble(left)) \(fixedOneDecimalDouble(y)) Td (".utf8)
             out += esc(render(txt))
             out += Array(") Tj ET".utf8)
             return [out]
         }
+        // Unreachable as `nil`: the fast-path check just above returns whenever
+        // `entry == nil && res == nil`, and `entry` is only ever set (just above) when
+        // `res != nil` — so every path that reaches here already has a `res`. Spelled as a
+        // guard because Swift's optional binding can't see that invariant on its own.
+        guard let res else { return [] }
         let family = pdfFamily(entry)
-        let pt = entry.points != 0 ? max(1, roundHalfToEven(entry.points)) : size
+        let pt: Int
+        if let entry, entry.points != 0 {
+            pt = max(1, roundHalfToEven(entry.points))
+        } else {
+            pt = size
+        }
         var ops: [[UInt8]] = []
         var x = left
         for (i, run) in hfRuns(txt).enumerated() {
             let runText = render(run.text)
             if runText.isEmpty { continue }
-            if i == 0, runText.trimmed().isEmpty, entry.proportional {
+            if i == 0, runText.trimmed().isEmpty, let entry, entry.proportional {
                 // WordStar re-stamps a tab-derived leading indent as 10-CPI machine
                 // spaces regardless of the font in force (the SAME rule `splitIndent`
                 // applies to body text) -- a proportional face's space glyph is much
@@ -316,73 +396,86 @@ func runningOps(
     // for years -- but a document that widens .mt moves its header DOWN with the body,
     // where a laser printer can physically print it (no printer lays ink at y = 0).
     //
-    // b26-header-round2 (SUPERSEDES the b26-header-baseline analysis just above -- that
-    // round's rule, "subtract hm only when hmSource == .file", was fit to a corpus where
-    // every EXPLICIT-mt document also happened to carry an explicit .hm (SCRIPT), so
-    // hmSource and mtSource were CONFOUNDED: nothing distinguished "keyed on hm's own
-    // source" from "keyed on mt's". It shipped, then broke LJ6DTP.WS on Jon's paper
-    // review -- LJ6DTP is the first oracle where mt is explicit (.mt 1.1") but hm is NOT
-    // (never touches .hm at all), and it separates the two hypotheses cleanly.
+    // b26-header-round2 / register b31-dot-command-sweep / mechanism W
+    // (PCL-DIVERGENCE-TRIAGE.md, planning task, 2026-09-06/07 -- SUPERSEDES both rounds
+    // below): every measurement that ever justified GATING hm's participation on
+    // mtSource/hmSource (-README, SCRIPT, LJ6DTP, HMFM_PROBE) was captured through
+    // Robert J. Sawyer's own WSCHANGE-customized `WS.EXE` (`ws7-prints/v1`/`v2`, or an
+    // equivalent dosbox-x probe against the SAME install) -- the identical install
+    // mechanisms S (`.po` factory default) and T (auto-leading factor) already found
+    // personalizes settings that had been mistaken for WordStar 7's stock behaviour.
+    // `-README` is the corpus's ONLY header-bearing document with mtSource/hmSource
+    // BOTH `.default`, and a `PRISTINE.EXE` (factory, no WSCHANGE) recapture of it
+    // (`ws7-prints/v3`) measures its header at 12.0pt (headBase 0 = mt(3) - hm(2) -
+    // topHead(1), hm FULLY SUBTRACTED) -- not 35.7pt/headBase 2 (hm zeroed), what every
+    // gated formula below predicts for this exact combination. hm participating
+    // UNCONDITIONALLY, with no gate on either source at all, is what stock WordStar 7
+    // actually does.
     //
-    // Two independent bugs were tangled in that break, both now fixed:
+    // This does NOT reopen SCRIPT/LJ6DTP: both are mtSource == .file (or, for LJ6DTP's
+    // second page, the per-page swap's own local `.file` value) on every oracle page
+    // below, so EVERY gate this history ever tried (mtSource-only, hmSource-only, the
+    // b31 OR) already had hm participating there -- dropping the gate changes nothing
+    // for a document that ever states mt or hm itself; it only changes the all-default
+    // case, which until -README's own `ws7-prints/v3` capture had never been checked
+    // against a non-Sawyer install at all. SCRIPT's own PRISTINE.EXE recapture (also
+    // `ws7-prints/v3`) confirms zero regression: still clean, all four of its own
+    // mt/hm-explicit header rows below included.
     //
-    // (1) hm's participation is keyed on mtSource, not hmSource. Five measured WS7
-    //     header baselines (WS7 frame, the usual -0.3pt decipoint residual), three
-    //     independent documents:
-    //       -README (.mt 3 DEFAULT, .hm 2 default): WS7 35.7 == headBase 2 =
-    //         mt(3) - topHead(1) -- hm NOT subtracted (mtSource .default).
+    // Superseded history, kept for the numbers (still real WS7 measurements, just from
+    // the WSCHANGE'd install, and every one of them STILL fits "hm participates
+    // unconditionally" -- none of these five ever exercised the all-default case that
+    // turned out to need correcting):
+    //   b26-header-round2: hm's participation is keyed on mtSource, not hmSource
+    //     (LJ6DTP.WS broke the OLDER "hmSource == .file" rule on Jon's paper review --
+    //     LJ6DTP is mt EXPLICIT but hm at its own default, separating the two
+    //     hypotheses). Four measured WS7 header baselines (WS7 frame, the usual -0.3pt
+    //     decipoint residual), fitting hm-participates-unconditionally exactly as well
+    //     as the mtSource gate they were built to justify:
     //       SCRIPT normal (.MT 7 EXPLICIT, .HM 3 explicit): WS7 48.0 == headBase 3 =
-    //         mt(7) - hm(3) - topHead(1) -- hm subtracted (mtSource .file).
+    //         mt(7) - hm(3) - topHead(1).
     //       SCRIPT figure-1 (.mt1 mid-doc EXPLICIT, .HM 3 carries): WS7 12.0 ==
-    //         headBase max(0, 1-3-1) = 0 -- hm subtracted.
+    //         headBase max(0, 1-3-1) = 0.
     //       SCRIPT figure-2 (.mt1" mid-doc EXPLICIT, .HM 3 carries): WS7 36.0 ==
     //         headBase 2 = mt(6) - hm(3) - topHead(1).
     //       LJ6DTP (.mt 1.1" EXPLICIT globally, its own mid-document .mt1"/.mb1" --
     //         b26-mtmb-general's per-page swap sets THIS page's mtLines/mtSource to the
     //         LOCAL 6.0/.file, the SAME value `printedTop` already renders the (correct,
     //         unchanged) 86.0pt body baseline from; .hm never touches at all, stays
-    //         2/.default): WS7 48.0 == headBase 3 = mt(6.0) - hm(2) - topHead(1) -- hm
-    //         SUBTRACTED despite being hmSource .default, because mtSource is .file
-    //         (the page's own local override, same one the body already trusts).
-    //     All five fit ONE rule: hm participates whenever mt IS NOT at the document's
-    //     factory default (mtSource == .file, reading whatever mt is ACTUALLY in force
-    //     on this page -- the per-page swap value where one applies) -- regardless of
-    //     whether hm ITSELF was ever typed. Once an author moves mt off the factory
-    //     default, WS7 reserves hm's distance (explicit or its own factory default)
-    //     between the header and the body; a document that never touches mt at all
-    //     needs no such reservation, mt alone already being the header's own working
-    //     measure.
+    //         2/.default): WS7 48.0 == headBase 3 = mt(6.0) - hm(2) - topHead(1).
+    //   register b31-dot-command-sweep: HMFM_PROBE (dosbox-x, Sawyer's own WS.EXE) held
+    //     `.mt` at its factory default for the WHOLE document and still measured the
+    //     header move to a different PCL row -- 35.7pt before a mid-document `.hm 6`,
+    //     12.0pt after it. Read as "hm participates unconditionally" rather than "hm
+    //     participates because hmSource == .file on the pages that moved": the SAME
+    //     35.7/12.0 numbers fall out (headBase max(0,3-2-1)=2 before, max(0,3-6-1)=0
+    //     after) with no gate at all -- b31's own OR-widening was one gate-shaped
+    //     explanation of this data, not the only one, and the all-default half of it
+    //     (35.7, headBase 2) is now known (mechanism W, above) to be the Sawyer-install
+    //     artifact, not the real stock reading for that combination.
     //
-    // (2) `.mt`/`.hm` are LINE-COUNT dot commands in WordStar's own file format, always
-    //     at the FIXED 6 LPI (12pt) baseline (`resolveLinesArg`'s own doc comment) -- a
-    //     SEPARATE unit from `.lh`, the document's own (possibly customized) BODY TEXT
-    //     leading. This function's headBase-to-points conversion used the caller's
-    //     `lead` parameter (the document's `.lh`-derived body lead) instead of that
-    //     fixed 12pt/line unit -- invisible on every prior oracle (-README, SCRIPT: both
-    //     `.lh`-default, 12pt either way) until LJ6DTP, whose own `.lh` is customized to
-    //     14pt (9.333/48in): bug (1) ALONE (hm unconditionally ignored, mtSource never
-    //     checked) gave headBase 5.0 * 14pt lead + 12 = 82.0, the exact wrong baseline
-    //     on Jon's paper -- squarely inside LJ6DTP's own body text (86.0pt, unaffected:
-    //     `printedTop`'s top-margin reservation was never mixed with `.lh` to begin
-    //     with). Fixing ONLY bug (1) with the WRONG (customized) lead still would not
-    //     reach 48.0 (headBase 3.0 * 14 + 12 = 54.0) -- both had to be found.
-    //     `PDFMetrics.lead` (this module's own 6 LPI constant, already used for the
-    //     fontless/default-.lh case everywhere else) replaces `lead` here; `size` is
-    //     untouched (the header's own font size, never a margin-count unit).
-    // register b31-dot-command-sweep (SUPERSEDES the mtSource-only gate above): a probe
-    // held `.mt` at its factory default for the WHOLE document (mtSource == .default
-    // throughout, never .file) and still measured the header move to a DIFFERENT PCL row
-    // once a mid-document `.hm` changed -- something the mtSource-only gate cannot produce
-    // at all (it zeroes `hm` unconditionally whenever mt stays default). `hmSource` was
-    // `.file` on the pages that moved (the author DID type `.hm` there) and `.default` on
-    // the ones that didn't -- exactly what an OR of the two sources predicts, and every
-    // one of the five measurements behind the gate above (each of which happened to have
-    // hmSource == .file whenever mtSource was too, or vice versa) still fits an OR read
-    // identically to the single-field gate they were built from: this widens the gate, it
-    // does not re-litigate them.
+    // `.mt`/`.hm` are LINE-COUNT dot commands in WordStar's own file format, always at
+    // the FIXED 6 LPI (12pt) baseline (`resolveLinesArg`'s own doc comment) -- a
+    // SEPARATE unit from `.lh`, the document's own (possibly customized) BODY TEXT
+    // leading. This function's headBase-to-points conversion used the caller's `lead`
+    // parameter (the document's `.lh`-derived body lead) instead of that fixed
+    // 12pt/line unit -- invisible on every prior oracle (-README, SCRIPT: both
+    // `.lh`-default, 12pt either way) until LJ6DTP, whose own `.lh` is customized to
+    // 14pt (9.333/48in): the wrong-lead bug ALONE gave headBase 5.0 * 14pt lead + 12 =
+    // 82.0, the exact wrong baseline on Jon's paper -- squarely inside LJ6DTP's own body
+    // text (86.0pt, unaffected: `printedTop`'s top-margin reservation was never mixed
+    // with `.lh` to begin with). `PDFMetrics.lead` (this module's own 6 LPI constant,
+    // already used for the fontless/default-.lh case everywhere else) replaces `lead`
+    // here; `size` is untouched (the header's own font size, never a margin-count unit).
     let mt = doc.page?.mtLines ?? 3.0
-    let hm = (doc.page?.mtSource == .file || doc.page?.hmSource == .file)
-        ? (doc.page?.hmLines ?? 2.0) : 0.0
+    // mechanism W: hm participates UNCONDITIONALLY -- no gate on mtSource/hmSource at
+    // all. See the long comment above this function's own `headBase` block for the full
+    // derivation and why every gated formula this project ever shipped (b26-header-
+    // round2's mtSource-only rule, register b31's OR-of-both-sources widening) was fit
+    // entirely against Robert J. Sawyer's WSCHANGE-customized WS7 install and never
+    // actually distinguished from this simpler rule until `-README`'s own
+    // `ws7-prints/v3` PRISTINE.EXE recapture.
+    let hm = doc.page?.hmLines ?? 2.0
     let topHead = Double(headers.keys.max() ?? 1)
     let headBase = max(0.0, mt - hm - topHead)
 
@@ -392,7 +485,7 @@ func runningOps(
         let y = Double(pageHeight) - (headBase + Double(n - 1)) * Double(PDFMetrics.lead)
             - Double(size)
         guard y >= 0 else { continue }
-        ops += hfLineOps(txt, y: y, fontIdx: doc.headerFonts[n])
+        ops += hfLineOps(txt, y: y, fontIdx: doc.headerFonts[n], tabRec: doc.headerTabs[n])
     }
     // b26-header-baseline: `fm` is deliberately UNCHANGED -- checked for the same
     // default/explicit asymmetry `.hm` turned out to have, above, and NOT applying it
@@ -410,7 +503,7 @@ func runningOps(
         guard let txt = footers[n], !txt.isEmpty else { continue }
         let y = Double(pageHeight) - Double(footLine + n - 1) * lead - Double(size)
         guard y >= 0 else { continue }
-        ops += hfLineOps(txt, y: y, fontIdx: doc.footerFonts[n])
+        ops += hfLineOps(txt, y: y, fontIdx: doc.footerFonts[n], tabRec: doc.footerTabs[n])
     }
     if showAutoNum {
         // WordStar's own AUTOMATIC number rides the SAME row a footer line 1 would (n=1:
@@ -489,12 +582,32 @@ struct LineSegment {
     }
 }
 
+// Mechanism G (ctrl-kd f328838, research: 2026-09-06_ws7-blank-lines-and-superscript-
+// advance.md, "G -- superscript/subscript advance in fixed-pitch text"). Real WS7's own
+// *Reference* manual (ch. 10 "Style," Sub/Superscript, p. 10-8/9) states the reduced size
+// is "the x-height... of the original height" and gives ONE worked example — 12pt Times
+// Roman -> 8.1pt (ratio 0.675) — but that ratio is Times Roman's own, not a universal
+// constant: raw PCL from two independent real WS7 captures (DOCC.pcl, -SCREEN.pcl —
+// byte-identical `ESC(sp9.25v13.04hsb4099T` font-select command in both, typeface 4099 =
+// Courier) measures Courier's own ratio at 9.25pt from a 12pt body = 0.7708, a DIFFERENT
+// number. Confirms the manual's own wording: this is a real, font-specific x-height
+// fraction, not a flat scale — so it is a lookup keyed by family, not one constant. Only
+// Courier has a captured data point in this corpus; every other face keeps this emitter's
+// long-standing flat 2/3 default, unverified against any real WS7 sup/sub-in-that-face
+// capture.
+private let supSubXHeightRatio: [PDFFamily: Double] = [.courier: 9.25 / 12.0]
+private let supSubDefaultRatio = 2.0 / 3.0
+
 /// `(point size, baseline rise)` for a span set at `size`. Port of `pdf._sized`.
 ///
 /// Superscript and subscript are both SET SMALLER, not just moved: one size test covering
 /// either, then the rise chooses the direction. `sup` wins if a span somehow carries both,
-/// matching Python's nested conditional. Reduced to 2/3 — 8pt at the default 12, the ratio
-/// this emitter has always used.
+/// matching Python's nested conditional. Reduced by `family`'s own x-height ratio
+/// (`supSubXHeightRatio`, mechanism G) — 2/3 (8pt at the default 12, the ratio this emitter
+/// used before mechanism G) for any family with no measured WS7 ratio of its own. `family:
+/// nil` (every call site that predates mechanism G — Modern's three call sites in
+/// `PDFModernLayout.swift`) keeps the flat 2/3 default unconditionally, so nothing outside
+/// Printed's fixed-pitch line renderer changes behaviour.
 /// `rollPt` (b24 round 17, RULINGS-LEDGER row 3, register C22): the declared `.sr` roll,
 /// ALREADY converted to points — Printed's own domain only. `nil` (every Modern call site,
 /// and any caller that predates this) keeps the exact prior fixed 3/-2 rise, same "reader
@@ -503,13 +616,16 @@ struct LineSegment {
 /// subscript and superscript printing" — ONE symmetric amount, so a real `.sr` corrects
 /// BOTH the sup rise (the old hardcoded +3 happened to already look plausible) and the sub
 /// rise (the old -2 was never spec-derived at all).
-func sized(_ styles: Style, _ size: Int, rollPt: Double? = nil) -> (points: Int, rise: Int) {
+func sized(_ styles: Style, _ size: Int, rollPt: Double? = nil, family: PDFFamily? = nil)
+    -> (points: Int, rise: Int)
+{
+    let ratio = family.flatMap { supSubXHeightRatio[$0] } ?? supSubDefaultRatio
     if styles.contains(.sup) {
-        return (max(1, roundHalfToEven(Double(size * 2) / 3.0)),
+        return (max(1, roundHalfToEven(Double(size) * ratio)),
                 rollPt.map { roundHalfToEven($0) } ?? 3)
     }
     if styles.contains(.sub) {
-        return (max(1, roundHalfToEven(Double(size * 2) / 3.0)),
+        return (max(1, roundHalfToEven(Double(size) * ratio)),
                 rollPt.map { roundHalfToEven(-$0) } ?? -2)
     }
     return (size, 0)
@@ -578,6 +694,47 @@ func rules(_ styles: Style, _ text: String, x: Double, y: Double, w: Double,
 func spanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
     if let width = entry?.width1800, width != 0 { return Double(width) / hmiPerPoint }
     return Double(pt) * 0.6
+}
+
+// Mechanism G, the pitch half (ctrl-kd f328838, research: 2026-09-06_ws7-blank-lines-and-
+// superscript-advance.md). The manual is silent on this; the raw PCL is not: WS7 does not
+// merely draw a smaller glyph at the document's ambient fixed-pitch cell — it RESELECTS a
+// narrower pitch for the sup/sub span, an independent field of the same PCL font-selection
+// command, restored to the body's own H/V values immediately on exit. Measured directly
+// (-SCREEN's own unjustified demo line, clean of any justification confound): a 7.2pt
+// (10.00cpi) Courier body cell narrows to a 5.5pt (13.04cpi) cell for the span — confirmed
+// to the decipoint against -SCREEN.pcl's raw x-positions. `supSubCellRatio` is that measured
+// 5.5/7.2 fraction, applied proportionally to whatever the span's own body cell actually is
+// (Courier only — no other face has a captured sup/sub-in-fixed-pitch example in this
+// corpus); a body cell other than 7.2pt is unverified extrapolation.
+//
+// Two real shapes hit this, both confirmed against the corpus directly:
+//   - a WS7 span with its own font block (`entry` carries `width1800`) — `spanPitch`
+//     normally IGNORES `pt` entirely once a font block exists, which is exactly why the
+//     engine used to draw the full, un-narrowed body cell for a sup/sub run and land
+//     everything after it +1.7pt (one character's worth of the 7.2/5.5 shortfall) too far
+//     right (-SCREEN).
+//   - a WS4/print-stream span (no font block at all, `entry` is `nil`) — `spanPitch` falls
+//     back to `pt * 0.6`, where `pt` was already the REDUCED sup/sub size (`sized`'s own
+//     return) — narrowing the cell TWICE (once for the smaller drawn glyph, a second time
+//     implicitly via `pt`) to 4.8pt, 0.7pt narrower than WS7's real 5.5pt, landing everything
+//     after it that same 0.7pt too far LEFT (DOCC). Passing `bodyPt` (the span's own
+//     UNREDUCED declared size, `seg.size` at the call site) rather than the already-reduced
+//     `pt` fixes both shapes with the one call: `spanPitch(entry, bodyPt)` always answers
+//     "the span's own BODY cell," which this then scales down by the measured ratio.
+private let supSubCellRatio = 5.5 / 7.2
+
+/// The per-character advance for a sup/sub run inside a fixed-pitch span (mechanism G), or
+/// `nil` when the override does not apply — the caller falls back to the ordinary
+/// `spanPitch(entry, pt)` unchanged. Port of `pdf._sup_sub_span_pitch`.
+func supSubSpanPitch(_ entry: FontChange?, _ styles: Style, _ family: PDFFamily, _ bodyPt: Int)
+    -> Double?
+{
+    guard supSubXHeightRatio[family] != nil,
+          styles.contains(.sup) || styles.contains(.sub) else { return nil }
+    let bodyCell = spanPitch(entry, bodyPt)
+    guard bodyCell != 0 else { return nil }
+    return bodyCell * supSubCellRatio
 }
 
 /// The slot WordStar reserved for a run of `count` characters, in points.
@@ -880,7 +1037,7 @@ private func lineOpsPrinted(
             x += Double(hmi) / hmiPerPoint
             continue
         }
-        let (pt, rise) = sized(seg.styles, seg.size, rollPt: rollPt)
+        let (pt, rise) = sized(seg.styles, seg.size, rollPt: rollPt, family: seg.family)
         let baseFont = base14(seg.family, bold: seg.styles.contains(.bold),
                               italic: seg.styles.contains(.italic))
         let font = res.ref(baseFont)
@@ -1105,7 +1262,17 @@ private func lineOpsPrinted(
             // own HMI grid with Tz — for Courier the ratio is 100 by construction and no
             // operator is ever written, which is what keeps every fontless PDF
             // byte-identical.
-            let target = spanTarget(seg.entry, pt, count: seg.text.width)
+            //
+            // A sup/sub run gets mechanism G's own narrower cell instead of the body's
+            // (see `supSubSpanPitch`) — `seg.size` (the span's UNREDUCED declared size),
+            // not `pt` (already reduced by `sized`), so a fontless (WS4/print-stream)
+            // sup/sub span's cell is not narrowed twice.
+            let target: Double
+            if let pitch = supSubSpanPitch(seg.entry, seg.styles, seg.family, seg.size) {
+                target = Double(seg.text.width) * pitch
+            } else {
+                target = spanTarget(seg.entry, pt, count: seg.text.width)
+            }
             (scale, w) = tzScale(seg.text, baseFont, pt, target)
         }
         let want = hundredths(scale ?? tzDefault)
@@ -1218,12 +1385,27 @@ func pageStream(
         // slack as blank space BELOW the image, before the next real content), not flush
         // with the band's bottom — shifting the drawn box up by `(reserved - heightPt)`
         // reproduces that: `imgY` is the band's top edge (`y + (reserved - heightPt)`)
-        // minus the image's own height, i.e. flush with the band's top. `/Im<N>` is
-        // registered in every page's `/XObject` resources by `emitPDF`, one entry per
+        // minus the image's own height, i.e. flush with the band's top.
+        //
+        // Mechanism Y (ctrl-kd PCL-DIVERGENCE-TRIAGE.md, planning #211 follow-up,
+        // 9546ae6): "the band's top edge" above is the PRECEDING line's own BASELINE
+        // (that is what subtracting `reserved` from the running `y` lands on) — but real
+        // WS7 does not start the picture flush with that baseline. Measured against three
+        // independent `ws7-prints/v3` PRISTINE.EXE captures (PREVIEW, -SCREEN, -README,
+        // all embedding the same INSET/PIX/WORDSTAR.PIX), the raster's real top edge sits
+        // a further `0.25 * size` (that preceding line's own descent) BELOW that baseline
+        // — the SAME baseline-to-cell-bottom fraction a box-drawing glyph's own cell
+        // already uses elsewhere in this module, applied here to the PRECEDING line's
+        // cell instead of the image's own, because the picture cannot start until that
+        // line's full cell (baseline plus descent) has cleared. `size` is this function's
+        // own default text size parameter — pix tags reserve blank PHYSICAL lines at the
+        // document's own default size, never a per-line override `PageLine` tracks, so
+        // reusing it here matches every other furniture line's own assumption. `/Im<N>`
+        // is registered in every page's `/XObject` resources by `emitPDF`, one entry per
         // embedded pix index, shared exactly like the `/Font` dict already is.
         if let img = line.image {
             let reserved = line.lead ?? img.heightPt
-            let imgY = y + (reserved - img.heightPt)
+            let imgY = y + (reserved - img.heightPt) - 0.25 * Double(size)
             var op = Array("q \(fixedTwoDecimals(img.widthPt)) 0 0 \(fixedTwoDecimals(img.heightPt)) ".utf8)
             op += Array("\(fixedTwoDecimals(leftHere)) \(fixedTwoDecimals(imgY)) cm /Im\(img.pixIndex) Do Q".utf8)
             ops.append(op)
@@ -1391,10 +1573,12 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         let pageNumbers = resolvePageNumbers(pnCheckpoints(doc), pages)
         // Register b31, E3 item 2 (ruled 2026-08-25, ctrl-kd 6f30157): `.auto` (default)
         // lets the document's own `.pn`/`.pg`/`.op` decide (see `pgnumCheckpoints`,
-        // PDFLayout.swift) — byte-identical to every existing capture/oracle for the
+        // PDFLayout.swift, seeded ON 2026-09-07 — stock WS7's own factory default,
+        // ctrl-kd b6d5d03) — byte-identical to every existing capture/oracle for the
         // overwhelming majority of documents that never touch any of those four
-        // commands. `.on` forces WordStar's stock default numbering even on a document
-        // that never asked for it; `.off` suppresses it unconditionally. Neither `.on`
+        // commands: they get the stock automatic number, same as `.on` below. `.on`
+        // forces WordStar's stock default numbering even on a document that explicitly
+        // turned it off with `.op`; `.off` suppresses it unconditionally. Neither `.on`
         // nor `.off` touches an explicit `#` the author placed inside a real `.he`/`.fo`
         // — that is running-title content, substituted by `runningOps`'s own `render()`
         // regardless of this option.
@@ -1456,6 +1640,19 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
             } else {
                 pageTop = top
             }
+            // mechanism O (ctrl-kd 55d2b52): a page whose own `.po` (`Page.poCols`, set by
+            // `layoutPrintedPagesPlain` from `poCheckpoints`) differs from the document's
+            // global default gets its OWN header/footer LEFT edge -- SCRIPT.WS's own
+            // worked-example figures reset `.po` to `.5"` alongside their `.mt`/`.hm`
+            // changes, and WS7's real capture moves the running head's own left edge with
+            // it. Body text already carries a mid-document `.po` change correctly
+            // (`Line.poCols`, applied per line in `resolvePlainBody`/`resolvePrintedBody`);
+            // `pageStream` below keeps the document's global `left` unchanged -- only
+            // `runningOps` (the header/footer row) needs the page-local swap. `nil` (every
+            // page of every document that never changes `.po` mid-document) leaves
+            // `pageLeft` at the SAME `left` value computed once above, byte-identical to
+            // before this fix.
+            let pageLeft = page.poCols.map { resolveLeftPt($0, size: size) } ?? left
             // Register b31, E3 item 2: resolve THIS page's own automatic-number state.
             // `--headers off` already suppresses page numbers per its own documented
             // scope ("headers, footers, and page numbers"); `.on`/`.off` need no
@@ -1472,7 +1669,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                 autoPageNumber = false
             }
             let running = runningOps(pageDoc, pageNo: pageNumbers[i], pageHeight: pageHeight,
-                                     lead: lead, size: size, left: left, printed: true,
+                                     lead: lead, size: size, left: pageLeft, printed: true,
                                      headers: options.headers ? page.headers : [:],
                                      footers: options.headers ? page.footers : [:],
                                      res: res, autoPageNumber: autoPageNumber)

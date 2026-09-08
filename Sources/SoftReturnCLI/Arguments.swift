@@ -10,7 +10,14 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 4.0.2 is the v4.0.2 patch release: no engine/CLI behavior
+/// CLI's user-visible contract. 4.0.3 is the v4.0.3 patch release: sr carries the engine
+/// fidelity fixes ported from ctrl-kd since 4.0.2 (superscript/subscript sizing, header/
+/// footer inline-style handling, per-page running-head/footer right-tab padding, footnote
+/// marker spacing, page numbering on by default, automatic leading, top margin/footnote
+/// reserve, HTML tab tags, pictures embedded by default, and box-drawing glyphs in
+/// Symbol-mapped spans), released in lockstep with the app-side renderer/PDF-reader fixes
+/// and the rebuilt test suites — no CLI flag or default surface changed. 4.0.2 is the
+/// v4.0.2 patch release: no engine/CLI behavior
 /// change, sr carries the version bump alongside the app-only job-549 Export As 4th-column
 /// R2 rework and LayoutProof harness. 4.0.1 is the v4.0.1 patch release, the first cut built
 /// under docs/RELEASE-CHECKLIST.md top to bottom: no engine/CLI behavior change, released
@@ -63,7 +70,7 @@ import CtrlKD
 /// capacity/top/lead from `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose);
 /// 1.1.0 added the note-selection flags and the expanded --diagnose fields; 1.0.0 was the
 /// first CLI release.
-public let srVersion = "4.0.2"
+public let srVersion = "4.0.3"
 
 
 /// `sr v2.0.0`.
@@ -235,7 +242,12 @@ let sentenceSpacingChoices = ["auto", "keep", "single"]
 /// LINES-at-6-LPI unit `mtLines` always uses), mb exactly 1in, po 0.7in. `modern` is
 /// Modern mode's own page, named and made inspectable: 1in margins on Letter (6 lines
 /// top/bottom at 6 LPI, 10 columns at 10 CPI). Port of cli.py's `PAGE_PRESETS`.
-let pagePresets: [String: PageSettings] = [
+///
+/// `package` (not `internal`), planning #205 Task 2: `Sources/GenerateSawyerPresetDriftSR`
+/// (a same-package, non-`@testable` executable target) needs this table to render the
+/// `sawyer`-preset self-recorded drift file `CorpusParityTests` checks against — still not
+/// part of this library's PUBLIC API surface, just visible package-wide.
+package let pagePresets: [String: PageSettings] = [
     "default": PageSettings(),
     "sawyer": PageSettings(mtLines: 1195.0 / 1440.0 * 6.0, mbLines: 6.0, poCols: 7.0),
     "modern": PageSettings(mtLines: 6.0, mbLines: 6.0, poCols: 10.0),

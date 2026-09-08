@@ -446,6 +446,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // register C6, see `parseHeadFoot`.
     var headerFonts: [Int: Int] = [:]
     var footerFonts: [Int: Int] = [:]
+    // planning #202: this line's own right/center/decimal-align tab, when its typed text
+    // carries one — see `Document.headerTabs`/`footerTabs`.
+    var headerTabs: [Int: HFTabMark] = [:]
+    var footerTabs: [Int: HFTabMark] = [:]
     var hfEvents: [HFEvent] = []
     // Running FORMATTING state, stamped onto each block as it opens. Stateful, unlike
     // page geometry — see `Formatting2.swift`.
@@ -681,10 +685,23 @@ public func parseWS(_ data: [UInt8]) -> Document {
             for (_, mark) in physical.marks {
                 if case .font(let index) = mark { hfFontIdx = index; break }
             }
+            // planning #202: a right/center/decimal-align tab typed into a `.h#`/`.f#`
+            // argument (-README's own running head) is the SAME 'tab' mark a body span
+            // reads via `tabTargetAt` -- found here the same way `hfFontIdx` is, since
+            // `parseHeadFoot` only ever sees bytes, never this line's own marks.
+            var hfTabMark: (offset: Int, absHMI: Int, leader: UInt8, cols: Int)? = nil
+            for (rel, mark) in physical.marks {
+                if case .tab(let absHMI, let leader, let cols) = mark {
+                    hfTabMark = (rel, absHMI, leader, cols)
+                    break
+                }
+            }
             parseHeadFoot(stripHibit ? cmd : rstrippingASCIIWhitespace(raw),
                          headers: &headers, footers: &footers,
                          headerFonts: &headerFonts, footerFonts: &footerFonts,
-                         hfEvents: &hfEvents, anchor: hfAnchor, fontIdx: hfFontIdx)
+                         headerTabs: &headerTabs, footerTabs: &footerTabs,
+                         hfEvents: &hfEvents, anchor: hfAnchor, fontIdx: hfFontIdx,
+                         tabMark: hfTabMark)
             // The index of the block this entry POINTS AT — the one that follows it,
             // which is the block still open (if it has content) or the next to open.
             // "This heading is in the table of contents" refers forward, not back.
@@ -1265,6 +1282,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // Register C6: which doc.fonts entry each running head/foot opened with.
     doc.headerFonts = headerFonts
     doc.footerFonts = footerFonts
+    // planning #202: this line's own right/center/decimal-align tab, when it has one.
+    doc.headerTabs = headerTabs
+    doc.footerTabs = footerTabs
     // Register C2: raw PCL printer payloads, indexed by a span's own `pcl`.
     doc.pclPrograms = pclPrograms
     return doc
@@ -1398,7 +1418,11 @@ private let defaultPoCols = 8.0     // WS7 manual, "Page Layout": "The default p
                                     // presumptuous", from the file-format spec stating
                                     // none; the manual DOES state one, and 2.0.0 actually
                                     // renders the offset, so the manual's figure governs.)
-private let defaultHmLines = 2.0    // spec: ".HM ... Default is 2." (header sits INSIDE .mt)
+let defaultHmLines = 2.0    // spec: ".HM ... Default is 2." (header sits INSIDE .mt) —
+                             // internal (not private): PDFLayout.swift's
+                             // `printedNotesReservePt` also reads it (mechanism U port,
+                             // ctrl-kd 26169cd), mirroring Python's `DEFAULT_HM_LINES`
+                             // import in `_printed_notes_reserve_pt`.
 private let defaultFmLines = 2.0    // spec: ".FM ... Default is 2." (footer sits INSIDE .mb)
 let defaultLh48 = 8.0       // spec: ".LH ... The default is 8/48 or 6 lines per inch."
 let defaultSr48 = 3.0       // WSFORMAT.TXT: "[.SR] ... Default is 3." (1/48in units) --
@@ -1631,9 +1655,17 @@ func textLinesPerPage(pl: Double, mt: Double, mb: Double, lh48: Double) -> Int {
 /// PRINTED mode used to fall back to a hardcoded Courier for every running head because
 /// nothing captured it. `nil` (every document that never opens a `.h#`/`.f#` with a font
 /// block) leaves the line's entry absent, which is what `runningOps` reads as "no font".
+///
+/// `tabMark` (planning #202, -README's own running head) is the caller's own
+/// `physical.marks` 'tab' entry for this line, if any: `(offset, absHMI, leader, cols)`
+/// — `offset` a BYTE offset from the start of `cmd` (the SAME coordinate space
+/// `physical.marks` recorded it in), the rest exactly what a body span's own tab mark
+/// carries. See `Document.headerTabs`/`HFTabMark`.
 func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout [Int: String],
                    headerFonts: inout [Int: Int], footerFonts: inout [Int: Int],
-                   hfEvents: inout [HFEvent], anchor: Int, fontIdx: Int? = nil) {
+                   headerTabs: inout [Int: HFTabMark], footerTabs: inout [Int: HFTabMark],
+                   hfEvents: inout [HFEvent], anchor: Int, fontIdx: Int? = nil,
+                   tabMark: (offset: Int, absHMI: Int, leader: UInt8, cols: Int)? = nil) {
     guard cmd.count >= 3 else { return }
     let first = asciiUppercased(cmd[1])
     let second = asciiUppercased(cmd[2])
@@ -1649,7 +1681,11 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     // Python's `\s?` consumes at most ONE space after the command, so a deliberately
     // indented running head keeps the rest of its leading spaces.
     var rest = Array(cmd.dropFirst(3))
-    if rest.first == 0x20 { rest.removeFirst() }
+    var argStart = 3
+    if rest.first == 0x20 { rest.removeFirst(); argStart += 1 }
+    // planning #202: `tabMark`'s own offset is in `cmd`'s coordinate space; `rest` (the
+    // argument text this function actually decodes) starts at `argStart` within `cmd`.
+    let tabByteIdx = tabMark.map { $0.offset - argStart }
     // Wrapped extended characters `<1B x 1C>` appear in header text exactly as in the
     // body (LJ6DTP separates its title from the `#` page number with a wrapped middle
     // dot): decode them through the same cp437 rule the body uses -- control-range
@@ -1657,7 +1693,8 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     // FIRST, then trim: the byte-level rstrip this used to do ran before any of that,
     // which is fine when there's no wrapped triple in play (the common case) but
     // matches ctrl-kd's own ordering only this way round.
-    let text = decodeHeadFootText(rest).trimmedTrailing()
+    let (decoded, tabCharIdx) = decodeHeadFootText(rest, tabByteIdx: tabByteIdx)
+    let text = decoded.trimmedTrailing()
     let kind: HFKind = first == 0x48 ? .header : .footer
     if kind == .header {
         headers[line] = text
@@ -1671,6 +1708,17 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
         footerFonts[line] = fontIdx
         if fontIdx == nil { footerFonts.removeValue(forKey: line) }
     }
+    // planning #202: a tab whose own byte offset landed at or past the '#'-bearing text
+    // (or whose recovered char offset ended up past what `trimmedTrailing()` kept) has
+    // nothing left to reposition -- absent, same as a line with no tab at all.
+    if let tabMark, let tabCharIdx, tabCharIdx >= 0, tabCharIdx <= text.count {
+        let mark = HFTabMark(charIdx: tabCharIdx, cols: tabMark.cols, absHMI: tabMark.absHMI)
+        if kind == .header { headerTabs[line] = mark } else { footerTabs[line] = mark }
+    } else if kind == .header {
+        headerTabs.removeValue(forKey: line)
+    } else {
+        footerTabs.removeValue(forKey: line)
+    }
     hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: anchor))
 }
 
@@ -1680,23 +1728,52 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
 /// box-drawing graphics `decodeSpans` already renders for the body — never the control
 /// action; anything else is the byte's own ordinary cp437 character. Direct port of the
 /// wrapped-triple loop `_parse_head_foot` runs over its text argument.
-private func decodeHeadFootText(_ raw: [UInt8]) -> String {
+///
+/// `tabByteIdx` (planning #202), when given, is a right/center/decimal-align tab's own
+/// BYTE offset within `raw` — returned back as `tabCharIdx`, the SAME position in the
+/// decoded CHARACTER string, so the caller can locate the tab's baked padding run inside
+/// `headers[line]`/`footers[line]` without redoing this decode. Mirrors Python's
+/// `_parse_head_foot` char-index bookkeeping (`tab_char_idx`) exactly: the first wrapped
+/// triple at or past `tabByteIdx` fixes the answer using the characters already emitted
+/// (`charsSoFar`) plus the plain-text run's own 1-byte-per-char advance from `pos` — byte
+/// offsets only ever increase, so the first triple whose start is `>= tabByteIdx` is
+/// always the right one. `nil` when no tab mark was given, same as before this existed.
+private func decodeHeadFootText(_ raw: [UInt8], tabByteIdx: Int? = nil)
+    -> (text: String, tabCharIdx: Int?) {
     var parts: [String] = []
     var pos = 0
     var i = 0
+    var charsSoFar = 0
+    var tabCharIdx: Int? = nil
     while i < raw.count {
         if raw[i] == 0x1B, i + 2 < raw.count, raw[i + 2] == 0x1C {
-            if i > pos { parts.append(decodeCP437(Array(raw[pos..<i]))) }
+            if tabCharIdx == nil, let tabByteIdx, tabByteIdx <= i {
+                tabCharIdx = charsSoFar + (tabByteIdx - pos)
+            }
+            if i > pos {
+                let seg = decodeCP437(Array(raw[pos..<i]))
+                parts.append(seg)
+                charsSoFar += seg.count
+            }
             let x = raw[i + 1]
-            parts.append(cp437Graphics[x] ?? decodeCP437([x]))
+            let seg = cp437Graphics[x] ?? decodeCP437([x])
+            parts.append(seg)
+            charsSoFar += seg.count
             i += 3
             pos = i
             continue
         }
         i += 1
     }
-    if pos < raw.count { parts.append(decodeCP437(Array(raw[pos...]))) }
-    return parts.joined()
+    if tabCharIdx == nil, let tabByteIdx {
+        tabCharIdx = charsSoFar + (tabByteIdx - pos)
+    }
+    if pos < raw.count {
+        let seg = decodeCP437(Array(raw[pos...]))
+        parts.append(seg)
+        charsSoFar += seg.count
+    }
+    return (parts.joined(), tabCharIdx)
 }
 
 /// The n of a `.cp n`, defaulting to 1 (a bare `.cp` asks for one line).

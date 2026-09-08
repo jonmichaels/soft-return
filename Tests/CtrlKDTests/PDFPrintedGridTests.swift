@@ -36,7 +36,10 @@ import Testing
     // A lead is the space ABOVE its own line (it is a printer VMI: the feed onto the line
     // uses the value set before it), so the gap from line 1 to line 2 is the TALL line's 24pt
     // and the gap from 2 to 3 is the 12pt the file went back to.
-    let ys = contentSpans(emitPDF(doc, mode: .printed)).compactMap(\.y)
+    // pageNumbers: .off -- this test measures `.lh` leading, not page numbers; the stock
+    // automatic number (the real `.auto` default since 2026-09-07, ws7-prints/v3 finding
+    // #2) would otherwise add its own span to `ys` and shift these indices.
+    let ys = contentSpans(emitPDF(doc, mode: .printed, options: EmitOptions(pageNumbers: .off))).compactMap(\.y)
     #expect(ys.count >= 3)
     #expect(ys[0] - ys[1] == 24.0)
     #expect(ys[1] - ys[2] == 12.0)
@@ -135,11 +138,19 @@ import Testing
     #expect(last.mt == 3.0 && last.mb == 2.0)
 }
 
-@Test func printedXComesFromWordStarsOwnHMIArithmetic() {
+@Test func printedXComesFromWordStarsOwnHMIArithmetic() throws {
     // Each span starts where WordStar's own per-character advance puts it: the characters
     // before it, each at its run's HMI width (1/1800in). 1800 HMI is one inch is 72 points,
     // so a run declaring 1800 advances 72pt per character and the span after two of them
     // starts 144pt along.
+    //
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version's
+    // `left` was `printedLeft(doc, size: printedSize(doc))` -- the exact functions
+    // `emitPDF` itself calls to place every span's starting x -- so this could never catch
+    // a wrong MARGIN, only a mismatch between this test's own re-derivation and whatever
+    // emitPDF happened to compute. Pinned as an independent literal: no `.po`/`.cw` in this
+    // document, so WordStar's own defaults apply -- `.po 8` (8 columns) at a FIXED
+    // 7.2pt/column (2026-08-20 dx finding, independent of pitch) = 57.6pt.
     let helv = helvTypestyle()
     // staged: 6.2.4's type-checker times out on the one-expression form
     var data = ws7Block(0x00)
@@ -148,10 +159,11 @@ import Testing
     data += fontBlock(helv, points: 12.0, width: 180) + bytes("B") + HARD
     data += bytes("A closing line of ordinary prose keeps the byte ratio honest.") + HARD
     let doc = parseWS(data)
-    let left = printedLeft(doc, size: printedSize(doc))
+    #expect(doc.page?.poCols == 8.0, "the hand-derived 57.6pt margin below assumes the default .po 8")
+    let left = 57.6
     let spans = contentSpans(emitPDF(doc, mode: .printed))
-    let aa = try! #require(spans.first { $0.text == "AA" })
-    let b = try! #require(spans.first { $0.text == "B" })
+    let aa = try #require(spans.first { $0.text == "AA" })
+    let b = try #require(spans.first { $0.text == "B" })
     #expect(aa.x == tenth(left))                  // first span at the margin
     #expect(b.x == tenth(left + 2 * 72.0))        // 2 chars x 1800 HMI
 }
@@ -174,7 +186,21 @@ import Testing
     let doc = parseWS(data)
     let spans = contentSpans(emitPDF(doc, mode: .printed))
     let span = try! #require(spans.first { $0.text == "AAAA" })
-    let expected = faceTz("Helvetica", 180.0 / 25.0, 12)     // 180 HMI = 7.2pt pitch
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version's
+    // "expected" was `faceTz("Helvetica", 180.0/25.0, 12)` -- the EXACT function
+    // `PDFWriter.swift:1051` calls to produce `span.tz` -- so a bug in `faceTz`'s own
+    // formula would move both sides together. Independent here: `stringWidthPt` (a
+    // metrics-table READER over the standard base-14 AFM data, already trusted elsewhere
+    // in this file -- see `tzClampFallsBackToTheNaturalAdvance`'s `natural`) gives the
+    // average glyph width; `faceTz`'s own doc comment states its formula plainly enough to
+    // re-derive by hand: `round(pitch/avg*100, 2)` clamped to `[tzMin, tzMax]`. What THIS
+    // test still verifies independently of `faceTz` itself is the WIRING: that `emitPDF`
+    // correctly resolved this record to the "Helvetica" face and a 7.2pt (180 HMI) pitch
+    // before scaling anything.
+    let tzReference = "abcdefghijklmnopqrstuvwxyz "
+    let avg = stringWidthPt(tzReference, "Helvetica", 12) / Double(tzReference.count)
+    let raw = (180.0 / 25.0) / avg * 100.0
+    let expected = min(tzMax, max(tzMin, Double(hundredths(raw)) / 100.0))
     #expect(span.tz == expected)
     // Helvetica's AVERAGE lowercase glyph is NARROWER than WordStar's 10-CPI cell, so
     // the constant STRETCHES it to the grid, not squeezes it (contrast a single "AAAA"
@@ -236,13 +262,19 @@ import Testing
     // "Helv" name.
     let helv = helvTypestyle()
     // staged: 6.2.4's type-checker times out on the one-expression form
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): `left` pinned as an
+    // independent literal (same derivation as `printedXComesFromWordStarsOwnHMIArithmetic`
+    // above -- no `.po`/`.cw` in this document, so WordStar's default `.po 8` at the fixed
+    // 7.2pt/column applies: 57.6pt), rather than calling `printedLeft` -- the exact
+    // function `emitPDF` itself calls to place every span's starting x.
     var data = ws7Block(0x00)
     data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
     data += fontBlock(helv, points: 12.0, width: 1800) + bytes("AA")
     data += fontBlock(helv, points: 12.0, width: 180) + bytes("B") + HARD
     data += bytes("A closing line of ordinary prose keeps the byte ratio honest.") + HARD
     let doc = parseWS(data)
-    let left = printedLeft(doc, size: 12)
+    #expect(doc.page?.poCols == 8.0, "the hand-derived 57.6pt margin below assumes the default .po 8")
+    let left = 57.6
     let spans = contentSpans(emitPDF(doc, mode: .printed))
     let aa = try! #require(spans.first { $0.text == "AA" })
     let b = try! #require(spans.first { $0.text == "B" })

@@ -38,8 +38,24 @@ import Testing
     // body down 24pt. A real, evidenced, deliberate change to Printed geometry, not
     // incidental -- and, as it happens, the identical digest ctrl-kd's own re-pinned
     // fixture now carries.
+    //
+    // Re-pinned a THIRD time 2026-09-07 (PRINTED hashes only, again -- modern still
+    // untouched: page numbering is a Printed-only feature; ported from ctrl-kd b6d5d03):
+    // none of these fixtures touch `.pn`/`.pg`/`.op`/`.pc`, so `pgnumCheckpoints`'s
+    // corrected default (ws7-prints/v3 finding #2, seeded ON to match stock WS7 instead of
+    // Robert J. Sawyer's WSCHANGE-customized install) now adds a stock automatic page
+    // number to each of them -- a real, evidenced, deliberate content change, not
+    // incidental, and again the identical digest ctrl-kd's own re-pinned fixture carries.
+    //
+    // Re-pinned a FOURTH time 2026-09-07, same day (mechanism U, ctrl-kd
+    // `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3` PRISTINE.EXE round, commit 26169cd):
+    // `.mt` ALONE (36pt), not `.mt`+`.hm` (60pt), for a document that never sets its own
+    // `.mt` -- see `printedTop`'s own doc comment. Moves the two default-`.mt` PRINTED
+    // fixtures (`makeProse`, `styled`) up 24pt; the print-stream fixture is UNCHANGED
+    // (`page == nil` -> the fixed `PDFMetrics.topPrinted` constant, never `.mt`-derived
+    // either way).
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .printed))
-        == "a98671821a5692e81d81567b48d1cd9d768ea237a8efefcd6ffdefc8019c46ff")
+        == "267278729cfed03a1fecae8a90feb3c6102b43639be92b3eebdc0c658e74f5a6")
     // Modern's pin is RE-TAKEN (ruling 2026-08-05: "Modern PDF needs to be the printed
     // version of Modern RTF" — document fonts carried, proportional reflow, the
     // Courier-only Modern died with the WS4 lens). This exact digest is also what the
@@ -50,9 +66,9 @@ import Testing
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .modern))
         == "eb8bc918916d3bbb0b274e203c1c3f03b9008e6f6755cc67c6100a2f30705950")
     #expect(sha256Hex(emitPDF(parseWS(styled), mode: .printed))
-        == "e0e54d1399a799a5120fd075d30993c7ca43b90c5e4aa152114330990cedb488")
+        == "a2d067710cee2ebd9f4b86274f2e787d3bf1d304a582dd9d02103956334fe183")
     #expect(sha256Hex(emitPDF(parsePrintstream(stream), mode: .printed))
-        == "6d6555d63a003a276e67c8291ab31b653cc526e4ec47bf6f6cc5da50849d7e98")
+        == "9dec7b10d0158a392bf684b63ff1e243f821a86194354b53f1095b23533c59f6")
 }
 
 @Test func sha256HelperMatchesTheStandardsOwnVectors() {
@@ -193,18 +209,25 @@ import Testing
 @Test func printedFontBlockLeadingIsCarriedThroughBlanksAndResetByFixedPitch() throws {
     // round 26 wave 3 (fidelity_gate.py Finding B, PREVIEW.WS ground truth): an unstyled
     // WS5+ FONT-BLOCK document doesn't lay every line on the flat 12pt default -- WS7
-    // spreads them by 1.2x the largest PROPORTIONAL font size active on the line, carried
-    // through blank lines, reset by a FIXED-PITCH (Courier) font tag. Gated document-wide
-    // on "any doc.fonts entry is proportional" -- a document with only fixed-pitch font
-    // records stays on the flat grid (see `pdfFontlessDocumentsAreByteIdenticalToPreFontsOutput`
-    // and this test's own "Intro line." case: no font tag has appeared yet, but the GATE
-    // is document-wide, so it still gets 14.4, not a flat 12).
+    // spreads them by autoLeadFactor x the largest PROPORTIONAL font size active on the
+    // line, carried through blank lines, reset by a FIXED-PITCH (Courier) font tag. Gated
+    // document-wide on "any doc.fonts entry is proportional" -- a document with only
+    // fixed-pitch font records stays on the flat grid (see
+    // `pdfFontlessDocumentsAreByteIdenticalToPreFontsOutput` and this test's own "Intro
+    // line." case: no font tag has appeared yet, but the GATE is document-wide, so it
+    // still gets the flat lead, not a bare 12).
+    //
+    // Mechanism T (`autoLeadFactor`'s own doc comment): the factor below moved from 1.2
+    // (Sawyer's install) to stock WS7's real 1.0 -- the SHAPE (carry-through-blanks,
+    // reset-by-fixed-pitch, stale-state-on-the-resetting-line-itself) is unchanged, only
+    // the literal point values are.
     //
     // Expected leads are the real Python reference's own (`pdf._doc_to_pagelines`) on the
     // byte-identical fixture, including the one subtlety a docstring-only reading would
     // miss: `_font_lead_pt`'s carried `state` resets to `None` only AFTER computing the
     // CURRENT line's own governing size, so the fixed-pitch tag's OWN line still reads the
-    // stale carried 20pt (24.0pt) -- only the line AFTER it sees the reset (14.4pt).
+    // stale carried 20pt (20.0pt at stock) -- only the line AFTER it sees the reset
+    // (flat, 12.0pt).
     let prop = fontBlock(0, points: 20.0, styleBits: 0x8000)     // proportional, 20pt
     let fixed = fontBlock(1, points: 12.0, styleBits: 0)         // fixed-pitch (Courier), 12pt
     var data = bytes("Intro line.") + HARD
@@ -221,11 +244,12 @@ import Testing
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.count == 1)
     let leads = pages[0].map { $0.lead }
-    // `12.0 * 1.2` (not the literal `14.4`) so this matches the SAME floating-point value
-    // the real Python reference computes (`12 * 1.2 == 14.399999999999999`), not the
-    // nearest-representable double to the decimal literal.
-    let flat = 12.0 * 1.2
-    #expect(leads == [flat, 24.0, 24.0, 24.0, flat])
+    // `12.0 * autoLeadFactor` rather than a bare literal, matching the real Python
+    // reference's own computed value (`12 * AUTO_LEAD_FACTOR`) -- at stock's 1.0 factor
+    // this is exactly 12.0 (no floating-point residue the way `12 * 1.2` had under
+    // Sawyer's install; mechanism T).
+    let flat = 12.0 * autoLeadFactor
+    #expect(leads == [flat, 20.0, 20.0, 20.0, flat])
 }
 
 @Test func fontResourcesKeepsTheCourierFourAndAppendsFromF5() {

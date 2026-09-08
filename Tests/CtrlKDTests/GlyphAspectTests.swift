@@ -104,12 +104,23 @@ private func curveBBox(_ ops: String) -> (w: Double, h: Double)? {
     // `pt: Int` (this port's own `graphicOps` signature) picks pt=10 -> h = 1.1*10 =
     // 11.0, matched exactly by pitch=11.0; tolerance covers the ops' own one-decimal
     // coordinate formatting, not a real precision claim.
+    //
+    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version
+    // read `frac` from `partBlocks["\u{25A0}"]` -- the EXACT SAME lookup table
+    // `graphicOps` itself reads (`PDFDriverLJ6DTP.swift:389`) to place this glyph -- so a
+    // bad table entry would move both sides together and this could never catch it.
+    // '\u{25A0}' (the cp437 0xFE black-square bullet)'s table entry is pinned as an
+    // independent literal instead, straight from the table's own doc comment: (0.175,
+    // 0.175, 0.65, 0.65) -- a centered square occupying 65% of the cell each way.
     let ops = joinedOps(graphicOps("\u{25A0}", x: 0.0, y: 100.0, pitch: 11.0, pt: 10))
     let (x, _, w, h) = try #require(rectOps(ops).first)
-    let frac = try #require(partBlocks["\u{25A0}"])
+    let frac = (x: 0.175, y: 0.175, w: 0.65, h: 0.65)
     #expect(abs(x - frac.x * 11.0) < 0.2)
     #expect(abs(w - frac.w * 11.0) < 0.2)
     #expect(abs(h - frac.h * 11.0) < 0.2)
+    // The table entry itself hasn't silently drifted from what this test pins.
+    let tableEntry = try #require(partBlocks["\u{25A0}"])
+    #expect(tableEntry == frac)
 }
 
 @Test func convertWSBulletSquareEndToEnd() throws {

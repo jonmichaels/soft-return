@@ -255,9 +255,17 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
 // --------------------------------------------------------- corpus gauntlet
 
 // Files VERIFIED byte-identical on 2026-08-06 — a deliberate spread: WS4-flagged
-// prose, style libraries, notes, Symbol/Dingbats runs, pctl rule-drawing, mailmerge,
-// wrapped control charts, a 526 KB macro doc. Paths relative to the WS archive root
-// (`archiveWSPath`, the ONE place the private path lives).
+// prose, style libraries, notes, Symbol/Dingbats runs, pctl rule-drawing,
+// wrapped control charts, a 526 KB macro doc. Paths relative to the Sawyer archive root
+// (`sawyerArchivePath`, the ONE place the private path lives — `CTRLKD_SAWYER_ARCHIVE`).
+//
+// `LSRBOX/LSRBOXES.MRG` (mailmerge + wrapped NULs) dropped from this list, planning #192
+// (2026-09-05): the vendored `private-corpus` this repo's `CTRLKD_SAWYER_ARCHIVE` is
+// documented to point at is documents-only by Jon's ruling, and a `.MRG` mail-merge
+// template is one of the named excluded categories — the file is gone permanently, not
+// incompletely, so keeping it here would fail loud against the archive shape the repo
+// itself now documents as the normal armed case. Arming against a full, untrimmed Sawyer
+// download still has the file; this gauntlet just no longer names it.
 private let gauntletFiles = [
     "OLDTIMES.WS",            // the review benchmark: notes, styles
     "LJ6DTP.WS",              // 41 print controls, colour, fonts
@@ -269,27 +277,40 @@ private let gauntletFiles = [
     "REF/CODES.WS",           // overprint ^H composition
     "PRINTERS/fontcrib.ws",   // mid-line Symbol/Dingbats via styles
     "WS-CON/SAMPLE.WS",       // ^D doublestrike, interleaved toggles
-    "LSRBOX/LSRBOXES.MRG",    // mailmerge + wrapped NULs
     "MACROS/HOLYMAC/-HOLYMAC.WS",   // 526 KB, net-zero toggle pairs
 ]
 
-@Test func gauntletNamedFilesByteIdentical() throws {
+@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+func gauntletNamedFilesByteIdentical() throws {
     for rel in gauntletFiles {
-        guard let d = FileManager.default.contents(atPath: archiveWSPath + "/" + rel)
-        else { continue }             // not in this copy of the archive
+        let path = sawyerArchivePath + "/" + rel
+        guard let d = FileManager.default.contents(atPath: path) else {
+            throw MissingSawyerFixture(path: path)   // armed but incomplete: fail loud
+        }
         let data = [UInt8](d)
         #expect(try rt(data) == data, "\(rel)")
     }
 }
 
-@Test func gauntletWSCohortCensusFloor() throws {
-    // Every .WS document in the archive, with a floor a regression trips. 83 of 83
-    // were byte-identical when the Python census was written (2026-08-06); the same
-    // floor here, so a writer/parser regression fails loudly. If the archive itself
-    // grows a new pathological file, the failure message says which file so the census
-    // can rule on it.
-    guard FileManager.default.fileExists(atPath: archiveWSPath) else { return }
-    guard let enumerator = FileManager.default.enumerator(atPath: archiveWSPath) else { return }
+@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+func gauntletWSCohortCensusFloor() throws {
+    // Every .WS document in the archive, with a floor a regression trips. 83 of 83 were
+    // byte-identical when the Python census was written (2026-08-06) against the FULL
+    // unfiltered Sawyer archive. The corpus repo's vendored `sawyer/` (D3 migration,
+    // 2026-09-04) is deliberately narrower — D2 vendors test DOCUMENTS only, dropping
+    // `DOSBox-X/` and `vDosPlus/` (emulator config dirs) outright — which removes two
+    // duplicate-named `DISPLAY.WS` copies (`DOSBox-X/DISPLAY.WS`, `vDosPlus/DISPLAY.WS`;
+    // the root `DISPLAY.WS` they duplicate IS vendored) that the old count included.
+    // 82 of 82 is 100% byte-identical against the vendored corpus — no regression, just a
+    // smaller cohort (verified: the floor of 83 still holds unchanged against the full,
+    // un-vendored archive at `CTRLKD_SAWYER_ARCHIVE=<full archive>`). The floor here
+    // tracks the vendored corpus, since that's the shape `CTRLKD_SAWYER_ARCHIVE` names
+    // under this repo's own contract. If the archive itself grows a new pathological
+    // file, the failure message says which file so the census can rule on it.
+    guard FileManager.default.fileExists(atPath: sawyerArchivePath) else {
+        throw MissingSawyerFixture(path: sawyerArchivePath)   // armed but the dir isn't there
+    }
+    let enumerator = try #require(FileManager.default.enumerator(atPath: sawyerArchivePath))
     var ok = 0
     var total = 0
     var bad: [String] = []
@@ -298,7 +319,7 @@ private let gauntletFiles = [
         paths.append(rel)
     }
     for rel in paths.sorted() {
-        guard let d = FileManager.default.contents(atPath: archiveWSPath + "/" + rel),
+        guard let d = FileManager.default.contents(atPath: sawyerArchivePath + "/" + rel),
               !d.isEmpty else { continue }
         let data = [UInt8](d)
         let variant = detect(data).variant
@@ -311,5 +332,5 @@ private let gauntletFiles = [
         }
     }
     #expect(total >= 80, "archive shrank? only \(total) .WS documents seen")
-    #expect(ok >= 83 && bad.isEmpty, "\(ok) of \(total) identical; diverged: \(bad.prefix(10))")
+    #expect(ok >= 82 && bad.isEmpty, "\(ok) of \(total) identical; diverged: \(bad.prefix(10))")
 }

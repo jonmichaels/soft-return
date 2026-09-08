@@ -4,11 +4,12 @@
 /// after the fixtures that first caught each defect stop being the only way to catch it.
 ///
 /// Synthetic fixtures only, built byte-by-byte, same discipline as `Fixtures.swift`. A
-/// corpus-driven pass (`test_lint_gates_over_private_corpus` in Python) is intentionally
-/// NOT ported here — this port has no equivalent of `CTRLKD_PRIVATE_FIXTURES` wired to a
-/// directory of loose documents; `CTRLKD_PRIVATE_CORPUS` (the `WSChangeTests.swift`
-/// convention) is a different, WS-file-specific corpus shape. The synthetic gates below are
-/// exactly the regression trip-wires the Python suite documents them as.
+/// corpus-driven pass (`test_lint_gates_over_private_corpus` in Python, ctrl-kd) is
+/// intentionally NOT ported here — this port has no equivalent of that suite's own flat-
+/// directory-of-loose-documents env gate; neither `CTRLKD_SAWYER_ARCHIVE` nor
+/// `CTRLKD_PRIVATE_CORPUS` (this repo's own corpus gates, `WSChangeTests.swift`) are shaped
+/// for that. The synthetic gates below are exactly the regression trip-wires the Python
+/// suite documents them as.
 import Foundation
 import Testing
 @testable import CtrlKD
@@ -536,6 +537,14 @@ private func rtfBodyOnly(_ r: String) -> String {
 /// Replay Modern RTF's own body — direct-formatting tokens only — and flag a paragraph
 /// whose direct li/ri don't match its referenced style's table margins, or a quote
 /// paragraph's own `\fi` outside a sane bound. Port of `_rtf_state_issues`.
+///
+/// LIMIT (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): this gate's own
+/// "expected" side calls `rtfStyleMargins` -- the EXACT function `emitRTF` itself calls to
+/// produce the direct li/ri it's checking. A bug IN `rtfStyleMargins` corrupts both sides
+/// identically and this gate could never catch it; it only catches `emitRTF` wiring the
+/// value in from somewhere ELSE. `rtfStyleMarginsConvertsHMIToTwipsByTheDocumentedFactor`
+/// below tests `rtfStyleMargins`'s own OUTPUT against an independent, hand-derived twips
+/// literal, closing that gap; this gate stays (still real, corpus-wide wiring coverage).
 private func rtfStateIssues(_ r: String, _ doc: Document, printed: Bool = false) -> [String] {
     var margins: [Int: (li: Int, ri: Int)] = [:]
     var quoteSlots: Set<Int> = []
@@ -563,6 +572,27 @@ private func rtfStateIssues(_ r: String, _ doc: Document, printed: Bool = false)
         }
     }
     return bad
+}
+
+/// FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): independent of
+/// `rtfStateIssues` above -- no call to `rtfStyleMargins` on the expected side. RTF's twip
+/// (1/1440in) and WordStar's style-record HMI (1/1800in) are both external facts about
+/// the formats, not values this codebase invents: 900 HMI = 0.5in = 720 twips (0.5in is
+/// Word's own default paragraph indent, a well-known round number in twips, independent
+/// confirmation the conversion factor is right). Right margin: HMI position 900 -> column
+/// 900/180 = 5 (per `rtfStyleMargins`'s own documented 180-HMI-per-column read of `.rm`'s
+/// frame) -> indent width `fullCols(65) - 5 = 60` columns -> `60 * 144 twips/col = 8640`
+/// (`fullCols`/144-twips-per-col are named constants elsewhere, not re-derived here).
+@Test func rtfStyleMarginsConvertsHMIToTwipsByTheDocumentedFactor() {
+    let entry = StyleEntry(name: "Test Style", record: StyleRecord(
+        leftMarginHMI: 900, rightMarginHMI: 900))
+    let (li, ri) = rtfStyleMargins(entry, printed: true)
+    #expect(li == 720, "900 HMI (0.5in) at 1800 HMI/in -> 720 twips (0.5in) at 1440 twips/in")
+    #expect(ri == 8640, "column 5 -> 60-column indent width -> 60 * 144 twips/col")
+
+    // No margins at all -> no indent, independent of the sentinel encoding.
+    let plain = StyleEntry(name: "Plain", record: StyleRecord())
+    #expect(rtfStyleMargins(plain, printed: true) == (0, 0))
 }
 
 private let rtfAttrCtl: [(name: String, style: Style, ctl: String)] = [
@@ -661,6 +691,15 @@ private func missingAttrMarkers(_ rendered: String, fmt: String, attrsPresent: S
 /// `.lh`-derived leading in force across the document's paragraph blocks, `\fi` per
 /// distinct `.pm`-derived first-line indent, and the document-wide `\sb`/`\sa` pair from
 /// WordTsar's `.PSA`/`.PSB`. Port of `_rtf_printed_vertical_space_expected`.
+///
+/// LIMIT (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): this calls
+/// `rtfSlTwips`/`rtfPMFiTwips`/`rtfDocSpacingTwips` -- the exact functions `emitRTF` itself
+/// calls to produce the tokens this gate checks for -- so a bug IN those functions passes
+/// here regardless. `round6DoubleSpacedSourceOpensDoubleSpacedInPrintedRTF` and
+/// `round6PsaPsbLandAsDirectSbSaInPrintedRTF` below already close that gap independently:
+/// both hand-derive the expected `\sl`/`\fi`/`\sb`/`\sa` twip literals straight from the
+/// `.lh`/`.pm`/`.PSA`/`.PSB` dot-command VALUES (e.g. "16 * 30 twips/48in-unit, doubled"),
+/// never by calling these functions -- this gate stays for its corpus-wide wiring coverage.
 private func rtfPrintedVerticalSpaceExpected(_ doc: Document)
     -> (sl: Set<Int>, fi: Set<Int>, sb: Int?, sa: Int?) {
     var margins: [Int: (li: Int, ri: Int)] = [:]

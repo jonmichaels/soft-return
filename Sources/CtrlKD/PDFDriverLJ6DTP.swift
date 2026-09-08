@@ -282,7 +282,7 @@ let symbolShapes: [Character: [SymbolSubShape]] = [
                  .rect(x: 0.10, y: 0.22, w: 0.80, h: 0.09)],
 ]
 
-let graphicChars: Set<Character> =
+public let graphicChars: Set<Character> =
     Set([fullBlock]).union(boxArms.keys).union(shadeGray.keys).union(partBlocks.keys)
         .union(symbolShapes.keys).union(arcCorners.keys)
 
@@ -503,7 +503,7 @@ func splitGraphics(_ segs: [LineSegment]) -> [LineSegment] {
 //
 // cp1252 (Printed PDF's declared `/WinAnsiEncoding`, `esc`) carries none of the
 // Greek/math repertoire cp437 puts at 0xE0-0xEE -- real WS7 prints this fine (measured:
-// the reference vault's -SCREEN.pcl + .measurements.json, the "αßΓπ..." line), because the driver
+// jon_vault's -SCREEN.pcl + .measurements.json, the "αßΓπ..." line), because the driver
 // routed those bytes through the Symbol PostScript font, not through the body face's own
 // encoding. `pdfFamily` already recognises a WHOLE span's font block as `.symbol` (a real
 // `.symbol`-typestyle font); this is the same face-bypass for the common case, PLAIN

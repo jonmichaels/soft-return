@@ -42,7 +42,8 @@ import Testing
 /// itself was tried FIRST and also failed, for a different reason: AppKit suppresses
 /// `paragraphSpacingBefore` entirely for whichever paragraph is the very first one in a text
 /// container, exactly the case that matters most here). The correct, CONTAINER-relative
-/// ground truth `containerRelativeInkTop` below uses instead: real ink top = fragment's own
+/// REFERENCE CALCULATION `containerRelativeInkTop` below uses instead (a geometric fact
+/// about this app's own text layout, not real WordStar 7): real ink top = fragment's own
 /// absolute origin (which DOES move with a preceding spacer paragraph) plus its fragment-local
 /// baseline offset, minus real ink-above-baseline — literally "is the glyph's own top at or
 /// below this container's local y=0," this job's own brief, phrased as geometry instead of a
