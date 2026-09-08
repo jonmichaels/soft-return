@@ -955,19 +955,94 @@ private func symbolStyleOp(
     return op
 }
 
+/// A bare 0x09 tab byte's print-time expansion target, in document columns —
+/// WSFORMAT.WS's own file-format reference (WordStar's control-code table, byte 09h
+/// ^I): "At print time the number of hard spaces required to reach a modulus 8 print
+/// position is generated."
+private let tabModulus = 8
+
+/// Expand every bare 0x09 tab byte in `segs`' own text into the literal spaces
+/// WordStar's print-time rule computes — planning #244 (the round-trip gauntlet fix).
+///
+/// This used to happen in `decodeSpans` at PARSE time (planning #202/#237): a running
+/// document-column count since the start of the physical line, and on a bare 0x09,
+/// pad with however many spaces are needed to reach the next multiple of 8 (a tab
+/// already sitting on a stop still advances a full `tabModulus`, the standard tab
+/// convention). That was the RIGHT structural rule but the WRONG place to apply it —
+/// baking the expansion into the parsed `Span.text` makes a computed space
+/// indistinguishable from one the author actually typed, so the native WordStar
+/// writer's round-trip (`WriterTests`' corpus gauntlet) re-emits spaces instead of the
+/// original 0x09 byte and never reproduces the source file (`MACROS/HOLYMAC/-HOLYMAC
+/// .WS`, `REF/WINDOWS7.WS`, `REF/wordstar-file-format.ws`, found 2026-09-08, planning
+/// #244). `decodeSpans` now keeps the literal byte (`buf.append(b)`, restored to its
+/// pre-#237 form — the document model IS the source bytes, unexpanded); this function
+/// applies the SAME rule here instead, at PRINTED-mode render time only, on a
+/// transient copy of the segment text. The underlying `Span.text` the writer reads
+/// back out is never touched — Modern mode and every other emitter (text, markdown,
+/// html, rtf) never call this and keep seeing the bare, un-expanded byte, exactly
+/// their own pre-#237 behavior (unchanged; #237's fidelity fix was Printed-PDF-only in
+/// its own evidence — WS7 LaserJet PCL captures — despite living in a function every
+/// mode shared).
+///
+/// Column-tracking matches `decodeSpans`'s own former semantics exactly: a running
+/// count across the WHOLE physical line (every `LineSegment` in `segs`, in order,
+/// regardless of style — a font/colour change never consumes a column), reset to 0 for
+/// each call (one call = one physical line, since Printed mode renders physical lines
+/// verbatim, never rewrapped). Segments with no tab byte are returned unchanged — most
+/// printed lines never carry one, so this is a no-op scan for them, not an allocation.
+private func expandBareTabsForPrintedLayout(_ segs: [LineSegment]) -> [LineSegment] {
+    guard segs.contains(where: { $0.text.contains("\t") }) else { return segs }
+    var col = 0
+    return segs.map { seg in
+        guard seg.text.contains("\t") else {
+            col += seg.text.count
+            return seg
+        }
+        var out = ""
+        out.reserveCapacity(seg.text.count)
+        for ch in seg.text {
+            if ch == "\t" {
+                let needed = tabModulus - (col % tabModulus)
+                out += String(repeating: " ", count: needed)
+                col += needed
+            } else {
+                out.append(ch)
+                col += 1
+            }
+        }
+        var newSeg = seg
+        newSeg.text = out
+        return newSeg
+    }
+}
+
 private func lineOpsPrinted(
     _ segs: [LineSegment], left: Double, y: Double, size: Int, res: FontResources,
     tzState: inout Int, colState: inout PDFFill, darkenState: inout Bool,
     colourMap: [Int: Double] = [:],
     rollPt: Double? = nil, fi: Double? = nil, ulContinuous: Bool = true,
     pclPrograms: [[UInt8]] = [], pageHeight: Double = Double(PDFMetrics.pageHeight),
-    kerning: Bool = true
+    kerning: Bool = true, justifyRightX: Double? = nil
 ) -> [[UInt8]] {
     var ops: [[UInt8]] = []
+    // Planning #244 (the round-trip gauntlet fix): expand any bare 0x09 tab byte HERE,
+    // at render time, not in `decodeSpans` — see `expandBareTabsForPrintedLayout`'s own
+    // doc comment. First transform on `segs`, ahead of even `ljSubstitute`, so the
+    // running column count matches `decodeSpans`'s own former semantics exactly: from
+    // the physical line's first character, before any drawing-time substitution.
+    var segs = expandBareTabsForPrintedLayout(segs)
     // `colourMap` is non-empty exactly when the document declares driver LJ6DTP — the
     // same gate covers its character substitutions.
-    let segs = colourMap.isEmpty ? segs : ljSubstitute(segs, kerning: kerning)
+    segs = colourMap.isEmpty ? segs : ljSubstitute(segs, kerning: kerning)
     let splitSegs = splitIndent(splitSymbolFallback(splitGraphics(segs)))
+    // Planning #238 (.oj on full justification): justification only ever touches the
+    // ONE span that IS the whole line -- a line that split into several segs (a styled
+    // word mid-sentence, a leading indent, graphics) is left unjustified rather than
+    // guess how to divide the slack among them. Port of Python's `justify_eligible`
+    // (`_line_ops_printed`, ctrl-kd aeb34ad) -- measured on the SAME `splitSegs` this
+    // function's own loop below iterates, after indent/symbol/graphics splitting, same
+    // as Python's `segs` at that point in its own function.
+    let justifyEligible = justifyRightX != nil && splitSegs.count == 1
     // b24 round 17 (RULINGS-LEDGER row 5/7): `.pm`'s first-line indent, in points,
     // already resolved relative to `left` (li=0 baseline — see `printedPMFiPt`).
     //
@@ -1267,6 +1342,112 @@ private func lineOpsPrinted(
             scale = nil
             w = Double(seg.text.width) * Double(size) * 0.6      // document print columns
         } else {
+            // Planning #238 (.oj on full justification, research/
+            // 2026-09-08_justification-rule.md, ctrl-kd aeb34ad): `justifyEligible`
+            // guarantees this line IS the whole span and it reached the fixed-pitch
+            // branch (not proportional, not graphics, not a tab, not the leading
+            // indent) — split it into word/gap pieces (the same run-splitter the
+            // proportional branch above uses) and stretch only the single-blank gaps.
+            // See `lineOpsPrinted`'s own doc comment for the measured rule and its
+            // documented approximation (an even split across elastic gaps — WS7's own
+            // per-gap split is NOT perfectly flat, not reverse-engineered to the
+            // decipoint this pass).
+            let pitch = supSubSpanPitch(seg.entry, seg.styles, seg.family, seg.size)
+                ?? spanPitch(seg.entry, pt)
+            if justifyEligible, let justifyRightX {
+                let pieces = splitKeepingSpaceRuns(seg.text)
+                let elastic = pieces.indices.filter { pieces[$0] == " " }
+                // `neumaierSum`, not a naive left-to-right fold: Python's `natural_total =
+                // sum(len(p) * pitch for p in pieces)` calls CPython's OWN built-in `sum()`,
+                // which since Python 3.12 performs Neumaier (compensated) summation over a
+                // float sequence rather than plain left-to-right addition — verified
+                // (20000 random trials, exact bit match) against CPython 3.12.3's actual
+                // behavior. This is not a rounding nicety: on LSRBOX.WS's own justified
+                // paragraph ("LaserJet  Series II and later printers.  The  accompanying
+                // Mail-", the SAME document the research note's worked example cites), a
+                // naive fold lands 1 ULP below the line's exact target width, turning
+                // `stretchTotal` into a tiny positive epsilon (1.1e-13) instead of the
+                // EXACT 0.0 Python's own gate (`elastic and stretch_total > 0`) sees —
+                // which flips this line from "render as one natural-width Tj" (Python's
+                // real, recorded output) to "split into 9 pieces" (a real cross-engine
+                // divergence, caught by AnswerKeyParityTests: LSRBOX.WS.pdf.printed,
+                // 44870 bytes here vs ctrl-kd's own 42340).
+                let naturalTotal = neumaierSum(pieces.map { Double($0.count) * pitch })
+                let stretchTotal = justifyRightX - x - naturalTotal
+                if !elastic.isEmpty, stretchTotal > 0 {
+                    let base = stretchTotal / Double(elastic.count)
+                    let symbolBoldJ = seg.family == .symbol && seg.styles.contains(.bold)
+                    let symbolItalicJ = seg.family == .symbol && seg.styles.contains(.italic)
+                    var ulX0: Double? = nil
+                    var ulX1 = 0.0
+                    let spanUL = ulContinuous && seg.styles.contains(.underline)
+                    let pieceStyles = spanUL ? seg.styles.subtracting(.underline) : seg.styles
+                    var ei = 0
+                    for (pi, piece) in pieces.enumerated() {
+                        var pw = Double(piece.count) * pitch
+                        let isElasticGap = piece == " " && ei < elastic.count && elastic[ei] == pi
+                        if isElasticGap {
+                            pw += base
+                            ei += 1
+                        }
+                        let pscale: Double?
+                        let actualW: Double
+                        if isElasticGap {
+                            // `tzScale` width-matches a GLYPH's drawn shape via
+                            // percentage scaling -- sound for a word whose natural
+                            // width is close to its target, but a stretched gap can
+                            // need many hundreds of percent, well outside `tzScale`'s
+                            // own sanity clamp (`tzMin`/`tzMax`), which would silently
+                            // reject it and keep the UNSTRETCHED width (the bug this
+                            // branch exists to avoid). Nothing is drawn for a space
+                            // piece anyway (the `piece.contains(where:)` check below),
+                            // so the advance is simply `pw` itself -- no glyph-metric
+                            // question to ask.
+                            pscale = nil
+                            actualW = pw
+                        } else {
+                            (pscale, actualW) = tzScale(piece, baseFont, pt, pw)
+                        }
+                        let pwant = hundredths(pscale ?? tzDefault)
+                        if piece.contains(where: { !$0.isWhitespace }) {
+                            if symbolBoldJ || symbolItalicJ {
+                                ops.append(symbolStyleOp(
+                                    font: font, pt: pt, rise: rise, want: pwant,
+                                    tzState: &tzState, x: x, y: y, textBytes: esc(piece),
+                                    isBold: symbolBoldJ, isItalic: symbolItalicJ))
+                            } else if pwant == tzState {
+                                var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
+                                op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                                op += esc(piece)
+                                op += Array(") Tj ET".utf8)
+                                ops.append(op)
+                            } else {
+                                var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
+                                op += Array("\(fixedTwoDecimal(hundredths: pwant)) Tz ".utf8)
+                                op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                                op += esc(piece)
+                                op += Array(") Tj ET".utf8)
+                                ops.append(op)
+                                tzState = pwant
+                            }
+                            if ulX0 == nil { ulX0 = x }
+                            ulX1 = x + actualW
+                        }
+                        ops += rules(pieceStyles, piece, x: x, y: y, w: actualW,
+                                    continuous: ulContinuous)
+                        x += actualW
+                    }
+                    if spanUL, let ulX0 {
+                        ops.append(rule(xFrom: ulX0, xTo: ulX1, y: y - 1.5))
+                    }
+                    // Land EXACTLY on the margin regardless of any rounding
+                    // accumulated across the pieces above -- the one part of the
+                    // measured rule confirmed on every justified line in the corpus,
+                    // never left to float drift.
+                    x = justifyRightX
+                    continue
+                }
+            }
             // Fixed-pitch (and metric-less) runs: width-matched onto the font block's
             // own HMI grid with Tz — for Courier the ratio is 100 by construction and no
             // operator is ever written, which is what keeps every fontless PDF
@@ -1461,7 +1642,7 @@ func pageStream(
                              colourMap: colourMap, rollPt: rollHere,
                              fi: line.fi, ulContinuous: ulContinuous,
                              pclPrograms: pclPrograms, pageHeight: Double(pageHeight),
-                             kerning: line.kerning)
+                             kerning: line.kerning, justifyRightX: line.justifyRightX)
     }
     return joined(ops, separator: 0x0A)                                 // Python's b'\n'.join
 }

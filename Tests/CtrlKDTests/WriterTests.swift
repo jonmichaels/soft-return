@@ -73,6 +73,24 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     #expect(try rt(data) == data)
 }
 
+@Test func bare0x09TabByteSurvivesVerbatim() throws {
+    // Planning #244 (found 2026-09-08 by the private round-trip gauntlet): a
+    // bare 0x09 tab byte (as opposed to the `.tb`-ruler type-9 tab block the
+    // test above covers) must come back as the SAME literal byte -- not the
+    // modulus-8 spaces Printed-mode PDF rendering computes for it
+    // (`expandBareTabsForPrintedLayout`, planning #244's own layout-time
+    // relocation of that expansion, see that function's doc comment). Baking
+    // the expansion into `decodeSpans` at PARSE time (the original planning
+    // #202/#237 shape) made a computed space indistinguishable from one the
+    // author actually typed, and this exact byte broke round-trip on three
+    // real archive documents (sawyer/MACROS/HOLYMAC/-HOLYMAC.WS, sawyer/REF/
+    // WINDOWS7.WS, sawyer/REF/wordstar-file-format.ws) before this fix --
+    // this is the synthetic regression guard for that gap; the corpus
+    // gauntlet below is the real-file coverage.
+    let data = ws5Seed + bytes("From:\tWordStar") + HARD + [0x1A]
+    #expect(try rt(data) == data)
+}
+
 @Test func ws5WrappedExtendedCharsAndBareHighByte() throws {
     // a real é as the wrapped triple, a chart glyph, a wrapped PRINTABLE (ASCIITAB
     // style), and a bare extended byte — four different escape economies, each of which

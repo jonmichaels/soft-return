@@ -151,6 +151,16 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     /// exactly as it already does for `left`.
     public var roll: Double?
 
+    /// `justifyRightX` (planning #238, `.oj on` full justification): this line's own
+    /// right text-margin in ABSOLUTE points, or `nil` for an unjustified line — set by
+    /// `resolvePlainBody` only on a line inside an `.oj on`/`align == .justify` block
+    /// that is NOT that block's own last physical line (see `lineOpsPrinted`'s own doc
+    /// comment for the measured rule). Consumed by `lineOpsPrinted`; a PageLine this
+    /// emitter MAKES rather than reads (furniture) leaves it `nil`, the same convention
+    /// `left`/`roll` already follow. Port of Python's `PageLine.justify_right_x`
+    /// (ctrl-kd aeb34ad).
+    public var justifyRightX: Double?
+
     public init() {
         spans = []
         lead = nil
@@ -163,12 +173,13 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         kerning = true
         left = nil
         roll = nil
+        justifyRightX = nil
     }
 
     public init(_ spans: [Span], soft: Bool = false, lead: Double? = nil,
                 overprint: Bool = false, fi: Double? = nil, bi: Int? = nil,
                 image: ImageRef? = nil, ws4Spacing: Bool = false, kerning: Bool = true,
-                left: Double? = nil, roll: Double? = nil) {
+                left: Double? = nil, roll: Double? = nil, justifyRightX: Double? = nil) {
         self.spans = spans
         self.soft = soft
         self.lead = lead
@@ -180,6 +191,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         self.kerning = kerning
         self.left = left
         self.roll = roll
+        self.justifyRightX = justifyRightX
     }
 
     public init(arrayLiteral elements: Span...) {
@@ -3297,11 +3309,35 @@ private func resolvePlainBody(
                 // on this physical line, matching ctrl-kd's own `_doc_to_pagelines`
                 // choke point exactly.
                 if sentenceSpacing { spans = sentenceSpacingSpans(spans) }
+                // Planning #238 (.oj on full justification, research/
+                // 2026-09-08_justification-rule.md, ctrl-kd aeb34ad): every line of an
+                // `align == .justify` block EXCEPT ITS OWN LAST is stretched to the
+                // block's resolved right margin -- measured directly against WS7
+                // (sawyer/LSRBOX/LSRBOX.WS): the paragraph's final physical line sits
+                // short of the margin, ragged, while every line above it reaches the
+                // margin exactly. `rightMargin` is `.rm` in print columns, measured
+                // from the SAME `.po` origin as the left edge (confirmed against two
+                // independent captures: LSRBOX's own explicit `.po .7"/.rm 6.5"` and
+                // CTRL-K.H1's all-defaults line, both landing on their real WS7 right
+                // edge as poOrigin + rmCols*7.2pt, never rm alone) -- 65.0 is
+                // WordStar's own factory default (WSFORMAT.TXT gives no numeric
+                // default; confirmed instead against CTRL-K_EXT_H1.pcl's real
+                // flush-right edge, 525.6pt = the same default .po 8 cols (57.6pt) +
+                // 65 cols (468pt)). This function is Printed-only (see its own doc
+                // comment), so there is no `printed` guard here — ctrl-kd's own
+                // equivalent gate is `printed and b.align == 'justify' and ...`.
+                var justifyRightX: Double? = nil
+                if block.align == .justify, lineIdx < block.lines.count - 1 {
+                    let poOriginPt = ownLeft ?? printedLeft(doc, size: sizeForLeft)
+                    let rmCols = block.rightMargin ?? 65.0
+                    justifyRightX = poOriginPt + rmCols * pdfPtPerCol
+                }
                 items.append(.line(PageLine(spans, soft: line.soft, lead: ownLead,
                                             overprint: line.overprint,
                                             fi: firstLineOfBlock ? fiPt : nil, bi: bi,
                                             ws4Spacing: ws4SpacingLine,
-                                            kerning: line.kerning, left: ownLeft, roll: ownRoll)))
+                                            kerning: line.kerning, left: ownLeft, roll: ownRoll,
+                                            justifyRightX: justifyRightX)))
                 firstLineOfBlock = false
             }
         }

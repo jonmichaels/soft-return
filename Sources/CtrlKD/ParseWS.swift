@@ -20,12 +20,6 @@ private let wsToggles: [UInt8: Style] = [
     0x04: .bold,
 ]
 
-/// A bare 0x09 tab byte's print-time expansion target, in document columns
-/// (WSFORMAT.WS's own file-format reference: "the number of hard spaces required to
-/// reach a modulus 8 print position is generated" — see `decodeSpans`'s own 0x09
-/// branch, planning #202 batch, ported from core.py's `_TAB_MODULUS`).
-private let tabModulus = 8
-
 /// Codes discarded without comment (core.py:164).
 ///
 /// `0x08` (^H overprint) was here until 2026-08-03 and is deliberately NOT any more:
@@ -172,14 +166,6 @@ private func decodeSpans(
 ) -> [Span] {
     var spans: [Span] = []
     var buf: [UInt8] = []
-    // Running document-COLUMN count since the start of THIS physical line (planning
-    // #202 batch, bare-0x09 tab-expansion fix, ported from core.py's `col`): every
-    // character this function actually places — in `buf` or as a directly-appended
-    // Span — advances it by exactly its own length; a style toggle, font/colour
-    // change, or dropped control byte never does (zero print width). `raw` starts this
-    // line at column 0 by construction (one CRLF-delimited content line); only the
-    // bare-0x09 branch below reads it.
-    var col = 0
     // `flush` needs to read the font/colour, but both are `inout` and a nested function
     // may not capture an `inout` parameter that outlives the call. Local mirrors,
     // written back before returning, are the idiom the rest of this file would use.
@@ -254,7 +240,6 @@ private func decodeSpans(
                 let text = decodeCP437(Array(raw[i..<end]))
                 spans.append(Span(text: text, styles: active, font: font, colour: colour,
                                   pctlHMI: hmi, pcl: pcl))
-                col += text.count
                 i = end
                 advanced = true
             }
@@ -265,7 +250,6 @@ private func decodeSpans(
                 let text = decodeCP437(Array(raw[i..<end]))
                 spans.append(Span(text: text, styles: active, font: font, colour: colour,
                                   pix: idx))
-                col += text.count
                 i = end
                 advanced = true
             }
@@ -307,7 +291,6 @@ private func decodeSpans(
                 let text = decodeCP437(Array(raw[i..<end]))
                 spans.append(Span(text: text, styles: active, font: font, colour: colour,
                                   tabHMI: absHMI, tabLeader: Int(leader)))
-                col += text.count
                 i = end
                 advanced = true
             }
@@ -321,10 +304,8 @@ private func decodeSpans(
                 flush()
                 let n = current + 1
                 fnCounter = n
-                let fnrefText = String(n)
-                spans.append(Span(text: fnrefText, styles: active.union([.sup, .fnref]),
+                spans.append(Span(text: String(n), styles: active.union([.sup, .fnref]),
                                   font: font, colour: colour))
-                col += fnrefText.count
             }
         }
         if i >= raw.count { break }
@@ -352,7 +333,6 @@ private func decodeSpans(
             } else {
                 buf.append(x)
             }
-            col += 1
             i += 2
             continue
         }
@@ -377,26 +357,12 @@ private func decodeSpans(
             active.remove(.altFont)
         } else if b == 0x0F {
             buf.append(0x20)                    // binding space (core.py:196-197)
-            col += 1
         } else if b == 0x1E {
             // inactive soft hyphen: dropped entirely (core.py:198-199)
         } else if b == 0x1F {
             buf.append(0x2D)                    // active soft hyphen -> '-' (core.py:200-201)
-            col += 1
         } else if b == 0x09 {
-            // A BARE tab byte (as opposed to a `.tb`-ruler type-9 tab block, the
-            // `pendingTab` mechanism above -- this file's own note there: 46 archive
-            // files use `.tb`, ZERO contain a bare 0x09, the two never coexist on one
-            // line) expands at PRINT time to the next modulus-8 column, per WordStar's
-            // own file-format reference (WSFORMAT.WS: "09h ^I ... At print time the
-            // number of hard spaces required to reach a modulus 8 print position is
-            // generated") -- planning #202 batch, ported from core.py's identical fix.
-            // `col` is 0-indexed from this physical line's own start; a tab exactly ON
-            // a stop still advances a FULL `tabModulus` columns (the standard tab
-            // convention: it always moves at least one column).
-            let needed = tabModulus - (col % tabModulus)
-            buf.append(contentsOf: repeatElement(0x20, count: needed))
-            col += needed
+            buf.append(b)                       // tab survives (core.py:202-203)
         } else if b == 0xA0 && !stripHibit {
             // WS5+ soft space: justification/alignment padding WordStar re-stamps at
             // print time (615 bare A0s across the corpus, all in layout contexts --
@@ -405,7 +371,6 @@ private func decodeSpans(
             // through cp437. WS4 needs nothing: its soft spaces are 0x20|0x80 and the
             // bit-7 mask (applied above, before `b` is computed) already restored them.
             buf.append(0x20)
-            col += 1
         } else if b < 0x20 || b == 0x7F {
             // core.py:204-206 — everything else in control range is either known-noise
             // or a diagnostic we want to surface.
@@ -414,7 +379,6 @@ private func decodeSpans(
             }
         } else {
             buf.append(b)
-            col += 1
         }
         i += 1
     }
