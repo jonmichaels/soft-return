@@ -10,7 +10,11 @@
 # What this workflow does NOT do: build, sign, notarize, or upload the
 # release assets themselves. Those steps still happen on the Mac worker
 # per the (private) release checklist; this workflow only verifies what
-# landed and pushes the resulting formula bump.
+# landed and pushes the resulting formula bump. It also does not sign the
+# Sparkle appcast update -- that is done locally with a private EdDSA key.
+#
+# Trigger: publishing a GitHub Release, or a manual workflow_dispatch run
+# with a `tag` input (see the `on:` block below).
 #
 # Jobs:
 #   guard      - the release tag must equal srVersion in
