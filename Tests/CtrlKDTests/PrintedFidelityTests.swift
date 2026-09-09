@@ -430,6 +430,87 @@ import Testing
     #expect(!contains(off, bytes("(   1)")) && !contains(off, bytes("Courier")) == false)
 }
 
+/// Planning #247: labels are a SEQUENTIAL COUNT of numbered lines (1, 2, 3...), not the
+/// raw physical line index (2, 4, 6...) -- measured against a real WS7 capture
+/// (ws7-prints/v4/sawyer__PRINT_EXT_TST.pcl, ctrl-kd's own `LINE_NO_RIGHT_PT` comment).
+/// Six body lines, interval 2: lines 1, 3, 5 (0-based 0, 2, 4) are numbered, labelled
+/// 1, 2, 3. Port of ctrl-kd's
+/// `test_l_hash_gutter_numbers_every_nth_line_printed_pdf_and_rtf`.
+@Test func lHashGutterLabelsAreASequentialCountNotTheRawLineIndex() throws {
+    let header = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    var body = bytes(".l# 2") + HARD
+    for i in 1...6 { body += bytes("Line \(i) text.") + HARD }
+    let doc = parseWS(header + body)
+    #expect(doc.lineNumbering == 2)
+
+    let pdf = emitPDF(doc, mode: .printed,
+                      options: EmitOptions(pageNumbers: .off))
+    let gutterLabels = contentSpans(pdf)
+        .filter { ($0.x ?? 999) < 30.0 }
+        .map { $0.text.trimmed() }
+    #expect(gutterLabels == ["1", "2", "3"])
+
+    let rtf = emitRTF(doc, mode: .printed, options: EmitOptions())
+    #expect(rtf.contains(#"1\tab"#) && rtf.contains(#"2\tab"#) && rtf.contains(#"3\tab"#))
+    #expect(!rtf.contains(#"4\tab"#) && !rtf.contains(#"5\tab"#) && !rtf.contains(#"6\tab"#))
+}
+
+/// Planning #247: interval 1 numbers EVERY physical line, blank ones included -- the
+/// previous "blank lines are never numbered" guard was an unverified assumption; the real
+/// capture numbers a blank physical line exactly like a text-bearing one. Port of
+/// ctrl-kd's `test_l_hash_gutter_interval_1_numbers_every_line`.
+@Test func lHashGutterIntervalOneNumbersEveryLine() throws {
+    let header = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    let body = bytes(".l# 1") + HARD + bytes("One.") + HARD + HARD + bytes("Two.") + HARD
+    let doc = parseWS(header + body)
+    #expect(doc.lineNumbering == 1)
+
+    let pdf = emitPDF(doc, mode: .printed,
+                      options: EmitOptions(pageNumbers: .off))
+    let gutterLabels = contentSpans(pdf)
+        .filter { ($0.x ?? 999) < 30.0 }
+        .map { $0.text.trimmed() }
+    #expect(gutterLabels == ["1", "2", "3"])
+
+    let rtf = emitRTF(doc, mode: .printed, options: EmitOptions())
+    #expect(rtf.contains(#"1\tab"#) && rtf.contains(#"2\tab"#) && rtf.contains(#"3\tab"#))
+}
+
+/// Planning #247's actual bug: `doc.lineNumbering` is a single flat value, so a document
+/// that turns `.l#` ON and then OFF again (exactly the sawyer/PRINT.TST,
+/// sawyer/DEFAULT/PRINT.TST shape) read the LAST command -- always off -- for the WHOLE
+/// document, and rendered no numbers anywhere, even in the span where it was on. A blank
+/// line separates the "on" and "off" paragraphs -- the parser merges hard-wrapped lines
+/// with no blank between them into ONE block (checkpointing resolves per BLOCK, not per
+/// physical line), so a real block boundary at the toggle point is what makes this
+/// fixture actually exercise two different blocks, matching sawyer/PRINT.TST's own
+/// shape. Port of ctrl-kd's `test_l_hash_checkpoint_is_positional_not_last_command_wins`.
+@Test func lHashCheckpointIsPositionalNotLastCommandWins() throws {
+    let header = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    var body = bytes(".l# 2") + HARD
+    for i in 1...4 { body += bytes("On \(i).") + HARD }
+    body += HARD + bytes(".l# 0") + HARD
+    for i in 1...4 { body += bytes("Off \(i).") + HARD }
+    let doc = parseWS(header + body)
+    // The flat, last-command-wins reading is off -- confirms the bug is real, not
+    // merely theoretical, on this exact fixture shape.
+    #expect(doc.lineNumbering == nil)
+
+    // The "on" block is 5 physical lines (4 sentences + the blank separator, itself
+    // numbered -- blank lines count): numbered at 0-based 0, 2, 4, labelled 1, 2, 3.
+    // The "off" block gets nothing.
+    let pdf = emitPDF(doc, mode: .printed,
+                      options: EmitOptions(pageNumbers: .off))
+    let gutterLabels = contentSpans(pdf)
+        .filter { ($0.x ?? 999) < 30.0 }
+        .map { $0.text.trimmed() }
+    #expect(gutterLabels == ["1", "2", "3"])
+
+    let rtf = emitRTF(doc, mode: .printed, options: EmitOptions())
+    #expect(rtf.contains(#"1\tab"#) && rtf.contains(#"2\tab"#) && rtf.contains(#"3\tab"#))
+    #expect(!rtf.contains(#"4\tab"#))
+}
+
 // MARK: - item 7: diagnose surfacing
 
 // Soft returns (not plain hard-returned lines) so `detect()` reads these as ws4/ws5+

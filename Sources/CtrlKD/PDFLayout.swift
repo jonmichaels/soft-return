@@ -37,6 +37,20 @@ public enum PDFMetrics {
     public static let topPrinted = 36
     /// Lines per page: `(pageHeight - 2 * top) / lead`.
     public static let linesModern = 54
+    /// `.l#` line-numbering gutter (planning #247): right edge of the printed label,
+    /// ABSOLUTE from the true page edge (x=0) -- WordStar column 4, 0.4in -- never
+    /// relative to the document's own `.po`/left margin. Measured against real WS7
+    /// (ws7-prints/v4/sawyer__PRINT_EXT_TST.pcl, dosbox-x): the document's `.po .8"`
+    /// (column 8, 57.6pt) puts body text at x=576 decipoints while a single-digit label
+    /// sits at x=216..288 decipoints and a two-digit one at x=144..288 -- the SAME right
+    /// edge (288 decipoints = 28.8pt) either way, confirming right-alignment to a fixed
+    /// column, not a `.po`-relative one. WSFORMAT.TXT's own internal-format section (the
+    /// 0Ch "Page offset" printer-driver record) calls this field an "Absolute HMI spot
+    /// for line number", the same reading. One oracle value only (both real `.l#`
+    /// occurrences in the Sawyer archive share the same `.po .8"`) -- a document with a
+    /// narrower `.po` than this could in principle overlap its own body text; not
+    /// observed, not guarded against. Port of Python's `LINE_NO_RIGHT_PT`.
+    public static let lineNoRightPt = 28.8
     // Printed-mode capacity is per-document now (`printedCap`, ctrl-kd 1.3.0): WordStar's
     // own vertical model, `.pl - .mt - .mb` at the `.lh` line height — 55 for WordStar's own
     // defaults, not a fixed line count. Python deleted the equivalent `LINES_PRINTED`

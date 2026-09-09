@@ -1889,6 +1889,68 @@ func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? {
     parseDotNumberConsuming(arg).map { ($0.value, $0.unit) }
 }
 
+/// `[(blockIndex, interval), ...]` in ascending block order -- the `.l#` line-numbering
+/// interval IN FORCE from that block onward. Same `dotPositions`-anchored shape
+/// `plCheckpoints`/`hmFmCheckpoints` (`PDFLayout.swift`) use -- kept here in `ParseWS.swift`,
+/// not `PDFLayout.swift`, because BOTH Printed renderers need the positional answer:
+/// `PDFWriter.swift`'s `pageStream` resolves it PER LINE (by that line's own block index --
+/// a single per-page value cannot represent a document whose `.l#` turns on and off again
+/// within one page, exactly sawyer/PRINT.TST's own shape) and `EmitRTF.swift`'s Printed
+/// gutter resolves it PER BLOCK (RTF has no page object to reset against, so its own
+/// numbering runs continuously from the document's start). Port of Python's
+/// `line_numbering_checkpoints`.
+///
+/// Seeded at `(0, nil)` ("off") -- unlike `plCheckpoints`'s WordStar-hardcoded-default
+/// seed, there is no retroactive first-occurrence-wins hazard to guard against here: line
+/// numbering's own real default IS off, so a `.l#` whose only occurrence sits mid-document
+/// correctly leaves every earlier block at `nil` with no special-casing needed.
+///
+/// Walked directly against `dp.text` rather than through `dotCommandNameAndArg` -- that
+/// helper's name grammar is `[A-Za-z]{1,3}` only, and `.L#`'s own two-character name ends
+/// in the literal `#`, which it can never match (see `parseCollectDot`'s own handling of
+/// the same command, `Formatting2.swift`).
+///
+/// Planning #247 (found by the #245 job on PRINT.TST/PSPRINT.TST): `doc.lineNumbering`
+/// (set by `parseCollectDot`, `.l#`'s own PARSE-time handler) is a single flat value,
+/// last-command-wins for the WHOLE document -- both real oracles here (sawyer/PRINT.TST,
+/// sawyer/DEFAULT/PRINT.TST) declare `.l#2` right before their "Line Numbers"
+/// demonstration section and `.l# 0` right after it, so the flat reading is always the OFF
+/// value and nothing ever rendered anywhere, even on the one page that turned it on. This
+/// is the `.mt`/`.mb`-shaped fix: a positional answer, not a single global one.
+/// (sawyer/PSPRINT.TST's own `..l#2` is a DIFFERENT thing entirely -- a leading `..` is
+/// WordStar's own `.IG`/comment shorthand, so that occurrence never was a real dot
+/// command; PSPRINT.TST's line numbering stays off throughout, correctly, both before and
+/// after this fix.)
+func lineNumberingCheckpoints(_ doc: Document) -> [(blockIndex: Int, interval: Int?)] {
+    var checkpoints: [(blockIndex: Int, interval: Int?)] = [(0, nil)]
+    for dp in doc.dotPositions {
+        let bytes = Array(dp.text.utf8)
+        guard bytes.count >= 3, bytes[0] == 0x2E,             // '.'
+              asciiUppercased(bytes[1]) == 0x4C,              // 'L'
+              bytes[2] == 0x23                                // '#'
+        else { continue }
+        guard let (value, _) = parseDotNumber(Array(bytes[3...])), value.isFinite
+        else { continue }
+        let interval: Int? = Int(value) > 0 ? Int(value) : nil
+        if interval != checkpoints[checkpoints.count - 1].interval {
+            checkpoints.append((dp.blockIndex, interval))
+        }
+    }
+    return checkpoints
+}
+
+/// The `.l#` interval (or `nil`) in force at block index `bi`, per `checkpoints`
+/// (ascending, from `lineNumberingCheckpoints`) -- the LAST checkpoint at or before `bi`.
+/// Mirrors `plAt` exactly. Port of Python's `line_numbering_at`.
+func lineNumberingAt(_ checkpoints: [(blockIndex: Int, interval: Int?)], _ bi: Int) -> Int? {
+    var interval = checkpoints[0].interval
+    for cp in checkpoints {
+        if cp.blockIndex > bi { break }
+        interval = cp.interval
+    }
+    return interval
+}
+
 // ------------------------------------------------------------ dot-command math
 //
 // Planning #202 residuals round, cause 5. Direct port of core.py's identical

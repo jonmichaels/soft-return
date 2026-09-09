@@ -1543,7 +1543,7 @@ func pageStream(
     left: Double = Double(PDFMetrics.margin),
     running: [[UInt8]] = [], fonts: [FontChange] = [], res: FontResources? = nil,
     colourMap: [Int: Double] = [:], rollPt: Double? = nil, ulContinuous: Bool = true,
-    lineNoInterval: Int? = nil, pclPrograms: [[UInt8]] = []
+    lineNoCheckpoints: [(blockIndex: Int, interval: Int?)]? = nil, pclPrograms: [[UInt8]] = []
 ) -> [UInt8] {
     let res = res ?? FontResources()
     var ops: [[UInt8]] = running
@@ -1563,6 +1563,17 @@ func pageStream(
     // family always needs one. See `lineOpsPrinted`'s colour block.
     var darkenState = false
     var prevOverprint = false
+    // planning #247: `.l#`'s own running state -- `lineNoState.interval` is the interval
+    // MOST RECENTLY resolved (per line, below), and `lineNoState.k` is a 0-based count of
+    // physical lines since it last changed value (including a change FROM or TO nil/off).
+    // Local to this call, so it starts fresh at every page's own first line for free
+    // (`pageStream` is invoked once per page) -- matching the one real oracle
+    // (sawyer/PRINT.TST: `.l#2` activates on a page's own first body line, `.l# 0`
+    // deactivates on its last) -- and ALSO restarts correctly if a checkpoint change ever
+    // lands mid-page (untested: no oracle exercises that), rather than counting from the
+    // page's own top regardless of where the interval itself began. Port of Python's
+    // `line_no_state`.
+    var lineNoState: (interval: Int?, k: Int) = (nil, 0)
     for (n, line) in pagelines.enumerated() {
         if n > 0, !prevOverprint {
             y -= line.lead ?? lead
@@ -1618,20 +1629,48 @@ func pageStream(
             continue
         }
         let coalesced = coalesce(line)
-        // b24 round 17b (RULINGS-LEDGER row 5/6, register C11): `.l#`'s own gutter —
-        // every Nth physical line on the page (1-based, N = the document's own `.l#`
-        // interval, WordStar's own numbering convention — `.l# 5` numbers lines 5, 10,
-        // 15...), right-aligned a few points left of the text margin. Blank lines are
-        // never numbered (nothing to count on paper). The gutter draws in the margin
-        // WordStar's own `.po`/`.lm` already reserved, same as a running head does —
-        // register b31: that margin is THIS LINE's own (`leftHere`), not always the
-        // document default, now that `.po` can override per line.
-        if let interval = lineNoInterval, interval > 0, (n + 1) % interval == 0,
-           coalesced.contains(where: { $0.text.contains { !$0.isWhitespace } }) {
-            let label = String(n + 1)
-            let gutterFont = res.ref("Courier")
-            let gx = leftHere - 4.0 - Double(label.count) * Double(size) * 0.6
-            var op = Array("BT /\(gutterFont) \(size) Tf 0 Ts ".utf8)
+        // b24 round 17b (RULINGS-LEDGER row 5/6, register C11), corrected by planning
+        // #247 against a real WS7 capture (`PDFMetrics.lineNoRightPt`'s own doc comment):
+        // `.l#`'s own gutter. N = the interval in force on THIS LINE (resolved from
+        // `lineNoCheckpoints`, by that line's own `bi` -- a single per-page value cannot
+        // represent PRINT.TST's own `.l#2`/`.l# 0` pair, both of which land on the SAME
+        // page).
+        //
+        // `lineNoState.k` (a 0-based count of physical lines, BLANK ones included --
+        // measured: the real capture numbers blank physical lines exactly like
+        // text-bearing ones, so the previous "blank lines are never numbered" guard here
+        // was an unverified assumption, not evidence -- since the interval last CHANGED
+        // value) stands in for a plain page-relative `n`: a physical line is numbered
+        // when that count is a multiple of N, and its label is a SEQUENTIAL COUNT of
+        // numbered lines so far (1, 2, 3, ...), not the raw line index: measured against
+        // the real capture, `.l#2`'s labels run 1, 2, 3, 4... one per numbered line,
+        // never 2, 4, 6, 8 (which a raw page-relative index would have printed).
+        // Right-aligned to `PDFMetrics.lineNoRightPt`, an ABSOLUTE page position -- never
+        // relative to `leftHere`, so it draws in the margin WordStar's own `.po` already
+        // reserved without shifting `left` itself, same as a running head does. Rendered
+        // in the document's own default body font (`spanRender` with no styles -- the
+        // SAME resolution an ordinary unstyled span gets), not a hardcoded face: the one
+        // real oracle happens to be Courier, which is also this engine's own fallback,
+        // so this is untested against a document whose default body font is something
+        // else.
+        let lineInterval: Int?
+        if let checkpoints = lineNoCheckpoints, let bi = line.bi {
+            lineInterval = lineNumberingAt(checkpoints, bi)
+        } else {
+            lineInterval = nil
+        }
+        if lineInterval != lineNoState.interval {
+            lineNoState = (lineInterval, 0)
+        }
+        let lineNoK = lineNoState.k
+        lineNoState.k += 1
+        if let interval = lineInterval, interval > 0, lineNoK % interval == 0 {
+            let label = String(lineNoK / interval + 1)
+            let gutterRendered = spanRender("", font: nil, fonts: fonts, size: size)
+            let gutterFont = res.ref(base14(gutterRendered.family, bold: false, italic: false))
+            let gutterSize = gutterRendered.size
+            let gx = PDFMetrics.lineNoRightPt - Double(label.count) * Double(gutterSize) * 0.6
+            var op = Array("BT /\(gutterFont) \(gutterSize) Tf 0 Ts ".utf8)
             op += Array("\(fixedOneDecimalDouble(gx)) \(fixedOneDecimalDouble(y)) Td (".utf8)
             op += esc(label)
             op += Array(") Tj ET".utf8)
@@ -1752,12 +1791,17 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         // only records `underlineBlanks` when the command is present, so absent-vs-off
         // is distinguishable).
         let ulContinuous = doc.formatting.underlineBlanks ?? true
-        // b24 round 17b (RULINGS-LEDGER row 5/6, register C11): `.l#`'s own interval,
-        // flag-gated — default ON (same shape as `--headers`), but the FEATURE only
-        // ever fires when the document itself declared `.l#` (`doc.lineNumbering` is
-        // `nil` otherwise): the flag's job is letting a caller SUPPRESS what the file
-        // asked for, not inventing numbering a silent file never requested.
-        let lineNoInterval = options.lineNumbers ? doc.lineNumbering : nil
+        // b24 round 17b (RULINGS-LEDGER row 5/6, register C11), corrected by planning
+        // #247: `.l#`'s own interval, flag-gated — default ON (same shape as
+        // `--headers`), but the FEATURE only ever fires when the document itself
+        // declared `.l#` (`lineNumberingCheckpoints` stays at its `(0, nil)` seed
+        // otherwise): the flag's job is letting a caller SUPPRESS what the file asked
+        // for, not inventing numbering a silent file never requested. `lineNoCheckpoints`
+        // carries the FULL positional answer -- `pageStream` resolves the interval in
+        // force PER LINE from it (a single per-page value cannot represent PRINT.TST's
+        // own `.l#2`/`.l# 0` pair, both of which land on the SAME page; see
+        // `pageStream`'s own comment).
+        let lineNoCheckpoints = options.lineNumbers ? lineNumberingCheckpoints(doc) : nil
         // Font runs are a PRINTED-mode facsimile feature — WS4 documents and print
         // streams have no font blocks, so `doc.fonts` is empty for them and this is a
         // no-op either way.
@@ -1921,7 +1965,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                     size: size, left: left, running: running,
                                     fonts: fonts, res: res, colourMap: colourMap,
                                     rollPt: rollPt, ulContinuous: ulContinuous,
-                                    lineNoInterval: lineNoInterval,
+                                    lineNoCheckpoints: lineNoCheckpoints,
                                     pclPrograms: doc.pclPrograms))
         }
         // b24 round 18 (RULINGS-LEDGER row 4): TOC/Index compiled as ADDITIONAL pages at
@@ -1945,7 +1989,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                         size: size, left: left, running: running,
                                         fonts: fonts, res: res, colourMap: colourMap,
                                         rollPt: rollPt, ulContinuous: ulContinuous,
-                                        lineNoInterval: nil))
+                                        lineNoCheckpoints: nil))
                 chunkStart += cap
             }
         }

@@ -797,19 +797,46 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             .joined()
     }
 
-    // b24 round 17b (RULINGS-LEDGER row 5/6, register C11): `.l#`'s own gutter for
-    // Printed RTF — flag-gated (default ON, same shape as `headers`; fires only when
-    // the document itself declared `.l#`). RTF has no page object of its own to reset a
-    // per-page count against (unlike PDF's separate Page streams), so numbering runs
-    // from the DOCUMENT'S start, a deliberate, simpler choice for this continuous-text
-    // format — a true per-page reset would need RTF's own pagination model, which this
-    // format doesn't have and isn't being built here.
-    let lineNoInterval: Int? = (printed && options.lineNumbers) ? doc.lineNumbering : nil
-    var lineNo = 0
-    func numbered(_ renderedLine: String, hasText: Bool) -> String {
-        lineNo += 1
-        if let interval = lineNoInterval, interval > 0, hasText, lineNo % interval == 0 {
-            let label = String(lineNo)
+    // b24 round 17b (RULINGS-LEDGER row 5/6, register C11), corrected by planning #247:
+    // `.l#`'s own gutter for Printed RTF — flag-gated (default ON, same shape as
+    // `headers`; fires only when the document itself declared `.l#`). RTF has no page
+    // object of its own to reset a per-page count against (unlike PDF's separate Page
+    // streams), so numbering runs from the DOCUMENT'S start, a deliberate, simpler
+    // choice for this continuous-text format — a true per-page reset would need RTF's
+    // own pagination model, which this format doesn't have and isn't being built here.
+    //
+    // `lineNoCheckpoints` (`lineNumberingCheckpoints`) replaces a single flat
+    // `doc.lineNumbering` read, which is the LAST `.l#` in the whole document -- both
+    // real oracles (sawyer/PRINT.TST, sawyer/DEFAULT/PRINT.TST) turn numbering back OFF
+    // right after their demonstration section, so the flat reading was always off,
+    // everywhere, planning #247. `numbered()` now resolves the interval IN FORCE at each
+    // line's own block (`bi`), same mechanism PDF's per-page checkpoint uses, just
+    // walked per-block instead of per-page.
+    //
+    // `lineNoState` (mirrors `PDFWriter.swift`'s `pageStream`'s own `lineNoState`
+    // exactly): `.interval` is the interval most recently resolved, `.k` is a 0-based
+    // count of physical lines since it last changed value. Labels are a SEQUENTIAL
+    // COUNT of numbered lines (1, 2, 3, ...), counted from whenever `.l#` last turned on
+    // (or changed interval), NOT from the document's own start -- see
+    // `PDFMetrics.lineNoRightPt`'s own doc comment for the real-capture evidence (labels
+    // run 1, 2, 3... starting the instant `.l#2` activates, never continuing some large
+    // running total). Blank physical lines are numbered exactly like text-bearing ones
+    // (measured; the previous `hasText` guard here was unverified).
+    let lineNoCheckpoints: [(blockIndex: Int, interval: Int?)]? =
+        printed ? lineNumberingCheckpoints(doc) : nil
+    let lineNumbersEnabled = printed && options.lineNumbers
+    var lineNoState: (interval: Int?, k: Int) = (nil, 0)
+    func numbered(_ renderedLine: String, bi: Int) -> String {
+        let interval: Int? = (lineNumbersEnabled ? lineNoCheckpoints.flatMap {
+            lineNumberingAt($0, bi)
+        } : nil)
+        if interval != lineNoState.interval {
+            lineNoState = (interval, 0)
+        }
+        let k = lineNoState.k
+        lineNoState.k += 1
+        if let interval, interval > 0, k % interval == 0 {
+            let label = String(k / interval + 1)
             let padded = String(repeating: " ", count: max(0, 4 - label.count)) + label
             return "{" + rtfEscape(padded) + #"\tab }"# + renderedLine
         }
@@ -845,8 +872,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             }
             // physical lines: \line at every printed break, soft or hard
             var lines = block.lines.map {
-                numbered(rtfSeg($0.spans, block),
-                        hasText: $0.spans.contains { !$0.text.trimmed().isEmpty })
+                numbered(rtfSeg($0.spans, block), bi: bi)
             }
             if block.heading != 0 {
                 lines = lines.map { #"{\b\fs28 "# + $0 + "}" }
