@@ -1058,6 +1058,68 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
     return out
 }
 
+/// A bare 0x09 tab byte's print-time expansion target, in document columns — same
+/// constant as `PDFWriter.swift`'s own (now render-time-only-as-fallback) copy.
+private let modelTabModulus = 8
+
+/// Expand every bare 0x09 tab byte in `spans`' own text into the literal spaces
+/// WordStar's print-time rule computes — planning #251 (2026-09-09), moved one layer
+/// EARLIER than planning #244's own fix: `PDFWriter.swift`'s `expandBareTabsForPrintedLayout`
+/// used to do this at RENDER time, on the `[LineSegment]` array built from a `PageLine`'s
+/// `Span`s — which meant only the PDF writer ever saw the expansion; `docToPagelines`'s own
+/// callers (chiefly `emitLayout`'s 'printed' pagelines — the JSON the app's own
+/// `docToPagelines` port reads) still received the raw, un-expanded byte (planning #251,
+/// item 9: RNFOREST/RECYCLE/WETLAND landed a full modulus-8 stop short in the app because of
+/// exactly this). This function does the identical rule (same doc comment, ctrl-kd's own
+/// `_expand_bare_tabs_for_printed_layout` mirrors it too) at MODEL-BUILD time instead, on
+/// `Span`s, before a `PageLine` is ever constructed — so every consumer of the model
+/// (the PDF writer AND the layout JSON) sees the same, already-expanded text. Called ONLY
+/// from Printed-only pageline construction (`resolvePlainBody`'s `if printed` branch,
+/// `resolvePrintedBody`'s unconditional Printed-only body) — Modern's own flow never
+/// calls this and keeps seeing the bare byte, unchanged, matching planning #244's original
+/// Modern-untouched guarantee. Column-tracking matches `PDFWriter.swift`'s own former
+/// semantics exactly: a running count across the WHOLE physical line (every `spans` entry,
+/// in order, regardless of style — a font/colour change never consumes a column), reset to
+/// 0 for each call (one call = one physical line). A literal space (or WS5+ soft space,
+/// already collapsed to plain " " by decode) immediately preceding a bare tab shifts the
+/// modulus-8 stop by the length of that trailing run — planning #237 remainder, see
+/// `PDFWriter.swift`'s own doc comment (still there, unchanged) for the full probe table.
+private func expandBareTabsForPrintedLayout(_ spans: [Span]) -> [Span] {
+    guard spans.contains(where: { $0.text.contains("\t") }) else { return spans }
+    var col = 0
+    var spaceRun = 0
+    return spans.map { span in
+        guard span.text.contains("\t") else {
+            col += span.text.count
+            let trailing = span.text.reversed().prefix(while: { $0 == " " }).count
+            spaceRun = trailing == span.text.count ? spaceRun + trailing : trailing
+            return span
+        }
+        var out = ""
+        out.reserveCapacity(span.text.count)
+        for ch in span.text {
+            if ch == "\t" {
+                let base = col - spaceRun
+                let needed = modelTabModulus - (base % modelTabModulus)
+                out += String(repeating: " ", count: needed)
+                col = base + needed + spaceRun
+                spaceRun = 0
+            } else if ch == " " {
+                out.append(ch)
+                col += 1
+                spaceRun += 1
+            } else {
+                out.append(ch)
+                col += 1
+                spaceRun = 0
+            }
+        }
+        var newSpan = span
+        newSpan.text = out
+        return newSpan
+    }
+}
+
 /// IR -> pages of laid-out lines. Port of `_doc_to_pagelines` (pdf.py:57-112) for Modern
 /// mode; Printed mode is this project's own addition (job — period-authentic footnote
 /// layout), since Python's `pdf.py` never modeled WordStar's real page-bottom footnote
@@ -1787,6 +1849,11 @@ private func resolvePrintedBody(
             // AFTER the pix-substitution check above, which needs the raw, untouched
             // text to match its structural placeholder.
             if sentenceSpacing { outSpans = sentenceSpacingSpans(outSpans) }
+            // Planning #251 (2026-09-09): model-build-time bare-tab expansion, same
+            // point ctrl-kd's own `_body_stream_printed` sibling applies it (right
+            // before this function's own PageLine construction) — see
+            // `expandBareTabsForPrintedLayout`'s own doc comment above.
+            outSpans = expandBareTabsForPrintedLayout(outSpans)
             // A PageLine, not a bare list of spans, so the line's own `.lh` survives the
             // footnote paginator too — body lines keep their lead whether or not the
             // document has notes.
@@ -3761,6 +3828,11 @@ private func resolvePlainBody(
                 // on this physical line, matching ctrl-kd's own `_doc_to_pagelines`
                 // choke point exactly.
                 if sentenceSpacing { spans = sentenceSpacingSpans(spans) }
+                // Planning #251 (2026-09-09): model-build-time bare-tab expansion, same
+                // point ctrl-kd's own `_doc_to_pagelines` plain path applies it (right
+                // before this function's own PageLine construction) — see
+                // `expandBareTabsForPrintedLayout`'s own doc comment above.
+                spans = expandBareTabsForPrintedLayout(spans)
                 // Planning #238 (.oj on full justification, research/
                 // 2026-09-08_justification-rule.md, ctrl-kd aeb34ad): every line of an
                 // `align == .justify` block EXCEPT ITS OWN LAST is stretched to the

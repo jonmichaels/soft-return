@@ -1053,11 +1053,17 @@ private func lineOpsPrinted(
     kerning: Bool = true, justifyRightX: Double? = nil
 ) -> [[UInt8]] {
     var ops: [[UInt8]] = []
-    // Planning #244 (the round-trip gauntlet fix): expand any bare 0x09 tab byte HERE,
-    // at render time, not in `decodeSpans` — see `expandBareTabsForPrintedLayout`'s own
-    // doc comment. First transform on `segs`, ahead of even `ljSubstitute`, so the
-    // running column count matches `decodeSpans`'s own former semantics exactly: from
-    // the physical line's first character, before any drawing-time substitution.
+    // Planning #244 (the round-trip gauntlet fix) moved this expansion out of
+    // `decodeSpans` (parse time) into render time, here. Planning #251 (2026-09-09)
+    // moved it AGAIN, one step earlier still: body text now arrives already expanded —
+    // `PDFLayout.swift`'s own `resolvePlainBody`/`resolvePrintedBody` both call the
+    // model-layer `expandBareTabsForPrintedLayout(_ spans: [Span])` themselves when
+    // they build each PageLine's segments, so the MODEL carries the expansion
+    // (`emitLayout`'s 'printed' pagelines chief among the consumers that stopped
+    // seeing a raw 0x09 byte). The call below is now a no-op for that text (no '\t'
+    // left to find, the fast-path guard returns `segs` untouched) — kept here only in
+    // case a future caller of `lineOpsPrinted` ever bypasses the model layer; every
+    // current caller (`emitPDF`'s Printed page loop, off `docToPagelines`) does not.
     var segs = expandBareTabsForPrintedLayout(segs)
     // `colourMap` is non-empty exactly when the document declares driver LJ6DTP — the
     // same gate covers its character substitutions.
