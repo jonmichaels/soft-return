@@ -467,8 +467,14 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
     // valuable field: `detect` INFERS ws4-vs-ws5+ from byte statistics, and the file says
     // its release outright. 78 archive documents declare 7.0 and 3 declare 6.0. The
     // style-library pointer is what C1 proper needs.
-    let body: [UInt8] = [0x70] + bytes("LASERJET") + [0x00] + [0x00, 0x00]
-        + [0x34, 0x12] + [0x01, 0x00]
+    // Built from typed sub-expressions, not one long `+` chain: the compiler's own
+    // type checker times out on that shape once enough other array-literal-concatenation
+    // expressions share this file (seen on the macOS toolchain specifically, planning
+    // #227 follow-up CI run) -- breaking it up here removes the ambiguity, not the intent.
+    var body: [UInt8] = [0x70]
+    body += bytes("LASERJET")
+    body += [0x00, 0x00, 0x00]
+    body += [0x34, 0x12, 0x01, 0x00]
     let doc = parseWS(wsBlock(cmd: 0x00, content: body)
                       + bytes("Body text, with enough ordinary prose to detect.\r\n"))
     #expect(doc.wsHeader?.release == "7.0")
