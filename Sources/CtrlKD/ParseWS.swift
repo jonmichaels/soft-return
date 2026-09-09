@@ -736,6 +736,17 @@ public func parseWS(_ data: [UInt8]) -> Document {
             dotPositions.append(DotPosition(blockIndex: blocks.count,
                                             lineIndex: cur.lines.count,
                                             text: decodeCP437(cmd)))
+            // This physical line IS the ruler image for the bare `.RR` that
+            // swallowed it (see that entry's own citation) — apply its L/P/R
+            // pips exactly like the same-line form does (applyRulerMargins,
+            // Formatting2.swift), and close the block the same way a
+            // mid-paragraph `.lm`/`.pm`/`.rm` would (`blockFormat` covers
+            // all three). Port of ctrl-kd core.py's identical fix.
+            let rrBefore = fmt.blockFormat
+            applyRulerMargins(cmd.map { $0 & 0x7F }, &fmt)
+            if fmt.blockFormat != rrBefore {
+                closeBlock()
+            }
             continue
         }
 
@@ -989,6 +1000,27 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // block cannot hold both.
             let beforeFmt = fmt.blockFormat
             applyFormatDot(cmd, &fmt)
+            // #241 remainder: a same-line `.RR` ruler IMAGE (`.RR--!...R`)
+            // updates leftMargin/paraMargin/rightMargin exactly like an
+            // explicit `.lm`/`.pm`/`.rm` would — see `applyRulerMargins`'s
+            // own citation (Formatting2.swift). Applied here, RAW (`cmd`
+            // past the command letters, not `applyFormatDot`'s own `arg`),
+            // because `dotCommandNameAndArg`'s leading-space skip eats the
+            // spaces a real ruler uses to POSITION its pips (WSFORMAT.WS's
+            // own table rulers open with 20+ of them) — stripping those
+            // before reading pip columns would silently shift every pip
+            // left. The OTHER `.RR` form — a digit reference to a
+            // preformatted ruler (`.rr9`) — carries no image and must not
+            // reach it; a BARE `.rr` (nothing after it at all) is handled
+            // where its own swallowed next-line image is consumed, not
+            // here. Port of ctrl-kd core.py's identical fix.
+            if head2 == [0x52, 0x52] {
+                let rulerBody = Array(cmd.dropFirst(3))
+                let trimmedBody = rulerBody.drop { $0 == 0x20 || $0 == 0x09 }
+                if let first = trimmedBody.first, !(first >= 0x30 && first <= 0x39) {
+                    applyRulerMargins(rulerBody, &fmt)
+                }
+            }
             if fmt.blockFormat != beforeFmt {
                 closeBlock()
             }

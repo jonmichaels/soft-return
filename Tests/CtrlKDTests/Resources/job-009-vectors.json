@@ -188,14 +188,14 @@
    "input_hex": "2e72722d2d2d2d212d2d2d2d212d2d2d2d520d0a436f6cb120646174e10d0a436f6cb220646174e10d0a",
    "format": "rtf",
    "mode": "modern",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{Col1 data}\\line {Col2 data}\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\ri7344 \n\\sl-240\\slmult0 \n{Col1 data}\\line {Col2 data}\\par \n}\n"
   },
   {
    "name": "columnar_ruler/rtf/printed",
    "input_hex": "2e72722d2d2d2d212d2d2d2d212d2d2d2d520d0a436f6cb120646174e10d0a436f6cb220646174e10d0a",
    "format": "rtf",
    "mode": "printed",
-   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\sl-240\\slmult0 \n{Col1 data}\\line {Col2 data}\\par \n}\n"
+   "expected": "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}{\\f1 Courier New;}}\\paperw12240\\paperh15840\\margl1152\\margr1152\\margt720\\margb1920\n\\f1\\fs24 \n\\ri7344 \n\\sl-240\\slmult0 \n{Col1 data}\\line {Col2 data}\\par \n}\n"
   },
   {
    "name": "extended_char/html/modern",

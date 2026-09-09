@@ -214,6 +214,52 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     #expect(doc.columnar)
 }
 
+@Test func rrRulerPipsSetAndClearMargins() {
+    // Mirrors ctrl-kd's test_rr_ruler_pips_set_and_clear_margins (planning #241
+    // remainder). `.RR`'s own spec ("Ruler. Embeds a ruler line... The text
+    // following the .RR is the exact image of the ruler line... on the screen")
+    // means the embedded ruler is the COMPLETE margin picture from that point on,
+    // not a patch on top of whatever `.lm`/`.rm`/`.pm` set before it. Measured
+    // mechanism: WSFORMAT.WS sets `.pm11` once for a control-code table and never
+    // resets it before the next section's own bare `.RR--!...--------R` (no `P`
+    // pip) -- WS7's real capture prints that heading at the plain page margin (no
+    // hanging indent at all); this engine, before this fix, kept carrying the
+    // stale `.pm11` column across the ruler and indented both 72pt too far right.
+    var data = bytes(".RR L---P---R") + HARD
+    data += bytes("First line under the new ruler.") + HARD
+    data += bytes(".RR--!----!--------R") + HARD
+    data += bytes("Heading back at the plain margin.") + HARD
+    let doc = parseWS(data)
+    let paras = doc.blocks.filter { $0.kind == .para }
+    #expect(paras.count == 2)
+    #expect(paras[0].leftMargin == 1.0)
+    #expect(paras[0].paraMargin == 5.0)
+    #expect(paras[0].rightMargin == 9.0)
+    // The second ruler shows neither `L` nor `P` -- both clear, matching a
+    // document that never set `.lm`/`.pm` at all -- but DOES show `R`, so
+    // rightMargin is set fresh from its own pip, not left stale either.
+    #expect(paras[1].leftMargin == nil)
+    #expect(paras[1].paraMargin == nil)
+    #expect(paras[1].rightMargin == 16.0)
+}
+
+@Test func rrBareRulerNextLineAlsoClearsParaMargin() {
+    // Mirrors ctrl-kd's test_rr_bare_ruler_next_line_also_clears_para_margin. The
+    // OTHER `.RR` form -- a bare `.rr` on its own line, whose ruler IMAGE is the
+    // next physical line instead (wordstar-file-format.ws's own shape, planning
+    // #240) -- must apply the identical pip rule, not just the same-line form.
+    var data = bytes(".pm11") + HARD
+    data += bytes("Hanging entry first line.") + HARD
+    data += bytes(".RR") + HARD
+    data += bytes("--!----!--------R") + HARD
+    data += bytes("Heading back at the plain margin.") + HARD
+    let doc = parseWS(data)
+    let paras = doc.blocks.filter { $0.kind == .para }
+    #expect(paras.count == 2)
+    #expect(paras[0].paraMargin == 10.0)     // `.pm11` -> column 11 -> offset 10
+    #expect(paras[1].paraMargin == nil)      // cleared: the swallowed ruler image has no `P` pip
+}
+
 @Test func ws7FootnoteExtractionAndRef() {
     // Mirrors test_ws7_footnote_extraction_and_ref.
     let data = ws7Block(0x00) + bytes("Treaties were made.") +

@@ -200,6 +200,57 @@ private func trimmed(_ b: [UInt8]) -> [UInt8] {
     return Array(b[s..<e])
 }
 
+/// Planning #241 remainder (indent-state leak, sawyer/REF/WSFORMAT.WS) —
+/// port of ctrl-kd core.py's `_ruler_pips`/`_apply_ruler_margins`. WSFORMAT.
+/// WS's own `.RR` spec ("Ruler. Embeds a ruler line to be used for
+/// subsequent typing and alignment. The text following the .RR is the
+/// exact image of the ruler line... on the screen") means the embedded
+/// image is the COMPLETE current margin picture, not a patch applied on
+/// top of whatever was active before. `leftMargin`/`paraMargin`/
+/// `rightMargin` are each either the 0-based column of that pip's own
+/// `L`/`P`/`R` character in the ruler string, or nil (cleared, matching a
+/// document that never set the command at all) when the pip is absent —
+/// never "leave the prior value in force". Measured: WSFORMAT.WS sets
+/// `.pm11` once for its first control-code table (`.rr L------R`, no `P`
+/// pip — the accompanying explicit `.pm11` line sets paraMargin itself,
+/// immediately after, so clearing it first here is a no-op there), then
+/// never issues another `.pm`/`.RR` with a `P` pip before its next
+/// section heading's own bare `.RR--!...--------R` (still no `P`, and
+/// this time NOT followed by a `.pm` reset) — WS7's real capture prints
+/// that heading and its body paragraph at the plain page margin (no
+/// indent at all), while this engine, before this fix, kept carrying
+/// `.pm11`'s column forward across the ruler and indented both 72pt too
+/// far right. A digit straight after `.RR` (`.rr9`, `.rr0`) is WordStar's
+/// OTHER `.RR` form — a reference to a PREFORMATTED ruler stored in the
+/// user area, not an inline image — and carries no pip characters to
+/// read here; `rulerPips` is never called for that form, so state is
+/// left exactly as before, unevidenced either way. Dispatched from TWO
+/// sites in `ParseWS.swift` itself, both AFTER `applyFormatDot(cmd,
+/// &fmt)` runs so the shared `blockFormat` before/after diff (which
+/// already closes a block on any `.lm`/`.pm`/`.rm` change) sees this one
+/// too — never from inside `applyFormatDot`, whose own `arg` has already
+/// had `dotCommandNameAndArg`'s leading-space skip strip the ruler's OWN
+/// leading spaces (which position its first pip): the same-line form
+/// reads raw `cmd` past `.RR`, the bare form reads the swallowed next
+/// physical line, whichever call site actually has the real bytes.
+func rulerPips(_ ruler: [UInt8]) -> (left: Int?, para: Int?, right: Int?) {
+    let upper = ruler.map(asciiUpper)
+    func find(_ b: UInt8) -> Int? {
+        upper.firstIndex(of: b)
+    }
+    return (find(0x4C), find(0x50), find(0x52))     // 'L', 'P', 'R'
+}
+
+/// Set/clear `state.leftMargin`/`.paraMargin`/`.rightMargin` from one
+/// `.RR` ruler-line IMAGE — see `rulerPips`'s own citation for the
+/// clear-when-absent rule.
+func applyRulerMargins(_ ruler: [UInt8], _ state: inout FormatState) {
+    let (l, p, r) = rulerPips(ruler)
+    state.leftMargin = l.map(Double.init)
+    state.paraMargin = p.map(Double.init)
+    state.rightMargin = r.map(Double.init)
+}
+
 /// Update running formatting state from one dot-command line.
 func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
     guard var (name, arg) = dotCommandNameAndArg(cmd) else { return }
