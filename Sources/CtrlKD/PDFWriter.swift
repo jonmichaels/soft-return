@@ -1602,10 +1602,27 @@ func pageStream(
     // page's own top regardless of where the interval itself began. Port of Python's
     // `line_no_state`.
     var lineNoState: (interval: Int?, k: Int) = (nil, 0)
+    // planning #227 follow-up (2026-09-09, mirrored from ctrl-kd): `applyColumns`
+    // concatenates every column's own lines into ONE flat `pagelines` array (column
+    // 0's, then column 1's, ...; `PageLine.col` records which) -- this loop must
+    // therefore reset Y when `col` climbs, the same way it already resets per
+    // PHYSICAL page (the `y = ... - firstLead` line above). Never implemented: Y
+    // instead kept decrementing across every column in sequence, so column 1
+    // continued DOWN from wherever column 0 ended instead of restarting at the top.
+    // `prevCol` starts at the first line's own column (or `nil` on a non-columnar
+    // page, where it can never differ from any later line's `nil` either) so the
+    // FIRST line is never treated as a "new column" -- it already got its correct
+    // position from `y`'s initial assignment above.
+    var prevCol = pagelines.first?.col
     for (n, line) in pagelines.enumerated() {
         if n > 0, !prevOverprint {
-            y -= line.lead ?? lead
+            if let curCol = line.col, curCol != prevCol {
+                y = Double(pageHeight - top) - (line.lead ?? lead)
+            } else {
+                y -= line.lead ?? lead
+            }
         }
+        prevCol = line.col
         prevOverprint = line.overprint
         // register b31: this line's own `.po` override (already resolved to points --
         // `PageLine.left`, see its own doc comment), or the document default `left`
