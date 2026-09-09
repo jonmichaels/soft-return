@@ -121,6 +121,18 @@ private func explicitBreakReason(_ block: Block, anchoredDotText: [String]) -> I
             return .pageBreakOrigin(text)
         }
         return .pageBreakOrigin(".cp\(block.heading)")
+    case .colbreak:
+        // Planning #227: `.cb`, `.pa`'s columnar sibling.
+        if let text = anchoredDotText.last(where: { $0.uppercased().hasPrefix(".CB") }) {
+            return .pageBreakOrigin(text)
+        }
+        return .pageBreakOrigin(".cb")
+    case .condcolumn:
+        // Planning #227: `.cc n`, `.cp`'s columnar sibling.
+        if let text = anchoredDotText.last(where: { $0.uppercased().hasPrefix(".CC") }) {
+            return .pageBreakOrigin(text)
+        }
+        return .pageBreakOrigin(".cc\(block.heading)")
     case .para:
         preconditionFailure("explicitBreakReason called on a non-pagebreak block")
     }

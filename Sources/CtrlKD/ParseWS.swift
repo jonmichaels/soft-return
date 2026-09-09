@@ -48,6 +48,18 @@ private let dotPagebreak: Set<[UInt8]> = [Array("PA".utf8)]
 /// the break it was there to prevent.
 private let dotCondpage: [UInt8] = Array("CP".utf8)
 
+/// Planning #227 (columns-rule research, port of ctrl-kd core.py): `.cb`/`.cc` are the
+/// columnar siblings of `.pa`/`.cp` — `.cb` breaks to the next column (or the next page's
+/// own column 1, if the current column is a region's last) UNCONDITIONALLY; `.cc n` breaks
+/// only if fewer than n lines remain in the CURRENT column (WSFORMAT.TXT: "Like the .CP
+/// command, but works with columnar breaks instead"). `.cb` is undocumented in
+/// WSFORMAT.TXT's own `.C*` alphabetical list (it runs CC, CO, CP, CS, CV, CW — no CB) but
+/// is real and live: confirmed against sawyer/DEFAULT/PRINT.TST's real WS7 capture, which
+/// jumps to the next column immediately at a `.cb`, mid-column, well before that column's
+/// own vertical space ran out.
+private let dotColbreak: Set<[UInt8]> = [Array("CB".utf8)]
+private let dotCondcolumn: [UInt8] = Array("CC".utf8)
+
 /// `.ig` — the long-form comment syntax (`..` is the short form). Ruling 2026-08-06 M9.
 private let dotIgnore: [UInt8] = Array("IG".utf8)
 
@@ -821,6 +833,17 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // break.
                 closeBlock()
                 blocks.append(Block(kind: .condpage, heading: cpLines(cmd)))
+            } else if dotColbreak.contains(head2) {
+                // Planning #227: `.cb`, unconditional column break.
+                closeBlock()
+                blocks.append(Block(kind: .colbreak))
+            } else if head2 == dotCondcolumn {
+                // `.cc n` — a column break ONLY if fewer than n lines remain in the
+                // CURRENT column (WSFORMAT.TXT: "Like the .CP command, but works with
+                // columnar breaks instead"). Same strict-less-than test as `.cp`, scoped
+                // to one column's own remaining space instead of the page's.
+                closeBlock()
+                blocks.append(Block(kind: .condcolumn, heading: cpLines(cmd)))
             }
             if Array(cmd.dropFirst().prefix(1)).map(asciiLowercased) == [0x72],  // 'r'
                cmd.contains(0x21) {                                             // '!'

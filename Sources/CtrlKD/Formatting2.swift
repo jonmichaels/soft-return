@@ -294,8 +294,21 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
     case "CO":
         // `.co <n>, <gutter>` — the archive writes `.co2, 0.3"`, `.CO3,  .20"` and
         // `.co1` (one column = columns off). Stateful like the margins. Register C5.
+        //
+        // Planning #227 (columns-rule research, port of ctrl-kd core.py): a
+        // BARE `.co` with no number at all -- undocumented in WSFORMAT.TXT's
+        // own prose, but real and live (sawyer/DEFAULT/PRINT.TST,
+        // sawyer/PSPRINT.TST both use it to turn columns back off after a
+        // `.co3` section) -- means the same as the documented `.co1`: columns
+        // off. Previously this branch returned immediately when no number
+        // parsed, leaving `state.columns` at whatever a prior `.co N` set --
+        // a silent no-op that kept columns ON.
         let body = trimmed(arg)
-        guard let (n, _, numEnd) = parseDotNumberConsuming(body), n.isFinite else { return }
+        guard let (n, _, numEnd) = parseDotNumberConsuming(body), n.isFinite else {
+            state.columns = 1
+            state.columnGutter = nil
+            return
+        }
         state.columns = Swift.max(1, Int(n))
         // The gutter follows the count after separators that may be a comma OR
         // just spaces -- `.co2, 0.3"` and `.co 2  1.00"` are both real. Python:

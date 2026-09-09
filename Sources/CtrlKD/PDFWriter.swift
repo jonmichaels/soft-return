@@ -1349,9 +1349,10 @@ private func lineOpsPrinted(
             // indent) — split it into word/gap pieces (the same run-splitter the
             // proportional branch above uses) and stretch only the single-blank gaps.
             // See `lineOpsPrinted`'s own doc comment for the measured rule and its
-            // documented approximation (an even split across elastic gaps — WS7's own
-            // per-gap split is NOT perfectly flat, not reverse-engineered to the
-            // decipoint this pass).
+            // documented approximation (cumulative-floor Bresenham across elastic
+            // gaps, in whole decipoints — WS7's own per-gap split is NOT perfectly
+            // flat and not reverse-engineered to the decipoint this pass; see
+            // research/2026-09-08_justification-gap-model.md).
             let pitch = supSubSpanPitch(seg.entry, seg.styles, seg.family, seg.size)
                 ?? spanPitch(seg.entry, pt)
             if justifyEligible, let justifyRightX {
@@ -1375,7 +1376,22 @@ private func lineOpsPrinted(
                 let naturalTotal = neumaierSum(pieces.map { Double($0.count) * pitch })
                 let stretchTotal = justifyRightX - x - naturalTotal
                 if !elastic.isEmpty, stretchTotal > 0 {
-                    let base = stretchTotal / Double(elastic.count)
+                    // Cumulative-floor Bresenham (planning #238, research/
+                    // 2026-09-08_justification-gap-model.md), port of ctrl-kd's own
+                    // change: whole-decipoint integer arithmetic, not a flat float
+                    // split. `stretchDp[i]` sums to exactly `stretchTotalDp` by
+                    // construction (telescoping floor differences), so there is no
+                    // float accumulation order to get wrong and no compensated-sum
+                    // needed for THIS arithmetic (`neumaierSum` above stays — it
+                    // guards the separate `stretchTotal > 0` gate, not this split).
+                    let n = elastic.count
+                    // `roundHalfToEven`, not `Double.rounded()` — this Foundation-free
+                    // Linux build can't link libm's `round`/`floor` symbols (see
+                    // `Formatting.swift`'s own note); matches Python's `round()` tie-break.
+                    let stretchTotalDp = roundHalfToEven(stretchTotal * 10)
+                    let stretchDp: [Int] = (0..<n).map { i in
+                        ((i + 1) * stretchTotalDp) / n - (i * stretchTotalDp) / n
+                    }
                     let symbolBoldJ = seg.family == .symbol && seg.styles.contains(.bold)
                     let symbolItalicJ = seg.family == .symbol && seg.styles.contains(.italic)
                     var ulX0: Double? = nil
@@ -1387,7 +1403,7 @@ private func lineOpsPrinted(
                         var pw = Double(piece.count) * pitch
                         let isElasticGap = piece == " " && ei < elastic.count && elastic[ei] == pi
                         if isElasticGap {
-                            pw += base
+                            pw += Double(stretchDp[ei]) / 10.0
                             ei += 1
                         }
                         let pscale: Double?

@@ -796,6 +796,108 @@ public func coalesce(_ line: PageLine) -> PageLine {
     return out
 }
 
+/// Planning #227 (research/2026-09-08_columns-rule.md), port of ctrl-kd's own
+/// `_apply_columns`: regroup a finished, ordinary single-column `pages` list into real
+/// `.co n` newspaper-column pages -- a POST-PASS over pagination's own output, not a
+/// change to the pagination budget loop itself.
+///
+/// Why a post-pass works at all: a column is never vertically shorter than the page it's
+/// on (measured: every `.co`-bearing document in the corpus), so the ordinary
+/// single-column pagination loop, run unmodified, already produces exactly the right
+/// BREAK POINTS for a columnar region's content -- each "page" it closes is precisely one
+/// column's worth of material, because column height and page height are the same
+/// budget. `resolvePlainBody`/`resolvePrintedBody`'s own block loops guarantee (by
+/// forcing a break on every LEAVING `columns` state change, research §7) that a real page
+/// coming out of that loop is either wholly non-columnar or wholly one columnar region's
+/// own single N/gutter pair -- never a mix, EXCEPT for the one shape research §7 also
+/// documents: a non-columnar prefix (a title/ruler line) sharing a page with the START of
+/// its `.co` region, no break between them (SYMBOL.CHT/WINGDING.CHT/the FONTCRIB family).
+/// That page is classified by the FIRST columnar block referenced ANYWHERE on it, not
+/// just its first line's -- the prefix lines simply stay wherever the ordinary pass
+/// already put them, becoming column 0's own leading lines unshifted (column 0's own x IS
+/// the page's ordinary left origin).
+///
+/// Column geometry (research §3): a column's own width is the block's `.rm` minus `.po`
+/// -- the SAME number that already defines an ordinary single-column line's own right
+/// edge, NOT the page width divided by n. Column i's left edge is therefore
+/// `baseLeft + i * (columnWidthPt + gutterPt)`, where `baseLeft` is whatever this line's
+/// own left origin already resolved to.
+///
+/// No balancing (research §5): a trailing group of fewer than n columnar pages is merged
+/// into one physical page using only the columns actually present -- the remaining column
+/// slots are simply never drawn into.
+func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
+    if pages.isEmpty { return pages }
+    let size = printedSize(doc)
+    var out: [Page] = []
+    var i = 0
+    let nPages = pages.count
+    while i < nPages {
+        let pg = pages[i]
+        // A page's own columnar-ness is decided by the FIRST columnar block referenced
+        // anywhere on it (see this function's own doc comment for why NOT just the
+        // first line's).
+        let firstColBI = pg.lines.first { pl in
+            guard let bi = pl.bi, bi >= 0, bi < doc.blocks.count else { return false }
+            return (doc.blocks[bi].columns ?? 1) > 1
+        }?.bi
+        let cols = firstColBI.map { doc.blocks[$0].columns ?? 1 } ?? 1
+        if pg.isEmpty || cols <= 1 {
+            out.append(pg)
+            i += 1
+            continue
+        }
+        let blk = doc.blocks[firstColBI!]
+        let gutterCols = blk.columnGutter ?? 0.0
+        let rmCols = blk.rightMargin ?? 65.0
+        let gutterPt = gutterCols * pdfPtPerCol
+        let rmPt = rmCols * pdfPtPerCol
+        var merged = Page([])
+        // Group metadata (headers/footers/margins/geometry) comes from the FIRST
+        // sub-page in the group -- "page just started" state, exactly what an ordinary
+        // page's own metadata already means.
+        merged.headers = pg.headers
+        merged.footers = pg.footers
+        merged.mtLines = pg.mtLines
+        merged.mbLines = pg.mbLines
+        merged.plLines = pg.plLines
+        merged.hmLines = pg.hmLines
+        merged.fmLines = pg.fmLines
+        merged.poCols = pg.poCols
+        merged.explicitBreak = pg.explicitBreak
+        merged.explicitBreakBI = pg.explicitBreakBI
+        let groupEnd = Swift.min(i + cols, nPages)
+        // A later sub-page belonging to a DIFFERENT columns/gutter pair (a new `.co`
+        // restatement) or a non-columnar page ends the group early -- the forced break
+        // on state-change (research §7) means this should only ever happen exactly at
+        // `i + cols`, never inside it, but the check is cheap insurance.
+        var colIdx = 0
+        for j in i..<groupEnd {
+            let sub = pages[j]
+            let subColBI = sub.lines.first { pl in
+                guard let bi = pl.bi, bi >= 0, bi < doc.blocks.count else { return false }
+                return (doc.blocks[bi].columns ?? 1) > 1
+            }?.bi
+            let subCols = subColBI.map { doc.blocks[$0].columns ?? 1 } ?? 1
+            let subGutter = subColBI.map { doc.blocks[$0].columnGutter ?? 0.0 } ?? 0.0
+            if subCols != cols || subGutter != gutterCols { break }
+            for var pl in sub.lines {
+                let baseLeft = pl.left ?? printedLeft(doc, size: size)
+                // `rmPt` is column 0's own right edge, measured from the SAME
+                // page-left origin `baseLeft` is -- so `rmPt - baseLeft` is exactly
+                // one column's own width (docstring).
+                let columnWidthPt = rmPt - baseLeft
+                pl.left = baseLeft + Double(colIdx) * (columnWidthPt + gutterPt)
+                merged.lines.append(pl)
+            }
+            colIdx += 1
+        }
+        out.append(merged)
+        i += colIdx > 0 ? colIdx : 1
+    }
+    return out
+}
+
 /// IR -> pages of laid-out lines. Port of `_doc_to_pagelines` (pdf.py:57-112) for Modern
 /// mode; Printed mode is this project's own addition (job — period-authentic footnote
 /// layout), since Python's `pdf.py` never modeled WordStar's real page-bottom footnote
@@ -830,18 +932,20 @@ public func docToPagelines(
             // pages but never strips a page's own leading/trailing blank lines on
             // this branch, so a notes-path page ending in an authorial blank keeps
             // it. The blank paints nothing, so PDF ink is identical either way.
-            return finalizePages(layoutPrintedPages(doc, pixResults: pixResults,
-                                                    pictures: pictures,
-                                                    sentenceSpacing: sentenceSpacing),
-                                 printed: true, isPrintStream: isPrintStream,
-                                 stripBlanks: false,
-                                 fallbackHeaders: doc.headers, fallbackFooters: doc.footers)
-        }
-        return finalizePages(layoutPrintedPagesPlain(doc, pixResults: pixResults,
-                                                      pictures: pictures,
-                                                      sentenceSpacing: sentenceSpacing),
+            return applyColumns(doc,
+                finalizePages(layoutPrintedPages(doc, pixResults: pixResults,
+                                                 pictures: pictures,
+                                                 sentenceSpacing: sentenceSpacing),
                              printed: true, isPrintStream: isPrintStream,
-                             fallbackHeaders: doc.headers, fallbackFooters: doc.footers)
+                             stripBlanks: false,
+                             fallbackHeaders: doc.headers, fallbackFooters: doc.footers))
+        }
+        return applyColumns(doc,
+            finalizePages(layoutPrintedPagesPlain(doc, pixResults: pixResults,
+                                                  pictures: pictures,
+                                                  sentenceSpacing: sentenceSpacing),
+                         printed: true, isPrintStream: isPrintStream,
+                         fallbackHeaders: doc.headers, fallbackFooters: doc.footers))
     }
     // Modern PDF's own real pipeline is `modernStreams` (PDFModernLayout.swift), which
     // embeds since round 22; this legacy Modern layout is not an emitter path for it,
@@ -1339,10 +1443,29 @@ private func resolvePrintedBody(
     let fontLeadBase = fontLeadOk ? Double(printedSize(doc)) : 0.0
     var cursor = 0
     var items: [PrintedBodyItem] = []
-
+    // Planning #227: same region-boundary logic as `resolvePlainBody` -- see its own
+    // comment. `.cb`/`.cc` themselves are deliberately NOT given a sentinel here,
+    // matching ctrl-kd's own `_body_stream_printed`: that function never handled `.cp`
+    // conditional breaks either (a pre-existing gap, not a new one) -- this loop, unlike
+    // that one, already threads `.cp`/`.condpage` through as a pre-existing capability
+    // (predates this pass), so giving `.cc`/`.condcolumn` the SAME sentinel here would
+    // make `.cc` WORK on this one engine and stay inert on ctrl-kd, a real cross-engine
+    // divergence for exactly this corpus document (found live testing this port:
+    // sawyer/DEFAULT/PRINT.TST's own `.cc 19` shifted its "Paragraph Indentation"
+    // section into column 2 here while ctrl-kd left it in column 1, `AnswerKeyParityTests`
+    // divergence). `.colbreak`/`.condcolumn` fall through as ordinary no-lines blocks,
+    // same as an unhandled `.cp` already did before this port existed. Only
+    // sawyer/DEFAULT/PRINT.TST (the one `.co`-bearing corpus document with placeable
+    // notes) is affected; named in the columns-rule research note as an open scope gap.
+    var prevCols = 1
     for (bi, block) in doc.blocks.enumerated() {
         // An explicit `.pa` is honored verbatim in a facsimile. WordStar's own 0x0B
         // end-of-page marks are NOT breaks -- see `Line.softpage`.
+        if block.kind == .pagebreak, prevCols > 1 {
+            // Planning #227 (corrected, see `resolvePlainBody`'s identical gate): a
+            // bare `.pa` inside an active `.co n>1` region is absorbed.
+            continue
+        }
         if block.kind == .pagebreak {
             items.append(.pageBreak)
             continue
@@ -1350,6 +1473,15 @@ private func resolvePrintedBody(
         if block.kind == .condpage {
             items.append(.condPage(max(1, block.heading)))
             continue
+        }
+        if block.kind == .para {
+            let curCols = block.columns ?? 1
+            var lastIsBreak = false
+            if case .pageBreak? = items.last { lastIsBreak = true }
+            if prevCols > 1, curCols != prevCols, !items.isEmpty, !lastIsBreak {
+                items.append(.pageBreak)
+            }
+            prevCols = curCols
         }
         if block.origin == .fi {
             // #241: `.fi` (file insert) on a target this engine cannot resolve
@@ -3259,6 +3391,13 @@ private func resolvePlainBody(
     let lsConfirmed = ws4Spacing && doc.page?.lsSource == .file && (doc.page?.ls ?? 1) > 1
     let spacingMap = ws4Spacing ? ws4SpacingBlankIndices(doc, lsConfirmed: lsConfirmed) : [:]
     var items: [PlainBodyItem] = []
+    // Planning #227 (columns-rule research §7, corrected): only LEAVING a `.co n>1`
+    // region forces a page break -- confirmed against sawyer/DEFAULT/PRINT.TST's own
+    // `.co` off transition. ENTERING one does NOT: sawyer/REF/SYMBOL.CHT's own title
+    // line sits on the SAME page as its chart's columnar content in the real WS7
+    // capture (1 page total). `prevCols` tracks the columns state of the most recently
+    // processed REAL (`.para`) block; sentinel blocks never change it.
+    var prevCols = 1
     for (bi, block) in doc.blocks.enumerated() {
         // Finding 1: see `ws4Spacing`'s own comment above -- `spacingMap` is the
         // literal empty dictionary for every non-WS4 document, so this lookup always
@@ -3267,13 +3406,46 @@ private func resolvePlainBody(
         for (kind, line, text) in hfByBlock[bi] ?? [] {
             items.append(.hf(kind: kind, line: line, text: text))
         }
-        if block.kind == .pagebreak {
+        if block.kind == .pagebreak && prevCols > 1 {
+            // Planning #227 (corrected): a bare `.pa` occurring INSIDE an active
+            // `.co n>1` region is ABSORBED, not honoured. Measured against
+            // sawyer/REF/WINGDING.CHT's own real WS7 capture: its source carries
+            // `.pa` markers the author placed between chart-entry groups (a manual
+            // column-simulation convention predating, or kept alongside, the real
+            // `.co5` that now governs the same content) -- honouring them fragmented
+            // one real ~47-line column into a 44-line page plus an orphaned 3-line
+            // page, inflating WINGDING.CHT to 2 engine pages against WS7's real 1.
+            // Columns fill by height alone once `.co n>1` is active (research §4);
+            // only `.cb` forces an early break inside one (handled below,
+            // unconditionally, regardless of this gate).
+            continue
+        }
+        if block.kind == .pagebreak || block.kind == .colbreak {
+            // Planning #227: `.cb` (unconditional column break) maps onto the SAME
+            // forced-break sentinel `.pa` uses OUTSIDE a columnar region (or always,
+            // for `.cb` itself -- it never gets the absorption above). Inside an
+            // active `.co n>1` region, the column-grouping post-pass (`applyColumns`)
+            // turns every Nth forced break into a real page break and the others into
+            // a column advance -- exactly what a column break means.
             items.append(.pageBreak)
             continue
         }
-        if block.kind == .condpage {
+        if block.kind == .condpage || block.kind == .condcolumn {
+            // `.cc n` (planning #227) shares `.cp`'s own sentinel for the identical
+            // reason `.cb` shares `.pa`'s above: "room remaining in the current
+            // column" and "room remaining in the current page" are the SAME question
+            // whenever a column's height equals a page's (always, in this engine).
             items.append(.condPage(max(1, block.heading)))
             continue
+        }
+        if block.kind == .para {
+            let curCols = block.columns ?? 1
+            var lastIsBreak = false
+            if case .pageBreak? = items.last { lastIsBreak = true }
+            if prevCols > 1, curCols != prevCols, !items.isEmpty, !lastIsBreak {
+                items.append(.pageBreak)
+            }
+            prevCols = curCols
         }
         if block.origin == .fi {
             // #241: see `resolvePrintedBody`'s own identical check for the

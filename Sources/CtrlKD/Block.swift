@@ -19,6 +19,11 @@ public enum BlockKind: String, Hashable, Sendable {
     /// remain on the page, which only pagination knows), so the block carries n in
     /// `heading` and the page-filling loop applies the rule.
     case condpage
+    /// Planning #227: `.cb` — an UNCONDITIONAL column break, `.pa`'s columnar sibling.
+    case colbreak
+    /// Planning #227: `.cc n` — a CONDITIONAL column break, `.cp`'s columnar sibling.
+    /// Same shape as `.condpage`: n rides in `heading`, the pagination loop decides.
+    case condcolumn
 }
 
 /// Horizontal alignment of a block's lines. WordStar's default is `.left`, which every
