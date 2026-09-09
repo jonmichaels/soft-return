@@ -1304,6 +1304,20 @@ private func jsonHFDict(_ dict: [Int: String], order: [Int]) -> LayoutJSONValue 
 /// a WordStar file without linking an engine, and both engines' layout is comparable as
 /// data. Format version bumps only on breaking shape changes. Port of
 /// `layout.emit_layout`.
+///
+/// version 2 (planning #227 follow-up, 2026-09-09): each printed line MAY now carry
+/// `left` (its own resolved left-edge origin in points) and `col` (its 0-based column
+/// index inside an active `.co n>1` region) — the same `PageLine.left`/`PageLine.col`
+/// `applyColumns` already resolves for the PDF writer, now surfaced here too. Each
+/// printed PAGE MAY gain `columns`/`column_gutter_pt`/`column_width_pt` — the shared
+/// geometry every line's own `col` on that page resolves against. Both are OMITTED, not
+/// null, when this line/page has no opinion (the document's own default applies) — a
+/// document with no `.po`/`.poe`/`.poo` override and no `.co n>1` region anywhere emits
+/// byte-identical JSON to version 1. `col` is the field a consumer MUST use to decide
+/// "this line starts a new column, reset the vertical cursor to the page top" — an
+/// ordinary `left` change (a mid-document `.po`/`.poe`/`.poo` override) is NOT that
+/// signal and must not reset the flow; only a `col` change is. Old fields (`segments`,
+/// `soft`, `overprint`, `lead`) are unchanged; this is purely additive.
 @Sendable
 public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                        options: EmitOptions = EmitOptions()) -> String {
@@ -1325,7 +1339,7 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
     for page in docToPagelines(doc, printed: true) {
         var lines: [LayoutJSONValue] = []
         for pl in page {
-            lines.append(.object([
+            var fields: [(String, LayoutJSONValue)] = [
                 ("segments", .array(pl.spans.map { span in
                     .object([
                         ("text", .string(span.text)),
@@ -1341,7 +1355,16 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                 ("soft", .bool(pl.soft)),
                 ("overprint", .bool(pl.overprint)),
                 ("lead", pl.lead.map { LayoutJSONValue.double($0) } ?? .null),
-            ]))
+            ]
+            // `left`/`col` (version 2, planning #227 follow-up): present ONLY when this
+            // line actually carries an opinion -- omitted, not null, when both are the
+            // document's own default -- see `emitLayout`'s own doc comment and ctrl-kd's
+            // identical `left`/`col` gate in `layout.py`'s `emit_layout` for why: a
+            // document with no `.po`/`.poe`/`.poo` override and no `.co n>1` region
+            // anywhere emits byte-identical JSON to version 1.
+            if let left = pl.left { fields.append(("left", .double(left))) }
+            if let col = pl.col { fields.append(("col", .int(col))) }
+            lines.append(.object(fields))
         }
         // b56040b (PDFLayout: content-free documents keep their own header/footer)
         // made `finalizePages`'s `pages.isEmpty` fallback synthesize a REAL Page whose
@@ -1359,19 +1382,30 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         // ctrl-kd's, while the PDF driver keeps using the real fallback headers/footers
         // untouched.
         let blankHF = notesPath || page.isEmpty
-        printedPages.append(.object([
+        var pageFields: [(String, LayoutJSONValue)] = [
             ("lines", .array(lines)),
             ("headers", blankHF ? .object([]) : jsonHFDict(page.headers,
                                                              order: headerOrder)),
             ("footers", blankHF ? .object([]) : jsonHFDict(page.footers,
                                                              order: footerOrder)),
-        ]))
+        ]
+        // `columns`/`column_gutter_pt`/`column_width_pt` (version 2): same
+        // omit-unless-set convention as `left`/`col` above -- present only on a page
+        // `applyColumns` actually merged from a `.co n>1` group.
+        if let columns = page.columns {
+            pageFields.append(("columns", .int(columns)))
+            pageFields.append(("column_gutter_pt",
+                               page.columnGutterPt.map { LayoutJSONValue.double($0) } ?? .null))
+            pageFields.append(("column_width_pt",
+                               page.columnWidthPt.map { LayoutJSONValue.double($0) } ?? .null))
+        }
+        printedPages.append(.object(pageFields))
     }
 
     let flow = modernSemanticFlow(doc, notes: options.notes, noteRefs: options.noteRefs)
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
-        ("version", .int(1)),
+        ("version", .int(2)),
         ("meta", jsonMeta(doc)),
         ("page", jsonPage(doc.page)),
         ("fonts", .array(doc.fonts.map(jsonFont))),

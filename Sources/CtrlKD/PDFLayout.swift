@@ -194,6 +194,18 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     /// document that combines them.
     public var parityLeft: ParityLeft?
 
+    /// `col` (planning #227 follow-up, 2026-09-09): this line's own 0-based column index
+    /// within an active `.co n>1` region, or `nil` for every ordinary (non-columnar) line
+    /// -- same "furniture"/"document default" convention as `left`/`bi`. Set ONLY by
+    /// `applyColumns`, at the same site that already resolves this line's own `left` for
+    /// its column -- `left` alone cannot tell a consumer THIS IS A NEW COLUMN, RESET Y
+    /// apart from an ordinary mid-document `.po`/`.poe`/`.poo` left-edge change (which
+    /// must NOT reset the vertical flow); `col` is the unambiguous signal `emitLayout`
+    /// and Soft Return.app's Native view both need for that distinction. A page's own
+    /// column COUNT/geometry lives on `Page` (`columns`/`columnGutterPt`/`columnWidthPt`)
+    /// rather than repeated on every line. Port of Python's `PageLine.col`.
+    public var col: Int?
+
     public init() {
         spans = []
         lead = nil
@@ -208,13 +220,14 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         roll = nil
         justifyRightX = nil
         parityLeft = nil
+        col = nil
     }
 
     public init(_ spans: [Span], soft: Bool = false, lead: Double? = nil,
                 overprint: Bool = false, fi: Double? = nil, bi: Int? = nil,
                 image: ImageRef? = nil, ws4Spacing: Bool = false, kerning: Bool = true,
                 left: Double? = nil, roll: Double? = nil, justifyRightX: Double? = nil,
-                parityLeft: ParityLeft? = nil) {
+                parityLeft: ParityLeft? = nil, col: Int? = nil) {
         self.spans = spans
         self.soft = soft
         self.lead = lead
@@ -228,6 +241,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         self.roll = roll
         self.justifyRightX = justifyRightX
         self.parityLeft = parityLeft
+        self.col = col
     }
 
     public init(arrayLiteral elements: Span...) {
@@ -645,6 +659,19 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     /// `nil`) for every ordinary page.
     public var explicitBreak: Bool
     public var explicitBreakBI: Int?
+    /// `columns`/`columnGutterPt`/`columnWidthPt` (planning #227 follow-up, 2026-09-09):
+    /// this page's own `.co n` geometry, set ONLY by `applyColumns` on a page it actually
+    /// merged from a columnar group -- `nil`/`nil`/`nil` for every ordinary page, the same
+    /// "no opinion" convention `poCols` etc. already use. One page-level record rather
+    /// than repeating gutter/width on every `PageLine` (`PageLine.col` carries the
+    /// per-line column INDEX; this is the shared geometry every index on this page
+    /// resolves against). `columnWidthPt` is one column's own width -- the block's `.rm`
+    /// minus `.po`, exactly as `applyColumns`'s own doc comment derives it, NOT the page
+    /// width divided by n. Port of Python's `Page.columns`/`column_gutter_pt`/
+    /// `column_width_pt`.
+    public var columns: Int?
+    public var columnGutterPt: Double?
+    public var columnWidthPt: Double?
 
     public init() {
         lines = []
@@ -659,13 +686,18 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         poParity = false
         explicitBreak = false
         explicitBreakBI = nil
+        columns = nil
+        columnGutterPt = nil
+        columnWidthPt = nil
     }
 
     public init(_ lines: [PageLine], headers: [Int: String] = [:], footers: [Int: String] = [:],
                mtLines: Double? = nil, mbLines: Double? = nil, plLines: Double? = nil,
                hmLines: Double? = nil, fmLines: Double? = nil, poCols: Double? = nil,
                poParity: Bool = false,
-               explicitBreak: Bool = false, explicitBreakBI: Int? = nil) {
+               explicitBreak: Bool = false, explicitBreakBI: Int? = nil,
+               columns: Int? = nil, columnGutterPt: Double? = nil,
+               columnWidthPt: Double? = nil) {
         self.lines = lines
         self.headers = headers
         self.footers = footers
@@ -678,6 +710,9 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.poParity = poParity
         self.explicitBreak = explicitBreak
         self.explicitBreakBI = explicitBreakBI
+        self.columns = columns
+        self.columnGutterPt = columnGutterPt
+        self.columnWidthPt = columnWidthPt
     }
 
     public init(arrayLiteral elements: PageLine...) {
@@ -881,6 +916,16 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
         merged.poParity = pg.poParity
         merged.explicitBreak = pg.explicitBreak
         merged.explicitBreakBI = pg.explicitBreakBI
+        // planning #227 follow-up (2026-09-09): this page's own column geometry,
+        // recorded once here rather than re-derived per line by every consumer --
+        // `emitLayout` and Soft Return.app's Native view both need it to draw column
+        // boundaries/reset the vertical flow at each column change (see `PageLine.col`'s
+        // own doc comment). `columnWidthPt` is captured from the FIRST real line below
+        // (whichever column it's in -- the formula is the same for all of them), not
+        // re-derived from `printedLeft` here, so it agrees exactly with the per-line
+        // `left` values this same loop sets.
+        merged.columns = cols
+        merged.columnGutterPt = gutterPt
         let groupEnd = Swift.min(i + cols, nPages)
         // A later sub-page belonging to a DIFFERENT columns/gutter pair (a new `.co`
         // restatement) or a non-columnar page ends the group early -- the forced break
@@ -902,7 +947,14 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
                 // page-left origin `baseLeft` is -- so `rmPt - baseLeft` is exactly
                 // one column's own width (docstring).
                 let columnWidthPt = rmPt - baseLeft
+                if merged.columnWidthPt == nil { merged.columnWidthPt = columnWidthPt }
                 pl.left = baseLeft + Double(colIdx) * (columnWidthPt + gutterPt)
+                // planning #227 follow-up: the unambiguous "which column, RESET Y"
+                // signal -- see `PageLine.col`'s own doc comment. Every real line this
+                // loop touches belongs to a column (0 for the page's own non-columnar
+                // prefix lines too, per this function's own doc comment: column 0's x
+                // IS the page's ordinary left origin).
+                pl.col = colIdx
                 merged.lines.append(pl)
             }
             colIdx += 1

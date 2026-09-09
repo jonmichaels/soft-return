@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import CtrlKD
 
@@ -334,6 +335,65 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
     let html = emitHTML(doc, mode: .modern)
     #expect(html.contains("column-count:2"))
     #expect(html.contains("column-gap:0.30in"))
+}
+
+@Test func printedPagelinesCarryColumnGeometryAndOverflowToARealPage() {
+    // Planning #227 follow-up (2026-09-09): `applyColumns`'s own column placement was
+    // real in the PDF bytes but invisible to every OTHER consumer of `docToPagelines` --
+    // this is the regression test for the fix, a synthetic 2-column document sized to
+    // overflow one physical page. `printedCap` for a silent (default Letter/margins)
+    // document is 55 lines/page (port of ctrl-kd's `_printed_cap`), so 130 one-line
+    // `.co2` paragraphs need 130/2 = 65 lines per column, more than one page's own
+    // 55-line column can hold: WordStar fills column 1 top-to-bottom, then column 2, so
+    // overflow opens page 2 (110 lines -- 55+55 -- fit on page 1; the remaining 20 open
+    // page 2, starting fresh at column 0 -- "no balancing", matching ctrl-kd's own
+    // identical Python regression test and `applyColumns`'s own doc comment).
+    let body = String(repeating: "Body line here now.\r\n", count: 130)
+    let doc = parseWS(bytes(".co2, 0.3\"\r\n" + body +
+                            ".co1\r\nBack to one column now, past the columns.\r\n"))
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages.count == 3)
+    let page1 = pages[0], page2 = pages[1], page3 = pages[2]
+    #expect(page1.lines.count == 110 && page2.lines.count == 20 && page3.lines.count == 1)
+    #expect(page1.lines.map { $0.col } == Array(repeating: 0, count: 55) +
+                                          Array(repeating: 1, count: 55))
+    let col0Lefts = Set(page1.lines.filter { $0.col == 0 }.compactMap { $0.left })
+    let col1Lefts = Set(page1.lines.filter { $0.col == 1 }.compactMap { $0.left })
+    #expect(col0Lefts.count == 1 && col1Lefts.count == 1)
+    #expect(col0Lefts != col1Lefts)
+    let left0 = col0Lefts.first!, left1 = col1Lefts.first!
+    #expect(left1 - left0 == page1.columnGutterPt! + page1.columnWidthPt!)
+    #expect(page1.columns == 2)
+    // the OVERFLOW page: both of page 1's columns filled completely, so the remaining
+    // 20 lines open a NEW physical page and start filling IT from column 0 again.
+    #expect(Set(page2.lines.map { $0.col }) == [0])
+    #expect(Set(page2.lines.compactMap { $0.left }) == col0Lefts)
+    #expect(page2.columns == 2)
+    // the page AFTER `.co1` is ordinary, single-column -- no column opinion.
+    #expect(page3.lines[0].col == nil && page3.columns == nil)
+
+    // The SAME geometry, end to end, through the public `layout` JSON a renderer in any
+    // language reads (planning #227's own bug report: the app's Native view was drawing
+    // all of page 1 down ONE column because this JSON never surfaced `left`/`col` at
+    // all).
+    let data = Array(emitLayout(doc).utf8)
+    let json = try! JSONSerialization.jsonObject(with: Data(data)) as! [String: Any]
+    #expect(json["version"] as? Int == 2)
+    let jpages = (json["printed"] as! [String: Any])["pages"] as! [[String: Any]]
+    #expect(jpages.count == 3)
+    let jp1 = jpages[0]
+    #expect(jp1["columns"] as? Int == 2)
+    #expect(jp1["column_gutter_pt"] as? Double == page1.columnGutterPt!)
+    #expect(jp1["column_width_pt"] as? Double == page1.columnWidthPt!)
+    let jlines1 = jp1["lines"] as! [[String: Any]]
+    let jcols = jlines1.map { $0["col"] as? Int }
+    #expect(jcols == Array(repeating: 0, count: 55) + Array(repeating: 1, count: 55))
+    let jlefts = Set(jlines1.compactMap { $0["left"] as? Double })
+    #expect(jlefts == col0Lefts.union(col1Lefts))
+    let jp3 = jpages[2]
+    #expect(jp3["columns"] == nil)
+    let jlines3 = jp3["lines"] as! [[String: Any]]
+    #expect(jlines3[0]["col"] == nil)
 }
 
 @Test func columnarBlockParagraphGetsFullAssemblyIndentAndVerseTreatment() {
