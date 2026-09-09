@@ -990,24 +990,52 @@ private let tabModulus = 8
 /// each call (one call = one physical line, since Printed mode renders physical lines
 /// verbatim, never rewrapped). Segments with no tab byte are returned unchanged — most
 /// printed lines never carry one, so this is a no-op scan for them, not an allocation.
+///
+/// Planning #237 remainder (probed 2026-09-09, `research/2026-09-09_space-tab-lattice-
+/// shift.md`, ctrl-kd `pdf._expand_bare_tabs_for_printed_layout`'s own updated doc
+/// comment carries the full probe table): a literal space (or a WS5+ soft space, 0xA0 —
+/// already collapsed to plain " " by decode) immediately preceding a bare 0x09 does NOT
+/// just occupy its own column like any other character before the tab. WS7's LaserJet
+/// driver computes the tab's modulus-8 stop from the column BEFORE that trailing run of
+/// space(s) — as if it had not yet flushed them to its own column tracker — then adds
+/// the run's length back on top of that stop. Eight probe documents printed through
+/// real WS7 confirm this exactly, including a shape the corpus had never exercised
+/// before (a trailing space run that itself lands EXACTLY on a modulus-8 stop): 7
+/// characters then one space (column 8, already on a stop) lands the next word at
+/// column 9, not the old same-column rule's on-stop-advances-a-full-8 answer of 16.
+/// `spaceRun` tracks the length of the CONSECUTIVE run of literal space characters
+/// immediately preceding the current position, across `segs` entries; on a bare tab,
+/// the modulus lands on `col - spaceRun`, falling back to the plain `col` when there is
+/// no preceding space run (`spaceRun == 0`) — the ORIGINAL rule, unchanged for every tab
+/// not preceded by a space.
 private func expandBareTabsForPrintedLayout(_ segs: [LineSegment]) -> [LineSegment] {
     guard segs.contains(where: { $0.text.contains("\t") }) else { return segs }
     var col = 0
+    var spaceRun = 0
     return segs.map { seg in
         guard seg.text.contains("\t") else {
             col += seg.text.count
+            let trailing = seg.text.reversed().prefix(while: { $0 == " " }).count
+            spaceRun = trailing == seg.text.count ? spaceRun + trailing : trailing
             return seg
         }
         var out = ""
         out.reserveCapacity(seg.text.count)
         for ch in seg.text {
             if ch == "\t" {
-                let needed = tabModulus - (col % tabModulus)
+                let base = col - spaceRun
+                let needed = tabModulus - (base % tabModulus)
                 out += String(repeating: " ", count: needed)
-                col += needed
+                col = base + needed + spaceRun
+                spaceRun = 0
+            } else if ch == " " {
+                out.append(ch)
+                col += 1
+                spaceRun += 1
             } else {
                 out.append(ch)
                 col += 1
+                spaceRun = 0
             }
         }
         var newSeg = seg

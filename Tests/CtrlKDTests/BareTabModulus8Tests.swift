@@ -132,6 +132,56 @@ private func wordX(_ pdf: [UInt8], _ word: String) -> Double? {
     #expect(out.contains("\t"), "\(out)")
 }
 
+@Test func bareTabPrecededByASingleSpaceLandsOneColumnFurther() throws {
+    // Planning #237 remainder (probed 2026-09-09): a literal space immediately before
+    // the tab shifts the modulus-8 stop by the length of that trailing space run,
+    // confirmed against real WS7 print output (8 probe docs, `research/2026-09-09_
+    // space-tab-lattice-shift.md`). 7 characters, the last one a space ("ABCDEF ") --
+    // WITHOUT the space quirk this would land on column 8, same as the 7-non-space-char
+    // case; WITH it, the driver computes the stop from column 6 (-> 8) and adds the
+    // 1-column space run back on top, landing on 9.
+    let pdf = printedPDF(bytes("ABCDEF \tWord.") + HARD)
+    #expect(drawnLine(pdf, containing: "Word.") == "ABCDEF " + String(repeating: " ", count: 2) + "Word.")
+}
+
+@Test func bareTabPrecededByTwoSpacesAddsTheWholeRunBack() throws {
+    // 5 characters + 2 trailing spaces (column 7): the stop is computed from column 5
+    // (-> 8) and the FULL 2-space run is added back, landing on column 10 -- not 9,
+    // ruling out a flat "+1" in favour of "+space run length".
+    let pdf = printedPDF(bytes("ABCDE  \tWord.") + HARD)
+    #expect(drawnLine(pdf, containing: "Word.") == "ABCDE  " + String(repeating: " ", count: 3) + "Word.")
+}
+
+@Test func bareTabPrecededBySpaceExactlyOnAStopStillShifts() throws {
+    // The shape the corpus had never exercised before this probe: 7 characters + 1
+    // space puts the cursor AT column 8, already on a modulus-8 stop. The old
+    // same-column rule's on-stop-advances-a-full-8 answer would land column 16; real
+    // WS7 instead computes the stop from column 7 (the space stripped back off) -> 8,
+    // then adds the 1-column space run back -> 9. If this regresses to 16, the fix has
+    // been narrowed to only the below-a-stop case.
+    let pdf = printedPDF(bytes("ABCDEFG \tWord.") + HARD)
+    #expect(drawnLine(pdf, containing: "Word.") == "ABCDEFG " + String(repeating: " ", count: 1) + "Word.")
+}
+
+@Test func bareTabPrecededByASoftSpaceShiftsTheSameAsALiteralOne() throws {
+    // A WS5+ soft space (0xA0) decodes to plain " " before this function ever sees the
+    // text, so it is indistinguishable from an author-typed space here -- and real WS7
+    // printed output treats it identically: the probe (P6) landed on the same column as
+    // the literal-space case at the same starting column.
+    let pdf = printedPDF(bytes("ABCDEF") + [0xA0] + bytes("\tWord.") + HARD)
+    #expect(drawnLine(pdf, containing: "Word.") == "ABCDEF " + String(repeating: " ", count: 2) + "Word.")
+}
+
+@Test func win7EtcSubjectLineShapeLandsOnTheWS7VerifiedColumn() throws {
+    // The actual WIN7.ETC residual planning #237 left open: " Subject: " (10
+    // characters, the last one a space) followed by a bare tab. Real WS7's capture
+    // places the word after the tab at column 17 -- this fix's `base = 10 - 1 = 9` ->
+    // modulus stop 16 -> `+1` space run -> 17, matching exactly; the pre-fix
+    // same-column rule gave 16, one short, which is what planning #237 reported.
+    let pdf = printedPDF(bytes(" Subject: \tWord.") + HARD)
+    #expect(drawnLine(pdf, containing: "Word.") == " Subject: " + String(repeating: " ", count: 7) + "Word.")
+}
+
 @Test func aStyledMixedLineWithABareTabIsStillDrawnCorrectly() throws {
     // A line resolving to more than one styled span still reaches
     // `expandBareTabsForPrintedLayout` (it runs on the RAW segs, ahead of the split
