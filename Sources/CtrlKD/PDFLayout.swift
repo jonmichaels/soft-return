@@ -322,6 +322,35 @@ func leadPt(_ lh48: Double?) -> Double? {
 /// from paper BY DESIGN").
 let autoLeadFactor = 1.0
 
+/// `fontLeadPt`'s governing-size ceiling (planning #233, ERROR.WS, 2026-09-09): a WS5+
+/// FONT-BLOCK document's oversized DECORATIVE title-card sizes (72pt/42pt) do NOT carry
+/// the auto-lead scaling the way PREVIEW.WS's 24pt font blocks do (the mechanism-T oracle
+/// above, still the largest size with real WS7 evidence of scaling). Measured directly
+/// against `sawyer/FONTS/PS/ERROR.WS`'s real WS7 capture (`tools/pcl_text.py` on
+/// `ws7-prints/v4/sawyer__FONTS__PS__ERROR_EXT_WS.pcl`, a real LaserJet PCL5 capture,
+/// gpcl6-rendered PNG confirms the visual): "ERROR!" (72pt) to "Must Sterilize!" (42pt) is
+/// a clean 5-line-feed run (`\r\n` x5 in the source bytes) covering exactly 60.0pt —
+/// 12.0pt/line-feed, the document's own flat `.lh` default (`lh48=8.0`), NOT 72.0pt/line
+/// as the ungated governing-size formula computes. "Must Sterilize!" (42pt) to "No new
+/// WORDSTAR.PS produced" (20pt) is a 10-line-feed run covering exactly 120.0pt — again
+/// 12.0pt/line, not 42.0pt. Both gaps decompose to ONE clean constant with zero residual.
+/// PREVIEW.WS's own three 24pt transitions (Times->Univers, Univers->Aachen,
+/// Aachen->Courier) are clean 2-line-feed runs at exactly 24.0pt/line-feed each
+/// (`ws7-prints/v3/PREVIEW.pcl`) — governing-size scaling IS real, just not above whatever
+/// ceiling separates 24pt (scales) from 42pt (doesn't). No corpus document exercises this
+/// un-`.lh`'d auto-lead path at an intermediate size (every other big-font document found —
+/// LJ6DTP.WS, PRINTER.PS, fontcrib.ws, WINGDING.CHT, SYMBOL.CHT — sets its own explicit
+/// `.lh` around its decorative text, routing around this formula entirely per its own
+/// guard below). Rather than guess a number between the two measured points, the ceiling
+/// is set at the largest size real WS7 evidence actually confirms scales, 24.0pt: at or
+/// under it, a proportional font's own declared size governs (unchanged behaviour); over
+/// it, it degrades to the SAME "reset the carried state, fall back to the document
+/// default" treatment a fixed-pitch font already gets (see `fontLeadPt`'s own doc comment)
+/// — an oversized decorative font's own line, and every blank line after it, prints at the
+/// plain document-default lead, not its own huge size. Swift-convention counterpart of
+/// Python's `pdf.FONT_LEAD_CAP_PT`.
+let fontLeadCapPt = 24.0
+
 /// The baseline-to-baseline leading a WS7 paragraph STYLE dictates for every physical
 /// line in `block` (`Block.lineHeightVMI`/`styleFontPt`, set from the style record's own
 /// font/line-height fields — `parseWS`'s style-selection parse). `nil` when no style
@@ -577,7 +606,52 @@ func enteringLeadPt(_ block: Block, _ doc: Document, prevBlock: Block?) -> Doubl
 /// `lhSource == .file` check `styleLeadPt` uses) — no corpus evidence exists for how real
 /// WS7 arbitrates a font block's own size against an ACTIVE `.lh`, so that combination is
 /// left to the pre-existing `.lh`-based mechanism, unconditionally, same doctrine as
-/// `styleLeadPt`'s own guard. Port of Python's `_font_lead_pt`.
+/// `styleLeadPt`'s own guard.
+///
+/// CEILING (planning #233, `fontLeadCapPt` — see its own doc comment for the full
+/// ERROR.WS/PREVIEW.WS evidence): a proportional font block whose OWN declared size
+/// exceeds `fontLeadCapPt` never governs — it is treated exactly like a FIXED-PITCH block
+/// for this function's purposes (does not raise `propSizesHere`, RESETS the carried
+/// `state` the same way a Courier tag does). A 72pt or 42pt decorative title-card font's
+/// own line, and every blank line after it, therefore prints at the plain document-default
+/// lead, matching real WS7 — only sizes at or under the cap (the largest real WS7 evidence
+/// confirms scales, 24pt) get the governing-size treatment described above.
+///
+/// ORDERING, and the VIRGIN/ESTABLISHED distinction in `state`, both planning #233 (second
+/// half of the same evidence — ERROR.WS's residual 8.0pt after the ceiling alone): a
+/// line's OWN font tag governs the ENTERING advance of the line AFTER it, generally never
+/// its own — WordStar's byte encoding puts a font-change record right before the text it
+/// applies to, AFTER that text's own leading `\r\n`, so the vertical move that PLACES a
+/// line usually happens before that line's own tag has even been read. ERROR.WS's "No new
+/// WORDSTAR.PS produced" proves this directly: it carries its own 20pt Triumvirate tag
+/// (within the ceiling), but its real entering advance is the SAME flat 12.0pt as the nine
+/// purely-blank lines before it, not 20.0pt — because `state` was already ESTABLISHED at
+/// the document default by "Must Sterilize!"'s 42pt tag exceeding the ceiling immediately
+/// before this run, and an established `state` always wins over a line's own tag.
+///
+/// But `state` starting VIRGIN (nothing has ever governed — the very first proportional
+/// tag in the whole document) is different, and PREVIEW.WS's own Times-Roman heading (its
+/// FIRST proportional tag) is the oracle that tells the two apart: `ParseWS`'s own parse
+/// gives this engine only 4 blank `Line` records between the document's plain-12pt intro
+/// and the Times heading, one fewer than the capture's real 6-line-feed gap (720
+/// decipoints/72.0pt) — the parse folds a `.oc off` dot-command's line into the record
+/// that follows it, a parse-level detail invisible to WS7's own byte-for-byte vertical
+/// motion. Crediting the Times heading's OWN 24pt tag to ITS OWN entering advance (4 blank
+/// x 12 + 1 x 24 = 72) reproduces the real 72.0pt exactly; forcing it through `state`
+/// (still nil, "fall back to base" once VIRGIN state is read literally as "no size") would
+/// under-shoot by exactly one line (60, not 72) — the residual this distinction fixes.
+/// Once ANY tag has been seen, real or reset, `state` becomes ESTABLISHED (see below) and
+/// every later line, including one with its own in-range tag (Univers/Aachen in PREVIEW,
+/// "No new..." in ERROR.WS), is governed by `state` alone.
+///
+/// So: `state` is `nil` ONLY before the first font tag of the whole document; every reset
+/// (`fontLeadCapPt` exceeded, or a fixed-pitch tag) sets it to `baseSize` itself — an
+/// ESTABLISHED real number, not `nil` — specifically so a LATER in-range tag can never
+/// again fall back to governing its own line the way a virgin `nil` would. The scan below
+/// still folds every proportional size found ON a line into what `state` becomes for the
+/// NEXT line (still `max()` of them, for a mid-line font change's padding — see the
+/// paragraph above); only which value THIS line's own return uses — `state` if already
+/// established, else this line's own scan — is new. Port of Python's `_font_lead_pt`.
 func fontLeadPt(_ line: Line, fonts: [FontChange], baseSize: Double, state: inout Double?)
     -> Double
 {
@@ -586,16 +660,21 @@ func fontLeadPt(_ line: Line, fonts: [FontChange], baseSize: Double, state: inou
     for s in line.spans {
         guard let fidx = s.font, fidx >= 0, fidx < fonts.count else { continue }
         let entry = fonts[fidx]
-        if entry.proportional {
+        if entry.proportional, entry.points <= fontLeadCapPt {
             propSizesHere.append(entry.points)
             lastTagProportional = true
         } else {
             lastTagProportional = false
         }
     }
-    let governing = propSizesHere.max() ?? state
+    let governing: Double?
+    if let established = state {
+        governing = established
+    } else {
+        governing = propSizesHere.max()
+    }
     if lastTagProportional == false {
-        state = nil
+        state = baseSize
     } else if !propSizesHere.isEmpty {
         state = propSizesHere.max()
     }
