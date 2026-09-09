@@ -1876,7 +1876,17 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
             // `page_geom_changed` fix.
             let pageGeomChanged = page.mtLines != nil || page.mbLines != nil
                 || page.hmLines != nil || page.fmLines != nil
-            let pageLeft = (pageGeomChanged ? page.poCols : nil)
+            // #241 follow-up (2026-09-08, planning #231): `.poe`/`.poo` are themselves a
+            // page-layout decision (WSFORMAT.WS: "specify even or odd number page
+            // offsets"), not a HOLYMAC-style transient body-only `.po` excursion -- the
+            // one thing `pageGeomChanged` above exists to filter out. A live parity
+            // override (`Page.poParity`, set in `layoutPrintedPagesPlain`/
+            // `layoutPrintedPages`) must reach the running head/foot regardless of
+            // whether `.mt`/`.mb`/`.hm`/`.fm` also changed on this page. Measured:
+            // sawyer/MAILLIST/PHONE.LST (`.poo .20"`/`.poe .20"`, no `.mt`/`.hm` change
+            // ever) -- running head was stuck at the document default 57.6pt instead of
+            // the declared 14.4pt. Port of Python's `pdf.py` `page_po_parity` fix.
+            let pageLeft = ((pageGeomChanged || page.poParity) ? page.poCols : nil)
                 .map { resolveLeftPt($0, size: size) } ?? left
             // Register b31, E3 item 2: resolve THIS page's own automatic-number state.
             // `--headers off` already suppresses page numbers per its own documented

@@ -106,3 +106,45 @@ private func parityDoc(_ src: [UInt8]) -> Document {
     #expect(pdfWordX(streams[1], "PAGE2") == 144.0)   // SAME on every page -- no
                                                        // alternation triggered
 }
+
+@Test func runningHeadFollowsPoePooWithoutAGeometryChange() throws {
+    // #241 follow-up (2026-09-08): the running head/foot's own `pageGeomChanged` gate
+    // (`PDFWriter.swift`, added so a HOLYMAC-style transient `.po` excursion -- one
+    // with no `.mt`/`.mb`/`.hm`/`.fm` alongside it -- never leaks into the header) was
+    // ALSO silently catching a live `.poe`/`.poo` parity override, which is itself a
+    // real page-layout decision and must reach the header/footer regardless. Measured:
+    // sawyer/MAILLIST/PHONE.LST (`.poo .20"`/`.poe .20"`, no plain `.po`, `.mt`/`.mb`/
+    // `.hm`/`.fm` never touched) -- its own `.h1` running head rendered at the document
+    // default 57.6pt instead of the declared 14.4pt; body text was already correct
+    // (`ownParityLeft` is per-LINE, never gated). No `.mt`/`.mb`/`.hm`/`.fm` anywhere in
+    // this fixture -- `pageGeomChanged` is `false` on every page, so a header/footer
+    // left edge that still tracks parity here can only be `Page.poParity`.
+    let doc = parityDoc(bytes(".po 8\r\n.poe 1\"\r\n.poo 2\"\r\n.he TITLE\r\n")
+        + bytes("PAGE1") + HARD + bytes(".pa\r\n")
+        + bytes("PAGE2") + HARD)
+    let out = emitPDF(doc, mode: .printed)
+    let streams = pdfContentStreams(out)
+    #expect(streams.count == 2)
+    #expect(pdfWordX(streams[0], "TITLE") == 144.0)   // odd -> .poo (2in)
+    #expect(pdfWordX(streams[0], "PAGE1") == 144.0)
+    #expect(pdfWordX(streams[1], "TITLE") == 72.0)    // even -> .poe (1in)
+    #expect(pdfWordX(streams[1], "PAGE2") == 72.0)
+}
+
+@Test func runningHeadIgnoresATransientPoWithNoGeometryChange() throws {
+    // #241's own oracle (HOLYMAC.WS), preserved: a plain mid-document `.po` change
+    // with NO `.poe`/`.poo` in force and no `.mt`/`.mb`/`.hm`/`.fm` alongside it must
+    // NOT move the running head -- only a genuine geometry change or a live parity
+    // override (the sibling test above) may.
+    let doc = parityDoc(bytes(".po 1\"\r\n.he TITLE\r\n")
+        + bytes("PAGE1") + HARD + bytes(".pa\r\n")
+        + bytes(".po 3\"\r\n")
+        + bytes("PAGE2") + HARD)
+    let out = emitPDF(doc, mode: .printed)
+    let streams = pdfContentStreams(out)
+    #expect(pdfWordX(streams[0], "TITLE") == 72.0)
+    // PAGE2's own body line DOES track the new `.po` (per-line override) -- only the
+    // running head stays put, per HOLYMAC's own confirmed behaviour.
+    #expect(pdfWordX(streams[1], "PAGE2") == 216.0)
+    #expect(pdfWordX(streams[1], "TITLE") == 72.0)
+}

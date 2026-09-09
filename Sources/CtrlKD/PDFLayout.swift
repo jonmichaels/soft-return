@@ -622,6 +622,17 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     /// override (`Line.poCols`, applied in `resolvePlainBody`/`resolvePrintedBody`), this is
     /// the page-granularity twin that mechanism was missing. Port of Python's `Page.po_cols`.
     public var poCols: Double?
+    /// planning #231/#241 follow-up (2026-09-08): whether `poCols` above came from an
+    /// ACTIVE `.poe`/`.poo` parity override, as opposed to a plain mid-document `.po`
+    /// reset. #241's `pageGeomChanged` gate (`PDFWriter.swift`) exists to keep a
+    /// HOLYMAC-style transient `.po` (a local body-margin excursion, no real page-layout
+    /// change) from leaking into the running head/foot -- but `.poe`/`.poo` ARE
+    /// themselves a page-layout decision by definition (WSFORMAT.WS: "specify even or
+    /// odd number page offsets"), so they must bypass that gate rather than be silently
+    /// caught by it. Measured: sawyer/MAILLIST/PHONE.LST (`.poo .20"`/`.poe .20"`, no
+    /// plain `.po`) -- its own running head rendered at the document default 57.6pt
+    /// instead of the declared 14.4pt. Port of Python's `Page.po_parity`.
+    public var poParity: Bool
     /// #228 (research/2026-09-08_trailing-pa-rule.md, planning #228): a trailing `.pa`
     /// followed by at least one more real content paragraph -- even a blank one --
     /// before EOF opens a final page with no body; real WS7 still stamps its running
@@ -645,6 +656,7 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         hmLines = nil
         fmLines = nil
         poCols = nil
+        poParity = false
         explicitBreak = false
         explicitBreakBI = nil
     }
@@ -652,6 +664,7 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     public init(_ lines: [PageLine], headers: [Int: String] = [:], footers: [Int: String] = [:],
                mtLines: Double? = nil, mbLines: Double? = nil, plLines: Double? = nil,
                hmLines: Double? = nil, fmLines: Double? = nil, poCols: Double? = nil,
+               poParity: Bool = false,
                explicitBreak: Bool = false, explicitBreakBI: Int? = nil) {
         self.lines = lines
         self.headers = headers
@@ -662,6 +675,7 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.hmLines = hmLines
         self.fmLines = fmLines
         self.poCols = poCols
+        self.poParity = poParity
         self.explicitBreak = explicitBreak
         self.explicitBreakBI = explicitBreakBI
     }
@@ -864,6 +878,7 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
         merged.hmLines = pg.hmLines
         merged.fmLines = pg.fmLines
         merged.poCols = pg.poCols
+        merged.poParity = pg.poParity
         merged.explicitBreak = pg.explicitBreak
         merged.explicitBreakBI = pg.explicitBreakBI
         let groupEnd = Swift.min(i + cols, nPages)
@@ -3825,6 +3840,12 @@ func layoutPrintedPagesPlain(
         let parityPo = leftForParity(curPo, curPoe, curPoo, isEven: isEvenPage)
         if parityPo != docPo {
             pg.poCols = parityPo
+            // #241 follow-up: mark that this override is a live `.poe`/`.poo` parity
+            // decision (not a plain mid-document `.po` excursion) so the running
+            // head/foot's own `pageGeomChanged` gate (`PDFWriter.swift`) -- correctly
+            // built to exclude a HOLYMAC-style transient `.po` -- lets it through
+            // regardless. See `Page.poParity`.
+            pg.poParity = curPoe != nil || curPoo != nil
         }
         // Body text: `resolvePlainBody` could not resolve a `.poe`/`.poo`-governed
         // line's own left origin at BUILD time (which page, and therefore which
