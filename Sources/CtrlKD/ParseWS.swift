@@ -721,7 +721,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         }
         // core.py:289 — masked unconditionally, NOT gated on stripHibit: a ws5+ dot line
         // is still recognized, and a ws4 dot whose '.' carries bit 7 (0xAE) still is too.
-        let stripped = raw.map { $0 & 0x7F }
+        var stripped = raw.map { $0 & 0x7F }
 
         // #240: this entry is a bare `.rr`'s own ruler-image line (see the flag's
         // own comment, set below) — consume it whole, exactly like a dot-command
@@ -748,6 +748,45 @@ public func parseWS(_ data: [UInt8]) -> Document {
             if case .pctl = mark { return true }
             return false
         }
+        // #246 (sawyer/PRINT.TST, /PSPRINT.TST, /DEFAULT/PRINT.TST; core.py mirror):
+        // a literal form feed can sit directly in front of a dot command on the SAME
+        // physical line — WSFORMAT.TXT: "0Ch ^L  Form Feed.  At print time causes page
+        // to be ejected." Measured shape (all three documents, byte-identical at the
+        // boundary): an End-of-page (0x0B) symmetrical sequence's transient
+        // overprint-CR break lands right before a bare 0x0C (0x8C, the flagged/soft
+        // form of ^L, already de-flagged to 0x0C by `flaggedControls` above),
+        // immediately followed by `.pm1` with no space and no separate line break of
+        // its own. Real WS7's own PCL capture (tools/pcl_text.py) prints no ".pm1"
+        // text at all — only the page eject — so WordStar treats whatever follows a
+        // form feed as being in the first position of a fresh line for dot-command
+        // purposes, the same way it already does after an ordinary hard/soft return.
+        //
+        // Previously `stripped.first` was the form feed itself, never '.', so the
+        // whole line — form feed AND the dot-command text after it — fell through to
+        // body-text decoding below (the `raw.contains(0x0C)` branch), which prints the
+        // leading form feed as its own pagebreak block but has no way to re-test what
+        // follows it for dot-command-ness, so ".pm1" was decoded and printed as a
+        // literal span.
+        //
+        // Peel off each leading form feed as its own pagebreak block (same shape as
+        // the mid-line split branch below: one closeBlock()+Block(.pagebreak, .ff)+
+        // tally bump per byte) and re-test the remainder — ONLY when it actually turns
+        // out to be a dot command, so an ordinary form-feed-then-body-text line (no
+        // evidence of that shape in this corpus, but not ruled out) still reaches the
+        // unchanged branch below untouched.
+        var ffLead = 0
+        while ffLead < stripped.count, stripped[ffLead] == 0x0C {
+            ffLead += 1
+        }
+        if ffLead > 0, ffLead < stripped.count, stripped[ffLead] == 0x2E {
+            for _ in 0..<ffLead {
+                closeBlock()
+                blocks.append(Block(kind: .pagebreak, origin: .ff))
+                rtTally += 1
+            }
+            raw = Array(raw[ffLead...])
+            stripped = Array(stripped[ffLead...])
+        }
         if stripped.first == 0x2E && !pctlLeads {             // '.' — dot command line
             // core.py:290-298 — captured as metadata; the line itself never becomes text.
             let cmd = rstrippingASCIIWhitespace(stripped)
@@ -758,7 +797,18 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // writer — and mailmerge lines (.av/.dm/.df/.rv...) must come back
             // byte-exact, never re-serialized from an interpretation (permanent
             // ruling).
-            rtDots.append(RoundtripDot(anchor: rtTally, raw: physical.text,
+            //
+            // #246: `raw`, NOT `physical.text` — core.py's mirror uses its own
+            // (possibly FF-peeled) local `raw` here too. Every OTHER branch in this
+            // loop never mutates `raw` before this point, so the two were always
+            // byte-identical until the leading-form-feed peel above; using
+            // `physical.text` here re-inserted the flagged form feed byte this dot
+            // line's OWN ledger must not carry (its own pagebreak Block, one loop
+            // iteration back, already owns that byte via `flaggedAt`'s offset-based
+            // un-translate) — a duplicated 0x0C on write (LSRBOX.WS, MICKEE.WS: WS7's
+            // own `.oj off` / `.rm 5.5"` lines sit right after a flagged form feed,
+            // the same shape as `.pm1` in PRINT.TST).
+            rtDots.append(RoundtripDot(anchor: rtTally, raw: raw,
                                        brk: rtBrk ?? []))
             // Where in the document this command sat: the coarsest anchor that is
             // actually stable (it survives reflow, which a byte offset does not).

@@ -190,6 +190,33 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     #expect(try rt(data) == data)
 }
 
+@Test func dotCommandAfterFlaggedFormFeedRoundtrips() throws {
+    // Planning #246 round-trip companion to
+    // dotCommandAfterAFlaggedFormFeedIsNotPrintedAsText (ParseWSTests.swift): same byte
+    // shape (an End-of-page block's overprint-CR break, a bare 0x0D, a flagged form feed
+    // 0x8C, then a dot command with no space), now checked for exact reassembly.
+    //
+    // The FF byte and the dot line's own bytes both land in the round-trip ledger at that
+    // point (a pagebreak Block plus a separate dot-line entry) — only the pagebreak's own
+    // event owns the flagged byte (patched back from 0x0C to 0x8C by the file-level
+    // offset-based `flaggedAt` un-translate); the dot line's own ledger entry must NOT
+    // also carry it, or the byte doubles on write. This is exactly the bug this test
+    // guards: the ledger append used to read the pre-mutation `physical.text` instead of
+    // the locally peeled `raw`, serializing the flagged form feed twice (once from the
+    // pagebreak event, once folded into the dot line) — found via
+    // gauntletWSCohortCensusFloor diverging on LSRBOX.WS/MICKEE.WS once the parser fix
+    // above started splitting this shape correctly.
+    let endOfPage = ws7Block(0x0B, payload: [UInt8](repeating: 0, count: 28))
+    var data = ws7Block(0x00)
+        + bytes("Set a paragraph margin to print in") + SOFT
+        + bytes("paragraph style.") + HARD
+        + bytes(".cc 19") + endOfPage
+        + [0x0d, 0x8c] + bytes(".pm1") + HARD
+        + bytes("Hanging Indentation") + HARD
+    data += [0x1A]
+    #expect(try rt(data) == data)
+}
+
 @Test func blankLinesIncludingTrailingRunAndCtrlZTail() throws {
     // the trailing blank run is consumed by linesPass without ever being yielded
     // (the ledger's eofTail carries it); the ^Z padding after the EOF byte is the file

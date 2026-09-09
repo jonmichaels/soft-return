@@ -644,6 +644,44 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     #expect(leading.blocks.map(\.kind) == [.pagebreak, .para])
 }
 
+@Test func dotCommandAfterAFlaggedFormFeedIsNotPrintedAsText() {
+    // Planning #246 (sawyer/PRINT.TST, /PSPRINT.TST, /DEFAULT/PRINT.TST; port of
+    // test_dot_command_after_a_flagged_form_feed_is_not_printed_as_text): a literal
+    // '.pm1' was printed as text next to '.cc 19' in all three documents, both engines.
+    //
+    // The measured byte shape (hexdump around '.cc 19', identical across all three
+    // files): an End-of-page (0x0B) symmetrical sequence's own transient 'overprint
+    // line' break (a BARE 0x0D, not paired with 0x0A) is immediately followed by 0x8C —
+    // the flagged/soft form of ^L (Form Feed) that `flaggedControls` de-flags to a real
+    // 0x0C — immediately followed by `.pm1` with NO space and no separator of its own,
+    // then an ordinary hard return.
+    //
+    // WSFORMAT.TXT: dot commands are recognised only when the period sits "in the first
+    // position in the line". A literal ^L "causes page to be ejected" at print time —
+    // real WS7's own PCL capture (tools/pcl_text.py) prints no '.pm1' text at all, only
+    // the page eject, so WordStar treats whatever follows the form feed as the first
+    // position of a fresh line for dot-command purposes, exactly as it already does
+    // after a hard/soft return. `stripped.first` used to be the form feed itself, never
+    // '.', so the whole line — form feed AND '.pm1' — fell through to body-text decoding
+    // and printed literally.
+    let endOfPage = ws7Block(0x0B, payload: [UInt8](repeating: 0, count: 28))
+    let data = ws7Block(0x00)                                      // WS7 header block
+        + bytes("Set a paragraph margin to print in") + SOFT
+        + bytes("paragraph style.") + HARD
+        + bytes(".cc 19") + endOfPage                              // overprint-CR 'over' break
+        + [0x0d]                                                   // bare CR, no 0x0A follows
+        + [0x8c] + bytes(".pm1")                                   // flagged FF, then the dot cmd
+        + HARD
+        + bytes("Hanging Indentation") + HARD
+    let doc = parseWS(data)
+    let txt = emitText(doc, mode: .printed)
+    #expect(!txt.contains(".pm1"), "the dot command leaked into printed text")
+    #expect(txt.contains("Hanging Indentation"))
+    // the flagged form feed still ejects the page, as a real 0x0C would
+    let ffBlocks = doc.blocks.filter { $0.kind == .pagebreak }
+    #expect(!ffBlocks.isEmpty && ffBlocks.first?.origin == .ff)
+}
+
 // MARK: - The paragraph style library (C1)
 
 @Test func styleLibraryParsesWithThirtyThreeByteStride() {
