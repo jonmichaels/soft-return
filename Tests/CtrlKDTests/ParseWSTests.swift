@@ -664,15 +664,16 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // after a hard/soft return. `stripped.first` used to be the form feed itself, never
     // '.', so the whole line — form feed AND '.pm1' — fell through to body-text decoding
     // and printed literally.
+    // staged: 6.2.4's type-checker times out on the one-expression form
     let endOfPage = ws7Block(0x0B, payload: [UInt8](repeating: 0, count: 28))
-    let data = ws7Block(0x00)                                      // WS7 header block
-        + bytes("Set a paragraph margin to print in") + SOFT
-        + bytes("paragraph style.") + HARD
-        + bytes(".cc 19") + endOfPage                              // overprint-CR 'over' break
-        + [0x0d]                                                   // bare CR, no 0x0A follows
-        + [0x8c] + bytes(".pm1")                                   // flagged FF, then the dot cmd
-        + HARD
-        + bytes("Hanging Indentation") + HARD
+    var data = ws7Block(0x00)                                      // WS7 header block
+    data += bytes("Set a paragraph margin to print in") + SOFT
+    data += bytes("paragraph style.") + HARD
+    data += bytes(".cc 19") + endOfPage                            // overprint-CR 'over' break
+    data += [0x0d]                                                 // bare CR, no 0x0A follows
+    data += [0x8c] + bytes(".pm1")                                 // flagged FF, then the dot cmd
+    data += HARD
+    data += bytes("Hanging Indentation") + HARD
     let doc = parseWS(data)
     let txt = emitText(doc, mode: .printed)
     #expect(!txt.contains(".pm1"), "the dot command leaked into printed text")

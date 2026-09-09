@@ -206,13 +206,14 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // pagebreak event, once folded into the dot line) — found via
     // gauntletWSCohortCensusFloor diverging on LSRBOX.WS/MICKEE.WS once the parser fix
     // above started splitting this shape correctly.
+    // staged: 6.2.4's type-checker times out on the one-expression form
     let endOfPage = ws7Block(0x0B, payload: [UInt8](repeating: 0, count: 28))
     var data = ws7Block(0x00)
-        + bytes("Set a paragraph margin to print in") + SOFT
-        + bytes("paragraph style.") + HARD
-        + bytes(".cc 19") + endOfPage
-        + [0x0d, 0x8c] + bytes(".pm1") + HARD
-        + bytes("Hanging Indentation") + HARD
+    data += bytes("Set a paragraph margin to print in") + SOFT
+    data += bytes("paragraph style.") + HARD
+    data += bytes(".cc 19") + endOfPage
+    data += [0x0d, 0x8c] + bytes(".pm1") + HARD
+    data += bytes("Hanging Indentation") + HARD
     data += [0x1A]
     #expect(try rt(data) == data)
 }
