@@ -931,11 +931,13 @@ private func pageTexts(_ page: Page) -> [String] {
 @Test func cpPricesReservedLinesAtTheirOwnLeadNotTheDocumentDefault() throws {
     let pad = (1...55).map { "PAD \(String(format: "%03d", $0))" }
     let bodyLines = (100...125).map { "LINE \($0)" }
-    let source = pad.joined(separator: "\r\n") + "\r\n"
-        + ".lh 16\r\n"
-        + bodyLines.joined(separator: "\r\n") + "\r\n"
-        + ".cp 2\r\n"
-        + "LINE 126\r\nLINE 127\r\n"
+    // `+=` statements, never a chained `+` expression (macOS CI type-checker
+    // times out on it -- see this repo's own CLAUDE.md).
+    var source = pad.joined(separator: "\r\n") + "\r\n"
+    source += ".lh 16\r\n"
+    source += bodyLines.joined(separator: "\r\n") + "\r\n"
+    source += ".cp 2\r\n"
+    source += "LINE 126\r\nLINE 127\r\n"
     let doc = parseWS(bytes(source))
     #expect(doc.page?.lhSource == .default)   // the trap: capacity stays at 12pt
     let pages = docToPagelines(doc, printed: true)
