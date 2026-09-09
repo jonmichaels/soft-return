@@ -1443,34 +1443,37 @@ private func resolvePrintedBody(
     let fontLeadBase = fontLeadOk ? Double(printedSize(doc)) : 0.0
     var cursor = 0
     var items: [PrintedBodyItem] = []
-    // Planning #227: same region-boundary logic as `resolvePlainBody` -- see its own
-    // comment. `.cb`/`.cc` themselves are deliberately NOT given a sentinel here,
-    // matching ctrl-kd's own `_body_stream_printed`: that function never handled `.cp`
-    // conditional breaks either (a pre-existing gap, not a new one) -- this loop, unlike
-    // that one, already threads `.cp`/`.condpage` through as a pre-existing capability
-    // (predates this pass), so giving `.cc`/`.condcolumn` the SAME sentinel here would
-    // make `.cc` WORK on this one engine and stay inert on ctrl-kd, a real cross-engine
-    // divergence for exactly this corpus document (found live testing this port:
-    // sawyer/DEFAULT/PRINT.TST's own `.cc 19` shifted its "Paragraph Indentation"
-    // section into column 2 here while ctrl-kd left it in column 1, `AnswerKeyParityTests`
-    // divergence). `.colbreak`/`.condcolumn` fall through as ordinary no-lines blocks,
-    // same as an unhandled `.cp` already did before this port existed. Only
-    // sawyer/DEFAULT/PRINT.TST (the one `.co`-bearing corpus document with placeable
-    // notes) is affected; named in the columns-rule research note as an open scope gap.
+    // Planning #245 (closing the scope gap this comment used to document at planning
+    // #227): `.cb`/`.cc` now get the SAME sentinel treatment `resolvePlainBody` already
+    // gives them -- ctrl-kd's own `_body_stream_printed`/`_paginate_printed_notes` picked
+    // up the identical fix first (planning #245), verified there to be a content-safe
+    // no-op for sawyer/DEFAULT/PRINT.TST (the only corpus document this path and `.co`
+    // both apply to): the natural height-driven column breaks this paginator already
+    // computes land at the SAME points `.cb`/`.cc` would force, so making them live
+    // moves nothing for this specific document -- it closes the architectural gap
+    // (matching `resolvePlainBody`'s own behaviour, and `.cp`'s own pre-existing
+    // handling one paragraph below) without the cross-engine divergence the previous
+    // note here was written to avoid. `.colbreak` reuses `.pageBreak`'s own sentinel
+    // exactly the way `.pagebreak` does (both engines' ordinary paths already do this);
+    // `.condcolumn` reuses `.condPage`'s, exactly the way `.cp`'s pre-existing handling
+    // already does -- "room remaining in the current column" and "room remaining in the
+    // current page" are the same question whenever a column's own height equals a
+    // page's (research §4: always, in this engine).
     var prevCols = 1
     for (bi, block) in doc.blocks.enumerated() {
         // An explicit `.pa` is honored verbatim in a facsimile. WordStar's own 0x0B
         // end-of-page marks are NOT breaks -- see `Line.softpage`.
         if block.kind == .pagebreak, prevCols > 1 {
             // Planning #227 (corrected, see `resolvePlainBody`'s identical gate): a
-            // bare `.pa` inside an active `.co n>1` region is absorbed.
+            // bare `.pa` inside an active `.co n>1` region is absorbed. `.cb` never
+            // gets this absorption (handled unconditionally just below).
             continue
         }
-        if block.kind == .pagebreak {
+        if block.kind == .pagebreak || block.kind == .colbreak {
             items.append(.pageBreak)
             continue
         }
-        if block.kind == .condpage {
+        if block.kind == .condpage || block.kind == .condcolumn {
             items.append(.condPage(max(1, block.heading)))
             continue
         }
