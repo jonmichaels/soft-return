@@ -3862,10 +3862,23 @@ func layoutPrintedPagesPlain(
             // is charged even at a page's own start, so embed's image-band cost matches
             // off's natural per-line accumulation exactly, regardless of where either
             // mode's break happens to fall.
-            if line.image != nil {
-                return max(0.0, lead - defaultLead)
-            }
-            return 0.0                                      // first line on page is free
+            // planning #236 remainder (sawyer/INTERVU.WS): the credit above is
+            // scoped to `defaultLead`'s OWN worth, same as the image case just
+            // above — a page's first line was always free even when a STYLE
+            // (not `.lh`) gives it a bigger real lead than the document
+            // default, over-crediting the page by (real lead - defaultLead)
+            // points of budget that were never actually free. INTERVU.WS's
+            // whole body runs at the "MS Body Copy" style's own 24pt VMI
+            // while the document's `.lh` (hence `defaultLead`) stays the
+            // unset 12pt default — every page opening on a body line
+            // pocketed 12pt of phantom room this way, which is exactly the
+            // margin a later `.cp2` needed to correctly push a whole
+            // paragraph to the next page. Mathematically identical to the
+            // previous flat `0.0` for every document whose first line's
+            // lead already equals `defaultLead` (the overwhelming common
+            // case). Port of Python's identical `pdf._doc_to_pagelines`
+            // fix, same rule, same evidence.
+            return max(0.0, lead - defaultLead)
         }
         if last.overprint { return 0.0 }                   // this line shares a baseline
         return lead
@@ -3932,7 +3945,7 @@ func layoutPrintedPagesPlain(
         pageFooters = curFooters
     }
 
-    for item in items {
+    for (itemIndex, item) in items.enumerated() {
         switch item {
         case .hf(let kind, let line, let text):
             if kind == .header { curHeaders[line] = text } else { curFooters[line] = text }
@@ -3942,8 +3955,39 @@ func layoutPrintedPagesPlain(
             }
         case .condPage(let n):
             // Strictly fewer than n lines left -> break; exactly n is enough room.
-            let room = (budget - spent) / defaultLead
-            if room < Double(n), !page.isEmpty {
+            // planning #236 remainder (sawyer/INTERVU.WS): the same style-vs-
+            // document-default gap `cost`'s first-line credit above was just
+            // fixed for. A flat `n * defaultLead` room estimate prices the
+            // upcoming reserved lines at `n * defaultLead` points when they
+            // may actually cost more (a style's own bigger VMI, or a
+            // stateful `.lh` override) — measured directly against
+            // INTERVU.WS's WS7 capture: a `.cp2` sitting right after a Q&A
+            // paragraph break measured room in default-lead units as
+            // sufficient when only 36pt of real room was left and both
+            // reserved lines (each a real 24pt "MS Body Copy" style line)
+            // together need 48pt. Real WS7 pushes the WHOLE paragraph to a
+            // fresh page instead of splitting it. Look ahead at the REAL
+            // cost of the next `n` PageLines (skipping sentinels) instead of
+            // assuming each one is exactly `defaultLead` tall — confirmed
+            // necessary and not merely redundant with the `cost` fix: without
+            // this lookahead too, the same document still mispaginates.
+            // Port of Python's identical `pdf._doc_to_pagelines` fix.
+            var needed = 0.0
+            var seen = 0
+            peekLoop: for peekIndex in (itemIndex + 1)..<items.count {
+                switch items[peekIndex] {
+                case .pageBreak:
+                    break peekLoop
+                case .hf, .condPage:
+                    continue peekLoop
+                case .line(let peekLine):
+                    needed += peekLine.lead ?? defaultLead
+                    seen += 1
+                    if seen >= n { break peekLoop }
+                }
+            }
+            let room = budget - spent
+            if room < needed - 1e-6, !page.isEmpty {
                 closePage()
                 openNewPage()
             }

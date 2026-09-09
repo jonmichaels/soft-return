@@ -905,6 +905,53 @@ private func pageTexts(_ page: Page) -> [String] {
     #expect(docToPagelines(doc, printed: true).count == 1)
 }
 
+/// Planning #236 remainder (sawyer/INTERVU.WS). Page capacity is computed at the
+/// document's DEFAULT `.lh` (12pt here, never overridden pre-text, so `lhSource` stays
+/// `.default` — same trap as the Python twin's `test_mid_document_lh_change_produces_
+/// two_distinct_rtf_sl_values`), but a MID-DOCUMENT `.lh` change (or a style's own
+/// bigger VMI — the real INTERVU.WS mechanism, reproduced here with the simpler `.lh`
+/// lever since both feed the identical `PageLine.lead` this fix reads) makes real lines
+/// cost MORE than that default. Two compounding bugs, both fixed together, port of
+/// Python's identical test:
+///
+/// 1. `cost`'s "first line on a page is free" rule used to credit the WHOLE line
+///    regardless of its real lead — only `defaultLead`'s (12pt) worth should ever be
+///    free; the excess (12pt here, since the real line costs 24pt) must still be
+///    charged.
+/// 2. `.cp n`'s room check used to price the n reserved lines at a flat
+///    `n * defaultLead` (2 * 12 = 24pt) instead of their REAL cost (2 * 24 = 48pt).
+///
+/// 55 `PAD` lines at the document default (12pt) exactly fill page 1 (budget 648pt =
+/// 54 chargeable lines * 12pt + 1 free). `.lh 16` (24pt) then governs every real line
+/// on page 2: `LINE 100` opens page 2 and is "free" but must still be charged
+/// `max(0, 24-12) = 12pt` (bug 1); 25 more 24pt lines bring page 2's spent to 612pt,
+/// leaving exactly 36pt of real room. `.cp 2` then reserves `LINE 126`/`LINE 127` —
+/// 48pt of real room, which does NOT fit in the 36pt left, so WS7's rule (and this fix)
+/// must push BOTH to page 3.
+@Test func cpPricesReservedLinesAtTheirOwnLeadNotTheDocumentDefault() throws {
+    let pad = (1...55).map { "PAD \(String(format: "%03d", $0))" }
+    let bodyLines = (100...125).map { "LINE \($0)" }
+    let source = pad.joined(separator: "\r\n") + "\r\n"
+        + ".lh 16\r\n"
+        + bodyLines.joined(separator: "\r\n") + "\r\n"
+        + ".cp 2\r\n"
+        + "LINE 126\r\nLINE 127\r\n"
+    let doc = parseWS(bytes(source))
+    #expect(doc.page?.lhSource == .default)   // the trap: capacity stays at 12pt
+    let pages = docToPagelines(doc, printed: true)
+    // `#require`, not `#expect`: a wrong page count here means the later
+    // `pages[2]` access below is out of bounds, not just a failed assertion.
+    try #require(pages.count == 3, "expected 3 pages, got \(pages.count)")
+    let page1 = pageTexts(pages[0])
+    let page2 = pageTexts(pages[1])
+    let page3 = pageTexts(pages[2])
+    #expect(page1.contains { $0.contains("PAD 055") })
+    #expect(page2.contains { $0.contains("LINE 125") })
+    #expect(!page2.contains { $0.contains("LINE 126") },
+            ".cp did not price its reserved lines at their real 24pt lead")
+    #expect(page3.contains { $0.contains("LINE 126") } && page3.contains { $0.contains("LINE 127") })
+}
+
 // -------------------------------------------------- running heads and page numbers
 
 @Test func headersAndFootersAreCaptured() {
