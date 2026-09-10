@@ -117,7 +117,23 @@ func modernTokFont(_ text: String, font: Int?, fonts: [FontChange], nonpropFallb
 /// A token's advance in points under modern layout: natural face widths (face-scaled for
 /// entries, straight AFM for fontless Times), the fixed grid only where a fixed-pitch
 /// font block asks for it. Port of `_modern_w`.
-func modernTokenWidth(_ text: String, styles: Style, family: PDFFamily, pt: Int, entry: FontChange?) -> Double {
+///
+/// `printedPt` (planning #254, 2026-09-10): the document's OWN fixed-pitch type size
+/// (`printedSize(doc)`), never the Modern reading size -- a graphic character (box-
+/// drawing, block, shade) draws on the Printed fixed-pitch cell REGARDLESS of a resolved
+/// font entry's own `proportional` flag (WordStar counted a `.cw`-pitch column grid for
+/// these glyphs no matter what printer face the document declared; Modern's reading face
+/// is irrelevant to that count -- Jon's ruling). Before this fix, a fontless run
+/// (`entry == nil`, every WS4 file and any run before a WS5+ document's first font-
+/// change record) advanced graphic cells at the Modern BODY size (14pt) instead:
+/// -README's 65-column `=` rule measured 65*14 = 910pt in a 468pt measure, 370pt past
+/// the sheet's right edge. `spanPitch(entry, printedPt)` already ignores `printedPt`
+/// entirely once `entry` carries its own `widthHMI` (a real WS5+ font block), so this
+/// same call is correct for a resolved fixed-pitch OR proportional entry too -- passing
+/// `printedPt` here (not `spt`) only changes the FALLBACK branch (`entry == nil`), which
+/// is exactly the shape that was wrong. Port of ctrl-kd's identical `printed_pt`.
+func modernTokenWidth(_ text: String, styles: Style, family: PDFFamily, pt: Int, entry: FontChange?,
+                      printedPt: Int) -> Double {
     let (spt, _) = sized(styles, pt)
     let basefont = base14(family, bold: styles.contains(.bold), italic: styles.contains(.italic))
     if text.contains(where: { graphicChars.contains($0) }) {
@@ -128,20 +144,22 @@ func modernTokenWidth(_ text: String, styles: Style, family: PDFFamily, pt: Int,
         // spans draw the same shape at the same em advance now too (job 187) -- the two
         // modes agree on this rule, not just on its rationale.
         var total = 0.0
-        let pitch = (entry == nil || entry!.proportional) ? Double(spt) : spanPitch(entry, spt)
+        let pitch = spanPitch(entry, printedPt)
         let chars = Array(text)
         var pos = 0
         for range in graphicRunRanges(chars) {
             if range.lowerBound > pos {
                 let piece = String(chars[pos..<range.lowerBound])
-                total += modernTokenWidth(piece, styles: styles, family: family, pt: pt, entry: entry)
+                total += modernTokenWidth(piece, styles: styles, family: family, pt: pt, entry: entry,
+                                          printedPt: printedPt)
             }
             total += Double(range.count) * pitch
             pos = range.upperBound
         }
         if pos < chars.count {
             let piece = String(chars[pos...])
-            total += modernTokenWidth(piece, styles: styles, family: family, pt: pt, entry: entry)
+            total += modernTokenWidth(piece, styles: styles, family: family, pt: pt, entry: entry,
+                                      printedPt: printedPt)
         }
         return total
     }
@@ -259,6 +277,10 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
     let embedImages = pictures != .off && !pixResults.isEmpty
     let pixMap: [Int: PixResult] = embedImages
         ? Dictionary(uniqueKeysWithValues: pixResults.map { ($0.index, $0) }) : [:]
+    // planning #254: the document's own fixed-pitch size, for a graphic character's cell
+    // advance ONLY (`modernTokenWidth`'s own `printedPt` doc comment) -- never the Modern
+    // reading size.
+    let printedPt = printedSize(doc)
     let sem = modernSemanticFlow(doc, notes: keep, noteRefs: noteRefs)
     // one WordStar column in points, at the document's own `.cw`
     let colPt = (doc.page?.cw120 ?? 12.0) * 0.6
@@ -348,7 +370,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                     // a reference mark: Times at the body size, measured as-is
                     styles.insert(.fnref)
                     let width = modernTokenWidth(run.text, styles: styles, family: .times,
-                                                 pt: modernBodyPt, entry: nil)
+                                                 pt: modernBodyPt, entry: nil, printedPt: printedPt)
                     toks.append(ModernToken(text: run.text, styles: styles, family: .times,
                                             pt: modernBodyPt, entry: nil, width: width))
                     continue
@@ -368,7 +390,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                     for (fbText, fbFamily) in fbPieces {
                         let width = modernTokenWidth(fbText, styles: styles,
                                                      family: fbFamily, pt: resolved.pt,
-                                                     entry: resolved.entry)
+                                                     entry: resolved.entry, printedPt: printedPt)
                         toks.append(ModernToken(text: fbText, styles: styles,
                                                 family: fbFamily, pt: resolved.pt,
                                                 entry: resolved.entry, width: width))
@@ -502,8 +524,11 @@ func modernNoteLines(label: String, text: String, width: Double, kind: NoteKind 
 /// the stored head (`^B` bold and friends — LJ6DTP's `.h1`) are interpreted as styles via
 /// `hfRuns`, so measurement and drawing agree; letters overlapped when the toggles were
 /// measured as glyphs (M10). Port of `_modern_hf_ops`.
+/// `printedPt` (planning #254): threaded to `modernLineOps` only for the graphic-cell
+/// cases neither header nor footer text has ever been observed to carry -- see that
+/// parameter's own doc comment.
 func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Double,
-                 res: FontResources, tzState: inout Int) -> [[UInt8]] {
+                 res: FontResources, tzState: inout Int, printedPt: Int) -> [[UInt8]] {
     var toks: [ModernToken] = []
     for run in hfRuns(txt) {
         let runText = run.text.replacingAll("#", with: String(pageNo))
@@ -518,12 +543,21 @@ func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Dou
     if toks.isEmpty { return [] }
     var discardedGraphicCells: [PageLine.GraphicCellPlacement]? = nil
     return modernLineOps(toks, left: left, y: y, width: width, align: .left,
-                         res: res, tzState: &tzState,
+                         res: res, tzState: &tzState, printedPt: printedPt,
                          recordGraphicCells: &discardedGraphicCells)
 }
 
 /// Content-stream ops for one modern visual line. One op per word keeps a viewer's
 /// substitute-metric drift bounded, same as printed. Port of `_modern_line_ops`.
+///
+/// `printedPt` (planning #254, 2026-09-10): the document's own fixed-pitch type size
+/// (`printedSize(doc)`) -- see `modernTokenWidth`'s own doc comment for the full rule
+/// and the bug this closes (a graphic row's own cell advance must never depend on the
+/// Modern reading size). Threaded (not recomputed -- no `doc` reaches this function)
+/// from every real caller: `modernStreams` (body/footnote lines) and `modernHFOps`
+/// (running heads/feet), and through this function's own recursive sub-calls below so a
+/// graphic run split across several sub-calls always agrees with the piece that measured
+/// it in `modernTokenWidth`.
 ///
 /// `recordGraphicCells` (planning #251 follow-up, 2026-09-10): same contract as
 /// `PDFWriter.swift`'s own `lineOpsPrinted` parameter of the same name -- `nil` to
@@ -537,7 +571,7 @@ func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Dou
 /// extracts BETWEEN two runs is, by construction, never itself a graphic run).
 func modernLineOps(
     _ toksIn: [ModernToken], left: Double, y: Double, width: Double, align: Alignment,
-    res: FontResources, tzState: inout Int,
+    res: FontResources, tzState: inout Int, printedPt: Int,
     recordGraphicCells: inout [PageLine.GraphicCellPlacement]?
 ) -> [[UInt8]] {
     var toks = toksIn
@@ -563,7 +597,7 @@ func modernLineOps(
             // interleaved text renders through the normal (recursive) path (fontless
             // spans included under Modern -- round 3, 2026-08-06 M11)
             let entry = tok.entry
-            let pitch = (entry == nil || entry!.proportional) ? Double(spt) : spanPitch(entry, spt)
+            let pitch = spanPitch(entry, printedPt)
             let chars = Array(tok.text)
             var pos = 0
             var gx = x
@@ -571,11 +605,12 @@ func modernLineOps(
                 if range.lowerBound > pos {
                     let piece = String(chars[pos..<range.lowerBound])
                     let pieceWidth = modernTokenWidth(piece, styles: tok.styles,
-                                                      family: tok.family, pt: tok.pt, entry: entry)
+                                                      family: tok.family, pt: tok.pt, entry: entry,
+                                                      printedPt: printedPt)
                     let pieceTok = ModernToken(text: piece, styles: tok.styles, family: tok.family,
                                                pt: tok.pt, entry: entry, width: pieceWidth)
                     ops += modernLineOps([pieceTok], left: gx, y: y, width: width, align: .left,
-                                         res: res, tzState: &tzState,
+                                         res: res, tzState: &tzState, printedPt: printedPt,
                                          recordGraphicCells: &recordGraphicCells)
                     gx += pieceWidth
                 }
@@ -590,18 +625,18 @@ func modernLineOps(
                 // planning #251 follow-up (2026-09-10): the model's own per-cell x/width
                 // -- same "recorded here, the ONE place this run's per-character cell
                 // positions are ever computed" precedent `lineOpsPrinted`'s own
-                // `recordGraphicCells` doc comment states. `widthIsWholePointPitch:
-                // entry == nil || entry!.proportional` -- this branch's own `pitch`
-                // formula above, mirrored (unlike Printed's `proportionalCell`, a
-                // fontless Modern run ALSO takes the `Double(spt)` em-advance branch,
-                // M11).
+                // `recordGraphicCells` doc comment states. `widthIsWholePointPitch` is
+                // always `false` here now (planning #254): `pitch` is always
+                // `spanPitch`'s own Double, entry or no -- the old `wholePitch` branch
+                // this comment used to describe tracked a since-removed code path that
+                // advanced a fontless run's graphic cells at the Modern reading size
+                // instead.
                 if recordGraphicCells != nil {
-                    let wholePitch = entry == nil || entry!.proportional
                     for (i, ch) in run.enumerated() {
                         recordGraphicCells!.append(
                             PageLine.GraphicCellPlacement(char: ch, x: gx + Double(i) * pitch,
                                                           width: pitch,
-                                                          widthIsWholePointPitch: wholePitch))
+                                                          widthIsWholePointPitch: false))
                     }
                 }
                 gx += Double(range.count) * pitch
@@ -610,11 +645,11 @@ func modernLineOps(
             if pos < chars.count {
                 let piece = String(chars[pos...])
                 let pieceWidth = modernTokenWidth(piece, styles: tok.styles, family: tok.family,
-                                                  pt: tok.pt, entry: entry)
+                                                  pt: tok.pt, entry: entry, printedPt: printedPt)
                 let pieceTok = ModernToken(text: piece, styles: tok.styles, family: tok.family,
                                            pt: tok.pt, entry: entry, width: pieceWidth)
                 ops += modernLineOps([pieceTok], left: gx, y: y, width: width, align: .left,
-                                     res: res, tzState: &tzState,
+                                     res: res, tzState: &tzState, printedPt: printedPt,
                                      recordGraphicCells: &recordGraphicCells)
             }
             x += tok.width
@@ -680,6 +715,9 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     let keep: Set<NoteKind> = options.notes.isEmpty
         ? [.footnote, .endnote, .annotation] : options.notes
     let (margl, margt, margb, width) = modernGeometry(doc)
+    // planning #254: threaded to every `modernLineOps`/`modernHFOps` call below -- see
+    // `modernTokenWidth`'s own doc comment.
+    let printedPt = printedSize(doc)
     // N9 (b33 field notes): this function only ever runs the Modern path (printed=false
     // by construction -- `emitPDF`'s own `else` branch), so 'auto' always resolves to
     // single here.
@@ -880,13 +918,13 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
             guard let txt = page.headers[lno], !txt.isEmpty else { continue }
             let hy = Double(PDFMetrics.pageHeight) - 44.0 - Double(lno - 1) * noteLead
             ops += modernHFOps(txt, pageNo: pageNo, left: margl, y: hy, width: width,
-                               res: res, tzState: &tzState)
+                               res: res, tzState: &tzState, printedPt: printedPt)
         }
         for lno in page.footers.keys.sorted() {
             guard let txt = page.footers[lno], !txt.isEmpty else { continue }
             let fy = max(8.0, 44.0 - Double(lno - 1) * noteLead)
             ops += modernHFOps(txt, pageNo: pageNo, left: margl, y: fy, width: width,
-                               res: res, tzState: &tzState)
+                               res: res, tzState: &tzState, printedPt: printedPt)
         }
         for line in page.body {
             if let img = line.image {
@@ -900,7 +938,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
             var lineCells: [PageLine.GraphicCellPlacement]? = attachGraphicCells != nil ? [] : nil
             ops += modernLineOps(line.toks, left: margl + line.indent, y: line.y,
                                  width: max(36.0, width - line.indent - line.cut),
-                                 align: line.align, res: res, tzState: &tzState,
+                                 align: line.align, res: res, tzState: &tzState, printedPt: printedPt,
                                  recordGraphicCells: &lineCells)
             if let semI = line.semIndex, let lineCells, !lineCells.isEmpty {
                 attachGraphicCells![semI, default: []].append(
@@ -926,7 +964,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                     // function's own doc comment) -- always discarded.
                     var discardedGraphicCells: [PageLine.GraphicCellPlacement]? = nil
                     ops += modernLineOps(nlines[i - 1], left: margl, y: ly, width: width,
-                                         align: .left, res: res, tzState: &tzState,
+                                         align: .left, res: res, tzState: &tzState, printedPt: printedPt,
                                          recordGraphicCells: &discardedGraphicCells)
                 }
             }
