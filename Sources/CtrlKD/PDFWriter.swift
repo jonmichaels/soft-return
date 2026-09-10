@@ -1682,8 +1682,24 @@ private func lineOpsPrinted(
             // every space keeps its true proportion. One op per word bounds a viewer's
             // substitute-metric drift to a single word; spaces advance with no operator
             // at all.
-            let pitch = spanPitch(entry, pt)
-            let want = hundredths(faceTz(baseFont, pitch, pt))
+            //
+            // Mechanism G's proportional half (planning #259, 2026-09-10, port of
+            // pdf.py's own comment at the matching call site): `factor` is a property
+            // of the FONT BLOCK — the constant stretch this substitute face needs so
+            // its average glyph lands on WordStar's own declared pitch — not of any
+            // one span's drawn size. A sup/sub span's `pt` is already reduced by
+            // `sized` (8pt at the default 12); computing `factor` from THAT reduced
+            // size asked `faceTz` to stretch an 8pt-average reference glyph up to the
+            // pitch a 12pt-declared font block wants, inflating `want` (measured on
+            // LYING.WS's own 12pt CG-Times font block: 151.69% instead of 101.12%,
+            // landing an 8pt superscript "1" at 6.07pt instead of its natural 4.0pt).
+            // `seg.size` (this span's own UNREDUCED declared size, already in scope)
+            // for BOTH the pitch lookup and `faceTz`'s own reference-string
+            // measurement gives every span on the line the SAME scale — byte-
+            // identical for every non-sup/sub span (`sized` returns `pt == seg.size`
+            // when neither style is set).
+            let pitch = spanPitch(entry, seg.size)
+            let want = hundredths(faceTz(baseFont, pitch, seg.size))
             let factor = Double(want) / 10000.0
             // Continuous underline (Jon's ruling 2026-08-20, see `rules`'s own docstring):
             // one-op-per-word pieces would break the rule at every space no matter what

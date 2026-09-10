@@ -332,6 +332,33 @@ func courierTypestyle() -> Int {
     typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("courier") }!
 }
 
+/// A typestyle number the base-14 mapping resolves to Times (via the `serif` generic-style
+/// bit) — same reasoning as `courierTypestyle()`. Typestyle 5, "Tms Rmn (also CG Times,
+/// Times Roman and Dutch)" — LYING.WS's own real font block. Used by mechanism G's
+/// PROPORTIONAL sup/sub fixture (planning #259), which needs a REAL WS7 font block whose
+/// `.proportional` bit is set and which is NOT also this emitter's fontless-fallback family
+/// (Courier), so the fixture cannot silently pass through the fallback path unexercised.
+func timesTypestyle() -> Int {
+    typestyleNames.firstIndex { $0.hasPrefix("Tms Rmn") }!
+}
+
+/// A REAL type-0 WS5+ header block (planning #259, 2026-09-10): a declared release byte
+/// (0x60 = 7.0 BCD) plus enough padding to clear `detect()`'s own header-shortcut length
+/// floor (jump = payload.count + 4 must be >= 8, i.e. payload >= 4 bytes — the
+/// `data[0]==0x1d && data[3]==0x00` branch). `ws7Block(0x00)` alone (EMPTY payload, jump=4)
+/// fails that floor and falls through to `detect()`'s byte-density heuristics, which
+/// misjudge a SHORT synthetic fixture (this file's own sup/sub fixtures included) as
+/// `.binary` -- the symmetric-block parser (and therefore `doc.fonts`) never even runs, so a
+/// font-block fixture built on a bare `ws7Block(0x00)` preamble silently never exercises a
+/// real font entry at all. Direct port of ctrl-kd's `_ws7_header_block` test helper
+/// (tests/test_ctrlkd.py) -- see that helper's own doc comment for how this was found
+/// (investigating planning #259, this file's own pre-existing `SupSubFixedPitchTests.swift`
+/// fixtures have the SAME gap, invisible only because Courier is both this emitter's
+/// fontless default AND their own chosen face).
+func ws7HeaderBlock() -> [UInt8] {
+    ws7Block(0x00, payload: [0x60] + [UInt8](repeating: 0, count: 20))
+}
+
 /// A WS5+ note block (3=footnote, 4=endnote, 5=annotation, 6=comment) carrying `text`.
 /// Content layout per the WordStar 7.0 spec's Notes section: line-count word, number
 /// word, conversion-flag byte (high nybble = numbering format), then the text.

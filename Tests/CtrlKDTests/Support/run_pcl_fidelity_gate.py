@@ -286,13 +286,25 @@ def _load_ctrlkd_modules():
     return fg, pt
 
 
-# `font-substitution` is the one reason `pcl_tolerance.doc_report()`'s own docstring
-# names as accepted-by-rule (see that file's module docstring and `test_pcl_fidelity.py`'s
-# `real_bugs` filter) -- no `add(...)` call site in ctrl-kd currently uses that literal
-# string, so today this filters nothing out, but the check is kept here, matching
-# ctrl-kd's own test, so this driver and ctrl-kd's `pcl` pytest tier read a fixed set of
-# divergences as "real" the same way if that ever changes.
-ACCEPTED_REASON = 'font-substitution'
+# planning #259 (2026-09-10): this used to be a single literal `'font-substitution'`
+# string that no `add(...)` call site in ctrl-kd ever actually emits -- its own comment
+# said so outright ("today this filters nothing out") -- so this driver's `real_bug_count`
+# counted EVERY `cgtimes-drift-exceeds-tolerance`/`univers-drift-exceeds-tolerance`
+# divergence as a real bug, always, for every document that carries one (LYING's own 3
+# parked residuals included), even though `pcl_tolerance.py`'s own `FONT_SUBSTITUTION_
+# REASONS`/`is_font_substitution_reason` -- the actual, live accepted-by-rule set
+# (mechanism I) -- has named exactly those two reasons for a while. Found chasing planning
+# #259's own "LYING clean except parked drift" bar: ctrl-kd's `pytest -m pcl` already read
+# LYING as clean (0 real_bug_count, 3 accepted cgtimes-drift), and this driver disagreed
+# with it for a reason that had nothing to do with #259's own fix. Delegating to
+# `pt.is_font_substitution_reason` (imported below) instead of a dead local literal keeps
+# this driver honest with ctrl-kd's own live set from here on, the way the comment this
+# replaces always meant to.
+
+
+def _is_accepted_reason(reason: str) -> bool:
+    _fg, pt = _load_ctrlkd_modules()
+    return pt.is_font_substitution_reason(reason)
 
 
 def _divergence_line(d: dict) -> str:
@@ -313,9 +325,9 @@ def _summarize(report: dict) -> dict:
     # function's own docstring). A document with more than 40 divergences for one reason
     # (a private WS4 paper's own 83 `exact-drift` entries, seen while developing this
     # driver) would otherwise silently under-report by the amount the cap trimmed.
-    real_bug_count = sum(v for reason, v in counts.items() if reason != ACCEPTED_REASON)
+    real_bug_count = sum(v for reason, v in counts.items() if not _is_accepted_reason(reason))
     divergences = report.get('divergences', [])
-    real = [d for d in divergences if d['reason'] != ACCEPTED_REASON]
+    real = [d for d in divergences if not _is_accepted_reason(d['reason'])]
     lines = [_divergence_line(d) for d in real[:15]]
     if real_bug_count > len(lines):
         lines.append(f'... and {real_bug_count - len(lines)} more '
