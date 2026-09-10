@@ -14,8 +14,11 @@ import Testing
 @Test func justifyWordXLandsOnThePagelinesModel() {
     // Same fixture/arithmetic as JustificationTests' own
     // `justifiedLineReachesTheResolvedRightMargin`.
-    let src = bytes(".po 0\"\r\n.lm 0\r\n.rm 20\r\n.oj on\r\n") + bytes("AA BB CC") + SOFT
-        + bytes("DD.") + HARD
+    var src = bytes(".po 0\"\r\n.lm 0\r\n.rm 20\r\n.oj on\r\n")
+    src += bytes("AA BB CC")
+    src += SOFT
+    src += bytes("DD.")
+    src += HARD
     let doc = parseWS(src)
     let pages = docToPagelines(doc, printed: true)
     let pieces = pages[0][0].justifyWordX
@@ -42,8 +45,15 @@ import Testing
 @Test func justifyWordXAbsentForAStyledMixedLine() {
     // A second (unjustified) line so the styled first line is not ALSO the block's
     // own last physical line (rule 1 -- always unjustified regardless of shape).
-    let src = bytes(".po 0\"\r\n.lm 0\r\n.rm 40\r\n.oj on\r\n") + bytes("AA ")
-        + [0x02] + bytes("BB") + [0x02] + bytes(" CC") + SOFT + bytes("DD.") + HARD
+    var src = bytes(".po 0\"\r\n.lm 0\r\n.rm 40\r\n.oj on\r\n")
+    src += bytes("AA ")
+    src += [0x02]
+    src += bytes("BB")
+    src += [0x02]
+    src += bytes(" CC")
+    src += SOFT
+    src += bytes("DD.")
+    src += HARD
     let doc = parseWS(src)
     let pages = docToPagelines(doc, printed: true)
     let line = pages[0][0]
@@ -58,7 +68,9 @@ import Testing
     // 1/3/5 (0-based 0/2/4) numbered 1/2/3.
     var body = bytes(".l# 2") + HARD
     for i in 1...6 { body += bytes("Line \(i) text.") + HARD }
-    let doc = parseWS(ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15)) + body)
+    var src251d: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    src251d += body
+    let doc = parseWS(src251d)
     let pages = docToPagelines(doc, printed: true)
     let labels = pages[0].compactMap { $0.lineNo?.text }
     #expect(labels == ["1", "2", "3"])
@@ -108,10 +120,17 @@ import Testing
 
 @Test func graphicCellsLandOnThePagelinesModel() {
     // ┌──┐ / │ab│ / └──┘ (cp437 bytes: da c4 c4 bf / b3 'ab' b3 / c0 c4 c4 d9).
-    let body: [UInt8] = [0xda, 0xc4, 0xc4, 0xbf] + HARD
-        + [0xb3] + bytes("ab") + [0xb3] + HARD
-        + [0xc0, 0xc4, 0xc4, 0xd9] + HARD
-    let doc = parseWS(ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15)) + body)
+    var body: [UInt8] = [0xda, 0xc4, 0xc4, 0xbf]
+    body += HARD
+    body += [0xb3]
+    body += bytes("ab")
+    body += [0xb3]
+    body += HARD
+    body += [0xc0, 0xc4, 0xc4, 0xd9]
+    body += HARD
+    var doc251c: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    doc251c += body
+    let doc = parseWS(doc251c)
     let pages = docToPagelines(doc, printed: true)
     let lines = pages[0].filter { $0.graphicCells != nil }
     #expect(lines.count == 3)
@@ -131,8 +150,10 @@ import Testing
 }
 
 @Test func graphicCellsAbsentForALineWithNoGraphics() {
-    let doc = parseWS(ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
-        + bytes("An ordinary line of prose, nothing graphic here at all.") + HARD)
+    var src251c: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    src251c += bytes("An ordinary line of prose, nothing graphic here at all.")
+    src251c += HARD
+    let doc = parseWS(src251c)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages[0][0].graphicCells == nil)
 }
