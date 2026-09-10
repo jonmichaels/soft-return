@@ -556,6 +556,12 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // carries one — see `Document.headerTabs`/`footerTabs`.
     var headerTabs: [Int: HFTabMark] = [:]
     var footerTabs: [Int: HFTabMark] = [:]
+    // planning #255: this line's own resolved style-sheet alignment/span attrs -- see
+    // `Document.headerAlign`/`headerStyleAttrs`'s own doc comments.
+    var headerAlign: [Int: Alignment] = [:]
+    var footerAlign: [Int: Alignment] = [:]
+    var headerStyleAttrs: [Int: Style] = [:]
+    var footerStyleAttrs: [Int: Style] = [:]
     // planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state -- see
     // `Document.headersParity`'s own doc comment.
     var headersParity: [Int: [HFParity: String]] = [:]
@@ -564,6 +570,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var footerFontsParity: [Int: [HFParity: Int]] = [:]
     var headerTabsParity: [Int: [HFParity: HFTabMark]] = [:]
     var footerTabsParity: [Int: [HFParity: HFTabMark]] = [:]
+    var headerAlignParity: [Int: [HFParity: Alignment]] = [:]
+    var footerAlignParity: [Int: [HFParity: Alignment]] = [:]
+    var headerStyleAttrsParity: [Int: [HFParity: Style]] = [:]
+    var footerStyleAttrsParity: [Int: [HFParity: Style]] = [:]
     var hfEvents: [HFEvent] = []
     var hfEventsParity: [HFParity?] = []
     // Running FORMATTING state, stamped onto each block as it opens. Stateful, unlike
@@ -1013,18 +1023,56 @@ public func parseWS(_ data: [UInt8]) -> Document {
                     break
                 }
             }
+            // Planning #255: a `.h#`/`.f#` argument can ALSO open with its own 0x11
+            // paragraph-style-select (GALLEYS.DOT/ADVANCE.DOT's `.h1o`/`.h1e` --
+            // "Header Odd"/"Header Even"), found the same way `hfFontIdx`/`hfTabMark`
+            // are. Resolved against `styleSlots`, the SAME library lookup the body-text
+            // 0x11 handler above uses -- for BOTH axes a selected style can carry:
+            // `styleAlign`'s own justification reading, and the style's own FONT (real
+            // WS7 capture, sawyer/REF/ADVANCE.DOT's `.h1o`: "Header Odd" renders its
+            // header in 11pt Helvetica-Bold, the style's own declared font, not the
+            // document's default Courier -- style selection changes the active font for
+            // header/footer text exactly as it does for body text, `styleFontIndex` is
+            // the SAME cache the body 0x11 handler shares). An explicit inline font
+            // block ON THIS LINE (`hfFontIdx`, register C6) is the more specific signal
+            // and wins if both exist -- no corpus document exercises that combination,
+            // but the body-text precedent (an inline font block always overrides the
+            // ambient style) argues for the same precedence here.
+            var hfAlign: Alignment? = nil
+            var hfStyleFontIdx: Int? = nil
+            var hfStyleAttrs: Style = []
+            for (_, mark) in physical.marks {
+                if case .style(let w0) = mark, (w0 >> 8) == 0x02,
+                   let entry = styleSlots[w0 & 0xFF] {
+                    hfAlign = styleAlign(w0, styleSlots)
+                    if let record = entry.record {
+                        if let font = record.font,
+                           font.width != 0 || font.height != 0 || font.typestyle != 0 {
+                            hfStyleFontIdx = styleFontIndex(width: font.width, height: font.height,
+                                                            typestyle: font.typestyle)
+                        }
+                        hfStyleAttrs = record.attrs
+                    }
+                    break
+                }
+            }
             parseHeadFoot(stripHibit ? cmd : rstrippingASCIIWhitespace(raw),
                          headers: &headers, footers: &footers,
                          headerFonts: &headerFonts, footerFonts: &footerFonts,
                          headerTabs: &headerTabs, footerTabs: &footerTabs,
+                         headerAlign: &headerAlign, footerAlign: &footerAlign,
+                         headerStyleAttrs: &headerStyleAttrs, footerStyleAttrs: &footerStyleAttrs,
                          headersParity: &headersParity, footersParity: &footersParity,
                          headerFontsParity: &headerFontsParity,
                          footerFontsParity: &footerFontsParity,
                          headerTabsParity: &headerTabsParity,
                          footerTabsParity: &footerTabsParity,
+                         headerAlignParity: &headerAlignParity, footerAlignParity: &footerAlignParity,
+                         headerStyleAttrsParity: &headerStyleAttrsParity,
+                         footerStyleAttrsParity: &footerStyleAttrsParity,
                          hfEvents: &hfEvents, hfEventsParity: &hfEventsParity,
-                         anchor: hfAnchor, fontIdx: hfFontIdx,
-                         tabMark: hfTabMark)
+                         anchor: hfAnchor, fontIdx: hfFontIdx ?? hfStyleFontIdx,
+                         tabMark: hfTabMark, align: hfAlign, styleAttrs: hfStyleAttrs)
             // The index of the block this entry POINTS AT — the one that follows it,
             // which is the block still open (if it has content) or the next to open.
             // "This heading is in the table of contents" refers forward, not back.
@@ -1568,7 +1616,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
         pnStart: page.pnStart.map { Int($0) } ?? 1,
         pnSource: page.pnStart != nil ? .file : .default,
         pcCol: page.pcCol.map { Int($0) },
-        pcSource: page.pcCol != nil ? .file : .default
+        pcSource: page.pcCol != nil ? .file : .default,
+        rmCols: page.rmCols ?? defaultRmCols,
+        rmSource: page.rmCols != nil ? .file : .default
     )
     // The one derived figure consumers actually need: printed text lines per page, from
     // WordStar's own vertical model (see `textLinesPerPage` for the formula and the
@@ -1682,6 +1732,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // planning #202: this line's own right/center/decimal-align tab, when it has one.
     doc.headerTabs = headerTabs
     doc.footerTabs = footerTabs
+    // planning #255: this line's own resolved style-sheet alignment/span attrs.
+    doc.headerAlign = headerAlign
+    doc.footerAlign = footerAlign
+    doc.headerStyleAttrs = headerStyleAttrs
+    doc.footerStyleAttrs = footerStyleAttrs
     // planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state.
     doc.headersParity = headersParity
     doc.footersParity = footersParity
@@ -1689,6 +1744,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
     doc.footerFontsParity = footerFontsParity
     doc.headerTabsParity = headerTabsParity
     doc.footerTabsParity = footerTabsParity
+    doc.headerAlignParity = headerAlignParity
+    doc.footerAlignParity = footerAlignParity
+    doc.headerStyleAttrsParity = headerStyleAttrsParity
+    doc.footerStyleAttrsParity = footerStyleAttrsParity
     doc.hfEventsParity = hfEventsParity
     // Register C2: raw PCL printer payloads, indexed by a span's own `pcl`.
     doc.pclPrograms = pclPrograms
@@ -1891,6 +1950,7 @@ private struct PageAccumulator {
     var cw120: Double?
     var pnStart: Double?
     var pcCol: Double?
+    var rmCols: Double?
 }
 
 /// Named page sizes at 6 LPI (WordStar 7.0 file format spec: ".PL ... assuming 6
@@ -1934,6 +1994,10 @@ let defaultSr48 = 3.0       // WSFORMAT.TXT: "[.SR] ... Default is 3." (1/48in u
 private let defaultLs = 1.0         // single spacing (WS7 manual, "Line Spacing")
 private let defaultCw120 = 12.0     // spec: ".CW ... The default is 12 (12/120ths is 10
                                     // characters per inch)."
+private let defaultRmCols = 65.0    // WSFORMAT.TXT: ".RM ... Default is 65." Matches
+                                    // every other `.rm`-default reading already in this
+                                    // codebase (`newBlock`'s own body-paragraph
+                                    // fallback, `justifyRightX`'s callers).
 
 private func isASCIILetter(_ b: UInt8) -> Bool {
     (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
@@ -2308,15 +2372,22 @@ func textLinesPerPage(pl: Double, mt: Double, mb: Double, lh48: Double) -> Int {
 func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout [Int: String],
                    headerFonts: inout [Int: Int], footerFonts: inout [Int: Int],
                    headerTabs: inout [Int: HFTabMark], footerTabs: inout [Int: HFTabMark],
+                   headerAlign: inout [Int: Alignment], footerAlign: inout [Int: Alignment],
+                   headerStyleAttrs: inout [Int: Style], footerStyleAttrs: inout [Int: Style],
                    headersParity: inout [Int: [HFParity: String]],
                    footersParity: inout [Int: [HFParity: String]],
                    headerFontsParity: inout [Int: [HFParity: Int]],
                    footerFontsParity: inout [Int: [HFParity: Int]],
                    headerTabsParity: inout [Int: [HFParity: HFTabMark]],
                    footerTabsParity: inout [Int: [HFParity: HFTabMark]],
+                   headerAlignParity: inout [Int: [HFParity: Alignment]],
+                   footerAlignParity: inout [Int: [HFParity: Alignment]],
+                   headerStyleAttrsParity: inout [Int: [HFParity: Style]],
+                   footerStyleAttrsParity: inout [Int: [HFParity: Style]],
                    hfEvents: inout [HFEvent], hfEventsParity: inout [HFParity?],
                    anchor: Int, fontIdx: Int? = nil,
-                   tabMark: (offset: Int, absHMI: Int, leader: UInt8, cols: Int)? = nil) {
+                   tabMark: (offset: Int, absHMI: Int, leader: UInt8, cols: Int)? = nil,
+                   align: Alignment? = nil, styleAttrs: Style = []) {
     guard cmd.count >= 3 else { return }
     let first = asciiUppercased(cmd[1])
     let second = asciiUppercased(cmd[2])
@@ -2392,6 +2463,17 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     } else {
         if let tabValue { footerTabs[line] = tabValue } else { footerTabs.removeValue(forKey: line) }
     }
+    // Planning #255: a `.h#`/`.f#` argument's own 0x11 style-select resolves into
+    // `headerAlign`/`headerStyleAttrs` (+ parity) exactly like `fontIdx`/`tabValue`
+    // above -- absent key means WordStar's own ordinary left-aligned default, the same
+    // "presence, not a sentinel value" convention this function already uses.
+    if kind == .header {
+        if let align { headerAlign[line] = align } else { headerAlign.removeValue(forKey: line) }
+        headerStyleAttrs[line] = styleAttrs
+    } else {
+        if let align { footerAlign[line] = align } else { footerAlign.removeValue(forKey: line) }
+        footerStyleAttrs[line] = styleAttrs
+    }
     // Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o` ALSO write their own parity-split
     // state, on top of the ordinary flat write above (kept for Modern/RTF/plain-text,
     // which stay last-in-source-order-wins and parity-unaware -- reported, not fixed,
@@ -2403,12 +2485,20 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
             else { headerFontsParity[line, default: [:]].removeValue(forKey: parity) }
             if let tabValue { headerTabsParity[line, default: [:]][parity] = tabValue }
             else { headerTabsParity[line, default: [:]].removeValue(forKey: parity) }
+            // Planning #255
+            if let align { headerAlignParity[line, default: [:]][parity] = align }
+            else { headerAlignParity[line, default: [:]].removeValue(forKey: parity) }
+            headerStyleAttrsParity[line, default: [:]][parity] = styleAttrs
         } else {
             footersParity[line, default: [:]][parity] = text
             if let fontIdx { footerFontsParity[line, default: [:]][parity] = fontIdx }
             else { footerFontsParity[line, default: [:]].removeValue(forKey: parity) }
             if let tabValue { footerTabsParity[line, default: [:]][parity] = tabValue }
             else { footerTabsParity[line, default: [:]].removeValue(forKey: parity) }
+            // Planning #255
+            if let align { footerAlignParity[line, default: [:]][parity] = align }
+            else { footerAlignParity[line, default: [:]].removeValue(forKey: parity) }
+            footerStyleAttrsParity[line, default: [:]][parity] = styleAttrs
         }
     }
     hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: anchor))
@@ -2630,6 +2720,20 @@ private func parsePageDot(
         if hasText { return }
         guard let (value, _) = parseDotNumber(arg) else { return }
         page.pcCol = value
+    case "RM":
+        // Planning #255: `.rm`'s own document-opening value, at the same 10 CPI
+        // column frame `.po`/`.pc` already share -- needed so a style-sheet-driven
+        // right/center header/footer alignment (GALLEYS.DOT/ADVANCE.DOT's `.h1o`/
+        // `.h1e`) has a print-area RIGHT edge to align against. `.rm` was never
+        // tracked at document level before this (only per-BLOCK, on `FormatState`'s
+        // own separate reading of the same command) because nothing at page/document
+        // scope needed it -- and GALLEYS.DOT/ADVANCE.DOT are pseudogalley templates
+        // with NO body blocks at all, so the block-level reading is unavailable for
+        // exactly the documents that need this. Same pre-text-last-wins rule as
+        // mt/mb/hm/fm/po above.
+        if hasText { return }
+        guard let (value, unit) = parseDotNumber(arg) else { return }
+        page.rmCols = resolveColsArg(value, unit)
     // GAP, reported not implemented (planning #202 cause 6, 2026-09-08): `.POE`/
     // `.POO` (page offset for even/odd pages — WSFORMAT.WS: ".PO can optionally
     // specify even or odd number page offsets") and the matching `.H1E`/`.H1O`/

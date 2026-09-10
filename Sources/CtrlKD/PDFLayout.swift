@@ -1335,7 +1335,8 @@ public func docToPagelines(
                              stripBlanks: false,
                              fallbackHeaders: fallback.headers, fallbackFooters: fallback.footers,
                              fallbackHeadOverride: fallback.headOverride,
-                             fallbackFootOverride: fallback.footOverride))
+                             fallbackFootOverride: fallback.footOverride,
+                             fallbackPoCols: fallback.poCols, fallbackPoParity: fallback.poParity))
             // planning #251(b)/(c)/(d): the same three model-build-time attach
             // passes as the plain path below -- see each function's own doc
             // comment. Both `docToPagelines` branches converge here so `emitPDF`
@@ -1356,7 +1357,8 @@ public func docToPagelines(
                          printed: true, isPrintStream: isPrintStream,
                          fallbackHeaders: fallback.headers, fallbackFooters: fallback.footers,
                          fallbackHeadOverride: fallback.headOverride,
-                         fallbackFootOverride: fallback.footOverride))
+                         fallbackFootOverride: fallback.footOverride,
+                         fallbackPoCols: fallback.poCols, fallbackPoParity: fallback.poParity))
         let attachSize = printedSize(doc)
         attachJustifyWordXPrinted(doc, &plainPages, size: attachSize)
         attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
@@ -1586,7 +1588,8 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
 /// foot_lines` `headers_flat`/`headersFlat` branch (pdf.py, planning #250).
 private func parityResolvedFallbackHeadFoot(_ doc: Document) -> (
     headers: [Int: String], footers: [Int: String],
-    headOverride: [Int: HFOverride]?, footOverride: [Int: HFOverride]?
+    headOverride: [Int: HFOverride]?, footOverride: [Int: HFOverride]?,
+    poCols: Double?, poParity: Bool
 ) {
     let pageNo = doc.page?.pnStart ?? 1
     let isEven = pageNo % 2 == 0
@@ -1596,23 +1599,46 @@ private func parityResolvedFallbackHeadFoot(_ doc: Document) -> (
     if let variant = doc.headersParity[1]?[parity] {
         headers[1] = variant
         headOverride = [1: HFOverride(fontIdx: doc.headerFontsParity[1]?[parity],
-                                      tab: doc.headerTabsParity[1]?[parity])]
+                                      tab: doc.headerTabsParity[1]?[parity],
+                                      align: doc.headerAlignParity[1]?[parity],
+                                      styleAttrs: doc.headerStyleAttrsParity[1]?[parity] ?? [])]
     }
     var footers = doc.footers
     var footOverride: [Int: HFOverride]? = nil
     if let variant = doc.footersParity[1]?[parity] {
         footers[1] = variant
         footOverride = [1: HFOverride(fontIdx: doc.footerFontsParity[1]?[parity],
-                                      tab: doc.footerTabsParity[1]?[parity])]
+                                      tab: doc.footerTabsParity[1]?[parity],
+                                      align: doc.footerAlignParity[1]?[parity],
+                                      styleAttrs: doc.footerStyleAttrsParity[1]?[parity] ?? [])]
     }
-    return (headers, footers, headOverride, footOverride)
+    // Planning #255: a content-free template (GALLEYS.DOT/ADVANCE.DOT) never runs
+    // `closePage`'s own `.poe`/`.poo` resolution either (that loop never starts --
+    // there is no block to open a page at) -- this fallback page's own LEFT origin
+    // needs the SAME resolution `closePage` gives every real page, or a style-sheet
+    // right/center alignment (this function's own caller's caller) would measure its
+    // right edge from the WRONG (flat default) left origin. Reuses the SAME
+    // `poCheckpoints`/`poeOrPooCheckpoints`/`leftForParity` machinery `closePage`
+    // calls, at block 0 (the only anchor a document with no blocks can have).
+    let bi = 0
+    let docPo = poAt(poCheckpoints(doc), bi)
+    let poeCp = poeOrPooCheckpoints(doc, dotName: "POE")
+    let pooCp = poeOrPooCheckpoints(doc, dotName: "POO")
+    let poe: Double? = poeCp.isEmpty ? nil : poAt(poeCp, bi)
+    let poo: Double? = pooCp.isEmpty ? nil : poAt(pooCp, bi)
+    let parityPo = leftForParity(docPo, poe, poo, isEven: isEven)
+    let poCols: Double? = parityPo != docPo ? parityPo : nil
+    let poParity = poe != nil || poo != nil
+    return (headers, footers, headOverride, footOverride, poCols, poParity)
 }
 
 private func finalizePages(_ rawPages: [Page], printed: Bool, isPrintStream: Bool,
                            stripBlanks: Bool = true, fallbackHeaders: [Int: String] = [:],
                            fallbackFooters: [Int: String] = [:],
                            fallbackHeadOverride: [Int: HFOverride]? = nil,
-                           fallbackFootOverride: [Int: HFOverride]? = nil) -> [Page] {
+                           fallbackFootOverride: [Int: HFOverride]? = nil,
+                           fallbackPoCols: Double? = nil,
+                           fallbackPoParity: Bool = false) -> [Page] {
     var pages = rawPages
     if pages.isEmpty {
         // Python's `pages or [[]]`, with the running-head fallback ported alongside it —
@@ -1620,6 +1646,10 @@ private func finalizePages(_ rawPages: [Page], printed: Bool, isPrintStream: Boo
         var pg = Page([], headers: fallbackHeaders, footers: fallbackFooters)
         pg.headHfOverride = fallbackHeadOverride
         pg.footHfOverride = fallbackFootOverride
+        // Planning #255: this fallback page's own `.poe`/`.poo`-resolved left origin
+        // -- see `parityResolvedFallbackHeadFoot`'s own doc comment.
+        if let fallbackPoCols { pg.poCols = fallbackPoCols }
+        pg.poParity = fallbackPoParity
         return [pg]
     }
 
@@ -4352,7 +4382,9 @@ func layoutPrintedPagesPlain(
         // the flat fallback is NOT necessarily "the plain `.h1`'s own text" (a parity-
         // specific override is independently stateful, same as `.poe`/`.poo`).
         func parityHF(evenMap: [Int: String], oddMap: [Int: String],
-                     fontsParity: [Int: [HFParity: Int]], tabsParity: [Int: [HFParity: HFTabMark]])
+                     fontsParity: [Int: [HFParity: Int]], tabsParity: [Int: [HFParity: HFTabMark]],
+                     alignParity: [Int: [HFParity: Alignment]],
+                     styleAttrsParity: [Int: [HFParity: Style]])
             -> (text: String, override: HFOverride)? {
             guard evenMap[1] != nil || oddMap[1] != nil else { return nil }
             let letter: HFParity
@@ -4364,18 +4396,26 @@ func layoutPrintedPagesPlain(
             } else {
                 return nil
             }
-            let override = HFOverride(fontIdx: fontsParity[1]?[letter], tab: tabsParity[1]?[letter])
+            // Planning #255: this page's own resolved style-sheet alignment/span attrs,
+            // the SAME parity slot fontIdx/tab just above already read.
+            let override = HFOverride(fontIdx: fontsParity[1]?[letter], tab: tabsParity[1]?[letter],
+                                      align: alignParity[1]?[letter],
+                                      styleAttrs: styleAttrsParity[1]?[letter] ?? [])
             return (text, override)
         }
         if let (text, override) = parityHF(evenMap: pageHeadersE, oddMap: pageHeadersO,
                                            fontsParity: doc.headerFontsParity,
-                                           tabsParity: doc.headerTabsParity) {
+                                           tabsParity: doc.headerTabsParity,
+                                           alignParity: doc.headerAlignParity,
+                                           styleAttrsParity: doc.headerStyleAttrsParity) {
             if text.isEmpty { pg.headers.removeValue(forKey: 1) } else { pg.headers[1] = text }
             pg.headHfOverride = [1: override]
         }
         if let (text, override) = parityHF(evenMap: pageFootersE, oddMap: pageFootersO,
                                            fontsParity: doc.footerFontsParity,
-                                           tabsParity: doc.footerTabsParity) {
+                                           tabsParity: doc.footerTabsParity,
+                                           alignParity: doc.footerAlignParity,
+                                           styleAttrsParity: doc.footerStyleAttrsParity) {
             if text.isEmpty { pg.footers.removeValue(forKey: 1) } else { pg.footers[1] = text }
             pg.footHfOverride = [1: override]
         }

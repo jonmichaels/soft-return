@@ -1158,6 +1158,11 @@ private func jsonPage(_ page: PageGeometry?) -> LayoutJSONValue {
         ("ls_source", .string(p.lsSource.rawValue)),
         ("cw_120", .double(p.cw120)),
         ("cw_source", .string(p.cwSource.rawValue)),
+        // Planning #255: ctrl-kd's own `doc.meta['page']` dict construction inserts
+        // `rm_cols`/`rm_source` here, right after `cw_source` and before `text_lines`
+        // -- same key order, byte parity.
+        ("rm_cols", .double(p.rmCols)),
+        ("rm_source", .string(p.rmSource.rawValue)),
         ("text_lines", .int(p.textLines)),
         ("lh_varies", .bool(p.lhVaries)),
     ])

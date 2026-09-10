@@ -34,6 +34,8 @@
   "ls_source": "default",
   "cw_120": 12.0,
   "cw_source": "default",
+  "rm_cols": 58.0,
+  "rm_source": "file",
   "text_lines": 55,
   "lh_varies": false
  },

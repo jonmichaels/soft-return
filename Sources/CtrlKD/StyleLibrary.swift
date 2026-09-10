@@ -134,6 +134,24 @@ public func styleHeadingLevel(_ name: String) -> Int {
     return 0
 }
 
+/// The horizontal alignment a 0x11 paragraph-style-select handle's own RESOLVED style
+/// asks for — `.right` (flush right) or `.center`, or `nil` for anything this axis has
+/// never needed (left/justify — WordStar's own left-aligned default — an unresolvable
+/// 0x03xx editing-temp handle, or a slot with no library entry/record). Planning #255
+/// (sawyer/REF/GALLEYS.DOT/ADVANCE.DOT's `.h1o`/`.h1e` "Header Odd"/"Header Even" style
+/// sheets): the SAME pool-tag/slot resolution the body-text 0x11 handler uses (see that
+/// parse site's own comment) and the SAME `StyleRecord.justification` vocabulary
+/// `parseStyleLibrary` already emits — `.right` there means flush-right/right-ALIGNED
+/// (WordStar's own "flush right" term), not the fully-justified `.justify` a running
+/// `.oj on` would ask for; only right/center are documented header/footer alignment
+/// axes (WSFORMAT/-HOW-TO.RJS), so `.justify` and `.left` both fall through to `nil`
+/// here. Direct port of Python's `_style_align` (ctrl-kd core.py).
+public func styleAlign(_ w0: Int, _ styleSlots: [Int: StyleEntry]) -> Alignment? {
+    guard (w0 >> 8) == 0x02, let entry = styleSlots[w0 & 0xFF],
+          let j = entry.record?.justification else { return nil }
+    return (j == .right || j == .center) ? j : nil
+}
+
 /// `String.contains(String)` without Foundation resolves to the stdlib overload
 /// gated on macOS 13 (SE-0405) — a platform truth Linux never enforces, found by
 /// the first macOS CI build (2026-08-04): the Linux suite was green while

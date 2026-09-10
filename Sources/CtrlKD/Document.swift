@@ -197,6 +197,13 @@ public struct PageGeometry: Hashable, Sendable {
     /// them was the bug this field exists to keep apart. `nil` when unset.
     public var pcCol: Int?
     public var pcSource: Provenance
+    /// Planning #255: document-opening `.rm`, at the same 10 CPI column frame `.po`
+    /// uses -- needed so a style-sheet-driven right/center header/footer alignment
+    /// (GALLEYS.DOT/ADVANCE.DOT's `.h1o`/`.h1e`) has a print-area RIGHT edge to align
+    /// against; those two documents have no body blocks to read a per-block right
+    /// margin from. WSFORMAT.TXT: ".RM ... Default is 65."
+    public var rmCols: Double
+    public var rmSource: Provenance
     /// True when ANY line's `.lh` differs from `lh48` above — one flag so a consumer can
     /// say "this document changes its leading" without walking every line.
     ///
@@ -238,6 +245,8 @@ public struct PageGeometry: Hashable, Sendable {
         pnSource: Provenance = .default,
         pcCol: Int? = nil,
         pcSource: Provenance = .default,
+        rmCols: Double = 65.0,
+        rmSource: Provenance = .default,
         lhVaries: Bool = false,
         poVaries: Bool = false
     ) {
@@ -267,6 +276,8 @@ public struct PageGeometry: Hashable, Sendable {
         self.pnSource = pnSource
         self.pcCol = pcCol
         self.pcSource = pcSource
+        self.rmCols = rmCols
+        self.rmSource = rmSource
         self.lhVaries = lhVaries
         self.poVaries = poVaries
     }
@@ -350,10 +361,18 @@ public struct HFTabMark: Hashable, Sendable {
 public struct HFOverride: Hashable, Sendable {
     public var fontIdx: Int?
     public var tab: HFTabMark?
+    /// Planning #255: this parity variant's own resolved style-sheet alignment (`nil` for
+    /// WordStar's ordinary left-aligned default) and the selected style's own baseline
+    /// span attrs — see `Document.headerAlign`/`headerStyleAttrs`'s own doc comments.
+    public var align: Alignment?
+    public var styleAttrs: Style
 
-    public init(fontIdx: Int? = nil, tab: HFTabMark? = nil) {
+    public init(fontIdx: Int? = nil, tab: HFTabMark? = nil, align: Alignment? = nil,
+                styleAttrs: Style = []) {
         self.fontIdx = fontIdx
         self.tab = tab
+        self.align = align
+        self.styleAttrs = styleAttrs
     }
 }
 
@@ -604,6 +623,28 @@ public struct Document: Hashable, Sendable {
     /// limitation `headerFonts`/`footerFonts` have.
     public var headerTabs: [Int: HFTabMark] = [:]
     public var footerTabs: [Int: HFTabMark] = [:]
+    /// Planning #255: a `.h#`/`.f#` argument's own embedded paragraph-style-sheet
+    /// reference (a 0x11 selection, the SAME symmetric-block mechanism a body
+    /// paragraph's style select uses — WSFORMAT's own "Header Odd"/"Header Even" style
+    /// sheets, sawyer/REF/GALLEYS.DOT and ADVANCE.DOT's `.h1o`/`.h1e`) — `.right` (flush
+    /// right) or `.center` when the resolved style's own justification field asks for
+    /// one; absent (the common case) means WordStar's own default left-aligned
+    /// placement, byte-identical to before this existed. A literal type-9 right/center/
+    /// decimal-align TAB typed into the argument text itself (`headerTabs` above) is a
+    /// DIFFERENT, older mechanism — WSFORMAT documents both; a line can in principle
+    /// carry either, never observed carrying both in the corpus.
+    public var headerAlign: [Int: Alignment] = [:]
+    public var footerAlign: [Int: Alignment] = [:]
+    /// Planning #255: the SAME 0x11 style-select's own span-attribute bits — real WS7
+    /// capture, sawyer/REF/ADVANCE.DOT: "Header Odd"/"Header Even" both declare bold
+    /// (measured: "TITLE" prints Helvetica-BOLD, not plain Helvetica), which nothing
+    /// typed in the `.h1o`/`.h1e` argument text itself asks for. A style's attrs are a
+    /// BASELINE for the whole line, exactly like a body paragraph's own style attrs,
+    /// ORed with (never replacing) whatever inline toggle bytes the text itself types.
+    /// Empty `Style` (not absent) when unset, so a consumer can union it into a run's own
+    /// styles unconditionally.
+    public var headerStyleAttrs: [Int: Style] = [:]
+    public var footerStyleAttrs: [Int: Style] = [:]
     /// Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state, alongside
     /// the flat `headers`/`footers` above (still last-in-source-order-wins, unchanged —
     /// Modern/RTF/plain-text export stay parity-unaware, reported not implemented this
@@ -615,6 +656,14 @@ public struct Document: Hashable, Sendable {
     public var footerFontsParity: [Int: [HFParity: Int]] = [:]
     public var headerTabsParity: [Int: [HFParity: HFTabMark]] = [:]
     public var footerTabsParity: [Int: [HFParity: HFTabMark]] = [:]
+    /// Planning #255: the parity-aware sibling of `headerAlign`/`footerAlign` above,
+    /// same shape as `headerTabsParity` — GALLEYS.DOT/ADVANCE.DOT select a DIFFERENT
+    /// style ("Header Odd" vs "Header Even") on their `.h1o`/`.h1e` lines, so the
+    /// resolved alignment itself is parity-dependent, not just the text.
+    public var headerAlignParity: [Int: [HFParity: Alignment]] = [:]
+    public var footerAlignParity: [Int: [HFParity: Alignment]] = [:]
+    public var headerStyleAttrsParity: [Int: [HFParity: Style]] = [:]
+    public var footerStyleAttrsParity: [Int: [HFParity: Style]] = [:]
     /// Every `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` occurrence, in document order, with the
     /// block it precedes — see `HFEvent`. `headers`/`footers` above are the FINAL state,
     /// a convenience view kept for callers that don't need per-page replay.

@@ -178,13 +178,83 @@ private func rule(xFrom: Double, xTo: Double, y: Double) -> [UInt8] {
 /// unaffected by this change. The DEFAULT left/size (72.0/12, both accumulated from integer
 /// starts) are exact at every step, so every document that never sets `.po`/`.cw` still
 /// produces byte-identical output to before this change.
+/// Natural width, in points, of an already-resolved header/footer LINE (`#`
+/// substituted, tab-realignment baked — `resolveLineText`'s own output) — the SAME
+/// font/run resolution `hfLineOps` draws it with (register C6's own family/size
+/// lookup, `hfRuns`'s own toggle-byte styling), so a style-sheet-driven right/center
+/// alignment (planning #255) can be resolved HERE, on the model, and `hfLineOps` can
+/// simply draw at the model's own resolved `x` rather than recomputing this — one
+/// place that measures, matching `resolveLineText`'s own already-established
+/// convention for this function.
+///
+/// `styleAttrs` (planning #255, `Document.headerStyleAttrs`) is the selected
+/// paragraph style's own baseline span attrs (real capture, ADVANCE.DOT's "Header
+/// Odd"/"Header Even": both declare bold) — unioned into every run's own toggle-byte
+/// styles, never replacing them, exactly how `hfLineOps` itself must apply it when it
+/// draws the same text.
+///
+/// Mirrors `hfLineOps`'s own leading-indent special case (a tab-derived indent on a
+/// PROPORTIONAL line re-stamps as 10-CPI machine spaces, not the font's own narrow
+/// space glyph) so alignment and drawing never disagree about how wide the same text
+/// is. Direct port of Python's `_hf_natural_width_pt` (ctrl-kd pdf.py).
+func hfNaturalWidthPt(_ txt: String, fontIdx: Int?, doc: Document, size: Int,
+                      styleAttrs: Style = []) -> Double {
+    var entry: FontChange? = nil
+    if let fontIdx, fontIdx >= 0, fontIdx < doc.fonts.count { entry = doc.fonts[fontIdx] }
+    let family = pdfFamily(entry)
+    let pt: Int
+    if let entry, entry.points != 0 { pt = max(1, roundHalfToEven(entry.points)) }
+    else { pt = size }
+    var total = 0.0
+    for (i, run) in hfRuns(txt).enumerated() {
+        let runText = run.text
+        if runText.isEmpty { continue }
+        if i == 0, runText.trimmed().isEmpty, let entry, entry.proportional {
+            total += Double(runText.count) * pdfPtPerCol
+            continue
+        }
+        let styles = run.styles.union(styleAttrs)
+        let basefont = base14(family, bold: styles.contains(.bold), italic: styles.contains(.italic))
+        total += stringWidthPt(runText, basefont, pt)
+    }
+    return total
+}
+
+/// The starting x, in points, for one header/footer LINE that resolved a style-sheet
+/// alignment (planning #255) — `left` for `nil`/anything unresolved (WordStar's own
+/// default, byte-identical to before this existed), else `text`'s own natural width
+/// pulled back from `rightEdge` (flush right) or split evenly either side of the
+/// measure (center), clamped so a line wider than its own measure never prints LEFT
+/// of `left`. Direct port of Python's `_hf_align_x` (ctrl-kd pdf.py).
+func hfAlignX(_ align: Alignment?, text: String, fontIdx: Int?, doc: Document, size: Int,
+             left: Double, rightEdge: Double?, styleAttrs: Style = []) -> Double {
+    guard let align, align == .right || align == .center, let rightEdge else { return left }
+    let w = hfNaturalWidthPt(text, fontIdx: fontIdx, doc: doc, size: size, styleAttrs: styleAttrs)
+    if align == .right { return max(left, rightEdge - w) }
+    return left + max(0.0, (rightEdge - left - w) / 2.0)
+}
+
+/// The print area's own right edge, in points, for a header/footer line's own
+/// right/center alignment (planning #255) — `left` (the caller's own already-
+/// resolved, parity-aware `.po`/`.poe`/`.poo` origin for THIS page) plus the
+/// document's own `.rm`, at the same 10 CPI column frame `justifyRightX` (body-
+/// paragraph full justification) already uses `poOriginPt + rmCols * pdfPtPerCol`
+/// for. `doc.page?.rmCols` (planning #255) is the document's own OPENING `.rm`, the
+/// same "one resolved answer, page-1-shaped" rule mt/mb/hm/fm/po already follow at
+/// this same document-level scope. Direct port of Python's `_printed_hf_right`
+/// (ctrl-kd pdf.py).
+func printedHfRight(_ doc: Document, left: Double) -> Double? {
+    guard let rmCols = doc.page?.rmCols else { return nil }
+    return left + rmCols * pdfPtPerCol
+}
+
 /// The resolved running head/foot lines for one page (planning #251(d)) — the
 /// return shape of `resolveHeadFootLines`, shared by `runningOps` (the writer) and
 /// `attachHeadFootLinesPrinted` (the page-lines model). Port of Python's
 /// `{'headers': [...], 'footers': [...], 'auto': ... or None}` dict.
 struct ResolvedHeadFoot {
-    var headers: [(n: Int, text: String, y: Double, fontIdx: Int?)]
-    var footers: [(n: Int, text: String, y: Double, fontIdx: Int?)]
+    var headers: [(n: Int, text: String, y: Double, fontIdx: Int?, x: Double, styleAttrs: Style)]
+    var footers: [(n: Int, text: String, y: Double, fontIdx: Int?, x: Double, styleAttrs: Style)]
     var auto: (text: String, x: Double, y: Double)?
 }
 
@@ -466,8 +536,15 @@ func resolveHeadFootLines(
     let hm = doc.page?.hmLines ?? 2.0
     let topHead = Double(headers.keys.max() ?? 1)
     let headBase = max(0.0, mt - hm - topHead)
+    // Planning #255: the print area's own right edge, once per page (every
+    // header/footer line on it shares the same `.rm`) -- see `printedHfRight`'s own
+    // doc comment. `nil` for a document that never resolves a `.rm` at all
+    // (impossible in practice -- `doc.page?.rmCols` always carries at least the
+    // WordStar default -- kept as a guard anyway since `hfAlignX` already treats
+    // `nil` as "no alignment").
+    let rightEdge = printedHfRight(doc, left: left)
 
-    var resolvedHeaders: [(n: Int, text: String, y: Double, fontIdx: Int?)] = []
+    var resolvedHeaders: [(n: Int, text: String, y: Double, fontIdx: Int?, x: Double, styleAttrs: Style)] = []
     for n in headers.keys.sorted() {
         guard let txt = headers[n], !txt.isEmpty else { continue }
         let y = Double(pageHeight) - (headBase + Double(n - 1)) * Double(PDFMetrics.lead)
@@ -475,15 +552,23 @@ func resolveHeadFootLines(
         guard y >= 0 else { continue }
         let fontIdx: Int?
         let tabRec: HFTabMark?
+        let align: Alignment?
+        let styleAttrs: Style
         if let override = headHfOverride?[n] {
             fontIdx = override.fontIdx
             tabRec = override.tab
+            align = override.align
+            styleAttrs = override.styleAttrs
         } else {
             fontIdx = doc.headerFonts[n]
             tabRec = doc.headerTabs[n]
+            align = doc.headerAlign[n]
+            styleAttrs = doc.headerStyleAttrs[n] ?? []
         }
         let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: tabRec)
-        resolvedHeaders.append((n: n, text: text, y: y, fontIdx: fontIdx))
+        let x = hfAlignX(align, text: text, fontIdx: fontIdx, doc: doc, size: size,
+                         left: left, rightEdge: rightEdge, styleAttrs: styleAttrs)
+        resolvedHeaders.append((n: n, text: text, y: y, fontIdx: fontIdx, x: x, styleAttrs: styleAttrs))
     }
     // b26-header-baseline: `fm` is deliberately UNCHANGED -- checked for the same
     // default/explicit asymmetry `.hm` turned out to have, above, and NOT applying it
@@ -497,22 +582,30 @@ func resolveHeadFootLines(
     // dated, evidence that a default `.fm` already participates in the footer's own
     // placement, unlike a default `.hm` in the header's. Reported, not acted on.
     let footLine = pl - mb + fm
-    var resolvedFooters: [(n: Int, text: String, y: Double, fontIdx: Int?)] = []
+    var resolvedFooters: [(n: Int, text: String, y: Double, fontIdx: Int?, x: Double, styleAttrs: Style)] = []
     for n in footers.keys.sorted() {
         guard let txt = footers[n], !txt.isEmpty else { continue }
         let y = Double(pageHeight) - Double(footLine + n - 1) * lead - Double(size)
         guard y >= 0 else { continue }
         let fontIdx: Int?
         let tabRec: HFTabMark?
+        let align: Alignment?
+        let styleAttrs: Style
         if let override = footHfOverride?[n] {
             fontIdx = override.fontIdx
             tabRec = override.tab
+            align = override.align
+            styleAttrs = override.styleAttrs
         } else {
             fontIdx = doc.footerFonts[n]
             tabRec = doc.footerTabs[n]
+            align = doc.footerAlign[n]
+            styleAttrs = doc.footerStyleAttrs[n] ?? []
         }
         let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: tabRec)
-        resolvedFooters.append((n: n, text: text, y: y, fontIdx: fontIdx))
+        let x = hfAlignX(align, text: text, fontIdx: fontIdx, doc: doc, size: size,
+                         left: left, rightEdge: rightEdge, styleAttrs: styleAttrs)
+        resolvedFooters.append((n: n, text: text, y: y, fontIdx: fontIdx, x: x, styleAttrs: styleAttrs))
     }
     var auto: (text: String, x: Double, y: Double)? = nil
     if showAutoNum {
@@ -595,13 +688,14 @@ func runningOps(
     /// run-by-run path (it registers whatever base-14 font gets used in the page's own
     /// /Font resources); a caller that omits it gets the old single-Tj behaviour
     /// regardless (there is no way to register a font without one), same as before this fix.
-    func hfLineOps(_ txt: String, y: Double, fontIdx: Int?) -> [[UInt8]] {
+    func hfLineOps(_ txt: String, y: Double, fontIdx: Int?, x0: Double,
+                   styleAttrs: Style = []) -> [[UInt8]] {
         var entry: FontChange? = nil
         if let fontIdx, res != nil, fontIdx >= 0, fontIdx < doc.fonts.count {
             entry = doc.fonts[fontIdx]
         }
         let hasControlByte = txt.unicodeScalars.contains { $0.value < 0x20 }
-        if entry == nil, res == nil || !hasControlByte {
+        if entry == nil, styleAttrs.isEmpty, res == nil || !hasControlByte {
             // `txt.replacingAll("\u{2219}", with: "\u{2022}")`: this fast path (no
             // font block, no control/toggle byte anywhere) never calls `hfRuns` at
             // all -- fine for style and control-byte handling, since the gate just
@@ -619,7 +713,7 @@ func runningOps(
             // by design) against the PDF's own drawn bytes. ctrl-kd's own `_hf_line_
             // ops` carries the identical fix (pdf.py, same commit).
             var out = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
-            out += Array("\(fixedOneDecimalDouble(left)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+            out += Array("\(fixedOneDecimalDouble(x0)) \(fixedOneDecimalDouble(y)) Td (".utf8)
             out += esc(txt.replacingAll("\u{2219}", with: "\u{2022}"))
             out += Array(") Tj ET".utf8)
             return [out]
@@ -637,7 +731,7 @@ func runningOps(
             pt = size
         }
         var ops: [[UInt8]] = []
-        var x = left
+        var x = x0
         for (i, run) in hfRuns(txt).enumerated() {
             let runText = run.text
             if runText.isEmpty { continue }
@@ -652,8 +746,9 @@ func runningOps(
                 x += Double(runText.count) * pdfPtPerCol
                 continue
             }
-            let basefont = base14(family, bold: run.styles.contains(.bold),
-                                  italic: run.styles.contains(.italic))
+            let styles = run.styles.union(styleAttrs)
+            let basefont = base14(family, bold: styles.contains(.bold),
+                                  italic: styles.contains(.italic))
             let font = res.ref(basefont)
             var op = Array("BT /\(font) \(pt) Tf 0 Ts ".utf8)
             op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
@@ -666,11 +761,11 @@ func runningOps(
     }
 
     var ops: [[UInt8]] = []
-    for (_, text, y, fontIdx) in resolved.headers {
-        ops += hfLineOps(text, y: y, fontIdx: fontIdx)
+    for (_, text, y, fontIdx, x0, styleAttrs) in resolved.headers {
+        ops += hfLineOps(text, y: y, fontIdx: fontIdx, x0: x0, styleAttrs: styleAttrs)
     }
-    for (_, text, y, fontIdx) in resolved.footers {
-        ops += hfLineOps(text, y: y, fontIdx: fontIdx)
+    for (_, text, y, fontIdx, x0, styleAttrs) in resolved.footers {
+        ops += hfLineOps(text, y: y, fontIdx: fontIdx, x0: x0, styleAttrs: styleAttrs)
     }
     if let auto = resolved.auto {
         var op = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
@@ -2244,14 +2339,21 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
             autoPageNumber: autoPageNumber,
             headHfOverride: headHfOverrideIn, footHfOverride: footHfOverrideIn)
         else { continue }
+        // Planning #255: `styleAttrs` is a PDF-render-time concern only, applied by
+        // `runningOps`'s `hfLineOps` -- the page-lines MODEL keeps its pre-existing
+        // `HeadFootLine` shape (`text`/`x`/`y`/`font` only), unchanged for every
+        // document, matching this field's own established "byte-identical unless a
+        // document actually uses the mechanism" convention. `$0.x` (not `pageLeft`)
+        // is this line's own already-measured right/center-aligned starting point --
+        // `left` unchanged for the overwhelmingly common case.
         if !resolved.headers.isEmpty {
             pages[pi].headerLines = resolved.headers.map {
-                HeadFootLine(text: $0.text, x: pageLeft, y: $0.y, font: $0.fontIdx)
+                HeadFootLine(text: $0.text, x: $0.x, y: $0.y, font: $0.fontIdx)
             }
         }
         if !resolved.footers.isEmpty {
             pages[pi].footerLines = resolved.footers.map {
-                HeadFootLine(text: $0.text, x: pageLeft, y: $0.y, font: $0.fontIdx)
+                HeadFootLine(text: $0.text, x: $0.x, y: $0.y, font: $0.fontIdx)
             }
         }
         if let auto = resolved.auto {
