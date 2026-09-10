@@ -261,8 +261,21 @@ struct ResolvedHeadFoot {
 func resolveHeadFootLines(
     _ doc: Document, pageNo: Int, pageHeight: Int, lead: Double, size: Int,
     left: Double, printed: Bool, headers: [Int: String]? = nil, footers: [Int: String]? = nil,
-    autoPageNumber: Bool = false
+    autoPageNumber: Bool = false,
+    headHfOverride: [Int: HFOverride]? = nil, footHfOverride: [Int: HFOverride]? = nil
 ) -> ResolvedHeadFoot? {
+    // Planning #250: a document with NO real body blocks at all (GALLEYS.DOT/
+    // ADVANCE.DOT -- pseudogalley templates) never builds a real per-page `Page` via
+    // `closePage` -- `finalizePages`'s own `pages.isEmpty` fallback bakes `doc.
+    // headers`/`doc.footers` (already parity-resolved for the fallback page's own
+    // number by `parityResolvedFallbackHeadFoot`, PDFLayout.swift) directly into a
+    // concrete `Page`, so `headers`/`footers` below are NEVER `nil` for a real `Page`
+    // -- only the synthetic TOC path (`headers: [:]`, an explicit empty dict, never
+    // `nil`) and that same fallback exercise the `?? doc.headers` branch just below.
+    // `headHfOverride`/`footHfOverride` are threaded the SAME way `Page.headHfOverride`
+    // itself is (see its own doc comment) -- `nil` (every page of every document that
+    // never uses the family) reads the flat `doc.headerFonts`/`headerTabs` exactly as
+    // before this feature existed.
     let headers = headers ?? doc.headers
     let footers = footers ?? doc.footers
     let footerInUse = !footers.isEmpty && footers.values.contains { !$0.isEmpty }
@@ -460,8 +473,16 @@ func resolveHeadFootLines(
         let y = Double(pageHeight) - (headBase + Double(n - 1)) * Double(PDFMetrics.lead)
             - Double(size)
         guard y >= 0 else { continue }
-        let fontIdx = doc.headerFonts[n]
-        let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: doc.headerTabs[n])
+        let fontIdx: Int?
+        let tabRec: HFTabMark?
+        if let override = headHfOverride?[n] {
+            fontIdx = override.fontIdx
+            tabRec = override.tab
+        } else {
+            fontIdx = doc.headerFonts[n]
+            tabRec = doc.headerTabs[n]
+        }
+        let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: tabRec)
         resolvedHeaders.append((n: n, text: text, y: y, fontIdx: fontIdx))
     }
     // b26-header-baseline: `fm` is deliberately UNCHANGED -- checked for the same
@@ -481,8 +502,16 @@ func resolveHeadFootLines(
         guard let txt = footers[n], !txt.isEmpty else { continue }
         let y = Double(pageHeight) - Double(footLine + n - 1) * lead - Double(size)
         guard y >= 0 else { continue }
-        let fontIdx = doc.footerFonts[n]
-        let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: doc.footerTabs[n])
+        let fontIdx: Int?
+        let tabRec: HFTabMark?
+        if let override = footHfOverride?[n] {
+            fontIdx = override.fontIdx
+            tabRec = override.tab
+        } else {
+            fontIdx = doc.footerFonts[n]
+            tabRec = doc.footerTabs[n]
+        }
+        let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: tabRec)
         resolvedFooters.append((n: n, text: text, y: y, fontIdx: fontIdx))
     }
     var auto: (text: String, x: Double, y: Double)? = nil
@@ -523,12 +552,15 @@ func resolveHeadFootLines(
 func runningOps(
     _ doc: Document, pageNo: Int, pageHeight: Int, lead: Double, size: Int,
     left: Double, printed: Bool, headers: [Int: String]? = nil, footers: [Int: String]? = nil,
-    res: FontResources? = nil, autoPageNumber: Bool = false
+    res: FontResources? = nil, autoPageNumber: Bool = false,
+    headHfOverride: [Int: HFOverride]? = nil, footHfOverride: [Int: HFOverride]? = nil
 ) -> [[UInt8]] {
     guard let resolved = resolveHeadFootLines(doc, pageNo: pageNo, pageHeight: pageHeight,
                                               lead: lead, size: size, left: left,
                                               printed: printed, headers: headers,
-                                              footers: footers, autoPageNumber: autoPageNumber)
+                                              footers: footers, autoPageNumber: autoPageNumber,
+                                              headHfOverride: headHfOverride,
+                                              footHfOverride: footHfOverride)
     else { return [] }
 
     /// One already-resolved header/footer LINE's ops (register C6). `fontIdx` is the
@@ -2173,6 +2205,13 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
         // number).
         let headersIn: [Int: String]? = (isNotesPath && page0.explicitBreakBI == nil) ? nil : page0.headers
         let footersIn: [Int: String]? = (isNotesPath && page0.explicitBreakBI == nil) ? nil : page0.footers
+        // Planning #250: `page0.headHfOverride`/`footHfOverride` are `nil` for every
+        // notes-path page (`layoutPrintedPages` never replays `hfEvents`, so
+        // `closePage` there -- a DIFFERENT function -- never sets them), so no
+        // `isNotesPath` special-case is needed the way `headersIn`/`footersIn` above
+        // have one.
+        let headHfOverrideIn = page0.headHfOverride
+        let footHfOverrideIn = page0.footHfOverride
         let page = pages[pi]
         let pageGeomChanged = page.mtLines != nil || page.mbLines != nil
             || page.hmLines != nil || page.fmLines != nil
@@ -2202,7 +2241,8 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
         guard let resolved = resolveHeadFootLines(
             pageDoc, pageNo: pageNumbers[pi], pageHeight: pageHeight, lead: lead, size: size,
             left: pageLeft, printed: true, headers: headersIn, footers: footersIn,
-            autoPageNumber: autoPageNumber)
+            autoPageNumber: autoPageNumber,
+            headHfOverride: headHfOverrideIn, footHfOverride: footHfOverrideIn)
         else { continue }
         if !resolved.headers.isEmpty {
             pages[pi].headerLines = resolved.headers.map {
@@ -2478,7 +2518,9 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                      lead: lead, size: size, left: pageLeft, printed: true,
                                      headers: options.headers ? page.headers : [:],
                                      footers: options.headers ? page.footers : [:],
-                                     res: res, autoPageNumber: autoPageNumber)
+                                     res: res, autoPageNumber: autoPageNumber,
+                                     headHfOverride: options.headers ? page.headHfOverride : nil,
+                                     footHfOverride: options.headers ? page.footHfOverride : nil)
             built.append(pageStream(page, top: pageTop, pageHeight: pageHeight, lead: lead,
                                     size: size, left: left, running: running,
                                     fonts: fonts, res: res, colourMap: colourMap,

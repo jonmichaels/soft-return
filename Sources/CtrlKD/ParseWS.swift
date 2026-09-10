@@ -556,7 +556,16 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // carries one — see `Document.headerTabs`/`footerTabs`.
     var headerTabs: [Int: HFTabMark] = [:]
     var footerTabs: [Int: HFTabMark] = [:]
+    // planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state -- see
+    // `Document.headersParity`'s own doc comment.
+    var headersParity: [Int: [HFParity: String]] = [:]
+    var footersParity: [Int: [HFParity: String]] = [:]
+    var headerFontsParity: [Int: [HFParity: Int]] = [:]
+    var footerFontsParity: [Int: [HFParity: Int]] = [:]
+    var headerTabsParity: [Int: [HFParity: HFTabMark]] = [:]
+    var footerTabsParity: [Int: [HFParity: HFTabMark]] = [:]
     var hfEvents: [HFEvent] = []
+    var hfEventsParity: [HFParity?] = []
     // Running FORMATTING state, stamped onto each block as it opens. Stateful, unlike
     // page geometry — see `Formatting2.swift`.
     var fmt = FormatState()
@@ -1008,7 +1017,13 @@ public func parseWS(_ data: [UInt8]) -> Document {
                          headers: &headers, footers: &footers,
                          headerFonts: &headerFonts, footerFonts: &footerFonts,
                          headerTabs: &headerTabs, footerTabs: &footerTabs,
-                         hfEvents: &hfEvents, anchor: hfAnchor, fontIdx: hfFontIdx,
+                         headersParity: &headersParity, footersParity: &footersParity,
+                         headerFontsParity: &headerFontsParity,
+                         footerFontsParity: &footerFontsParity,
+                         headerTabsParity: &headerTabsParity,
+                         footerTabsParity: &footerTabsParity,
+                         hfEvents: &hfEvents, hfEventsParity: &hfEventsParity,
+                         anchor: hfAnchor, fontIdx: hfFontIdx,
                          tabMark: hfTabMark)
             // The index of the block this entry POINTS AT — the one that follows it,
             // which is the block still open (if it has content) or the next to open.
@@ -1667,6 +1682,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
     // planning #202: this line's own right/center/decimal-align tab, when it has one.
     doc.headerTabs = headerTabs
     doc.footerTabs = footerTabs
+    // planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state.
+    doc.headersParity = headersParity
+    doc.footersParity = footersParity
+    doc.headerFontsParity = headerFontsParity
+    doc.footerFontsParity = footerFontsParity
+    doc.headerTabsParity = headerTabsParity
+    doc.footerTabsParity = footerTabsParity
+    doc.hfEventsParity = hfEventsParity
     // Register C2: raw PCL printer payloads, indexed by a span's own `pcl`.
     doc.pclPrograms = pclPrograms
     // #228 (planning #228, research/2026-09-08_trailing-pa-rule.md): only
@@ -2285,14 +2308,40 @@ func textLinesPerPage(pl: Double, mt: Double, mb: Double, lh48: Double) -> Int {
 func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout [Int: String],
                    headerFonts: inout [Int: Int], footerFonts: inout [Int: Int],
                    headerTabs: inout [Int: HFTabMark], footerTabs: inout [Int: HFTabMark],
-                   hfEvents: inout [HFEvent], anchor: Int, fontIdx: Int? = nil,
+                   headersParity: inout [Int: [HFParity: String]],
+                   footersParity: inout [Int: [HFParity: String]],
+                   headerFontsParity: inout [Int: [HFParity: Int]],
+                   footerFontsParity: inout [Int: [HFParity: Int]],
+                   headerTabsParity: inout [Int: [HFParity: HFTabMark]],
+                   footerTabsParity: inout [Int: [HFParity: HFTabMark]],
+                   hfEvents: inout [HFEvent], hfEventsParity: inout [HFParity?],
+                   anchor: Int, fontIdx: Int? = nil,
                    tabMark: (offset: Int, absHMI: Int, leader: UInt8, cols: Int)? = nil) {
     guard cmd.count >= 3 else { return }
     let first = asciiUppercased(cmd[1])
     let second = asciiUppercased(cmd[2])
     guard first == 0x48 || first == 0x46 else { return }          // 'H' or 'F'
     let line: Int
-    if (first == 0x48 && second == 0x45) || (first == 0x46 && second == 0x4F) {
+    // Planning #250: `.H1E`/`.H1O`/`.F1E`/`.F1O` -- real 3-letter dot commands
+    // (WSFORMAT.TXT confirms only line 1 of each carries an even/odd variant; see
+    // `Document.headersParity`'s own doc comment). Checked BEFORE the plain `.H1`-`.H5`
+    // branch below, on a 4th byte, so a bare `.h1`/`.f1` (no 4th byte, or a 4th byte
+    // that isn't E/O) still falls through unchanged.
+    var parity: HFParity? = nil
+    var cmdArgOffset = 3
+    if second == 0x31, cmd.count >= 4 {
+        let third = asciiUppercased(cmd[3])
+        if third == 0x45 {                                         // .H1E / .F1E
+            parity = .even
+            cmdArgOffset = 4
+        } else if third == 0x4F {                                  // .H1O / .F1O
+            parity = .odd
+            cmdArgOffset = 4
+        }
+    }
+    if parity != nil {
+        line = 1
+    } else if (first == 0x48 && second == 0x45) || (first == 0x46 && second == 0x4F) {
         line = 1                                                   // .HE / .FO
     } else if second >= 0x31 && second <= 0x35 {
         line = Int(second - 0x30)                                  // .H1-.H5 / .F1-.F5
@@ -2301,8 +2350,8 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     }
     // Python's `\s?` consumes at most ONE space after the command, so a deliberately
     // indented running head keeps the rest of its leading spaces.
-    var rest = Array(cmd.dropFirst(3))
-    var argStart = 3
+    var rest = Array(cmd.dropFirst(cmdArgOffset))
+    var argStart = cmdArgOffset
     if rest.first == 0x20 { rest.removeFirst(); argStart += 1 }
     // planning #202: `tabMark`'s own offset is in `cmd`'s coordinate space; `rest` (the
     // argument text this function actually decodes) starts at `argStart` within `cmd`.
@@ -2332,15 +2381,38 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     // planning #202: a tab whose own byte offset landed at or past the '#'-bearing text
     // (or whose recovered char offset ended up past what `trimmedTrailing()` kept) has
     // nothing left to reposition -- absent, same as a line with no tab at all.
+    let tabValue: HFTabMark?
     if let tabMark, let tabCharIdx, tabCharIdx >= 0, tabCharIdx <= text.count {
-        let mark = HFTabMark(charIdx: tabCharIdx, cols: tabMark.cols, absHMI: tabMark.absHMI)
-        if kind == .header { headerTabs[line] = mark } else { footerTabs[line] = mark }
-    } else if kind == .header {
-        headerTabs.removeValue(forKey: line)
+        tabValue = HFTabMark(charIdx: tabCharIdx, cols: tabMark.cols, absHMI: tabMark.absHMI)
     } else {
-        footerTabs.removeValue(forKey: line)
+        tabValue = nil
+    }
+    if kind == .header {
+        if let tabValue { headerTabs[line] = tabValue } else { headerTabs.removeValue(forKey: line) }
+    } else {
+        if let tabValue { footerTabs[line] = tabValue } else { footerTabs.removeValue(forKey: line) }
+    }
+    // Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o` ALSO write their own parity-split
+    // state, on top of the ordinary flat write above (kept for Modern/RTF/plain-text,
+    // which stay last-in-source-order-wins and parity-unaware -- reported, not fixed,
+    // this round).
+    if let parity {
+        if kind == .header {
+            headersParity[line, default: [:]][parity] = text
+            if let fontIdx { headerFontsParity[line, default: [:]][parity] = fontIdx }
+            else { headerFontsParity[line, default: [:]].removeValue(forKey: parity) }
+            if let tabValue { headerTabsParity[line, default: [:]][parity] = tabValue }
+            else { headerTabsParity[line, default: [:]].removeValue(forKey: parity) }
+        } else {
+            footersParity[line, default: [:]][parity] = text
+            if let fontIdx { footerFontsParity[line, default: [:]][parity] = fontIdx }
+            else { footerFontsParity[line, default: [:]].removeValue(forKey: parity) }
+            if let tabValue { footerTabsParity[line, default: [:]][parity] = tabValue }
+            else { footerTabsParity[line, default: [:]].removeValue(forKey: parity) }
+        }
     }
     hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: anchor))
+    hfEventsParity.append(parity)
 }
 
 /// Decode header/footer TEXT, expanding `<1B x 1C>` wrapped characters: the middle byte

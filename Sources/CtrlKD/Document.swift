@@ -278,6 +278,17 @@ public enum HFKind: Hashable, Sendable {
     case footer
 }
 
+/// A `.h1e`/`.h1o`/`.f1e`/`.f1o` occurrence's own page parity (planning #250).
+/// WSFORMAT.TXT confirms only `.HE`/`.H1` and `.FO`/`.F1` "can optionally specify even
+/// or odd numbered page" headers/footers — `.H2`-`.H5`/`.F2`-`.F5` carry no such wording
+/// and no real corpus document sets one, so this only ever applies to line 1. `.even`
+/// matches WS7's own naming (`.h1e`) and the real-corpus prose confirming the mapping
+/// (sawyer/REF/-HOW-TO.RJS: `.h1o`'s own style sheet is literally named "Header Odd").
+public enum HFParity: Hashable, Sendable {
+    case even
+    case odd
+}
+
 /// One `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` occurrence, IN DOCUMENT ORDER, with the block it
 /// precedes. WordStar applies a running head/foot from the PAGE where it is defined — on
 /// that page itself only if no text has printed there yet, else from the next page.
@@ -326,6 +337,23 @@ public struct HFTabMark: Hashable, Sendable {
         self.charIdx = charIdx
         self.cols = cols
         self.absHMI = absHMI
+    }
+}
+
+/// Planning #250: one line's own font/tab, resolved for the SPECIFIC `.h1e`/`.h1o`/
+/// `.f1e`/`.f1o` variant a page's own parity picked — `Page.headHfOverride`/
+/// `footHfOverride`'s value type. `nil` on either field has the same meaning it already
+/// does on the flat `headerFonts`/`headerTabs` (fontless, or no tab) — the override's
+/// mere PRESENCE in the dict (as opposed to the dict lacking that line's key at all) is
+/// what tells `resolveHeadFootLines` to use it instead of the flat `Document.
+/// headerFonts`/`headerTabs` reads.
+public struct HFOverride: Hashable, Sendable {
+    public var fontIdx: Int?
+    public var tab: HFTabMark?
+
+    public init(fontIdx: Int? = nil, tab: HFTabMark? = nil) {
+        self.fontIdx = fontIdx
+        self.tab = tab
     }
 }
 
@@ -576,10 +604,29 @@ public struct Document: Hashable, Sendable {
     /// limitation `headerFonts`/`footerFonts` have.
     public var headerTabs: [Int: HFTabMark] = [:]
     public var footerTabs: [Int: HFTabMark] = [:]
+    /// Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state, alongside
+    /// the flat `headers`/`footers` above (still last-in-source-order-wins, unchanged —
+    /// Modern/RTF/plain-text export stay parity-unaware, reported not implemented this
+    /// round). Only key 1 is ever populated (see `HFParity`'s own doc comment). FINAL
+    /// state per parity, same limitation `headerFonts`/`headerTabs` already have.
+    public var headersParity: [Int: [HFParity: String]] = [:]
+    public var footersParity: [Int: [HFParity: String]] = [:]
+    public var headerFontsParity: [Int: [HFParity: Int]] = [:]
+    public var footerFontsParity: [Int: [HFParity: Int]] = [:]
+    public var headerTabsParity: [Int: [HFParity: HFTabMark]] = [:]
+    public var footerTabsParity: [Int: [HFParity: HFTabMark]] = [:]
     /// Every `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` occurrence, in document order, with the
     /// block it precedes — see `HFEvent`. `headers`/`footers` above are the FINAL state,
     /// a convenience view kept for callers that don't need per-page replay.
     public var hfEvents: [HFEvent]
+    /// `hfEvents`'s own parity, INDEX-ALIGNED with it (same length; `hfEventsParity[i]`
+    /// is `hfEvents[i]`'s own parity) rather than a field added onto `HFEvent` itself —
+    /// mirrors ctrl-kd's own `Document.hf_events_parity` (planning #250): a separate
+    /// array so `HFEvent`'s own shape, and every existing consumer of it, stays
+    /// unchanged for the 380+ real corpus documents that never use the family. `nil` for
+    /// a plain `.h1`/`.he`/`.f1`/`.fo` event, else `.even`/`.odd` for
+    /// `.h1e`/`.h1o`/`.f1e`/`.f1o`.
+    public var hfEventsParity: [HFParity?] = []
     /// Round-trip ledger — see `RoundtripLedger` (tasks #20/#21). `nil` for documents
     /// not built by `parseWS`.
     public var roundtrip: RoundtripLedger?

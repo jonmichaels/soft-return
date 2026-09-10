@@ -912,6 +912,14 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     public var headerLines: [HeadFootLine]?
     public var footerLines: [HeadFootLine]?
     public var autoPageno: AutoPageNumber?
+    /// Planning #250: `{1: HFOverride}` — set ONLY when THIS page's line 1 came from a
+    /// `.h1e`/`.h1o`/`.f1e`/`.f1o` parity variant (not a plain `.h1`/`.fo`), by
+    /// `closePage`'s own parity resolver. `nil` (the "no opinion, read `Document.
+    /// headerFonts`/`headerTabs` as before" default) for every page of every document
+    /// that never uses the family — same convention as `poCols`/`poParity` above. Port
+    /// of Python's `Page.head_hf_override`/`foot_hf_override`.
+    public var headHfOverride: [Int: HFOverride]?
+    public var footHfOverride: [Int: HFOverride]?
 
     public init() {
         lines = []
@@ -932,6 +940,8 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         headerLines = nil
         footerLines = nil
         autoPageno = nil
+        headHfOverride = nil
+        footHfOverride = nil
     }
 
     public init(_ lines: [PageLine], headers: [Int: String] = [:], footers: [Int: String] = [:],
@@ -958,6 +968,8 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.columnWidthPt = columnWidthPt
         self.headerLines = nil
         self.footerLines = nil
+        self.headHfOverride = nil
+        self.footHfOverride = nil
         self.autoPageno = nil
     }
 
@@ -1153,6 +1165,10 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
         // page's own metadata already means.
         merged.headers = pg.headers
         merged.footers = pg.footers
+        // planning #250: carry the source page's own parity font/tab override through
+        // the merge, same passthrough as headers/footers just above.
+        merged.headHfOverride = pg.headHfOverride
+        merged.footHfOverride = pg.footHfOverride
         merged.mtLines = pg.mtLines
         merged.mbLines = pg.mbLines
         merged.plLines = pg.plLines
@@ -1296,6 +1312,10 @@ public func docToPagelines(
     pictures: EmitOptions.PixMode = .off, sentenceSpacing: Bool = false
 ) -> [Page] {
     let isPrintStream = doc.detection?.variant == .printstream
+    // Planning #250: resolved once, shared by both `printed` branches below (the
+    // "zero real pages" fallback -- GALLEYS.DOT/ADVANCE.DOT) -- see
+    // `parityResolvedFallbackHeadFoot`'s own doc comment.
+    let fallback = parityResolvedFallbackHeadFoot(doc)
     if printed {
         if hasPlaceableNotes(doc) {
             // b24 round 19 (RULINGS-LEDGER PIX row) left this path as a documented
@@ -1313,7 +1333,9 @@ public func docToPagelines(
                                                  sentenceSpacing: sentenceSpacing),
                              printed: true, isPrintStream: isPrintStream,
                              stripBlanks: false,
-                             fallbackHeaders: doc.headers, fallbackFooters: doc.footers))
+                             fallbackHeaders: fallback.headers, fallbackFooters: fallback.footers,
+                             fallbackHeadOverride: fallback.headOverride,
+                             fallbackFootOverride: fallback.footOverride))
             // planning #251(b)/(c)/(d): the same three model-build-time attach
             // passes as the plain path below -- see each function's own doc
             // comment. Both `docToPagelines` branches converge here so `emitPDF`
@@ -1332,7 +1354,9 @@ public func docToPagelines(
                                                   pictures: pictures,
                                                   sentenceSpacing: sentenceSpacing),
                          printed: true, isPrintStream: isPrintStream,
-                         fallbackHeaders: doc.headers, fallbackFooters: doc.footers))
+                         fallbackHeaders: fallback.headers, fallbackFooters: fallback.footers,
+                         fallbackHeadOverride: fallback.headOverride,
+                         fallbackFootOverride: fallback.footOverride))
         let attachSize = printedSize(doc)
         attachJustifyWordXPrinted(doc, &plainPages, size: attachSize)
         attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
@@ -1549,14 +1573,54 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
 /// go through real pagination (`closePage()`) always supplies its own concrete (possibly
 /// legitimately empty, e.g. before the document's first `.h1`) headers/footers instead —
 /// this parameter never overrides those, only the synthetic empty-document fallback below.
+/// Planning #250: the `finalizePages` "zero pages" fallback (below) bakes `doc.headers`/
+/// `doc.footers` directly into a concrete `Page.headers`/`.footers` at CALL time, unlike
+/// every other page (whose header/footer text a real `closePage()` resolves against its
+/// OWN parity, once pagination knows it) -- so a content-free template that ALSO uses
+/// `.h1e`/`.h1o`/`.f1e`/`.f1o` (GALLEYS.DOT/ADVANCE.DOT: real corpus documents, zero
+/// body blocks at all) would otherwise show the flat last-in-source-order-wins text
+/// regardless of page parity. The synthetic fallback page IS the document's own first
+/// (and only) page, whose number is `doc.page?.pnStart` (default 1, WordStar's own
+/// `.pn` -- a document that renumbers its own start still gets the RIGHT parity here,
+/// not a hardcoded "page 1 is odd" assumption). Port of ctrl-kd's own `_resolve_head_
+/// foot_lines` `headers_flat`/`headersFlat` branch (pdf.py, planning #250).
+private func parityResolvedFallbackHeadFoot(_ doc: Document) -> (
+    headers: [Int: String], footers: [Int: String],
+    headOverride: [Int: HFOverride]?, footOverride: [Int: HFOverride]?
+) {
+    let pageNo = doc.page?.pnStart ?? 1
+    let isEven = pageNo % 2 == 0
+    let parity: HFParity = isEven ? .even : .odd
+    var headers = doc.headers
+    var headOverride: [Int: HFOverride]? = nil
+    if let variant = doc.headersParity[1]?[parity] {
+        headers[1] = variant
+        headOverride = [1: HFOverride(fontIdx: doc.headerFontsParity[1]?[parity],
+                                      tab: doc.headerTabsParity[1]?[parity])]
+    }
+    var footers = doc.footers
+    var footOverride: [Int: HFOverride]? = nil
+    if let variant = doc.footersParity[1]?[parity] {
+        footers[1] = variant
+        footOverride = [1: HFOverride(fontIdx: doc.footerFontsParity[1]?[parity],
+                                      tab: doc.footerTabsParity[1]?[parity])]
+    }
+    return (headers, footers, headOverride, footOverride)
+}
+
 private func finalizePages(_ rawPages: [Page], printed: Bool, isPrintStream: Bool,
                            stripBlanks: Bool = true, fallbackHeaders: [Int: String] = [:],
-                           fallbackFooters: [Int: String] = [:]) -> [Page] {
+                           fallbackFooters: [Int: String] = [:],
+                           fallbackHeadOverride: [Int: HFOverride]? = nil,
+                           fallbackFootOverride: [Int: HFOverride]? = nil) -> [Page] {
     var pages = rawPages
     if pages.isEmpty {
         // Python's `pages or [[]]`, with the running-head fallback ported alongside it —
         // see this function's own doc comment.
-        return [Page([], headers: fallbackHeaders, footers: fallbackFooters)]
+        var pg = Page([], headers: fallbackHeaders, footers: fallbackFooters)
+        pg.headHfOverride = fallbackHeadOverride
+        pg.footHfOverride = fallbackFootOverride
+        return [pg]
     }
 
     func leading(_ page: Page) -> Int {
@@ -3724,7 +3788,9 @@ private enum PlainBodyItem {
     case condPage(Int)
     case line(PageLine)
     /// A `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` occurrence, replayed at the block it precedes.
-    case hf(kind: HFKind, line: Int, text: String)
+    /// `parity` (planning #250) is `nil` for a plain `.h1`/`.he`/`.f1`/`.fo`, else
+    /// `.even`/`.odd` for `.h1e`/`.h1o`/`.f1e`/`.f1o`.
+    case hf(kind: HFKind, line: Int, text: String, parity: HFParity?)
 }
 
 /// Blocks -> plain body items, with `doc.hfEvents` replayed at the block each one
@@ -3736,9 +3802,14 @@ private func resolvePlainBody(
     sentenceSpacing: Bool = false
 ) -> [PlainBodyItem] {
     let refNotes = inlineReferenceNotes(doc)
-    var hfByBlock: [Int: [(HFKind, Int, String)]] = [:]
-    for event in doc.hfEvents {
-        hfByBlock[event.blockAnchor, default: []].append((event.kind, event.line, event.text))
+    var hfByBlock: [Int: [(HFKind, Int, String, HFParity?)]] = [:]
+    // planning #250: `doc.hfEventsParity` is index-aligned with `doc.hfEvents` itself
+    // — see `Document.hfEventsParity`'s own doc comment.
+    let hfParityByIndex = doc.hfEventsParity
+    for (i, event) in doc.hfEvents.enumerated() {
+        let parity = i < hfParityByIndex.count ? hfParityByIndex[i] : nil
+        hfByBlock[event.blockAnchor, default: []].append(
+            (event.kind, event.line, event.text, parity))
     }
     // b24 round 19 (RULINGS-LEDGER PIX row); round 22 closed the round-19 scope cuts --
     // `layoutPrintedPages` (the notes-aware paginator) and Modern's `modernStreams`
@@ -3804,8 +3875,8 @@ private func resolvePlainBody(
         // literal empty dictionary for every non-WS4 document, so this lookup always
         // returns the empty set there and nothing below can touch one.
         let spacingBlanks = spacingMap[bi] ?? []
-        for (kind, line, text) in hfByBlock[bi] ?? [] {
-            items.append(.hf(kind: kind, line: line, text: text))
+        for (kind, line, text, parity) in hfByBlock[bi] ?? [] {
+            items.append(.hf(kind: kind, line: line, text: text, parity: parity))
         }
         if block.kind == .pagebreak && prevCols > 1 {
             // Planning #227 (corrected): a bare `.pa` occurring INSIDE an active
@@ -4164,6 +4235,20 @@ func layoutPrintedPagesPlain(
     var curFooters: [Int: String] = [:]
     var pageHeaders: [Int: String] = [:]     // state at the OPEN page's start
     var pageFooters: [Int: String] = [:]
+    // Planning #250: the SAME flat/snapshot machinery as `curHeaders`/`pageHeaders`
+    // above, one independent pair per parity — `.h1e`/`.f1e` write only `curHeadersE`/
+    // `curFootersE`, `.h1o`/`.f1o` only `curHeadersO`/`curFootersO`; a plain `.h1`/
+    // `.fo` never clears either (the same "each command in this family is
+    // independently stateful" rule `.poe`/`.poo` already established). Resolved
+    // against the real page parity only in `closePage`, the one place that knows it.
+    var curHeadersE: [Int: String] = [:]
+    var curHeadersO: [Int: String] = [:]
+    var curFootersE: [Int: String] = [:]
+    var curFootersO: [Int: String] = [:]
+    var pageHeadersE: [Int: String] = [:]
+    var pageHeadersO: [Int: String] = [:]
+    var pageFootersE: [Int: String] = [:]
+    var pageFootersO: [Int: String] = [:]
 
     func cost(_ line: PageLine) -> Double {
         let lead = line.lead ?? defaultLead
@@ -4248,6 +4333,52 @@ func layoutPrintedPagesPlain(
             // regardless. See `Page.poParity`.
             pg.poParity = curPoe != nil || curPoo != nil
         }
+        // Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o` -- this page's own PARITY
+        // (`isEvenPage`, just resolved above) picks its real line-1 text the same way
+        // `.poe`/`.poo` picks its own left origin: its OWN parity variant if the
+        // document ever set one FOR THIS PARITY, else whatever plain `.h1`/`.he`/
+        // `.f1`/`.fo` governs (`pageHeaders`/`pageFooters`, already the page's own
+        // snapshot, unchanged). `pageHeadersE`/`O`/`pageFootersE`/`O` all empty (no
+        // document that never uses the family) means `parityHF` returns `nil` every
+        // time below -- `pg.headers`/`pg.footers` stay byte-identical to before this
+        // feature existed.
+        //
+        // "Only one of the pair set" (no corpus document exercises it): the un-set
+        // parity has no override of its own here and falls through to `pageHeaders`/
+        // `pageFooters` -- the flat dict every `.h#`/`.f#` command ALSO writes
+        // (`parseHeadFoot`, unconditionally, parity or not), the SAME last-in-source-
+        // order-wins projection Modern/RTF/plain-text already read. Port of ctrl-kd's
+        // own `_parity_hf` (pdf.py, planning #250) -- see its own doc comment for why
+        // the flat fallback is NOT necessarily "the plain `.h1`'s own text" (a parity-
+        // specific override is independently stateful, same as `.poe`/`.poo`).
+        func parityHF(evenMap: [Int: String], oddMap: [Int: String],
+                     fontsParity: [Int: [HFParity: Int]], tabsParity: [Int: [HFParity: HFTabMark]])
+            -> (text: String, override: HFOverride)? {
+            guard evenMap[1] != nil || oddMap[1] != nil else { return nil }
+            let letter: HFParity
+            let text: String
+            if isEvenPage, let t = evenMap[1] {
+                letter = .even; text = t
+            } else if !isEvenPage, let t = oddMap[1] {
+                letter = .odd; text = t
+            } else {
+                return nil
+            }
+            let override = HFOverride(fontIdx: fontsParity[1]?[letter], tab: tabsParity[1]?[letter])
+            return (text, override)
+        }
+        if let (text, override) = parityHF(evenMap: pageHeadersE, oddMap: pageHeadersO,
+                                           fontsParity: doc.headerFontsParity,
+                                           tabsParity: doc.headerTabsParity) {
+            if text.isEmpty { pg.headers.removeValue(forKey: 1) } else { pg.headers[1] = text }
+            pg.headHfOverride = [1: override]
+        }
+        if let (text, override) = parityHF(evenMap: pageFootersE, oddMap: pageFootersO,
+                                           fontsParity: doc.footerFontsParity,
+                                           tabsParity: doc.footerTabsParity) {
+            if text.isEmpty { pg.footers.removeValue(forKey: 1) } else { pg.footers[1] = text }
+            pg.footHfOverride = [1: override]
+        }
         // Body text: `resolvePlainBody` could not resolve a `.poe`/`.poo`-governed
         // line's own left origin at BUILD time (which page, and therefore which
         // parity, a line lands on is a pagination question, not a parse-order one) --
@@ -4265,15 +4396,28 @@ func layoutPrintedPagesPlain(
         spent = 0.0
         pageHeaders = curHeaders
         pageFooters = curFooters
+        pageHeadersE = curHeadersE
+        pageHeadersO = curHeadersO
+        pageFootersE = curFootersE
+        pageFootersO = curFootersO
     }
 
     for (itemIndex, item) in items.enumerated() {
         switch item {
-        case .hf(let kind, let line, let text):
+        case .hf(let kind, let line, let text, let parity):
+            if parity == .even {
+                if kind == .header { curHeadersE[line] = text } else { curFootersE[line] = text }
+            } else if parity == .odd {
+                if kind == .header { curHeadersO[line] = text } else { curFootersO[line] = text }
+            }
             if kind == .header { curHeaders[line] = text } else { curFooters[line] = text }
             if page.isEmpty {          // nothing printed on this page yet
                 pageHeaders = curHeaders
                 pageFooters = curFooters
+                pageHeadersE = curHeadersE
+                pageHeadersO = curHeadersO
+                pageFootersE = curFootersE
+                pageFootersO = curFootersO
             }
         case .condPage(let n):
             // Strictly fewer than n lines left -> break; exactly n is enough room.
