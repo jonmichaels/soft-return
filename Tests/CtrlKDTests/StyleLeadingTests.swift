@@ -252,12 +252,14 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
     #expect(gaps(doc) == [12.0])                     // autoLeadFactor (1.0) x document default 12pt
 }
 
-@Test func lhDotCommandOverridesStyleAutoLeading() {
-    // No corpus evidence exists for how real WS7 arbitrates a style's own vmi against an
-    // ACTIVE `.lh` dot command, so the fix stays conservative: a document that uses `.lh`
-    // at all (`doc.page?.lhSource == .file`) keeps the pre-existing `.lh`-driven leading
-    // UNCHANGED, even inside a styled block. `.lh 20` is 20/48in = 30pt, which must win
-    // over the 16pt style's own 19.2pt auto leading.
+@Test func styleAutoLeadingOutranksAnActiveLhDotCommand() {
+    // RESOLVED (planning #256, sawyer/REF/-HOW-TO.RJS) -- this test used to be named
+    // `lhDotCommandOverridesStyleAutoLeading` and pinned the OPPOSITE result, on the
+    // stated reasoning "no corpus evidence exists for how real WS7 arbitrates a style's
+    // own vmi against an ACTIVE `.lh` dot command". -HOW-TO.RJS IS that evidence now
+    // (see `styleLeadPt`'s own doc comment, PDFLayout.swift): a paragraph style's own
+    // leading governs OUTRIGHT once the block carries one -- `.lh 20` (30pt) no longer
+    // wins over the 16pt style's own 16.0pt auto leading (stock autoLeadFactor = 1.0).
     let lib = styleLibrary([
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "Big", record: auto16pt),
@@ -266,7 +268,7 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
         + styleRef(2) + bytes("Line one.") + HARD + bytes("Line two.") + HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
     #expect(doc.page?.lhSource == .file)
-    #expect(gaps(doc) == [30.0])
+    #expect(gaps(doc) == [16.0])
 }
 
 @Test func stylelessDocLeadingIsUnchanged() {
@@ -415,10 +417,11 @@ private func rtfSlSequence(_ r: String) -> [Int] {
     #expect(rtfSlSequence(r) == [-320, -240])         // 16.0pt fallback, 12.0pt fits
 }
 
-@Test func lhDotCommandOverridesStyleAutoLeadingInRTFToo() {
-    // RTF's own guard must match the PDF one exactly (same conservative doctrine, no
-    // separate formula): `.lh 20` (30pt) wins over the 16pt style's own 19.2pt auto
-    // leading -- mirrors `lhDotCommandOverridesStyleAutoLeading` at the PDF layer.
+@Test func styleAutoLeadingOutranksAnActiveLhDotCommandInRTFToo() {
+    // RTF's own leading must match the PDF one exactly (same shared mechanism --
+    // planning #256, see `styleAutoLeadingOutranksAnActiveLhDotCommand` at the PDF
+    // layer for the evidence): `.lh 20` (30pt) no longer wins over the 16pt style's own
+    // 16.0pt auto leading.
     let lib = styleLibrary([
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "Big", record: auto16pt),
@@ -428,7 +431,7 @@ private func rtfSlSequence(_ r: String) -> [Int] {
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
     #expect(doc.page?.lhSource == .file)
     let r = emitRTF(doc, mode: .printed)
-    #expect(rtfSlSequence(r) == [-600])               // 20/48in = 30pt = 600 twips
+    #expect(rtfSlSequence(r) == [-320])               // 16.0pt autoLeadFactor x 16pt
 }
 
 @Test func midDocumentLhChangeProducesTwoDistinctRTFSlValues() {
@@ -453,4 +456,46 @@ private func rtfSlSequence(_ r: String) -> [Int] {
     let r = emitRTF(doc, mode: .printed)
     // default .lh 8 = 12pt = -240 twips; changed .lh 16 = 24pt = -480 twips
     #expect(rtfSlSequence(r) == [-240, -480])
+}
+
+// planning #256 (sawyer/REF/-HOW-TO.RJS): a 14pt style-governed heading whose style vmi
+// (240=12pt) is too small for its own font (Finding B fallback -> 14pt) immediately
+// followed by a 10pt style-governed body paragraph whose SAME-shaped vmi (240=12pt) DOES
+// fit its own font (direct, no fallback -> 12pt) -- both AFTER a plain, unstyled `.lh 16`
+// (24pt) sets `Line.lead48` stateful per-line leading. Measured against the real
+// capture: the heading prints at 14.0pt and the body at 12.0pt -- NEITHER ever uses the
+// stale 24.0pt `.lh` value, even though `Line.lead48` for both blocks' lines carries it.
+// Before this fix, `ownLead = styleLead` in every PDF page-line builder only fired when
+// `line.lead48 == nil || line.lead48 == defaultLh48` -- a line carrying ANY other
+// explicit `.lh` value (stale or not) locked out its own block's style entirely,
+// silently reproducing exactly this document's real bug (140+ compounding
+// baseline-shift divergences and an extra, wrongly-paginated 13th page against WS7's
+// real 12 -- see planning #256's own before/after).
+private let howtoHeading14pt = styleRecord(font: (width: 180, height: 280, typestyle: 0), vmi: 240)   // 14pt font
+private let howtoBody10pt = styleRecord(font: (width: 180, height: 200, typestyle: 0), vmi: 240)      // 10pt font
+
+@Test func staleLhNeverOutranksALaterBlocksOwnStyleVMI() {
+    let lib = styleLibrary([
+        (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
+        (name: "Heading", record: howtoHeading14pt), (name: "Body", record: howtoBody10pt),
+    ])
+    var body = bytes("Padding prose so the detector reads this as a document.") + HARD
+    body += bytes(".lh 16") + HARD                     // stateful lead48 = 16 (24pt)
+    body += styleRef(2) + bytes("First heading line.") + HARD
+    body += bytes("Second heading line.") + HARD
+    body += styleRef(3) + bytes("First body line.") + HARD
+    body += bytes("Second body line.") + HARD
+    let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
+    // the document's OWN default stays untouched (matches -HOW-TO.RJS's own shape: this
+    // `.lh` sits after real text) -- this fix does NOT depend on `lhSource`; a stale
+    // `Line.lead48` blocked the style regardless of it.
+    #expect(doc.page?.lhSource == .default)
+    let g = gaps(doc)
+    // heading line 1 -> line 2 (NOT first-line-of-block, plain styleLeadPt): too-small
+    // vmi (12) for a 14pt font falls back to 14.0, never the stale 24.0.
+    #expect(g.contains(14.0))
+    // body line 1 -> line 2 (NOT first-line-of-block): vmi 12 fits a 10pt font directly,
+    // never the stale 24.0.
+    #expect(g.contains(12.0))
+    #expect(!g.contains(24.0))
 }

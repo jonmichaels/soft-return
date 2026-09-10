@@ -2584,7 +2584,35 @@ func cpLines(_ cmd: [UInt8]) -> Int {
 /// `namedPageSizes`) rather than forcing a label that doesn't fit. Direct port of
 /// `_resolve_page_size`. Not private since `effectivePage`'s size override recomputes
 /// the trio through it (EmitOptions.swift).
-func resolvePageSize(_ plLines: Double) -> (heightIn: Double, sizeName: String, widthIn: Double) {
+///
+/// This function's own return convention is always PRE-rotation/"portrait" (heightIn
+/// is the tall edge, widthIn the short one) -- `landscapePage` (EmitPDF.swift) is the
+/// ONE place that later swaps the two for a document whose `.pr or=l` is in force.
+///
+/// `orientation` (planning #256, sawyer/REF/-HOW-TO.RJS): a landscape document's `.pl`
+/// describes the edge content flows along AFTER rotation -- the sheet's SHORT edge
+/// (Letter's own 8.5in), not its long one -- so it must be matched against
+/// `namedPageSizes`'s WIDTH column (portrait short edge), not its HEIGHT column, and
+/// the pair handed back to the pre-rotation convention above is (that size's named
+/// HEIGHT, `pl`'s own value) -- i.e. exactly the shape a same-size PORTRAIT document
+/// would have produced, so the later landscape swap turns it into the correct
+/// wide-short landscape page. Measured against a real WS7 capture (-HOW-TO.RJS,
+/// `.pr or=l` + `.pl 8.50"`): the OLD code always matched the HEIGHT column regardless
+/// of orientation, found nothing within tolerance for 8.5in, and fell to the portrait
+/// "Custom" fallback (widthIn = 8.5in, same as the height -- a SQUARE page after the
+/// swap). A page narrower than the content it must hold silently drops every word
+/// poppler (and any MediaBox-respecting viewer/printer) finds past the true right
+/// edge. The HEIGHT-column match is tried FIRST, unconditionally, so a landscape
+/// document with no `.pl` override at all keeps its existing, already-tested, 792x612
+/// landscape resolution unaffected; the width-column reinterpretation only ever fires
+/// as a fallback, and only for `orientation == "landscape"`. Falls back to a full
+/// Letter-long-edge companion (11.0in) rather than the portrait Custom default
+/// (8.5in) -- a landscape page as narrow as it is tall is wrong for every real
+/// landscape document measured (GALLEYS.DOT/ADVANCE.DOT/BOOKLET.HOW/BOOKLET.RJS/
+/// -HOW-TO.RJS/HP-ENV.LST/HP-ENVMM.LST: every one carries `.pl 8.5(i|")`/`8.33"`,
+/// none matches a `namedPageSizes` height, all want Letter's or A4's own long edge as
+/// their companion). Direct port of ctrl-kd's own `_resolve_page_size(orientation=)`.
+func resolvePageSize(_ plLines: Double, orientation: String? = nil) -> (heightIn: Double, sizeName: String, widthIn: Double) {
     let heightIn = plLines / 6.0
     var best = namedPageSizes[0]
     var bestDiff = abs(best.heightIn - heightIn)
@@ -2597,6 +2625,21 @@ func resolvePageSize(_ plLines: Double) -> (heightIn: Double, sizeName: String, 
     }
     if bestDiff <= pageSizeSnapIn {
         return (best.heightIn, best.name, best.widthIn)
+    }
+    if orientation == "landscape" {
+        var wBest = namedPageSizes[0]
+        var wBestDiff = abs(wBest.widthIn - heightIn)
+        for candidate in namedPageSizes.dropFirst() {
+            let diff = abs(candidate.widthIn - heightIn)
+            if diff < wBestDiff {
+                wBest = candidate
+                wBestDiff = diff
+            }
+        }
+        if wBestDiff <= pageSizeSnapIn {
+            return (wBest.heightIn, wBest.name, heightIn)
+        }
+        return (11.0, "Custom", heightIn)
     }
     return (heightIn, "Custom", 8.5)
 }

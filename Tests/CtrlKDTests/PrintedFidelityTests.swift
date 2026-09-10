@@ -64,6 +64,32 @@ import Testing
     #expect(rtf.contains(#"\paperw15840\paperh12240"#))
 }
 
+@Test func prLandscapeWithBookletPlGetsFullLetterCompanionWidth() throws {
+    // planning #256: sawyer/REF/-HOW-TO.RJS (+ BOOKLET.HOW/.RJS, GALLEYS.DOT,
+    // ADVANCE.DOT, HP-ENV.LST, HP-ENVMM.LST) all declare `.pl 8.50"` (or `8.33"`)
+    // under `.pr or=l` -- 8.5in is Letter's own WIDTH, not any namedPageSizes height,
+    // so the old height-only match in `resolvePageSize` fell to the portrait "Custom"
+    // fallback (8.5in companion) even under landscape, producing a SQUARE 612x612
+    // MediaBox instead of the correct 792x612. Confirmed against poppler: a word
+    // positioned to extend past a too-narrow MediaBox is silently truncated on
+    // extraction ("Making" -> "Ma") -- what a real 792pt-wide layout squeezed into a
+    // 612pt MediaBox does to any MediaBox-respecting reader or printer.
+    var data = bytes(".pr or=l") + HARD
+    data += bytes(".pl 8.50\"") + HARD
+    data += bytes("A booklet body paragraph.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .printed)
+    #expect(contains(pdf, bytes("/MediaBox [0 0 792 612]")))   // NOT [0 0 612 612]
+}
+
+@Test func prPortraitExplicitPl8_5inKeepsTheOldSquareCustomPage() throws {
+    // The same explicit 8.5in `.pl`, but portrait: the landscape-only width-column
+    // reinterpretation must NOT fire here -- a portrait document that genuinely wants
+    // an 8.5in-tall page keeps the plain "Custom" 8.5in companion, unchanged.
+    let data = bytes(".pl 8.50\"") + HARD + bytes("A short portrait page.") + HARD
+    let pdf = emitPDF(parseWS(data), mode: .printed)
+    #expect(contains(pdf, bytes("/MediaBox [0 0 612 612]")))
+}
+
 // MARK: - item 3: .sr roll drives PDF rise + RTF \up\dn
 
 @Test func srRollDrivesPrintedPDFRise() throws {

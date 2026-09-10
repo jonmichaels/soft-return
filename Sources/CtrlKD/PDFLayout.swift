@@ -533,17 +533,28 @@ let fontLeadCapPt = 24.0
 /// before Fix C only ever rendered a block's OWN first line through this function, so
 /// this is the identical behaviour there) keeps the fallback.
 ///
-/// Document-level guard: if the file EVER used a real `.lh` dot command
-/// (`doc.page?.lhSource == .file`), a style's own leading is NOT applied at all, even
-/// where a line's own `.lh` state happens to equal the document default and so
-/// normalises to `nil` — indistinguishable, at the per-line level, from a line that never
-/// saw `.lh` in the first place. No corpus evidence exists for how real WS7 arbitrates a
-/// style's vmi against an ACTIVE `.lh`, so this stays conservative: an `.lh`-bearing
-/// document's leading is left exactly as the pre-existing mechanism computed it,
-/// unconditionally. Port of Python's `pdf._style_lead_pt`.
+/// RESOLVED (planning #256, sawyer/REF/-HOW-TO.RJS): this function used to return `nil`
+/// outright for ANY document that ever used a real `.lh` dot command (`doc.page?.lhSource
+/// == .file`), on the stated reasoning that "no corpus evidence exists for how real WS7
+/// arbitrates a style's vmi against an ACTIVE `.lh`". -HOW-TO.RJS IS that evidence: its
+/// ONE `.lh14/72"` (14pt) sits immediately before a `.pa` page break's heading paragraph,
+/// which — like the numbered list that follows it — carries the SAME real paragraph
+/// style ("Editing Defaults", vmi=240 = 12pt on its own font). Measured against the real
+/// WS7 v4 PCL capture: the heading (14pt Univers) prints at a 14pt lead (vmi/20 = 12pt is
+/// SMALLER than its own 14pt font — the too-small-vmi fallback below, `size *
+/// autoLeadFactor`, already gives exactly this), and every 10pt-font list-item line
+/// prints at the style's own EXPLICIT 12pt (vmi/20, no fallback needed — 12 >= 10). The
+/// stale, document-global `.lh14/72"` value (14pt) is what a bare `.lh`-wins-
+/// unconditionally reading was producing for the list items instead — wrong by 2pt per
+/// line, compounding across the whole page. The style's own vmi now governs whenever a
+/// block carries one — exactly the intent this doc comment already stated a few
+/// paragraphs up ("a style's own leading... governs OVER the generic `.lh`/document
+/// default") but a defensive, unevidenced document-wide veto silently contradicted (see
+/// each call site's own comment for the other half of this fix: `ownLead` must let
+/// `styleLead` win outright, not only when a line's own carried `.lh` happens to be
+/// unset). Port of Python's `pdf._style_lead_pt`.
 func styleLeadPt(_ block: Block, _ doc: Document, raw: Bool = false) -> Double? {
     guard let vmi = block.lineHeightVMI else { return nil }
-    if doc.page?.lhSource == .file { return nil }
     if vmi == -2 {
         // Python: `if not size: size = _printed_size(doc)` -- falsy catches both `None`
         // and a literal 0.0, not just the sentinel's absence.
@@ -2076,7 +2087,13 @@ private func resolvePrintedBody(
             if !isBlank {
                 firstLineOfBlock = false
             }
-            if let styleLead, line.lead48 == nil || line.lead48 == defaultLh48 {
+            // planning #256: a block's own paragraph-style leading, when it
+            // has one, governs OUTRIGHT -- no longer gated on whether this
+            // line's own carried `.lh` happens to be unset/default (see
+            // `styleLeadPt`'s own doc comment for the -HOW-TO.RJS evidence: a
+            // stale, document-wide `.lh` must never outrank the style its own
+            // block actually carries).
+            if let styleLead {
                 ownLead = styleLead
             }
             // round 26 wave 3 (fidelity_gate.py Finding B): a WS5+ FONT-BLOCK document
@@ -2189,10 +2206,23 @@ func roundHalfToEven(_ x: Double) -> Int {
 /// lines fit) as well as wider, exactly what real landscape printing does. `.mt`/`.mb`/
 /// `.po`-derived margins are left untouched — still top/bottom/left relative to the text,
 /// same as WordStar's own driver-level rotation never re-interpreted them either.
+///
+/// planning #256 (sawyer/REF/-HOW-TO.RJS + the HP-ENV.LST/HP-ENVMM.LST mailing-label
+/// pair): a plain swap of `page.heightIn`/`pwIn` (`resolvePageSize`'s PORTRAIT-convention
+/// resolution, which Modern's own page box ALSO reads directly and unswapped — "the page
+/// is the document's declared size", ruled 2026-08-06) only works when the document's
+/// `.pl` already snapped to a NAMED portrait height. A `.pl` that instead matches a named
+/// size's WIDTH column (every real landscape template measured: `.pl 8.5(i|")`/`8.33"`,
+/// none a portrait height) resolves to a bare, un-landscape-aware SQUARE Custom fallback
+/// there, and swapping two equal numbers changes nothing. Recomputes the pair fresh,
+/// orientation-aware, from `page.plLines` alone — never from the cached, Modern-shared
+/// portrait pair — so this correction stays scoped to Printed's own PDF/RTF geometry and
+/// never touches `doc.page` (and therefore Modern's own page box) at all.
 func landscapePage(_ page: PageGeometry) -> PageGeometry {
+    let (heightIn, _, pwIn) = resolvePageSize(page.plLines, orientation: "landscape")
     var eff = page
-    eff.heightIn = page.pwIn
-    eff.pwIn = page.heightIn
+    eff.heightIn = pwIn
+    eff.pwIn = heightIn
     return eff
 }
 
@@ -2971,7 +3001,13 @@ func resolvedPrintedLeads48(_ doc: Document) -> [Int: Double] {
                 styleLead = styleLeadPt(block, doc)
             }
             if !isBlank { firstLineOfBlock = false }
-            if let styleLead, line.lead48 == nil || line.lead48 == defaultLh48 {
+            // planning #256: a block's own paragraph-style leading, when it
+            // has one, governs OUTRIGHT -- no longer gated on whether this
+            // line's own carried `.lh` happens to be unset/default (see
+            // `styleLeadPt`'s own doc comment for the -HOW-TO.RJS evidence: a
+            // stale, document-wide `.lh` must never outrank the style its own
+            // block actually carries).
+            if let styleLead {
                 ownLead = styleLead
             }
             if ownLead == nil, fontLeadOk {
@@ -2991,7 +3027,13 @@ func resolvedPrintedLeads48(_ doc: Document) -> [Int: Double] {
             if let line = block.lines.first {
                 var ownLead = leadPt(line.lead48)
                 let styleLead = styleLeadPt(block, doc, raw: true)
-                if let styleLead, line.lead48 == nil || line.lead48 == defaultLh48 {
+                // planning #256: a block's own paragraph-style leading, when it
+                // has one, governs OUTRIGHT -- no longer gated on whether this
+                // line's own carried `.lh` happens to be unset/default (see
+                // `styleLeadPt`'s own doc comment for the -HOW-TO.RJS evidence: a
+                // stale, document-wide `.lh` must never outrank the style its own
+                // block actually carries).
+                if let styleLead {
                     ownLead = styleLead
                 }
                 if ownLead == nil, fontLeadOk {
@@ -4035,7 +4077,13 @@ private func resolvePlainBody(
             } else {
                 styleLead = styleLeadPt(block, doc)
             }
-            if let styleLead, line.lead48 == nil || line.lead48 == defaultLh48 {
+            // planning #256: a block's own paragraph-style leading, when it
+            // has one, governs OUTRIGHT -- no longer gated on whether this
+            // line's own carried `.lh` happens to be unset/default (see
+            // `styleLeadPt`'s own doc comment for the -HOW-TO.RJS evidence: a
+            // stale, document-wide `.lh` must never outrank the style its own
+            // block actually carries).
+            if let styleLead {
                 ownLead = styleLead
             }
             // round 26 wave 3 (fidelity_gate.py Finding B): a WS5+ FONT-BLOCK document
