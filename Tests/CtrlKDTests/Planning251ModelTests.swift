@@ -38,7 +38,7 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON.
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 6"))
+    #expect(json.contains("\"version\": 7"))
     #expect(json.contains("\"justify_word_x\""))
 }
 
@@ -80,7 +80,7 @@ import Testing
     #expect(pages[0].contains { $0.lineNo == nil })
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 6"))
+    #expect(json.contains("\"version\": 7"))
     #expect(json.contains("\"line_no\""))
 }
 
@@ -145,7 +145,7 @@ import Testing
     #expect(middle.map(\.char) == ["\u{2502}", "\u{2502}"])   // only the two bars
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 6"))
+    #expect(json.contains("\"version\": 7"))
     #expect(json.contains("\"graphic_cells\""))
 }
 
@@ -156,6 +156,61 @@ import Testing
     let doc = parseWS(src251c)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages[0][0].graphicCells == nil)
+}
+
+// ------------------------------------------- (c follow-up) Modern graphicCells
+
+/// Planning #251 follow-up (2026-09-10, app coder job 348): the SAME cp437 box
+/// draws a vector rule in Modern PDF too (`PDFDriverLJ6DTP.swift`'s `graphicOps`,
+/// called from `modernLineOps`), and the app's Modern view needs the model's own
+/// x/width/page to place it -- `attachGraphicCellsModern` records exactly what
+/// `modernStreams` draws, via a real (throwaway) call to that same function.
+@Test func modernGraphicCellsLandOnTheLayoutJSON() {
+    // A single ═══ rule, long enough to prove it stays ONE non-wrapping run.
+    var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    src += [UInt8](repeating: 0xCD, count: 10)     // ═ x 10
+    src += HARD
+    let doc = parseWS(src)
+    let cells = attachGraphicCellsModern(doc, notes: EmitOptions.defaultNotes, noteRefs: .word)
+    #expect(!cells.isEmpty)
+    let allCells = cells.values.flatMap { $0 }
+    #expect(allCells.count == 10)
+    #expect(allCells.allSatisfy { $0.char == "\u{2550}" })
+    #expect(allCells.allSatisfy { $0.page == 1 })
+    let xs = allCells.map(\.x)
+    #expect(xs == xs.sorted())
+
+    // Same answer, one level up, through the public `layout` JSON's `modern.items`.
+    let json = emitLayout(doc, mode: .modern)
+    #expect(json.contains("\"version\": 7"))
+    #expect(json.contains("\"graphic_cells\""))
+    #expect(json.contains("\"page\": 1"))
+}
+
+@Test func modernGraphicCellsAbsentForADocumentWithNoGraphics() {
+    var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    src += bytes("An ordinary line of prose, nothing graphic here at all.")
+    src += HARD
+    let doc = parseWS(src)
+    #expect(attachGraphicCellsModern(doc, notes: EmitOptions.defaultNotes, noteRefs: .word).isEmpty)
+    let json = emitLayout(doc, mode: .modern)
+    #expect(!json.contains("\"graphic_cells\""))
+}
+
+/// PDF bytes are unaffected -- `attachGraphicCellsModern`'s own throwaway call
+/// never touches the real `emitPDF` render path (`attachGraphicCells: nil` by
+/// default at its one real call site).
+@Test func modernGraphicCellsNeverChangePDFBytes() {
+    var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    src += [UInt8](repeating: 0xCD, count: 10)
+    src += HARD
+    let doc = parseWS(src)
+    let pdf1 = emitPDF(doc, mode: .modern)
+    let pdf2 = emitPDF(doc, mode: .modern)
+    #expect(pdf1 == pdf2)
+    _ = attachGraphicCellsModern(doc, notes: EmitOptions.defaultNotes, noteRefs: .word)
+    let pdf3 = emitPDF(doc, mode: .modern)
+    #expect(pdf3 == pdf1)
 }
 
 // --------------------------------------------------- (d) running head/foot
@@ -257,7 +312,7 @@ import Testing
     #expect(pages[0].footerLines == nil)
     #expect(pages[0].autoPageno == nil)
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 6"))
+    #expect(json.contains("\"version\": 7"))
     #expect(!json.contains("\"header_lines\""))
     #expect(!json.contains("\"footer_lines\""))
     #expect(!json.contains("\"auto_page_number\""))

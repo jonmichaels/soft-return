@@ -1219,7 +1219,17 @@ private func jsonStructure(_ s: RowStructure) -> LayoutJSONValue {
     ])
 }
 
-private func jsonItem(_ item: SemanticItem) -> LayoutJSONValue {
+/// `graphicCells` (version 7, planning #251 follow-up, 2026-09-10): this item's own
+/// `attachGraphicCellsModern`-recorded cells, keyed by `sem.items` index at the call
+/// site below -- `nil` for every item that isn't a `.para`/`.note` (`.blank`/
+/// `.pageBreak`/`.cond`/`.hf`/`.tabs`/`.noteSeparator` never draw a graphic character)
+/// or that drew none of its own. Present on `.note` as well as `.para`: an end-matter
+/// appendix entry (endnote/annotation) is ALSO a `.para` `ModernFlowItem` once
+/// `modernFlow` converts it (see that function's own `.note` case), so it flows through
+/// `modernStreams`' body-building loop exactly like an ordinary paragraph and can carry
+/// cells the same way. `.noteSeparator` is not given the field at all: its own text is
+/// always the fixed 20-dash rule, which can never contain a graphic character.
+private func jsonItem(_ item: SemanticItem, graphicCells: [PageLine.GraphicCellPlacement]?) -> LayoutJSONValue {
     switch item {
     case .para(let align, let indentCols, let cutCols, let runs, let footnotes, let structure, _, let bi):
         // `isVerse` (b24 completion, C1) is deliberately NOT a key here — Python's own
@@ -1245,6 +1255,9 @@ private func jsonItem(_ item: SemanticItem) -> LayoutJSONValue {
         if let structure {
             pairs.append(("structure", jsonStructure(structure)))
         }
+        if let graphicCells, !graphicCells.isEmpty {
+            pairs.append(("graphic_cells", .array(graphicCells.map(jsonGraphicCellPlacement))))
+        }
         return .object(pairs)
     case .blank:
         return .object([("kind", .string("blank"))])
@@ -1267,13 +1280,17 @@ private func jsonItem(_ item: SemanticItem) -> LayoutJSONValue {
     case .noteSeparator:
         return .object([("kind", .string("note-separator"))])
     case .note(let index, let noteKind, let label, let text):
-        return .object([
+        var pairs: [(String, LayoutJSONValue)] = [
             ("kind", .string("note")),
             ("index", .int(index)),
             ("note_kind", .string(noteKind.rawValue)),
             ("label", .string(label)),
             ("text", .string(text)),
-        ])
+        ]
+        if let graphicCells, !graphicCells.isEmpty {
+            pairs.append(("graphic_cells", .array(graphicCells.map(jsonGraphicCellPlacement))))
+        }
+        return .object(pairs)
     }
 }
 
@@ -1307,6 +1324,30 @@ private func jsonHeadFootLine(_ line: HeadFootLine) -> LayoutJSONValue {
         ("y", .double(roundToOneDecimal(line.y))),
         ("font", line.font.map { LayoutJSONValue.int($0) } ?? .null),
     ])
+}
+
+/// One `PageLine.GraphicCellPlacement`, shared by Printed's own `printed.pages[].lines[]
+/// .graphic_cells` (version 5, planning #251(c)) and Modern's `modern.items[].graphic_
+/// cells` (version 7, planning #251 follow-up, 2026-09-10) -- same three core fields
+/// either way, `page` added only when the placement carries one (Printed's never do; a
+/// `PageLine` is already nested inside its own page there, so it is implicit).
+private func jsonGraphicCellPlacement(_ cell: PageLine.GraphicCellPlacement) -> LayoutJSONValue {
+    // `widthIsWholePointPitch`: JSON-parity only -- see that field's own doc comment. A
+    // proportional cell's width is ctrl-kd's own bare Python `int` there (`json.dumps`
+    // shows no decimal point); every other cell is a `float`. Python's own `round(int,
+    // 1)` returns an `int` unchanged (verified), so rounding here does not disturb that
+    // int/float split.
+    let widthValue: LayoutJSONValue = cell.widthIsWholePointPitch
+        ? .int(Int(cell.width)) : .double(roundToOneDecimal(cell.width))
+    var fields: [(String, LayoutJSONValue)] = [
+        ("char", .string(String(cell.char))),
+        ("x", .double(roundToOneDecimal(cell.x))),
+        ("width", widthValue),
+    ]
+    if let page = cell.page {
+        fields.append(("page", .int(page)))
+    }
+    return .object(fields)
 }
 
 /// The `layout` format: the full viewer contract as JSON — semantic Modern flow, printed
@@ -1381,6 +1422,26 @@ private func jsonHeadFootLine(_ line: HeadFootLine) -> LayoutJSONValue {
 /// no automatic number shows — a document with neither anywhere emits byte-identical
 /// JSON to version 5. The raw `headers`/`footers` dict (unsubstituted template
 /// strings) stays exactly as it was; this is purely additive.
+///
+/// version 7 (planning #251 follow-up, 2026-09-10, found by the app coder job 348): a
+/// `modern.items` entry of kind `para` or `note` MAY now carry `graphic_cells` —
+/// `[{"char", "x", "width", "page"}, ...]`, one entry per cp437 box-drawing/graphic
+/// character that paragraph draws as a vector in Modern PDF, document order — the exact
+/// per-cell x/width `PDFModernLayout.swift`'s own `graphicOps` call (inside
+/// `modernLineOps`) draws from (`attachGraphicCellsModern`, mirroring Printed's
+/// `graphic_cells`/`attachGraphicCellsPrinted` precedent above exactly). `page` is the
+/// 1-based Modern PDF page that cell landed on — present here (and never on Printed's
+/// own `graphic_cells`) because `modern.items` is a flat, unpaginated array, unlike
+/// `printed.pages`, where the page is already the array's own nesting. OMITTED, not
+/// null, on every item with no graphic character at all, or that never reaches
+/// `modernStreams`' body-building pass (a footnote's own page-bottom text; see
+/// `attachGraphicCellsModern`'s own doc comment for that one documented scope cut) — a
+/// document with no Modern graphic content anywhere emits byte-identical JSON to
+/// version 6. The unit-cell GEOMETRY needed to actually DRAW each character
+/// (`graphicCellRects`/`graphicCellOps`, both PUBLIC, both already covering Modern's
+/// exact same six categories) is unaffected by this version bump — same "a stable,
+/// per-character lookup, not exported through this JSON" choice version 5's own doc
+/// comment already made.
 ///
 /// Old fields (`segments`, `soft`, `overprint`, `lead`) are unchanged; this is purely
 /// additive.
@@ -1467,19 +1528,7 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
             // line carrying a cp437 graphic character -- see
             // `PageLine.graphicCells`'s own doc comment.
             if let cells = pl.graphicCells {
-                fields.append(("graphic_cells", .array(cells.map {
-                    // `widthIsWholePointPitch`: JSON-parity only -- see that
-                    // field's own doc comment. A proportional cell's width is
-                    // ctrl-kd's own bare Python `int` there (`json.dumps` shows
-                    // no decimal point); every other cell is a `float`. Python's
-                    // own `round(int, 1)` returns an `int` unchanged (verified),
-                    // so rounding here does not disturb that int/float split.
-                    let widthValue: LayoutJSONValue = $0.widthIsWholePointPitch
-                        ? .int(Int($0.width)) : .double(roundToOneDecimal($0.width))
-                    return .object([("char", .string(String($0.char))),
-                                    ("x", .double(roundToOneDecimal($0.x))),
-                                    ("width", widthValue)])
-                })))
+                fields.append(("graphic_cells", .array(cells.map(jsonGraphicCellPlacement))))
             }
             lines.append(.object(fields))
         }
@@ -1567,14 +1616,21 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
     }
 
     let flow = modernSemanticFlow(doc, notes: options.notes, noteRefs: options.noteRefs)
+    // version 7 (planning #251 follow-up, 2026-09-10): `attachGraphicCellsModern` is
+    // called with the SAME `notes`/`noteRefs` just above, so its own `sem.items`
+    // indices line up with `flow.items` exactly -- see that function's own doc comment.
+    let modernGraphicCells = attachGraphicCellsModern(doc, notes: options.notes,
+                                                      noteRefs: options.noteRefs)
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
-        ("version", .int(6)),
+        ("version", .int(7)),
         ("meta", jsonMeta(doc)),
         ("page", jsonPage(doc.page)),
         ("fonts", .array(doc.fonts.map(jsonFont))),
         ("modern", .object([
-            ("items", .array(flow.items.map(jsonItem))),
+            ("items", .array(flow.items.enumerated().map {
+                jsonItem($1, graphicCells: modernGraphicCells[$0])
+            })),
             ("notes", .array(flow.notes.map(jsonNoteRow))),
         ])),
         ("printed", .object([("pages", .array(printedPages))])),

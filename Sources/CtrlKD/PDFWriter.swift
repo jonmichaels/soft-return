@@ -2494,7 +2494,9 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         // carried, proportional reflow at the real measure, footnotes at the page bottom,
         // fontless body Times 14. Always US Letter, like the RTF's own page setup. No
         // running heads, no colour ops — both are Printed-only features.
-        streams = modernStreams(doc, options: options, res: res)
+        var discardedModernGraphicCells: [Int: [PageLine.GraphicCellPlacement]]? = nil
+        streams = modernStreams(doc, options: options, res: res,
+                                attachGraphicCells: &discardedModernGraphicCells)
     }
 
     // (number, body) — the body WITHOUT the `N 0 obj` wrapper, which the writer adds while

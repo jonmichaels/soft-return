@@ -378,7 +378,7 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
     // all).
     let data = Array(emitLayout(doc).utf8)
     let json = try! JSONSerialization.jsonObject(with: Data(data)) as! [String: Any]
-    #expect(json["version"] as? Int == 6)
+    #expect(json["version"] as? Int == 7)
     let jpages = (json["printed"] as! [String: Any])["pages"] as! [[String: Any]]
     #expect(jpages.count == 3)
     let jp1 = jpages[0]

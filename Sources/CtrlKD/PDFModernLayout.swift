@@ -240,10 +240,22 @@ func modernTokenize(_ text: String) -> [String] {
 /// The JSON emitter therefore always serializes the document's own unconverted text; a
 /// consumer (this adapter, the app's native text stack) applies sentence-spacing on
 /// top, same as every other `modernFlow` option that never reaches the semantic items.
+/// `semIndexOfItem` (planning #251 follow-up, 2026-09-10): `nil` to record nothing (every
+/// ordinary render call), a real (empty) array to fill with, for each element of the
+/// returned `[ModernFlowItem]` IN ORDER, the index into `sem.items` (this function's own
+/// internal `modernSemanticFlow(doc, ...)` result) that produced it -- the provenance
+/// `attachGraphicCellsModern` needs to attribute a wrapped/paginated visual line's own
+/// graphic cells back to the SEMANTIC item (`layout` JSON's own `modern.items` entry) it
+/// came from. `.tabs` is the one `sem.items` entry that produces NO `flow` entry at all
+/// (an editor-time-only item, `continue`d before any append below) -- every other case
+/// appends exactly one `flow` entry per `sem.items` entry, in the same order, so this is
+/// pure bookkeeping alongside the existing loop, never a parallel re-derivation of what
+/// that loop already decides.
 func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 noteRefs: NoteRefs = .word, pixResults: [PixResult] = [],
                 pictures: EmitOptions.PixMode = .off,
-                textWidthPt: Double = 0.0, sentenceSpacing: Bool = false) -> [ModernFlowItem] {
+                textWidthPt: Double = 0.0, sentenceSpacing: Bool = false,
+                semIndexOfItem: inout [Int]?) -> [ModernFlowItem] {
     let embedImages = pictures != .off && !pixResults.isEmpty
     let pixMap: [Int: PixResult] = embedImages
         ? Dictionary(uniqueKeysWithValues: pixResults.map { ($0.index, $0) }) : [:]
@@ -274,16 +286,20 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
     // from ctrl-kd pdf.py's identical `nonprop_fallback` local, added the same round.
     let nonpropFallback = !doc.fonts.isEmpty && doc.formatting.proportional == false
     var flow: [ModernFlowItem] = []
-    for item in sem.items {
+    for (semI, item) in sem.items.enumerated() {
         switch item {
         case .blank:
             flow.append(.blank(blankH))
+            semIndexOfItem?.append(semI)
         case .pageBreak:
             flow.append(.pageBreak)
+            semIndexOfItem?.append(semI)
         case .cond(let lines):
             flow.append(.cond(lines))
+            semIndexOfItem?.append(semI)
         case .hf(let which, let line, let text):
             flow.append(.hf(kind: which, line: line, text: text))
+            semIndexOfItem?.append(semI)
         case .tabs:
             continue          // editor-time state: no rendered consequence (task #19)
         case .noteSeparator:
@@ -297,18 +313,21 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                                                  pt: modernNotePt, entry: nil, width: sepW)],
                               align: .left, notes: [], indent: 0.0, cut: 0.0,
                               noWrap: false, pageMarker: false, endNotesStart: true))
+            semIndexOfItem?.append(semI)
         case .note(let ni, _, let label, let text):
             let noteText = sentenceSpacing ? sentenceSpacingTexts([text])[0] : text
             flow.append(.para(toks: modernNoteToks(label: label, text: noteText,
                                                     kind: sem.notes[ni].kind),
                               align: .left, notes: [], indent: 0.0, cut: 0.0,
                               noWrap: false, pageMarker: false, endNotesStart: false))
+            semIndexOfItem?.append(semI)
         case .para(let align, let indentCols, let cutCols, var runs, let footnotes, _, _, let bi):
             if embedImages, !runs.contains(where: { $0.ref != nil }),
                let sub = spansPixSubstitution(runs.map { (text: $0.text, pix: $0.pix) },
                                               pixMap: pixMap, maxWPt: textWidthPt) {
                 flow.append(.image(pixIndex: sub.pixIndex, widthPt: sub.wPt,
                                    heightPt: sub.hPt))
+                semIndexOfItem?.append(semI)
                 continue
             }
             // N9: applied to the run texts, in order, same cross-piece state-carrying as
@@ -396,6 +415,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
             flow.append(.para(toks: toks, align: lineAlign, notes: notes,
                               indent: indentCols.value * colPt, cut: cutCols.value * colPt,
                               noWrap: noWrap, pageMarker: pageMarker, endNotesStart: false))
+            semIndexOfItem?.append(semI)
         }
     }
     return flow
@@ -496,15 +516,29 @@ func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Dou
         }
     }
     if toks.isEmpty { return [] }
+    var discardedGraphicCells: [PageLine.GraphicCellPlacement]? = nil
     return modernLineOps(toks, left: left, y: y, width: width, align: .left,
-                         res: res, tzState: &tzState)
+                         res: res, tzState: &tzState,
+                         recordGraphicCells: &discardedGraphicCells)
 }
 
 /// Content-stream ops for one modern visual line. One op per word keeps a viewer's
 /// substitute-metric drift bounded, same as printed. Port of `_modern_line_ops`.
+///
+/// `recordGraphicCells` (planning #251 follow-up, 2026-09-10): same contract as
+/// `PDFWriter.swift`'s own `lineOpsPrinted` parameter of the same name -- `nil` to
+/// record nothing (every ordinary render call), a real array to APPEND this call's own
+/// cp437 graphic-character placements to (never cleared first: a caller collecting
+/// across several calls, as `attachGraphicCellsModern` does across a paragraph's own
+/// wrapped visual lines, gets one running list). Threaded through this function's own
+/// recursive sub-calls (the non-graphic pieces flanking a graphic run) so every call
+/// site stays source-compatible with a single required argument, even though those
+/// particular sub-calls never themselves append anything (a piece `graphicRunRanges`
+/// extracts BETWEEN two runs is, by construction, never itself a graphic run).
 func modernLineOps(
     _ toksIn: [ModernToken], left: Double, y: Double, width: Double, align: Alignment,
-    res: FontResources, tzState: inout Int
+    res: FontResources, tzState: inout Int,
+    recordGraphicCells: inout [PageLine.GraphicCellPlacement]?
 ) -> [[UInt8]] {
     var toks = toksIn
     var lineWidth = toks.reduce(0.0) { $0 + $1.width }
@@ -541,7 +575,8 @@ func modernLineOps(
                     let pieceTok = ModernToken(text: piece, styles: tok.styles, family: tok.family,
                                                pt: tok.pt, entry: entry, width: pieceWidth)
                     ops += modernLineOps([pieceTok], left: gx, y: y, width: width, align: .left,
-                                         res: res, tzState: &tzState)
+                                         res: res, tzState: &tzState,
+                                         recordGraphicCells: &recordGraphicCells)
                     gx += pieceWidth
                 }
                 let run = String(chars[range])
@@ -552,6 +587,23 @@ func modernLineOps(
                 // `graphicOps`'s Printed-tuned default gap (see `graphicOps`'s own
                 // doc comment).
                 ops += graphicOps(run, x: gx, y: y, pitch: pitch, pt: spt, leadFactor: modernLine)
+                // planning #251 follow-up (2026-09-10): the model's own per-cell x/width
+                // -- same "recorded here, the ONE place this run's per-character cell
+                // positions are ever computed" precedent `lineOpsPrinted`'s own
+                // `recordGraphicCells` doc comment states. `widthIsWholePointPitch:
+                // entry == nil || entry!.proportional` -- this branch's own `pitch`
+                // formula above, mirrored (unlike Printed's `proportionalCell`, a
+                // fontless Modern run ALSO takes the `Double(spt)` em-advance branch,
+                // M11).
+                if recordGraphicCells != nil {
+                    let wholePitch = entry == nil || entry!.proportional
+                    for (i, ch) in run.enumerated() {
+                        recordGraphicCells!.append(
+                            PageLine.GraphicCellPlacement(char: ch, x: gx + Double(i) * pitch,
+                                                          width: pitch,
+                                                          widthIsWholePointPitch: wholePitch))
+                    }
+                }
                 gx += Double(range.count) * pitch
                 pos = range.upperBound
             }
@@ -562,7 +614,8 @@ func modernLineOps(
                 let pieceTok = ModernToken(text: piece, styles: tok.styles, family: tok.family,
                                            pt: tok.pt, entry: entry, width: pieceWidth)
                 ops += modernLineOps([pieceTok], left: gx, y: y, width: width, align: .left,
-                                     res: res, tzState: &tzState)
+                                     res: res, tzState: &tzState,
+                                     recordGraphicCells: &recordGraphicCells)
             }
             x += tok.width
             continue
@@ -597,7 +650,26 @@ func modernLineOps(
 }
 
 /// All page content streams for Modern mode. Port of `_modern_streams`.
-func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) -> [[UInt8]] {
+/// `attachGraphicCells` (planning #251 follow-up, 2026-09-10): same contract as
+/// `attachGraphicCellsPrinted`'s own `lineOpsPrinted` call -- `nil` for every ordinary
+/// render (`emitPDF`'s own call, zero extra cost beyond the `nil` checks already
+/// threaded through `modernFlow`/`modernLineOps`), a real (empty) dictionary for
+/// `attachGraphicCellsModern`'s throwaway pass, which this function fills keyed by
+/// `sem.items` index (see `BodyLine.semIndex`'s own doc comment) with every graphic
+/// cell that paragraph's own wrapped visual lines draw, in document order, ACROSS
+/// however many visual lines/pages that paragraph's own non-wrapping graphic run
+/// actually lands on -- the SAME `modernLineOps` call the real content stream is built
+/// from, so the values are exactly what the PDF draws, never a parallel re-derivation.
+/// Scope: body paragraphs, and the end-matter appendix's own endnote/annotation
+/// entries (both flow through `body` below) -- a FOOTNOTE's own text is collected and
+/// drawn through the separate `notesLines`/`page.notes` mechanism, which carries no
+/// `sem.items` identity, so a graphic character inside a footnote's own text (not
+/// observed anywhere in the public corpus) is not attached; this mirrors `layout`
+/// JSON's own existing choice to leave raw `headers`/`footers` unresolved onto
+/// `PageLine` (`header_lines`/`footer_lines`, planning #251(d), are the separate,
+/// already-resolved answer for those).
+func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
+                   attachGraphicCells: inout [Int: [PageLine.GraphicCellPlacement]]?) -> [[UInt8]] {
     // Python: `frozenset(options.get('notes', ())) or frozenset((...))` — an EMPTY set
     // (however it got that way, `--no-notes` included) falls back to the default three.
     // A real quirk in the reference, reproduced rather than "fixed": confirmed against
@@ -612,16 +684,25 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
     // by construction -- `emitPDF`'s own `else` branch), so 'auto' always resolves to
     // single here.
     let ssOn = resolveSentenceSpacing(options.sentenceSpacing, printed: false)
+    var semIndexOfItem: [Int]? = attachGraphicCells != nil ? [] : nil
     let flow = modernFlow(doc, keep: keep, noteRefs: options.noteRefs,
                           pixResults: options.pixResults, pictures: options.pictures,
-                          textWidthPt: width, sentenceSpacing: ssOn)
+                          textWidthPt: width, sentenceSpacing: ssOn,
+                          semIndexOfItem: &semIndexOfItem)
     let noteLead = modernLine * Double(modernNotePt)
     let sepH = noteLead
 
     /// `image` non-nil marks an embedded pix line (b24 round 22) — `toks` is empty then,
     /// mirroring Python's `('image', ...)` tuple riding in the `toks` slot.
+    /// `semIndex` (planning #251 follow-up, 2026-09-10): the `sem.items` index this
+    /// visual line's own tokens came from (`semIndexOfItem`'s own value for the `flow`
+    /// item this line was wrapped/paginated out of), or `nil` when `attachGraphicCells`
+    /// wasn't requested -- carried so the final content-stream loop below can attribute
+    /// a graphic cell it draws back to the semantic paragraph the `layout` JSON's own
+    /// `modern.items` array will serialize it against.
     typealias BodyLine = (y: Double, toks: [ModernToken], align: Alignment,
-                          indent: Double, cut: Double, image: PageLine.ImageRef?)
+                          indent: Double, cut: Double, image: PageLine.ImageRef?,
+                          semIndex: Int?)
     var pages: [(body: [BodyLine], notes: [[ModernToken]],
                  headers: [Int: String], footers: [Int: String])] = []
     var body: [BodyLine] = []
@@ -674,7 +755,8 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
         opened = false
     }
 
-    for item in flow {
+    for (fi, item) in flow.enumerated() {
+        let semI = semIndexOfItem?[fi]
         switch item {
         case .hf(let kind, let line, let text):
             if kind == .header { curH[line] = text } else { curF[line] = text }
@@ -715,7 +797,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
             openPage()
             y -= hPt
             body.append((y, [], .left, 0.0, 0.0,
-                         PageLine.ImageRef(pixIndex: pixIndex, widthPt: wPt, heightPt: hPt)))
+                         PageLine.ImageRef(pixIndex: pixIndex, widthPt: wPt, heightPt: hPt), semI))
         case .para(let toks, let align, let notes, let indent, let cut, let noWrap, let pageMarker,
                   let endNotesStart):
             if pageMarker, !body.isEmpty {
@@ -771,7 +853,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
                 openPage()
                 y -= h
                 lastH = h
-                body.append((y, vline, align, indent, cut, nil))
+                body.append((y, vline, align, indent, cut, nil, semI))
                 if vi == 0, !newNoteLines.isEmpty {
                     notesLines.append(contentsOf: newNoteLines)
                     for entry in notes { seenNotes.insert(entry.index) }
@@ -815,9 +897,19 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
                 ops.append(op)
                 continue
             }
+            var lineCells: [PageLine.GraphicCellPlacement]? = attachGraphicCells != nil ? [] : nil
             ops += modernLineOps(line.toks, left: margl + line.indent, y: line.y,
                                  width: max(36.0, width - line.indent - line.cut),
-                                 align: line.align, res: res, tzState: &tzState)
+                                 align: line.align, res: res, tzState: &tzState,
+                                 recordGraphicCells: &lineCells)
+            if let semI = line.semIndex, let lineCells, !lineCells.isEmpty {
+                attachGraphicCells![semI, default: []].append(
+                    contentsOf: lineCells.map { cell in
+                        var c = cell
+                        c.page = pageNo
+                        return c
+                    })
+            }
         }
         let nlines = page.notes
         if !nlines.isEmpty {
@@ -830,14 +922,61 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources) ->
                         + Array("\(fixedOneDecimalDouble(margl)) \(fixedOneDecimalDouble(ly)) Td (".utf8)
                         + esc(String(repeating: "-", count: 20)) + Array(") Tj ET".utf8))
                 } else {
+                    // Footnote text: no `sem.items` identity to attach to (see this
+                    // function's own doc comment) -- always discarded.
+                    var discardedGraphicCells: [PageLine.GraphicCellPlacement]? = nil
                     ops += modernLineOps(nlines[i - 1], left: margl, y: ly, width: width,
-                                         align: .left, res: res, tzState: &tzState)
+                                         align: .left, res: res, tzState: &tzState,
+                                         recordGraphicCells: &discardedGraphicCells)
                 }
             }
         }
         streams.append(joinedNewlines(ops))
     }
     return streams
+}
+
+/// planning #251 follow-up (2026-09-10, app coder job 348): every `sem.items` index
+/// (`modernSemanticFlow(doc, notes:, noteRefs:)`'s own item list -- the SAME call
+/// `emitLayout`'s `modern.items` serializes) with at least one drawn cp437 graphic-
+/// character cell, mapped to that paragraph's own cells (char/x/width/page, document
+/// order across however many wrapped visual lines/pages the paragraph's own non-
+/// wrapping graphic run lands on) -- via a real (throwaway-resources) call to
+/// `modernStreams` itself, using its own `attachGraphicCells` recording parameter, so
+/// the values are exactly what Modern PDF draws (`PDFDriverLJ6DTP.swift`'s own
+/// `graphicOps`), never a parallel re-derivation. Mirrors `attachGraphicCellsPrinted`'s
+/// own precedent (`PDFWriter.swift`) for Printed.
+///
+/// Skipped outright (returns `[:]`) when NO block anywhere in the document carries a
+/// graphic character at all -- the same necessary-condition short-circuit
+/// `attachGraphicCellsPrinted` applies per LINE, applied once here per DOCUMENT (the
+/// only granularity available before `modernStreams`' own pagination has run), sparing
+/// the overwhelming majority of documents a full throwaway Modern-PDF pagination pass.
+///
+/// `notes`/`noteRefs` come from the caller and must be the SAME values passed to
+/// `modernSemanticFlow` at the `emitLayout` call site, so a cell's own item index always
+/// lines up with the `sem.items` that produced it; every other option
+/// (`pixResults`/`pictures`/`sentenceSpacing`) is the library default `EmitOptions()`
+/// itself carries, matching `modernSemanticFlow`'s own "document's own unconverted
+/// text" convention (its own doc comment on the `sentenceSpacing` parameter) -- a pix-
+/// substituted paragraph never carries a graphic character in the first place (its
+/// runs are "exactly one resolved, decoded pix placeholder"), so `pictures: .off` here
+/// changes nothing this function could ever attach to.
+func attachGraphicCellsModern(_ doc: Document, notes: Set<NoteKind>, noteRefs: NoteRefs)
+    -> [Int: [PageLine.GraphicCellPlacement]]
+{
+    let hasGraphicContent = doc.blocks.contains { block in
+        block.lines.contains { line in
+            line.spans.contains { span in
+                span.text.contains { graphicChars.contains($0) }
+            }
+        }
+    }
+    guard hasGraphicContent else { return [:] }
+    var cells: [Int: [PageLine.GraphicCellPlacement]]? = [:]
+    let options = EmitOptions(notes: notes, noteRefs: noteRefs)
+    _ = modernStreams(doc, options: options, res: FontResources(), attachGraphicCells: &cells)
+    return cells ?? [:]
 }
 
 /// `[[UInt8]].joined(separator: 0x0A)` (Python's `b'\n'.join`), local to this file since

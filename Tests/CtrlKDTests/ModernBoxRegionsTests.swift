@@ -47,8 +47,10 @@ private let boxMid: [UInt8] = [0xB3] + [UInt8](repeating: 0x20, count: 21) + [0x
 private let boxBot: [UInt8] = [0xC0] + [UInt8](repeating: 0xC4, count: 21) + [0xD9]
 
 private func boxFlow(_ doc: Document) -> [ModernFlowItem] {
-    modernFlow(doc, keep: [.footnote, .endnote, .annotation], noteRefs: .word,
-              pixResults: [], pictures: .off, textWidthPt: 468.0)
+    var discardedSemIndex: [Int]? = nil
+    return modernFlow(doc, keep: [.footnote, .endnote, .annotation], noteRefs: .word,
+                      pixResults: [], pictures: .off, textWidthPt: 468.0,
+                      semIndexOfItem: &discardedSemIndex)
 }
 
 private func paraItems(_ flow: [ModernFlowItem]) -> [[ModernToken]] {

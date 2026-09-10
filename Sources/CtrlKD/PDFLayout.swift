@@ -289,11 +289,19 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         /// unaffected either way (`fixedOneDecimalDouble` et al. always emit a
         /// decimal).
         public var widthIsWholePointPitch: Bool
+        /// planning #251 follow-up (2026-09-10): the 1-based PDF page this cell landed
+        /// on, or `nil` -- Printed's own placements never set it (a `PageLine` is
+        /// already nested inside its own page in the `layout` JSON's `printed.pages`
+        /// array, so the page is implicit there); Modern's `attachGraphicCellsModern`
+        /// always sets it (`modern.items` is a FLAT, unpaginated array, so a cell has
+        /// no other way to say which of Modern PDF's own pages it is drawn on).
+        public var page: Int?
         public init(char: Character, x: Double, width: Double,
-                   widthIsWholePointPitch: Bool = false) {
+                   widthIsWholePointPitch: Bool = false, page: Int? = nil) {
             self.char = char
             self.x = x
             self.width = width
+            self.page = page
             self.widthIsWholePointPitch = widthIsWholePointPitch
         }
     }
