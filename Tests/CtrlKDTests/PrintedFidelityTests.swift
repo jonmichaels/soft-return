@@ -339,6 +339,58 @@ import Testing
     #expect(line.x == 79.2)
 }
 
+// MARK: - planning #257 (sawyer/REF/-HOW-TO.RJS pages 10-12): typed indent with NO `.pm`
+
+@Test func typedIndentWithNoPMUsesNaturalSpaceWidthNotColumns() throws {
+    // The sibling case the WARPRAYR fixtures above do NOT cover -- a proportional
+    // line's own typed leading spaces with NO `.pm` anywhere backing them (paraMargin
+    // 0, unlike every WARPRAYR fixture's `.pm 5`/`.pm 6`). `splitIndent` still flags
+    // these spaces `indent` (a leading run of literal blanks before proportional
+    // text, exactly WARPRAYR's own shape) but with no `.pm` in force there is no
+    // document-column convention for them to be honouring -- real WS7
+    // (ws7-prints/v4/sawyer__REF__-HOW-TO_EXT_RJS.pcl, `.pm 0"` in force) printed
+    // this banner's typed spaces at Univers 10pt's own natural, narrower space
+    // advance, not the 7.2pt 10-CPI column `pdfPtPerCol` charges a WARPRAYR-style
+    // run. Before this fix `lineOpsPrinted` charged EVERY proportional typed indent
+    // the document-column rate regardless of `.pm`, landing 'PRINTING' at x=165.6
+    // against WS7's real 88.8 (+76.8pt on the real document, whose own `.lm .3"`
+    // moves `left` to 21.6 -- this fixture has no `.lm`, so `left` is the plain `.po`
+    // default 57.6, and the same delta shows as 124.8 vs a pre-fix 201.6). Direct
+    // port of ctrl-kd's `test_typed_indent_with_no_pm_uses_natural_space_width_not_
+    // columns`.
+    var data = bytes(".pm 0") + HARD
+    data += fontBlock(helvTypestyle(), points: 10.0, styleBits: 0x8000, width: 125)
+    data += bytes("                    PRINTING UNBOUND BOOK GALLEYS") + HARD
+    let doc = parseWS(data)
+    #expect(doc.blocks[0].paraMargin == 0.0)
+    let pdf = emitPDF(doc, mode: .printed)
+    let spans = contentSpans(pdf)
+    let first = try #require(spans.first { $0.text == "PRINTING" })
+    #expect(first.x == 124.8)   // NOT 201.6 (20*7.2 + 57.6, the pre-fix
+                                // document-column bug this test pins closed)
+}
+
+@Test func typedIndentStillUsesDocumentColumnsWhenPMReallyIsActive() throws {
+    // The other half of the same fix, guarding against overcorrecting: WARPRAYR's
+    // own `.pm`-governed shape (`pmFirstLineIndentNotDoubledWhenSourceAlreadyTypesIt`,
+    // above) must still use the document-column measure -- `columnIndent` (this
+    // fix's own gate) is `indent && pmActive`, not a blanket switch to natural
+    // width. Same assertion that test already makes, re-stated here as this fix's
+    // own negative case so a future change to the `pmActive` gate trips whichever
+    // of these two tests it actually broke. Direct port of ctrl-kd's
+    // `test_typed_indent_still_uses_document_columns_when_pm_really_is_active`.
+    var data = bytes(".pm 5") + HARD
+    data += fontBlock(helvTypestyle(), points: 12.0, styleBits: 0x8000)
+    data += bytes("          Ten typed leading spaces on this first line.") + HARD
+    let doc = parseWS(data)
+    #expect(doc.blocks[0].paraMargin == 4.0)
+    let pdf = emitPDF(doc, mode: .printed)
+    let spans = contentSpans(pdf)
+    let ten = try #require(spans.first { $0.text == "Ten" })
+    #expect(ten.x == 129.6)   // left 57.6 + 10-space indent 72 (10-CPI columns,
+                              // .pm really is active here)
+}
+
 @Test func pmPsaPsbNeverReachModernPDF() throws {
     let data = bytes(".pm 10") + HARD + bytes("Text.") + HARD
     let baseline = bytes("Text.") + HARD

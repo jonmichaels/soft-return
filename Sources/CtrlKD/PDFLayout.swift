@@ -112,6 +112,21 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     /// quantity `lead` already carries.
     public var fi: Double?
 
+    /// planning #257 (ctrl-kd's own `PageLine.pm_active`): whether this line's own
+    /// BLOCK has a real, nonzero `.pm` in force — the missing half of `splitIndent`'s
+    /// `indent` flag. `indent` alone only says "this segment is the line's own leading
+    /// run of literal spaces before proportional text" — it does NOT say the leading
+    /// run is `.pm`'s own document-column convention (WARPRAYR.WS, measured) rather
+    /// than plain hand-typed centering with no margin mechanism behind it at all
+    /// (sawyer/REF/-HOW-TO.RJS pages 10-12, measured: `.pm 0"` in force). `fi` cannot
+    /// stand in for this — it is already 0/`nil` both when the block never set `.pm`
+    /// AND when a typed indent already satisfies a nonzero one (`printedPMFiPt`'s own
+    /// `max(0, pmCols - alreadyTypedCols)`), the very two cases this field tells
+    /// apart. `false` by construction for every line this emitter MAKES rather than
+    /// reads, the same "furniture" convention `fi`/`bi` follow. See `lineOpsPrinted`'s
+    /// own `pmActive` parameter for how it's consumed.
+    public var pmActive: Bool
+
     /// b24 round 18 (RULINGS-LEDGER row 4): the source Block's own index in
     /// `doc.blocks`, for `tocPageNumbers` to resolve which page a `.tc`/`.ix` entry's
     /// own block landed on — the REAL paginator's answer, not an estimate. `nil` for a
@@ -320,6 +335,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         overprint = false
         soft = false
         fi = nil
+        pmActive = false
         bi = nil
         image = nil
         ws4Spacing = false
@@ -335,7 +351,8 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     }
 
     public init(_ spans: [Span], soft: Bool = false, lead: Double? = nil,
-                overprint: Bool = false, fi: Double? = nil, bi: Int? = nil,
+                overprint: Bool = false, fi: Double? = nil, pmActive: Bool = false,
+                bi: Int? = nil,
                 image: ImageRef? = nil, ws4Spacing: Bool = false, kerning: Bool = true,
                 left: Double? = nil, roll: Double? = nil, justifyRightX: Double? = nil,
                 parityLeft: ParityLeft? = nil, col: Int? = nil,
@@ -346,6 +363,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         self.lead = lead
         self.overprint = overprint
         self.fi = fi
+        self.pmActive = pmActive
         self.bi = bi
         self.image = image
         self.ws4Spacing = ws4Spacing
@@ -3067,6 +3085,27 @@ func printedRollPt(_ doc: Document) -> Double {
 /// already derives from (size 12 * 0.6 == 7.2 at the default size).
 let pdfPtPerCol = 7.2
 
+/// planning #257 (sawyer/REF/-HOW-TO.RJS pages 10-12): a typed leading-space run
+/// before proportional text with NO `.pm` backing it (`lineOpsPrinted`'s own
+/// `pmActive`/`columnIndent`) still needs its OWN width — not `pdfPtPerCol` (that
+/// branch is for a `.pm`-governed run, WARPRAYR), and not this Base14 Helvetica
+/// substitute's own AFM space glyph either (0.278em — correct for an ORDINARY
+/// inter-word space inside running text, measured: "PRINTING UNBOUND"'s own single
+/// space landed within 0.1pt of it — but too narrow for a run of many consecutive
+/// typed ones). MEASURED directly against two independent blocks of the same real
+/// WS7 capture (ws7-prints/v4/sawyer__REF__-HOW-TO_EXT_RJS.pcl, both Univers/Helv
+/// 10pt, `.pm 0"` in force): the banner heading's 20/22/18/30-space lines (left
+/// 21.6pt, WS7 x 88.8/95.5/82.0/122.4) and the later `IfException` block's 12-space
+/// lines (left 417.6pt, WS7 x 457.9) both solve to the SAME flat 0.336em/pt ratio to
+/// within 0.1pt (decipoint rounding) — e.g. 21.6 + 20*3.36 = 88.8 exactly, 417.6 +
+/// 12*3.36 = 457.92 vs 457.9. Applied UNSCALED (no `faceTz` factor: that scale lands
+/// the face's AVERAGE character on its own HMI grid, and a space is not average —
+/// scaling it the same amount overshot every one of these lines). Untested outside
+/// a Helv/Univers substitution — no other proportional face types a literal indent
+/// with no `.pm` anywhere in the current corpus. Port of ctrl-kd's
+/// `_TYPED_INDENT_SPACE_EM`.
+let typedIndentSpaceEM = 0.336
+
 /// First-line indent in points from `.pm` — b24 round 17 (RULINGS-LEDGER row 5/7), mirrors
 /// `rtfPMFiTwips` (round 6), relative to li=0: Printed PDF has no per-block `.lm`/`.rm`
 /// margin of its own yet (that gap is Printed RTF's own ledger row 8, a SEPARATE item),
@@ -4000,6 +4039,10 @@ private func resolvePlainBody(
             continue
         }
         let fiPt = printedPMFiPt(block)
+        // planning #257: see `PageLine.pmActive`'s own doc comment -- the RAW `.pm`
+        // state, not `fiPt` (already reduced to 0 in both the "no `.pm` at all" and
+        // the "typed indent already satisfies a nonzero one" cases).
+        let pmActive = (block.paraMargin ?? 0) != 0
         var firstLineOfBlock = true
         // Fix C (b26-print-fidelity-2): the nearest earlier REAL (`.para`) block,
         // skipping pagebreak/condpage sentinels — `enteringLeadPt`'s own "outgoing"
@@ -4178,7 +4221,8 @@ private func resolvePlainBody(
                 }
                 items.append(.line(PageLine(spans, soft: line.soft, lead: ownLead,
                                             overprint: line.overprint,
-                                            fi: firstLineOfBlock ? fiPt : nil, bi: bi,
+                                            fi: firstLineOfBlock ? fiPt : nil,
+                                            pmActive: pmActive, bi: bi,
                                             ws4Spacing: ws4SpacingLine,
                                             kerning: line.kerning, left: ownLeft, roll: ownRoll,
                                             justifyRightX: justifyRightX,

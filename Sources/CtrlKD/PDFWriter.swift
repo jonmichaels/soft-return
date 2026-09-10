@@ -1380,7 +1380,8 @@ private func lineOpsPrinted(
     pclPrograms: [[UInt8]] = [], pageHeight: Double = Double(PDFMetrics.pageHeight),
     kerning: Bool = true, justifyRightX: Double? = nil,
     justifyWordX: [PageLine.JustifyWordPiece]? = nil,
-    recordGraphicCells: inout [PageLine.GraphicCellPlacement]?
+    recordGraphicCells: inout [PageLine.GraphicCellPlacement]?,
+    pmActive: Bool = false
 ) -> [[UInt8]] {
     var ops: [[UInt8]] = []
     // Planning #244 (the round-trip gauntlet fix) moved this expansion out of
@@ -1660,7 +1661,20 @@ private func lineOpsPrinted(
             x += Double(seg.text.width) * pitch
             continue
         }
-        if let entry = seg.entry, entry.proportional, !seg.indent {
+        // planning #257: `seg.indent` alone (`splitIndent`'s flag) only means "this
+        // segment is the line's own leading run of literal spaces before proportional
+        // text" -- it fires for WARPRAYR's `.pm`-backed stanza indents AND for
+        // sawyer/REF/-HOW-TO.RJS's `.pm 0"` hand-typed banner centring alike, and only
+        // the FIRST of those is really `.pm`'s document-column convention (see
+        // `PageLine.pmActive`'s own doc comment). `columnIndent` adds that missing
+        // half: a leading run only takes the 10-CPI document-column measure below when
+        // this line's own block actually has a real `.pm` in force; otherwise it falls
+        // into the SAME natural-width proportional path an ordinary word gets, which is
+        // what real WS7 did with -HOW-TO.RJS's typed spaces (measured: Univers 10pt's
+        // own space glyph, ~3.36pt wide, not the 7.2pt 10-CPI column this branch used
+        // to charge every one of them -- see `typedIndentSpaceEM`).
+        let columnIndent = seg.indent && pmActive
+        if let entry = seg.entry, entry.proportional, !columnIndent {
             // PROPORTIONAL runs advance at NATURAL widths, face-scaled. Every piece
             // (word or space run) occupies its own AFM width times the FACE-constant
             // Tz — the scale that lands the face's AVERAGE character on its HMI grid,
@@ -1686,8 +1700,18 @@ private func lineOpsPrinted(
             var ulX0: Double? = nil
             var ulX1 = 0.0
             for piece in splitKeepingSpaceRuns(seg.text) {
-                let nat = stringWidthPt(piece, baseFont, pt)
-                let pw = nat > 0 ? nat * factor : Double(piece.width) * pitch
+                let pw: Double
+                if seg.indent, piece.first == " " {
+                    // planning #257: this piece IS the whole typed leading run
+                    // (`splitIndent` only ever flags an all-space or all-text
+                    // segment) -- see `typedIndentSpaceEM`'s own doc comment for
+                    // the measured ratio and why it skips `factor` (the
+                    // face-average Tz scale) entirely.
+                    pw = Double(piece.width) * Double(pt) * typedIndentSpaceEM
+                } else {
+                    let nat = stringWidthPt(piece, baseFont, pt)
+                    pw = nat > 0 ? nat * factor : Double(piece.width) * pitch
+                }
                 if piece.first != " " {
                     if symbolBold || symbolItalic {
                         ops.append(symbolStyleOp(
@@ -1718,7 +1742,7 @@ private func lineOpsPrinted(
         }
         let scale: Double?
         let w: Double
-        if seg.indent {
+        if columnIndent {
             scale = nil
             w = Double(seg.text.width) * Double(size) * 0.6      // document print columns
         } else {
@@ -2048,7 +2072,8 @@ func pageStream(
                              pclPrograms: pclPrograms, pageHeight: Double(pageHeight),
                              kerning: line.kerning, justifyRightX: line.justifyRightX,
                              justifyWordX: line.justifyWordX,
-                             recordGraphicCells: &discardedGraphicCells)
+                             recordGraphicCells: &discardedGraphicCells,
+                             pmActive: line.pmActive)
     }
     return joined(ops, separator: 0x0A)                                 // Python's b'\n'.join
 }
@@ -2201,7 +2226,7 @@ func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int
                               ulContinuous: ulContinuous, pclPrograms: pclPrograms,
                               pageHeight: Double(pageHeight), kerning: line.kerning,
                               justifyRightX: line.justifyRightX, justifyWordX: line.justifyWordX,
-                              recordGraphicCells: &record)
+                              recordGraphicCells: &record, pmActive: line.pmActive)
             if let record, !record.isEmpty {
                 pages[pi][li].graphicCells = record
             }
