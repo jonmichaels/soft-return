@@ -383,6 +383,140 @@ public func graphicCellRects(_ char: Character) -> [(x: Double, y: Double, w: Do
     return []
 }
 
+/// One drawing-path command, unit-cell space -- the SAME three PDF path operators
+/// `graphicOps`'s own arcCorners branch emits (`m`/`l`/`c`), just not yet stringified.
+/// Port of ctrl-kd's `graphic_cell_ops`'s `('m', ...)`/`('l', ...)`/`('c', ...)` tuples.
+public enum PathSegment: Equatable {
+    case moveTo(x: Double, y: Double)
+    case lineTo(x: Double, y: Double)
+    case curveTo(c1x: Double, c1y: Double, c2x: Double, c2y: Double, x: Double, y: Double)
+}
+
+/// One drawing OPERATION in unit-cell space (0..1 fractions, `graphicCellRects`'s own
+/// convention: x left-to-right, y bottom-to-top). Planning #251 follow-up (2026-09-10,
+/// app coder job 348): `graphicCellRects` reduces every shape to its bounding rect(s) --
+/// documented there as lossy for arcCorners specifically ("a bounding-rect approximation
+/// of the curve"). `.strokePath` is the fix: a consumer that ties each `graphicCellRects`
+/// arcCorners rect to its own draw call turns ONE continuous quarter-circle join into TWO
+/// independently-drawn shapes, which is exactly why LJ6DTP.WS page 3 came out 51 app-drawn
+/// ops against the real PDF's 35 (`graphicCellOps` closes this; see its own doc comment).
+/// `gray` on `.fillRect` is `nil` for every table-driven rect except shadeGray's (which
+/// carries its own ink-coverage fraction, `shadeGray`'s own doc comment) -- the same
+/// "flat rect, no color of its own" convention `graphicCellRects` already documents for
+/// boxArms/partBlocks, now made explicit instead of silently absent.
+public enum GraphicCellOp: Equatable {
+    case fillRect(x: Double, y: Double, w: Double, h: Double, gray: Double?)
+    case fillDisc(cx: Double, cy: Double, r: Double)
+    case fillPolygon(points: [(x: Double, y: Double)])
+    case strokePath(segments: [PathSegment], lineWidthFrac: Double)
+
+    public static func == (lhs: GraphicCellOp, rhs: GraphicCellOp) -> Bool {
+        switch (lhs, rhs) {
+        case let (.fillRect(x1, y1, w1, h1, g1), .fillRect(x2, y2, w2, h2, g2)):
+            return x1 == x2 && y1 == y2 && w1 == w2 && h1 == h2 && g1 == g2
+        case let (.fillDisc(cx1, cy1, r1), .fillDisc(cx2, cy2, r2)):
+            return cx1 == cx2 && cy1 == cy2 && r1 == r2
+        case let (.fillPolygon(p1), .fillPolygon(p2)):
+            return p1.count == p2.count && zip(p1, p2).allSatisfy { $0.0.x == $0.1.x && $0.0.y == $0.1.y }
+        case let (.strokePath(s1, w1), .strokePath(s2, w2)):
+            return s1 == s2 && w1 == w2
+        default:
+            return false
+        }
+    }
+}
+
+/// Drawing-grade geometry for one cp437 graphic character, in unit-cell space --
+/// planning #251 follow-up (2026-09-10, app coder job 348, `docs/KNOWN-ISSUES-REGISTER.md`
+/// planning #216 row): where `graphicCellRects` hands a consumer bounding RECTS,
+/// `graphicCellOps` hands it the actual drawing OPERATIONS `graphicOps` itself executes --
+/// filled rects/discs/polygons for the five table-driven categories (never bounding-boxed:
+/// a disc stays a true disc, a poly stays its exact vertex list, unlike `graphicCellRects`'
+/// own documented bounding-box simplification for those two), and for arcCorners a SINGLE
+/// `.strokePath` carrying the exact same four path commands and Bezier control points
+/// `graphicOps`'s own arcCorners branch computes (`moveTo` the far stub end, `lineTo` the
+/// near stub end, `curveTo` the quarter-circle join with `graphicOps`'s own K=0.5523
+/// constant, `lineTo` the other stub's far end) -- never split into separate shapes, so a
+/// consumer executing this op list draws the identical shape at the identical op count as
+/// the real PDF. `GraphicCellOpsParityTests` replays each arcCorners character's ops back
+/// into the same raw PDF operator KIND sequence `graphicOps` itself emits (w, m, l, c, l,
+/// S) and asserts an exact match, both count and kind -- LJ6DTP.WS page 3's own regression
+/// (51 app-drawn ops against 35 real PDF ops, `graphicCellRects`' two-rects-per-arc
+/// reconstruction) is the corpus case this closes. `[]` for a character this module does
+/// not draw as geometry at all (`!graphicChars.contains(char)`), same convention
+/// `graphicCellRects` uses. Port of ctrl-kd's `graphic_cell_ops`.
+public func graphicCellOps(_ char: Character) -> [GraphicCellOp] {
+    if char == fullBlock {
+        return [.fillRect(x: 0.0, y: 0.0, w: 1.0, h: 1.0, gray: nil)]
+    }
+    if let gray = shadeGray[char] {
+        return [.fillRect(x: 0.0, y: 0.0, w: 1.0, h: 1.0, gray: gray)]
+    }
+    if let frac = partBlocks[char] {
+        return [.fillRect(x: frac.x, y: frac.y, w: frac.w, h: frac.h, gray: nil)]
+    }
+    if let shapes = symbolShapes[char] {
+        var out: [GraphicCellOp] = []
+        for shape in shapes {
+            switch shape {
+            case .white:
+                continue   // knockout -- see `graphicCellRects`' own doc comment
+            case .rect(let fx, let fy, let fw, let fh):
+                out.append(.fillRect(x: fx, y: fy, w: fw, h: fh, gray: nil))
+            case .disc(let fx, let fy, let fr):
+                out.append(.fillDisc(cx: fx, cy: fy, r: fr))
+            case .poly(let pts):
+                out.append(.fillPolygon(points: pts))
+            }
+        }
+        return out
+    }
+    if let arc = arcCorners[char] {
+        let t = graphicCellLineFrac
+        let rc = 0.42
+        let mx = 0.5, my = 0.5
+        let sv = arc.vertical == .up ? 1.0 : -1.0
+        let sh = arc.horizontal == .right ? 1.0 : -1.0
+        let ax = mx, ay = my + sv * rc
+        let bx = mx + sh * rc, by = my
+        let K = 0.5523
+        let c1x = ax, c1y = my + sv * rc * (1 - K)
+        let c2x = mx + sh * rc * (1 - K), c2y = by
+        let vFar = arc.vertical == .down ? 0.0 : 1.0
+        let hFar = arc.horizontal == .right ? 1.0 : 0.0
+        return [.strokePath(segments: [
+            .moveTo(x: mx, y: vFar),
+            .lineTo(x: ax, y: ay),
+            .curveTo(c1x: c1x, c1y: c1y, c2x: c2x, c2y: c2y, x: bx, y: by),
+            .lineTo(x: hFar, y: my),
+        ], lineWidthFrac: t)]
+    }
+    if let arms = boxArms[char] {
+        let t = graphicCellLineFrac
+        let d = graphicCellDoubleGapFrac
+        let mx = 0.5, my = 0.5
+        var out: [GraphicCellOp] = []
+        for (weight, xa, xb) in [(arms.left, 0.0, mx), (arms.right, mx, 1.0)] {
+            if weight == 1 {
+                out.append(.fillRect(x: xa, y: my - t / 2, w: xb - xa, h: t, gray: nil))
+            } else if weight == 2 {
+                out.append(.fillRect(x: xa, y: my + d - t / 2, w: xb - xa, h: t, gray: nil))
+                out.append(.fillRect(x: xa, y: my - d - t / 2, w: xb - xa, h: t, gray: nil))
+            }
+        }
+        for (weight, ya, yc) in [(arms.up, my, 1.0), (arms.down, 0.0, my)] {
+            if weight == 1 {
+                out.append(.fillRect(x: mx - t / 2, y: ya, w: t, h: yc - ya, gray: nil))
+            } else if weight == 2 {
+                out.append(.fillRect(x: mx - d - t / 2, y: ya, w: t, h: yc - ya, gray: nil))
+                out.append(.fillRect(x: mx + d - t / 2, y: ya, w: t, h: yc - ya, gray: nil))
+            }
+        }
+        return out
+    }
+    return []
+}
+
 /// Vector ops for one all-graphics span (spaces advance, draw nothing).
 ///
 /// `leadFactor * pt` is the glyph's own CELL height -- a box-drawing arm's vertical
