@@ -1298,6 +1298,17 @@ private func jsonHFDict(_ dict: [Int: String], order: [Int]) -> LayoutJSONValue 
     return .object(keys.map { (String($0), .string(dict[$0]!)) })
 }
 
+/// One resolved `HeadFootLine` (version 6, planning #251(d)) — `x`/`y` rounded to 1
+/// decimal, same convention as `justify_word_x`/`line_no`/`graphic_cells`.
+private func jsonHeadFootLine(_ line: HeadFootLine) -> LayoutJSONValue {
+    .object([
+        ("text", .string(line.text)),
+        ("x", .double(roundToOneDecimal(line.x))),
+        ("y", .double(roundToOneDecimal(line.y))),
+        ("font", line.font.map { LayoutJSONValue.int($0) } ?? .null),
+    ])
+}
+
 /// The `layout` format: the full viewer contract as JSON — semantic Modern flow, printed
 /// page-lines, page geometry with provenance, notes, and the invisible layer (dot
 /// commands with anchors, running-head events) — so a renderer in any language can draw
@@ -1347,6 +1358,29 @@ private func jsonHFDict(_ dict: [Int: String], order: [Int]) -> LayoutJSONValue 
 /// PUBLIC function, not exported through this JSON (it depends on nothing per-
 /// document; a consumer calls it directly, in either engine, keyed only by the
 /// character).
+///
+/// version 6 (planning #251(d), 2026-09-10): each printed PAGE MAY now carry
+/// `header_lines`/`footer_lines` — `[{"text", "x", "y", "font"}, ...]`, one entry per
+/// declared `.h#`/`.f#` slot IN FORCE on this page, ascending slot order — the fully
+/// RESOLVED running head/foot: `#` already substituted with THIS page's own real page
+/// number, and (a fontless/Courier line with its own right-align tab only) the
+/// print-time-baked realignment spacing WS7 itself re-evaluates per page. `text` still
+/// carries WordStar's own inline style TOGGLE BYTES — a consumer runs it through the
+/// SAME `hfRuns`-shaped styling pass the raw `headers`/`footers` dict (above,
+/// unchanged) already requires; this field adds WHERE and WHAT TEXT, never how to draw
+/// it. `font` is the index into this document's top-level `fonts` array
+/// (`Document.headerFonts`/`footerFonts`'s own value), or `null` for the fontless/
+/// Courier default. Also MAY carry `auto_page_number` — `{"text", "x", "y"}` — the
+/// resolved WordStar AUTOMATIC page number (the one `.pc` positions, completely
+/// separate from any `#` inside a real `.he`/`.fo`), present exactly when the
+/// document's own `.pn`/`.pg`/`.op` state shows it on THIS page and no real footer
+/// pre-empts it. All three fields are resolved from `resolveHeadFootLines` — the SAME
+/// function `PDFWriter.swift`'s own `runningOps` (the PDF writer) calls to render, so
+/// the PDF bytes and this JSON always agree by construction, never by parallel
+/// re-derivation. OMITTED, not null, when a page declares no header/footer at all and
+/// no automatic number shows — a document with neither anywhere emits byte-identical
+/// JSON to version 5. The raw `headers`/`footers` dict (unsubstituted template
+/// strings) stays exactly as it was; this is purely additive.
 ///
 /// Old fields (`segments`, `soft`, `overprint`, `lead`) are unchanged; this is purely
 /// additive.
@@ -1472,6 +1506,53 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
             ("footers", blankHF ? .object([]) : jsonHFDict(page.footers,
                                                              order: footerOrder)),
         ]
+        // `header_lines`/`footer_lines`/`auto_page_number` (version 6, planning
+        // #251(d)): resolved by `attachHeadFootLinesPrinted` -- see `emitLayout`'s
+        // own doc comment for the field shapes. Same omit-unless-set convention as
+        // `columns`/`left`/`col` above -- gated on `page.isEmpty` ONLY (the
+        // synthesized empty-page fallback, `b56040b`, still needs this: it
+        // carries the document's REAL headers/footers for the PDF driver's own
+        // sake, which `resolveHeadFootLines` would otherwise turn into real
+        // entries here too, while ctrl-kd's own equivalent fallback is a bare
+        // list with no `.headers` attribute at all and resolves nothing) --
+        // deliberately NOT gated on `notesPath` the way the raw `headers`/
+        // `footers` dict just above is: `resolved.headers`/`footers` are
+        // already empty arrays on a genuine notes-path page (its own real
+        // `page.headers`/`footers` ARE `{}`, replayed straight through, same
+        // as the raw dict), so `headerLines`/`footerLines` naturally stay
+        // `nil` there with no extra gate needed -- but `autoPageno` does NOT
+        // depend on headers/footers being non-empty (WSFORMAT.WS's own
+        // "active only when the footers are not in use" reads FALSE exactly
+        // when footers is `{}`), so a notes-path page can legitimately carry
+        // a real automatic page number with no real header/footer at all
+        // (DISPLAY.WS/REF/NOTES.TST's own `.pa`-terminated endnote-appendix
+        // page, #228) -- gating it on `notesPath` too silently dropped it,
+        // found via `AnswerKeyParityTests`.
+        // `page.isEmpty && !page.explicitBreak`, not `page.isEmpty` alone: a page
+        // with real content (some ordinary line, real endnote text) is never gated by
+        // either half. A genuinely empty page comes in two shapes that must be told
+        // apart -- `finalizePages`'s own `pages.isEmpty` fallback (the WHOLE array had
+        // no pages at all; the synthesized single page's `explicitBreak` stays `false`)
+        // still needs blanking, same reason the raw dict just above does; but #228's
+        // OWN empty trailing page (a bare `.pa` with a saved blank paragraph after it,
+        // `explicitBreak == true` -- REF/PAGESIZE.WS's own oracle, "WS7 page 6 is a
+        // single line, the footer digit '6', no body") must NOT be, or its real
+        // automatic page number silently disappears even though `attachHeadFootLines
+        // Printed` correctly resolved one for it. Found via `AnswerKeyParityTests`.
+        let blankResolvedHF = page.isEmpty && !page.explicitBreak
+        if !blankResolvedHF, let headerLines = page.headerLines {
+            pageFields.append(("header_lines", .array(headerLines.map(jsonHeadFootLine))))
+        }
+        if !blankResolvedHF, let footerLines = page.footerLines {
+            pageFields.append(("footer_lines", .array(footerLines.map(jsonHeadFootLine))))
+        }
+        if !blankResolvedHF, let auto = page.autoPageno {
+            pageFields.append(("auto_page_number", .object([
+                ("text", .string(auto.text)),
+                ("x", .double(roundToOneDecimal(auto.x))),
+                ("y", .double(roundToOneDecimal(auto.y))),
+            ])))
+        }
         // `columns`/`column_gutter_pt`/`column_width_pt` (version 2): same
         // omit-unless-set convention as `left`/`col` above -- present only on a page
         // `applyColumns` actually merged from a `.co n>1` group.
@@ -1488,7 +1569,7 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
     let flow = modernSemanticFlow(doc, notes: options.notes, noteRefs: options.noteRefs)
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
-        ("version", .int(5)),
+        ("version", .int(6)),
         ("meta", jsonMeta(doc)),
         ("page", jsonPage(doc.page)),
         ("fonts", .array(doc.fonts.map(jsonFont))),

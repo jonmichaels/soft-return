@@ -178,7 +178,32 @@ private func rule(xFrom: Double, xTo: Double, y: Double) -> [UInt8] {
 /// unaffected by this change. The DEFAULT left/size (72.0/12, both accumulated from integer
 /// starts) are exact at every step, so every document that never sets `.po`/`.cw` still
 /// produces byte-identical output to before this change.
-/// Header and footer text for one page, as content-stream ops.
+/// The resolved running head/foot lines for one page (planning #251(d)) — the
+/// return shape of `resolveHeadFootLines`, shared by `runningOps` (the writer) and
+/// `attachHeadFootLinesPrinted` (the page-lines model). Port of Python's
+/// `{'headers': [...], 'footers': [...], 'auto': ... or None}` dict.
+struct ResolvedHeadFoot {
+    var headers: [(n: Int, text: String, y: Double, fontIdx: Int?)]
+    var footers: [(n: Int, text: String, y: Double, fontIdx: Int?)]
+    var auto: (text: String, x: Double, y: Double)?
+}
+
+/// The running head/foot's own GEOMETRY and TEXT resolution — WHERE (each line's `y`;
+/// `x` is simply the caller's already-resolved `left`, since — unlike `y` — no
+/// header/footer line's own starting x has ever depended on `pageNo`, only on the
+/// page's own `.po`/`.poe`/`.poo` state, which `emitPDF`'s own per-page `pageLeft`
+/// already resolves and threads straight through as this function's `left` parameter)
+/// and WHAT TEXT (the `#` page-number substitution, and — fontless/Courier lines with
+/// their own right-align tab only — the print-time-baked realignment spacing WS7
+/// re-evaluates against THIS page's own actual page-number width).
+///
+/// Planning #251(d), 2026-09-10: this is the MODEL half of what used to be one
+/// function, `runningOps`. `runningOps` (the PDF writer) now calls this and turns its
+/// resolved `(text, y, fontIdx)` lines into content-stream ops; `attachHeadFootLinesPrinted`
+/// (the page-lines model, `docToPagelines`'s own post-pagination pass, below) calls the
+/// SAME function to put page-level `Page.headerLines`/`footerLines`/`autoPageno` on the
+/// model the app reads. Neither caller duplicates this arithmetic; both call this one
+/// function. Port of Python's `_resolve_head_foot_lines`.
 ///
 /// Geometry MEASURED on WordStar 4 (2026-08-03), not inferred:
 ///
@@ -209,24 +234,40 @@ private func rule(xFrom: Double, xTo: Double, y: Double) -> [UInt8] {
 ///     (the one `.pc` positions — a completely separate mechanism from a `#` the author
 ///     placed inside a real `.he`/`.fo`) show on THIS page", combining
 ///     `EmitOptions.PageNumberMode` and, for `.auto`, the per-page `pgnumCheckpoints`
-///     state (PDFLayout.swift). `runningOps` itself only resolves WHERE (from `.po`/
+///     state (PDFLayout.swift). This function itself only resolves WHERE (from `.po`/
 ///     `.pc` via `autoPageNumberXPt`) and WHETHER a real footer pre-empts it
 ///     (WSFORMAT.WS: "active only when the footers are not in use") — never the on/off
 ///     DECISION itself, which needs page-level context this function does not have. A
-///     caller that never passes it (every existing call site but the one main per-page
-///     loop wires it into) gets `false`, byte-identical to before this parameter
-///     existed — the TOC/Index call site included, which passes `headers: [:]`/
-///     `footers: [:]` explicitly and must not suddenly grow a number it never had.
-func runningOps(
+///     caller that never passes it (every existing `runningOps` call site but the one
+///     main per-page loop wires it into; `attachHeadFootLinesPrinted` below always
+///     resolves the document's own NATURAL `.auto` answer, the same "model states it
+///     unconditionally, a flag only tells the WRITER whether to draw it" convention
+///     `headers`/`footers` themselves already use) gets `false`, byte-identical to
+///     before this parameter existed — the TOC/Index call site included, which passes
+///     `headers: [:]`/`footers: [:]` explicitly and must not suddenly grow a number it
+///     never had.
+///
+/// Returns `nil` for "nothing to place here" (the caller distinguishes this from an
+/// empty-but-real result by testing for `nil`, not an empty array). Otherwise the
+/// resolved `headers`/`footers` lines (ascending `n`, only slots carrying real (non-
+/// empty) text) plus an optional `auto` entry. `text` is FULLY resolved (`#`
+/// substituted; fontless lines with their own right-align tab also get the baked
+/// realignment spaces) but keeps WordStar's own inline style TOGGLE BYTES intact — a
+/// consumer still runs it through `hfRuns` for STYLING/per-run advance, exactly as the
+/// raw `headers`/`footers` dict already requires (this function resolves WHERE and WHAT
+/// TEXT, never how to draw it). `fontIdx` is the same `Document.fonts` index
+/// `Document.headerFonts`/`footerFonts` already carry, or `nil` for the fontless/Courier
+/// default.
+func resolveHeadFootLines(
     _ doc: Document, pageNo: Int, pageHeight: Int, lead: Double, size: Int,
     left: Double, printed: Bool, headers: [Int: String]? = nil, footers: [Int: String]? = nil,
-    res: FontResources? = nil, autoPageNumber: Bool = false
-) -> [[UInt8]] {
+    autoPageNumber: Bool = false
+) -> ResolvedHeadFoot? {
     let headers = headers ?? doc.headers
     let footers = footers ?? doc.footers
     let footerInUse = !footers.isEmpty && footers.values.contains { !$0.isEmpty }
     let showAutoNum = printed && autoPageNumber && !footerInUse
-    guard printed, !headers.isEmpty || !footers.isEmpty || showAutoNum else { return [] }
+    guard printed, !headers.isEmpty || !footers.isEmpty || showAutoNum else { return nil }
     // `.op` does NOT suppress a `#` in a header or footer. WSFORMAT.TXT is explicit:
     // ".OP  Omit page number.  At print time no page numbers are printed UNLESS THE
     // '#' HAS BEEN USED IN FOOTERS OR HEADERS." It suppresses the AUTOMATIC page
@@ -249,83 +290,63 @@ func runningOps(
         }
         return out
     }
-    /// One header/footer LINE's ops (register C6). `fontIdx` is the `Document.fonts`
-    /// index found on this line's own `.h#`/`.f#` (`Document.headerFonts`/`footerFonts` —
-    /// absent when that line opened with no font-change block of its own). Resolved the
-    /// SAME way a body span's own font run is (`pdfFamily`), so LJ6DTP's running head —
-    /// Antique Olive, a proportional sans face, per its own `.h1` — no longer falls back
-    /// to a hardcoded Courier just because header text has no span machinery of its own.
-    /// `hfRuns` (already used by Modern/RTF for this exact text, never before by Printed)
-    /// turns WordStar's own typed toggle bytes into styles, so a genuinely bold run still
-    /// renders bold in whatever face this resolves to, and the toggle bytes themselves
-    /// never reach the page as literal control characters.
+    /// The final substituted (and, for a fontless line with its own right-align tab,
+    /// realignment-baked) text for one header/footer LINE — the TEXT half of what used
+    /// to be `hfLineOps`'s own `tabRec` branch, moved here (planning #251(d)) so it runs
+    /// once per PAGE at model-build time instead of once per PDF RENDER — same formula,
+    /// same result; `runningOps` never recomputes it, it calls `resolveHeadFootLines`
+    /// (this function's own caller) exactly like every other consumer.
     ///
-    /// No font on this line (the overwhelmingly common case — every document that never
-    /// opens a `.h#`/`.f#` with a font block) is BYTE-IDENTICAL to before this existed:
-    /// one Tj, the whole string, Courier — PROVIDED the line has no toggle bytes of its own
-    /// to interpret (mechanism M, ctrl-kd 74acc60, residuals round 2026-09-06): a fontless
-    /// `.h#`/`.f#` line that DOES type an inline style toggle (`hfToggles`, e.g. `^Y` for
-    /// italic) used to skip `hfRuns` entirely and write the raw control byte straight into
-    /// the Tj string — a real PDF viewer (and this repo's own fidelity gate, reproducing
-    /// one) then advances the pen by whatever width its font gives an undefined glyph code,
-    /// landing it as a phantom extra character glued onto the following word. Confirmed on
-    /// -README.WS's own running head (`.h1`, no font block, wrapped in a single `^Y`...`^Y`
-    /// italic pair): the engine's Printed PDF carried a literal `\x19` before "WordStar" on
-    /// every page, shifting "7.0"/"Archive" 7.2-14.4pt right of WS7's own real (correctly
-    /// italic-then-restored, no phantom glyph) position. `res` is required for the
-    /// run-by-run path (it registers whatever base-14 font gets used in the page's own
-    /// /Font resources); a caller that omits it gets the old single-Tj behaviour
-    /// regardless (there is no way to register a font without one), same as before this fix.
-    func hfLineOps(_ txt: String, y: Double, fontIdx: Int?, tabRec: HFTabMark? = nil) -> [[UInt8]] {
+    /// planning #202 (mechanism Q, ctrl-kd 605e27b): a right/center/decimal-align tab
+    /// typed into a `.h#`/`.f#` argument gets its own `cols` spaces BAKED into the
+    /// text at parse time -- sized for whatever the eventual `#` substitution was
+    /// assumed to be wide when the file was LAST SAVED (always 1 column: WordStar's
+    /// own screen shows the literal '#' token, never the eventual printed number).
+    /// Real WS7 re-evaluates the tab at PRINT TIME against THAT page's own actual
+    /// page-number width instead (measured, -README.WS pages 9->10: WS7's own
+    /// "WordStar" moves 7.2pt LEFT the instant the page number grows a second digit,
+    /// while the number's own right edge -- the tab's real target column -- never
+    /// moves).
+    ///
+    /// `tabRec.absHMI` (content[2:4], "absolute tab size in HMIs" -- the SAME field a
+    /// body span's own tab mark carries) is WHERE THE BAKED PADDING ITSELF ENDS,
+    /// measured from the document's own left reference -- i.e. it already encodes
+    /// `targetCol - savedSuffixWidth`, using the file's OWN (1-digit-'#') suffix
+    /// width at save time. Reversing that (`+` the STORED suffix's own
+    /// un-substituted width, un-styled control bytes stripped) recovers `targetCol`
+    /// without ever hardcoding a right margin. Re-deriving `targetCol` this way,
+    /// then subtracting THIS page's own ACTUAL (post-`#`-substitution) suffix
+    /// width, reproduces both of -README's real WS7 x positions exactly (352.8pt
+    /// pages 2-9, one digit; 345.6pt pages 10-16, two digits).
+    ///
+    /// UPDATE (mechanism X, PCL-DIVERGENCE-TRIAGE.md, planning task, 2026-09-07):
+    /// this formula used to subtract an EXTRA constant 1 from `savedTargetCol` --
+    /// "content[2:4] cols 41 + stored suffix width 24 = 65, but the real
+    /// print-time target measures 64" -- fit against `ws7-prints/v1`/`v2`'s own
+    /// numbers for the 2-digit-page case ONLY, while `-README`'s header row was
+    /// STILL 24pt too low (mechanism W's own bug, not yet found), which masked
+    /// every header word's own horizontal residual behind its much larger
+    /// vertical one -- the `-1` was never actually checked against a page where
+    /// the header's own Y position was already correct. Once mechanism W's own
+    /// fix landed first, `-README`'s `ws7-prints/v3` PRISTINE.EXE capture showed
+    /// BOTH digit-width buckets uniformly 7.2pt (one column) LEFT of this
+    /// formula's own output -- the extra `-1` bias, not a real WS7 rule (WS7's
+    /// own suffix-final print column is INCLUSIVE of the tab's own
+    /// SIZE-convention target column, not exclusive as the reverted comment
+    /// claimed). Removed: `savedTargetCol` is simply `round(absHMI / tabHMIPerCol)
+    /// + strippedSuffix.count` now, and both digit-width buckets land exactly on
+    /// the pristine measurements above with zero residual.
+    ///
+    /// Fixed-pitch (`entry == nil`, Courier) only: a proportional header face has no
+    /// single column width to divide the HMI target by, and no oracle in the corpus
+    /// combines the two, so that case is left at the baked `cols` -- unchanged, same
+    /// as before this existed.
+    func resolveLineText(_ txt: String, fontIdx: Int?, tabRec: HFTabMark?) -> String {
         var txt = txt
         var entry: FontChange? = nil
-        if let fontIdx, res != nil, fontIdx >= 0, fontIdx < doc.fonts.count {
+        if let fontIdx, fontIdx >= 0, fontIdx < doc.fonts.count {
             entry = doc.fonts[fontIdx]
         }
-        // planning #202 (mechanism Q, ctrl-kd 605e27b): a right/center/decimal-align tab
-        // typed into a `.h#`/`.f#` argument gets its own `cols` spaces BAKED into the
-        // text at parse time -- sized for whatever the eventual `#` substitution was
-        // assumed to be wide when the file was LAST SAVED (always 1 column: WordStar's
-        // own screen shows the literal '#' token, never the eventual printed number).
-        // Real WS7 re-evaluates the tab at PRINT TIME against THAT page's own actual
-        // page-number width instead (measured, -README.WS pages 9->10: WS7's own
-        // "WordStar" moves 7.2pt LEFT the instant the page number grows a second digit,
-        // while the number's own right edge -- the tab's real target column -- never
-        // moves).
-        //
-        // `tabRec.absHMI` (content[2:4], "absolute tab size in HMIs" -- the SAME field a
-        // body span's own tab mark carries) is WHERE THE BAKED PADDING ITSELF ENDS,
-        // measured from the document's own left reference -- i.e. it already encodes
-        // `targetCol - savedSuffixWidth`, using the file's OWN (1-digit-'#') suffix
-        // width at save time. Reversing that (`+` the STORED suffix's own
-        // un-substituted width, un-styled control bytes stripped) recovers `targetCol`
-        // without ever hardcoding a right margin. Re-deriving `targetCol` this way,
-        // then subtracting THIS page's own ACTUAL (post-`#`-substitution) suffix
-        // width, reproduces both of -README's real WS7 x positions exactly (352.8pt
-        // pages 2-9, one digit; 345.6pt pages 10-16, two digits).
-        //
-        // UPDATE (mechanism X, PCL-DIVERGENCE-TRIAGE.md, planning task, 2026-09-07):
-        // this formula used to subtract an EXTRA constant 1 from `savedTargetCol` --
-        // "content[2:4] cols 41 + stored suffix width 24 = 65, but the real
-        // print-time target measures 64" -- fit against `ws7-prints/v1`/`v2`'s own
-        // numbers for the 2-digit-page case ONLY, while `-README`'s header row was
-        // STILL 24pt too low (mechanism W's own bug, not yet found), which masked
-        // every header word's own horizontal residual behind its much larger
-        // vertical one -- the `-1` was never actually checked against a page where
-        // the header's own Y position was already correct. Once mechanism W's own
-        // fix landed first, `-README`'s `ws7-prints/v3` PRISTINE.EXE capture showed
-        // BOTH digit-width buckets uniformly 7.2pt (one column) LEFT of this
-        // formula's own output -- the extra `-1` bias, not a real WS7 rule (WS7's
-        // own suffix-final print column is INCLUSIVE of the tab's own
-        // SIZE-convention target column, not exclusive as the reverted comment
-        // claimed). Removed: `savedTargetCol` is simply `round(absHMI / tabHMIPerCol)
-        // + strippedSuffix.count` now, and both digit-width buckets land exactly on
-        // the pristine measurements above with zero residual.
-        //
-        // Fixed-pitch (`entry == nil`, Courier) only: a proportional header face has no
-        // single column width to divide the HMI target by, and no oracle in the corpus
-        // combines the two, so that case is left at the baked `cols` -- unchanged, same
-        // as before this existed.
         if entry == nil, let tabRec {
             let chars = Array(txt)
             let charIdx = tabRec.charIdx
@@ -339,53 +360,7 @@ func runningOps(
                 txt = String(chars[0..<charIdx]) + String(repeating: " ", count: newCols) + suffix
             }
         }
-        let hasControlByte = txt.unicodeScalars.contains { $0.value < 0x20 }
-        if entry == nil, res == nil || !hasControlByte {
-            var out = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
-            out += Array("\(fixedOneDecimalDouble(left)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-            out += esc(render(txt))
-            out += Array(") Tj ET".utf8)
-            return [out]
-        }
-        // Unreachable as `nil`: the fast-path check just above returns whenever
-        // `entry == nil && res == nil`, and `entry` is only ever set (just above) when
-        // `res != nil` — so every path that reaches here already has a `res`. Spelled as a
-        // guard because Swift's optional binding can't see that invariant on its own.
-        guard let res else { return [] }
-        let family = pdfFamily(entry)
-        let pt: Int
-        if let entry, entry.points != 0 {
-            pt = max(1, roundHalfToEven(entry.points))
-        } else {
-            pt = size
-        }
-        var ops: [[UInt8]] = []
-        var x = left
-        for (i, run) in hfRuns(txt).enumerated() {
-            let runText = render(run.text)
-            if runText.isEmpty { continue }
-            if i == 0, runText.trimmed().isEmpty, let entry, entry.proportional {
-                // WordStar re-stamps a tab-derived leading indent as 10-CPI machine
-                // spaces regardless of the font in force (the SAME rule `splitIndent`
-                // applies to body text) -- a proportional face's space glyph is much
-                // narrower, so advancing on IT would pull the header text back toward the
-                // margin instead of where WS7's own absolute-position PCL puts it
-                // (measured: LJ6DTP.pcl's `&a1718H` immediately before this exact line's
-                // "LJ6DTP").
-                x += Double(runText.count) * pdfPtPerCol
-                continue
-            }
-            let basefont = base14(family, bold: run.styles.contains(.bold),
-                                  italic: run.styles.contains(.italic))
-            let font = res.ref(basefont)
-            var op = Array("BT /\(font) \(pt) Tf 0 Ts ".utf8)
-            op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-            op += esc(runText)
-            op += Array(") Tj ET".utf8)
-            ops.append(op)
-            x += stringWidthPt(runText, basefont, pt)
-        }
-        return ops
+        return render(txt)
     }
 
     // The header block is anchored to the BODY, not the paper edge: its last line sits
@@ -479,13 +454,15 @@ func runningOps(
     let topHead = Double(headers.keys.max() ?? 1)
     let headBase = max(0.0, mt - hm - topHead)
 
-    var ops: [[UInt8]] = []
+    var resolvedHeaders: [(n: Int, text: String, y: Double, fontIdx: Int?)] = []
     for n in headers.keys.sorted() {
         guard let txt = headers[n], !txt.isEmpty else { continue }
         let y = Double(pageHeight) - (headBase + Double(n - 1)) * Double(PDFMetrics.lead)
             - Double(size)
         guard y >= 0 else { continue }
-        ops += hfLineOps(txt, y: y, fontIdx: doc.headerFonts[n], tabRec: doc.headerTabs[n])
+        let fontIdx = doc.headerFonts[n]
+        let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: doc.headerTabs[n])
+        resolvedHeaders.append((n: n, text: text, y: y, fontIdx: fontIdx))
     }
     // b26-header-baseline: `fm` is deliberately UNCHANGED -- checked for the same
     // default/explicit asymmetry `.hm` turned out to have, above, and NOT applying it
@@ -499,12 +476,16 @@ func runningOps(
     // dated, evidence that a default `.fm` already participates in the footer's own
     // placement, unlike a default `.hm` in the header's. Reported, not acted on.
     let footLine = pl - mb + fm
+    var resolvedFooters: [(n: Int, text: String, y: Double, fontIdx: Int?)] = []
     for n in footers.keys.sorted() {
         guard let txt = footers[n], !txt.isEmpty else { continue }
         let y = Double(pageHeight) - Double(footLine + n - 1) * lead - Double(size)
         guard y >= 0 else { continue }
-        ops += hfLineOps(txt, y: y, fontIdx: doc.footerFonts[n], tabRec: doc.footerTabs[n])
+        let fontIdx = doc.footerFonts[n]
+        let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: doc.footerTabs[n])
+        resolvedFooters.append((n: n, text: text, y: y, fontIdx: fontIdx))
     }
+    var auto: (text: String, x: Double, y: Double)? = nil
     if showAutoNum {
         // WordStar's own AUTOMATIC number rides the SAME row a footer line 1 would (n=1:
         // footLine + 1 - 1 == footLine) — measured, every probe that ever showed both
@@ -513,18 +494,142 @@ func runningOps(
         // `.fo` line 1 uses. `showAutoNum` already excludes the case a real footer is in
         // use (WSFORMAT.WS's own "active only when the footers are not in use"), so this
         // never collides with the loop just above — at most one of the two ever fires
-        // for a given page. Plain Courier, no font lookup — matches ctrl-kd's own
-        // `FONTS[(False, False)]`, the same fallback face `hfLineOps` uses for a line
-        // with no `.h#`/`.f#` font block of its own.
+        // for a given page.
         let y = Double(pageHeight) - Double(footLine) * lead - Double(size)
         if y >= 0 {
-            let x = autoPageNumberXPt(doc)
-            var op = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
+            auto = (text: String(pageNo), x: autoPageNumberXPt(doc), y: y)
+        }
+    }
+    return ResolvedHeadFoot(headers: resolvedHeaders, footers: resolvedFooters, auto: auto)
+}
+
+/// Header and footer text for one page, as content-stream ops — a thin RENDERING shell
+/// over `resolveHeadFootLines` (planning #251(d)): that function resolves WHERE (`y`,
+/// and this page's own `left`) and WHAT TEXT (page-number substitution, fontless tab-
+/// realignment baking); this function only turns each already-resolved line into PDF
+/// content-stream ops — font resource registration (`res`), toggle-byte STYLING
+/// (`hfRuns`), and a proportional header/footer face's own per-run natural-width
+/// advance. See `resolveHeadFootLines`'s own doc comment for the geometry/text
+/// derivation (mt/hm participation, `.op`, right-tab realignment, the WS4 header/footer
+/// row layout) — this doc comment covers rendering only.
+///
+/// - Parameters:
+///   - headers: the running head text IN FORCE on this page — `nil` (the default)
+///     falls back to `doc.headers`, the document's final state. A per-page dict comes
+///     from replaying `doc.hfEvents` through pagination (`Page.headers`); the
+///     notes-aware paginator never replays them and so always passes `nil`.
+///   - footers: same, for `doc.footers`/`Page.footers`.
+///   - autoPageNumber: see `resolveHeadFootLines`'s own doc comment.
+func runningOps(
+    _ doc: Document, pageNo: Int, pageHeight: Int, lead: Double, size: Int,
+    left: Double, printed: Bool, headers: [Int: String]? = nil, footers: [Int: String]? = nil,
+    res: FontResources? = nil, autoPageNumber: Bool = false
+) -> [[UInt8]] {
+    guard let resolved = resolveHeadFootLines(doc, pageNo: pageNo, pageHeight: pageHeight,
+                                              lead: lead, size: size, left: left,
+                                              printed: printed, headers: headers,
+                                              footers: footers, autoPageNumber: autoPageNumber)
+    else { return [] }
+
+    /// One already-resolved header/footer LINE's ops (register C6). `fontIdx` is the
+    /// `Document.fonts` index found on this line's own `.h#`/`.f#` (`Document.headerFonts`/
+    /// `footerFonts` — absent when that line opened with no font-change block of its
+    /// own). Resolved the SAME way a body span's own font run is (`pdfFamily`), so
+    /// LJ6DTP's running head — Antique Olive, a proportional sans face, per its own
+    /// `.h1` — no longer falls back to a hardcoded Courier just because header text has
+    /// no span machinery of its own. `hfRuns` (already used by Modern/RTF for this exact
+    /// text, never before by Printed) turns WordStar's own typed toggle bytes into
+    /// styles, so a genuinely bold run still renders bold in whatever face this resolves
+    /// to, and the toggle bytes themselves never reach the page as literal control
+    /// characters.
+    ///
+    /// `txt` arrives here ALREADY fully resolved (`#` substituted, any fontless
+    /// right-tab realignment baked — `resolveHeadFootLines`'s own `resolveLineText`) —
+    /// this function never touches page numbers or tab arithmetic, only glyphs.
+    ///
+    /// No font on this line (the overwhelmingly common case — every document that never
+    /// opens a `.h#`/`.f#` with a font block) is BYTE-IDENTICAL to before this existed:
+    /// one Tj, the whole string, Courier — PROVIDED the line has no toggle bytes of its own
+    /// to interpret (mechanism M, ctrl-kd 74acc60, residuals round 2026-09-06): a fontless
+    /// `.h#`/`.f#` line that DOES type an inline style toggle (`hfToggles`, e.g. `^Y` for
+    /// italic) used to skip `hfRuns` entirely and write the raw control byte straight into
+    /// the Tj string — a real PDF viewer (and this repo's own fidelity gate, reproducing
+    /// one) then advances the pen by whatever width its font gives an undefined glyph code,
+    /// landing it as a phantom extra character glued onto the following word. Confirmed on
+    /// -README.WS's own running head (`.h1`, no font block, wrapped in a single `^Y`...`^Y`
+    /// italic pair): the engine's Printed PDF carried a literal `\x19` before "WordStar" on
+    /// every page, shifting "7.0"/"Archive" 7.2-14.4pt right of WS7's own real (correctly
+    /// italic-then-restored, no phantom glyph) position. `res` is required for the
+    /// run-by-run path (it registers whatever base-14 font gets used in the page's own
+    /// /Font resources); a caller that omits it gets the old single-Tj behaviour
+    /// regardless (there is no way to register a font without one), same as before this fix.
+    func hfLineOps(_ txt: String, y: Double, fontIdx: Int?) -> [[UInt8]] {
+        var entry: FontChange? = nil
+        if let fontIdx, res != nil, fontIdx >= 0, fontIdx < doc.fonts.count {
+            entry = doc.fonts[fontIdx]
+        }
+        let hasControlByte = txt.unicodeScalars.contains { $0.value < 0x20 }
+        if entry == nil, res == nil || !hasControlByte {
+            var out = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
+            out += Array("\(fixedOneDecimalDouble(left)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+            out += esc(txt)
+            out += Array(") Tj ET".utf8)
+            return [out]
+        }
+        // Unreachable as `nil`: the fast-path check just above returns whenever
+        // `entry == nil && res == nil`, and `entry` is only ever set (just above) when
+        // `res != nil` — so every path that reaches here already has a `res`. Spelled as a
+        // guard because Swift's optional binding can't see that invariant on its own.
+        guard let res else { return [] }
+        let family = pdfFamily(entry)
+        let pt: Int
+        if let entry, entry.points != 0 {
+            pt = max(1, roundHalfToEven(entry.points))
+        } else {
+            pt = size
+        }
+        var ops: [[UInt8]] = []
+        var x = left
+        for (i, run) in hfRuns(txt).enumerated() {
+            let runText = run.text
+            if runText.isEmpty { continue }
+            if i == 0, runText.trimmed().isEmpty, let entry, entry.proportional {
+                // WordStar re-stamps a tab-derived leading indent as 10-CPI machine
+                // spaces regardless of the font in force (the SAME rule `splitIndent`
+                // applies to body text) -- a proportional face's space glyph is much
+                // narrower, so advancing on IT would pull the header text back toward the
+                // margin instead of where WS7's own absolute-position PCL puts it
+                // (measured: LJ6DTP.pcl's `&a1718H` immediately before this exact line's
+                // "LJ6DTP").
+                x += Double(runText.count) * pdfPtPerCol
+                continue
+            }
+            let basefont = base14(family, bold: run.styles.contains(.bold),
+                                  italic: run.styles.contains(.italic))
+            let font = res.ref(basefont)
+            var op = Array("BT /\(font) \(pt) Tf 0 Ts ".utf8)
             op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-            op += esc(String(pageNo))
+            op += esc(runText)
             op += Array(") Tj ET".utf8)
             ops.append(op)
+            x += stringWidthPt(runText, basefont, pt)
         }
+        return ops
+    }
+
+    var ops: [[UInt8]] = []
+    for (_, text, y, fontIdx) in resolved.headers {
+        ops += hfLineOps(text, y: y, fontIdx: fontIdx)
+    }
+    for (_, text, y, fontIdx) in resolved.footers {
+        ops += hfLineOps(text, y: y, fontIdx: fontIdx)
+    }
+    if let auto = resolved.auto {
+        var op = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
+        op += Array("\(fixedOneDecimalDouble(auto.x)) \(fixedOneDecimalDouble(auto.y)) Td (".utf8)
+        op += esc(auto.text)
+        op += Array(") Tj ET".utf8)
+        ops.append(op)
     }
     return ops
 }
@@ -1957,6 +2062,137 @@ func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int
             if let record, !record.isEmpty {
                 pages[pi][li].graphicCells = record
             }
+        }
+    }
+}
+
+/// planning #251(d): sets `Page.headerLines`/`footerLines`/`autoPageno` — the running
+/// head/foot's own resolved (text, x, y, font) entries, one per declared `.h#`/`.f#`
+/// slot in force on this page — moved from `runningOps`'s own render-time-only
+/// computation (called fresh, once per page, by `emitPDF`'s per-page loop) onto the
+/// page-lines model, via the SAME `resolveHeadFootLines` function (no parallel
+/// re-derivation: this and `runningOps` both call it, each simply doing something
+/// different with its answer — rendering vs recording, exactly `attachGraphicCellsPrinted`'s
+/// own precedent above). Port of Python's `_attach_head_foot_lines_printed`.
+///
+/// Resolves under the document's own NATURAL state — `autoPageNumber` from
+/// `pgnumCheckpoints` (the `.pn`/`.pg`/`.op` state the file itself carries) and every
+/// declared header/footer — the same "model states it unconditionally, a flag only
+/// tells the WRITER whether to draw it" convention `headers`/`footers`/`lineNo` already
+/// use: a caller that renders with `--headers off` or an explicit `.on`/`.off` page-
+/// number override still gets a PDF from `runningOps`'s own fresh, independent call
+/// (this function's answer is for the model/JSON export only, never substituted into
+/// the render path) — so those flags stay exactly as free to override the writer's own
+/// output as they always were.
+///
+/// Replicates `emitPDF`'s own per-page geometry swap (`.mt`/`.mb`/`.pl`/`.hm`/`.fm`/
+/// `.po` overrides, `pageGeomChanged`/`poParity`-gated `pageLeft`) and its `.auto`
+/// page-number-mode branch (the `.bi`-keyed `pgnumAt` lookup, with the #228 trailing-
+/// `.pa` `explicitBreakBI` fallback for a page with no lines of its own) verbatim — see
+/// that loop's own dense per-line comments for WHY each piece exists; this is the
+/// identical arithmetic, run once here instead of once per real render.
+///
+/// `isNotesPath` (planning #251(d) follow-up, found via `AnswerKeyParityTests`): ctrl-kd's
+/// own `_paginate_printed_notes` builds its body/footnote-area pages as PLAIN Python
+/// lists, never `Page` instances -- `_attach_head_foot_lines_printed`'s own `isinstance(
+/// pg, Page)` guard (pdf.py) therefore never assigns `header_lines`/`footer_lines`/
+/// `auto_pageno` to them, REGARDLESS of what `_resolve_head_foot_lines` would have
+/// computed. The one exception is `_endnote_pages`'s own trailing endnote-appendix
+/// page(s): its `_flush` wraps each one in a real `Page(...)` (setting `explicit_break_bi`
+/// in the same call, DISPLAY.WS/REF/NOTES.TST's own #228 oracle) UNLESS it is the first
+/// flush AND it continues the paginator's own last (still-bare-list) page. Swift's `Page`
+/// is uniformly a struct -- no bare-list/real-Page distinction exists to check directly --
+/// so on `isNotesPath`, `explicitBreakBI != nil` is used as the reachable proxy for "this
+/// page was one `_endnote_pages` actually wrapped," matching ctrl-kd's own isinstance
+/// gate: every page `explicitBreakBI` is ever set on, on EITHER pagination path, is a page
+/// a `Page(...)` call just constructed (`_close_page`'s own #228 branch on the plain path;
+/// `_endnote_pages`'s `_flush` here). A body/footnote-area page (`isNotesPath`, no
+/// `explicitBreakBI`) resolves nothing, matching ctrl-kd exactly -- confirmed on
+/// DISPLAY.WS: its own page 1 (46 lines, real `.bi`s, `explicitBreakBI == nil`) must NOT
+/// show an automatic page number even though `pgnumAt` alone would say yes; only page 2
+/// (the endnote appendix, `explicitBreakBI == 8`) does.
+func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: Int,
+                                isNotesPath: Bool = false) {
+    guard !pages.isEmpty else { return }
+    let lead = printedLead(doc)
+    let left = printedLeft(doc, size: size)
+    let pageHeight = resolvedPageHeight(doc, printed: true)
+    let pgnumCheckpointsList = pgnumCheckpoints(doc)
+    let pageNumbers = resolvePageNumbers(pnCheckpoints(doc), pages)
+    for pi in pages.indices {
+        // See this function's own doc comment: on the notes-aware path, a page is
+        // only resolved when it is one Python would also resolve -- either
+        // `_endnote_pages`'s own `_flush` wrapped it in a real `Page(...)`
+        // (`explicitBreakBI != nil`), or `applyColumns` merged it from a `.co n>1`
+        // group (`columns != nil`, PRINT.TST's own oracle: its `.co3` region's
+        // merged page IS a real `Page` in ctrl-kd too, `_apply_columns`'s own
+        // `merged = Page([])` construction, regardless of what its SOURCE
+        // sub-page's own type was). Neither condition holding means this page
+        // is Python's bare-list-equivalent (never resolved, matching
+        // `isinstance(pg, Page)` there).
+        let page0 = pages[pi]
+        let isColumnsMerge = page0.columns != nil
+        if isNotesPath, page0.explicitBreakBI == nil, !isColumnsMerge { continue }
+        // A columnar merge's own `headers`/`footers` on the notes path are
+        // Python's `merged.headers = getattr(pg, 'headers', None)` copying a
+        // bare-list source's MISSING attribute -- `None`, triggering `resolve
+        // HeadFootLines`'s own `doc.headers`/`doc.footers` fallback (`_apply_
+        // columns` never replays `hfEvents` any more than the notes-aware
+        // paginator whose output it is merging does). Swift's `Page.headers`
+        // is never optional, so `page.headers` here is always `[:]` rather than
+        // Python's `None` -- passing `nil` explicitly gets `resolveHeadFootLines`
+        // to apply the SAME fallback. `_endnote_pages`'s own wrap (the
+        // `explicitBreakBI` branch) is DIFFERENT: `Page(pg)` there defaults
+        // `headers`/`footers` to a REAL `{}` (Python never passes `None`), so
+        // no fallback applies there -- its own real (possibly empty) values are
+        // used as-is, matching DISPLAY.WS/REF/NOTES.TST's own oracle (no
+        // running head on the endnote appendix, an unaffected automatic page
+        // number).
+        let headersIn: [Int: String]? = (isNotesPath && isColumnsMerge) ? nil : page0.headers
+        let footersIn: [Int: String]? = (isNotesPath && isColumnsMerge) ? nil : page0.footers
+        let page = pages[pi]
+        let pageGeomChanged = page.mtLines != nil || page.mbLines != nil
+            || page.hmLines != nil || page.fmLines != nil
+        let pageLeft = ((pageGeomChanged || page.poParity) ? page.poCols : nil)
+            .map { resolveLeftPt($0, size: size) } ?? left
+        var pageDoc = doc
+        if page.mtLines != nil || page.mbLines != nil || page.plLines != nil
+            || page.hmLines != nil || page.fmLines != nil, var eff = doc.page {
+            if let mt = page.mtLines { eff.mtLines = mt; eff.mtSource = .file }
+            if let mb = page.mbLines { eff.mbLines = mb; eff.mbSource = .file }
+            if let pl = page.plLines { eff.plLines = pl }
+            if let hm = page.hmLines {
+                eff.hmLines = hm
+                eff.hmSource = hm != defaultHmLines ? .file : .default
+            }
+            if let fm = page.fmLines { eff.fmLines = fm; eff.fmSource = .file }
+            pageDoc.page = eff
+        }
+        let autoPageNumber: Bool
+        if let pageMaxBi = page.compactMap(\.bi).max() {
+            autoPageNumber = pgnumAt(pgnumCheckpointsList, pageMaxBi)
+        } else if let fallbackBi = page.explicitBreakBI {
+            autoPageNumber = pgnumAt(pgnumCheckpointsList, fallbackBi)
+        } else {
+            autoPageNumber = false
+        }
+        guard let resolved = resolveHeadFootLines(
+            pageDoc, pageNo: pageNumbers[pi], pageHeight: pageHeight, lead: lead, size: size,
+            left: pageLeft, printed: true, headers: headersIn, footers: footersIn,
+            autoPageNumber: autoPageNumber)
+        else { continue }
+        if !resolved.headers.isEmpty {
+            pages[pi].headerLines = resolved.headers.map {
+                HeadFootLine(text: $0.text, x: pageLeft, y: $0.y, font: $0.fontIdx)
+            }
+        }
+        if !resolved.footers.isEmpty {
+            pages[pi].footerLines = resolved.footers.map {
+                HeadFootLine(text: $0.text, x: pageLeft, y: $0.y, font: $0.fontIdx)
+            }
+        }
+        if let auto = resolved.auto {
+            pages[pi].autoPageno = AutoPageNumber(text: auto.text, x: auto.x, y: auto.y)
         }
     }
 }

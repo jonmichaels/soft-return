@@ -38,7 +38,7 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON.
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 5"))
+    #expect(json.contains("\"version\": 6"))
     #expect(json.contains("\"justify_word_x\""))
 }
 
@@ -80,7 +80,7 @@ import Testing
     #expect(pages[0].contains { $0.lineNo == nil })
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 5"))
+    #expect(json.contains("\"version\": 6"))
     #expect(json.contains("\"line_no\""))
 }
 
@@ -145,7 +145,7 @@ import Testing
     #expect(middle.map(\.char) == ["\u{2502}", "\u{2502}"])   // only the two bars
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 5"))
+    #expect(json.contains("\"version\": 6"))
     #expect(json.contains("\"graphic_cells\""))
 }
 
@@ -156,4 +156,120 @@ import Testing
     let doc = parseWS(src251c)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages[0][0].graphicCells == nil)
+}
+
+// --------------------------------------------------- (d) running head/foot
+
+/// Planning #251(d), running-head/foot half (2026-09-10): `Page.headerLines`/
+/// `footerLines`/`autoPageno` -- resolved text/x/y/font for the running head and
+/// foot, moved off `PDFWriter.swift`'s own render-time-only `runningOps` onto the
+/// page-lines model, via the shared `resolveHeadFootLines`. Swift port of ctrl-kd's
+/// own new `tests/test_ctrlkd.py` cases (`test_head_foot_lines_*`).
+
+@Test func headFootLinesLandOnTheModelMatchingTheWriter() {
+    var src = bytes(".h1 Header Text\r\n.f1 Footer Text\r\n")
+    src += bytes("Page one prose, plain and ordinary and long enough here.")
+    src += HARD
+    src += bytes(".pa\r\n")
+    src += bytes("Page two prose, also plain, ordinary, long enough here.")
+    src += HARD
+    let doc = parseWS(src)
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages.count == 2)
+    #expect(pages[0].headerLines == [HeadFootLine(text: "Header Text", x: 57.6, y: 780.0, font: nil)])
+    #expect(pages[0].footerLines == [HeadFootLine(text: "Footer Text", x: 57.6, y: 60.0, font: nil)])
+    #expect(pages[0].autoPageno == nil)     // a real footer is in force -> no auto number
+    #expect(pages[1].headerLines == [HeadFootLine(text: "Header Text", x: 57.6, y: 780.0, font: nil)])
+
+    let pdf = emitPDF(doc, mode: .printed)
+    let streams = pdfContentStreams(pdf)
+    let asString = String(decoding: streams[0], as: UTF8.self)
+    #expect(asString.contains("57.6 780.0 Td (Header Text) Tj"))
+    #expect(asString.contains("57.6 60.0 Td (Footer Text) Tj"))
+}
+
+@Test func headFootLinesResolveTheSamePageNumberSubstitutionAndTabBake() {
+    // -README's own right-tab shape (see `runningHeadRightTabRepositionsWhenThePage
+    // NumberWidens`, the same synthetic fixture) -- the model's own `headerLines[0]
+    // .text` carries BOTH the `#` substitution and the fontless tab-realignment
+    // bake, proving the model and the writer resolve identically.
+    func tabBlock(cols: Int, absHMI: Int, tabType: UInt8 = 0x5D) -> [UInt8] {
+        let size = cols * 180
+        var payload = withUnsafeBytes(of: UInt16(size).littleEndian, Array.init)
+        payload += withUnsafeBytes(of: UInt16(absHMI).littleEndian, Array.init)
+        payload += [tabType, UInt8(ascii: " ")]
+        return ws7Block(0x09, payload: payload)
+    }
+    let tab = tabBlock(cols: 13, absHMI: 2340)
+    var src = bytes(".pn 9\r\n.h1 ")
+    src += tab
+    src += bytes("TEST / #")
+    src += HARD
+    src += bytes("Page one prose, plain and ordinary and long enough here.")
+    src += HARD
+    src += bytes(".pa\r\n")
+    src += bytes("Page two prose, also plain, ordinary, long enough here.")
+    src += HARD
+    let doc = parseWS(src)
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages[0].headerLines?[0].text == String(repeating: " ", count: 13) + "TEST / 9")
+    #expect(pages[1].headerLines?[0].text == String(repeating: " ", count: 12) + "TEST / 10")
+
+    let pdf = emitPDF(doc, mode: .printed)
+    let streams = pdfContentStreams(pdf)
+    #expect(String(decoding: streams[0], as: UTF8.self).contains(pages[0].headerLines![0].text))
+    #expect(String(decoding: streams[1], as: UTF8.self).contains(pages[1].headerLines![0].text))
+}
+
+@Test func headFootLinesTrackAMidDocumentPoParityLeftEdge() {
+    // PHONE.LST/-HOW-TO.RJS's own shape: DIFFERENT odd/even offsets with no plain
+    // `.po` at all -- the model's own header `x` must follow `Page.poParity` the
+    // same way `runningOps`'s own `pageLeft` already does.
+    var src = bytes(".h1 Running Head\r\n.poo 2\r\n.poe 6\r\n")
+    src += bytes("Page one prose, plain and ordinary and long enough here.")
+    src += HARD
+    src += bytes(".pa\r\n")
+    src += bytes("Page two prose, also plain, ordinary, long enough here.")
+    src += HARD
+    src += bytes(".pa\r\n")
+    src += bytes("Page three prose, also plain, ordinary, long enough.")
+    src += HARD
+    let doc = parseWS(src)
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages.count == 3)
+    // page 1/3 odd -> .poo 2 (14.4pt); page 2 even -> .poe 6 (43.2pt).
+    #expect(pages[0].headerLines?[0].x == 14.4)
+    #expect(pages[1].headerLines?[0].x == 43.2)
+    #expect(pages[2].headerLines?[0].x == 14.4)
+}
+
+@Test func headFootLinesOmittedWhenTheDocumentHasNeither() {
+    // No `.h#`/`.f#` and no automatic number showing (`.op`, no `#` anywhere) --
+    // `headerLines`/`footerLines`/`autoPageno` stay `nil`, omitted from `layout`
+    // JSON too (version 6 emits byte-identical output to version 5 for a document
+    // like this, aside from the version number itself).
+    var src = bytes(".op\r\n")
+    src += bytes("Ordinary prose, plain, with no header or footer at all here.")
+    src += HARD
+    let doc = parseWS(src)
+    let pages = docToPagelines(doc, printed: true)
+    #expect(pages[0].headerLines == nil)
+    #expect(pages[0].footerLines == nil)
+    #expect(pages[0].autoPageno == nil)
+    let json = emitLayout(doc, mode: .printed)
+    #expect(json.contains("\"version\": 6"))
+    #expect(!json.contains("\"header_lines\""))
+    #expect(!json.contains("\"footer_lines\""))
+    #expect(!json.contains("\"auto_page_number\""))
+}
+
+@Test func layoutJSONCarriesResolvedHeadFootLines() {
+    var src = bytes(".h1 Header Text\r\n")
+    src += bytes("Page one prose, plain and ordinary and long enough here.")
+    src += HARD
+    let doc = parseWS(src)
+    let json = emitLayout(doc, mode: .printed)
+    #expect(json.contains("\"header_lines\""))
+    #expect(json.contains("\"text\" : \"Header Text\"") || json.contains("\"text\": \"Header Text\""))
+    #expect(json.contains("\"auto_page_number\""))
 }

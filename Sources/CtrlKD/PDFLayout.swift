@@ -778,6 +778,41 @@ func fontLeadPt(_ line: Line, fonts: [FontChange], baseSize: Double, state: inou
     return effective * autoLeadFactor
 }
 
+/// One RESOLVED running head/footer LINE (planning #251(d)) -- `text` already carries
+/// both the `#` page-number substitution and (a fontless line with its own right-align
+/// tab only) the baked realignment spacing, but keeps WordStar's own inline style
+/// TOGGLE BYTES intact, same as the raw `headers`/`footers` dict. `font` is the index
+/// into `Document.fonts`, or `nil` for the fontless/Courier default. Port of Python's
+/// `{'text': str, 'x': float, 'y': float, 'font': int|None}` dict shape.
+public struct HeadFootLine: Hashable, Sendable {
+    public var text: String
+    public var x: Double
+    public var y: Double
+    public var font: Int?
+
+    public init(text: String, x: Double, y: Double, font: Int?) {
+        self.text = text
+        self.x = x
+        self.y = y
+        self.font = font
+    }
+}
+
+/// WordStar's own resolved AUTOMATIC page number (the one `.pc` positions) for one page
+/// -- present exactly when `resolveHeadFootLines`'s `showAutoNum` gate lets it through.
+/// Port of Python's `(text, x, y)` tuple.
+public struct AutoPageNumber: Hashable, Sendable {
+    public var text: String
+    public var x: Double
+    public var y: Double
+
+    public init(text: String, x: Double, y: Double) {
+        self.text = text
+        self.x = x
+        self.y = y
+    }
+}
+
 /// One paginated page: a collection of `PageLine`s, plus the running head and foot IN
 /// FORCE when this page printed (replayed from `Document.hfEvents`). Port of Python's
 /// `Page(list)`.
@@ -859,6 +894,16 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     public var columns: Int?
     public var columnGutterPt: Double?
     public var columnWidthPt: Double?
+    /// `headerLines`/`footerLines`/`autoPageno` (planning #251(d), 2026-09-10): this
+    /// page's own RESOLVED running head/foot -- `#` substituted, fontless right-tab
+    /// realignment baked, `y`/`x`/`font` attached -- set ONLY by
+    /// `attachHeadFootLinesPrinted` (`docToPagelines`'s own post-pagination pass), from
+    /// `resolveHeadFootLines` (the SAME function `runningOps`, the PDF writer, calls to
+    /// render). `nil` (not `[]`) for "not yet resolved" -- every page until that attach
+    /// function runs. Port of Python's `Page.header_lines`/`footer_lines`/`auto_pageno`.
+    public var headerLines: [HeadFootLine]?
+    public var footerLines: [HeadFootLine]?
+    public var autoPageno: AutoPageNumber?
 
     public init() {
         lines = []
@@ -876,6 +921,9 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         columns = nil
         columnGutterPt = nil
         columnWidthPt = nil
+        headerLines = nil
+        footerLines = nil
+        autoPageno = nil
     }
 
     public init(_ lines: [PageLine], headers: [Int: String] = [:], footers: [Int: String] = [:],
@@ -900,6 +948,9 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.columns = columns
         self.columnGutterPt = columnGutterPt
         self.columnWidthPt = columnWidthPt
+        self.headerLines = nil
+        self.footerLines = nil
+        self.autoPageno = nil
     }
 
     public init(arrayLiteral elements: PageLine...) {
@@ -1265,6 +1316,7 @@ public func docToPagelines(
             attachJustifyWordXPrinted(doc, &notesPages, size: attachSize)
             attachLineNumbersPrinted(doc, &notesPages, size: attachSize)
             attachGraphicCellsPrinted(doc, &notesPages, size: attachSize)
+            attachHeadFootLinesPrinted(doc, &notesPages, size: attachSize, isNotesPath: true)
             return notesPages
         }
         var plainPages = applyColumns(doc,
@@ -1277,6 +1329,7 @@ public func docToPagelines(
         attachJustifyWordXPrinted(doc, &plainPages, size: attachSize)
         attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
         attachGraphicCellsPrinted(doc, &plainPages, size: attachSize)
+        attachHeadFootLinesPrinted(doc, &plainPages, size: attachSize)
         return plainPages
     }
     // Modern PDF's own real pipeline is `modernStreams` (PDFModernLayout.swift), which
