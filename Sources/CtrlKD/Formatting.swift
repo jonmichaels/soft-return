@@ -53,11 +53,34 @@ func fixedOneDecimal(tenths: Int) -> String {
 /// remainder compares against half of 2^k with no rounding at all.
 func fixedOneDecimalDouble(_ value: Double) -> String {
     let negative = value < 0
-    let magnitude = negative ? -value : value
+    let (tenths, zero) = tenthsExact(value)
+    if zero { return (negative ? "-" : "") + "0.0" }
+    return (negative ? "-" : "") + "\(tenths / 10).\(tenths % 10)"
+}
+
+/// `value` rounded to 1 decimal place, AS A `Double` — Python's `round(x, 1)`, exact on the
+/// binary value the same way `fixedOneDecimalDouble` is (round-half-to-even via integer
+/// arithmetic on the significand/exponent, no libm `.rounded()`). Port site: planning
+/// #251's `layout` JSON export (`justifyWordX`/`lineNo`/`graphicCells`), which needs the
+/// VALUE rounded (for cross-engine JSON byte parity — see that call site's own doc
+/// comment), not the string `fixedOneDecimalDouble` already produces for PDF ops.
+func roundToOneDecimal(_ value: Double) -> Double {
+    let negative = value < 0
+    let (tenths, zero) = tenthsExact(value)
+    if zero { return 0.0 }
+    let magnitude = Double(tenths) / 10.0
+    return negative ? -magnitude : magnitude
+}
+
+/// Shared exact-rounding core for `fixedOneDecimalDouble`/`roundToOneDecimal`: `value`'s
+/// magnitude rounded to tenths, as an integer, plus whether it fell under the domain guard
+/// (magnitude < 0.001, formats/rounds to zero regardless of sign).
+private func tenthsExact(_ value: Double) -> (tenths: Int64, isZero: Bool) {
+    let magnitude = value < 0 ? -value : value
     // Domain guard: coordinates are 0..~15000pt. Anything under half a thousandth of a
     // tenth formats as 0.0 regardless; anything astronomically large would overflow the
     // exact path and cannot occur in a PDF this writer emits.
-    if magnitude < 0.001 { return (negative ? "-" : "") + "0.0" }
+    if magnitude < 0.001 { return (0, true) }
     let m = Int64(magnitude.significandBitPattern | (1 << 52))   // normal doubles only here
     let e2 = magnitude.exponent - 52                             // magnitude = m * 2^e2
     var tenths: Int64
@@ -89,7 +112,7 @@ func fixedOneDecimalDouble(_ value: Double) -> String {
             }
         }
     }
-    return (negative ? "-" : "") + "\(tenths / 10).\(tenths % 10)"
+    return (tenths, false)
 }
 
 /// A `Double` rounded to hundredths, AS AN INTEGER of hundredths — Python's `round(x, 2)`

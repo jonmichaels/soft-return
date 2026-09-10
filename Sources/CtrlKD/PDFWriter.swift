@@ -686,21 +686,30 @@ func rules(_ styles: Style, _ text: String, x: Double, y: Double, w: Double,
     return ops
 }
 
-/// Per-character advance in POINTS for one span — WordStar's own number. Port of
-/// `pdf._span_pitch`.
+/// Per-character advance in POINTS for one run's fixed-pitch span — WordStar's own number.
+/// PUBLIC (2026-09-08) so Soft Return.app's Native renderer can pin fixed-pitch glyph
+/// advances to the engine's own pitch instead of deriving one of its own: the bundled
+/// Courier Prime's real advance is 0.5996em, not the 0.600 a naive derivation assumes, and
+/// that 0.0004em/char drift accumulates visibly over a wide page. Port of `pdf._span_pitch`.
 ///
-/// A WS5+ font block's FIRST word is the font width in HMIs (1/1800in): the pitch WordStar
-/// itself laid the document out on, and the pitch it sent the printer. 1800 HMI = 1 inch =
-/// 72pt, so the conversion is /25.
+/// CONTRACT — inputs: `entry` is the run's own `FontChange` (`nil` for a run with no font
+/// block: every WS4 file, every print stream, and any run before a WS5+ document's first
+/// font change); `pt` is the run's nominal type size in whole points (`printedSize`'s
+/// return, or a sup/sub run's own already-reduced size — see `supSubSpanPitch` for why that
+/// one passes the UNREDUCED body size instead). Returns the per-character advance in POINTS.
 ///
-/// A span with no font block — every WS4 file, every print stream, and every run before a
-/// WS5+ document's first font change — gets the document's own `.cw`-derived pitch instead.
-/// `.cw` is character width in 1/120in, which `printedSize` already resolved into the point
-/// size for exactly this reason (a Courier em advances 0.6, so cw/120in per character IS a
-/// cw-point font), so the pitch here is that size's 0.6em. Written in POINTS rather than
-/// converted through HMI on purpose: it is arithmetically the same number and it is the same
-/// float this emitter has always produced, which is what keeps a fontless PDF byte-identical.
-func spanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
+/// - Font-block case: a WS5+ font block's FIRST word is the font width in HMIs (1/1800in) —
+///   the pitch WordStar itself laid the document out on, and the pitch it sent the printer.
+///   1800 HMI = 1 inch = 72pt, so the conversion is /25. When present, this value ENTIRELY
+///   DETERMINES the answer; `pt` is ignored.
+/// - The `.cw` case: a span with no font block gets the document's own `.cw`-derived pitch
+///   instead. `.cw` is character width in 1/120in, which `printedSize` already resolved into
+///   the point size for exactly this reason (a Courier em advances 0.6, so cw/120in per
+///   character IS a cw-point font), so the pitch here is that size's 0.6em. Written in
+///   POINTS rather than converted through HMI on purpose: it is arithmetically the same
+///   number and it is the same float this emitter has always produced, which is what keeps
+///   a fontless PDF byte-identical.
+public func spanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
     if let width = entry?.width1800, width != 0 { return Double(width) / hmiPerPoint }
     return Double(pt) * 0.6
 }
@@ -790,6 +799,62 @@ func tzScale(_ text: String, _ baseFont: String, _ pt: Int, _ targetW: Double)
     if hundredths(scale) == hundredths(tzDefault) { return (nil, targetW) }
     if !(tzMin <= scale && scale <= tzMax) { return (nil, natural) }
     return (scale, targetW)
+}
+
+/// `[(text, x, width)]` left to right from `x0` -- one FIXED-PITCH justified line's own
+/// word/gap split (planning #238's measured rule, factored out planning #251(b) so
+/// `attachJustifyWordXPrinted` can call the EXACT SAME arithmetic at model-build time
+/// and attach the result to `PageLine.justifyWordX`; `lineOpsPrinted` then renders from
+/// that stored list when given one, byte-identical to before by construction — same
+/// function, same inputs, computed once). Returns `nil` when the line has no single-
+/// blank gap to stretch or no slack to distribute — the caller falls back to the
+/// un-split natural-width path, unchanged. Port of ctrl-kd's `_justify_pieces_printed`.
+///
+/// Cumulative-floor Bresenham distribution across the elastic (single-blank) gaps, in
+/// whole decipoints — see `lineOpsPrinted`'s own doc comment for the measured rule and
+/// its documented approximation. `neumaierSum` (not a naive left-to-right fold) and
+/// `roundHalfToEven` (not `Double.rounded()`) are unchanged from the code this was
+/// factored out of — see their own call sites' doc comments (just above, historically)
+/// for why each matters for cross-engine byte parity. A run of 2+ literal blanks is
+/// left at its natural width, like every non-space WORD piece: only `tzScale`'s own
+/// target changes (the gap's own stretched width, not a fresh `pw`), which is why a
+/// piece's stored `width` alone is enough for a later caller to reproduce its own scale
+/// — `tzScale(piece, baseFont, pt, width)` on an ALREADY-RESOLVED width reproduces the
+/// same scale/actual-width pair `tzScale(piece, baseFont, pt, pw)` produced the first
+/// time (self-consistent: in-clamp, `width == pw` already; out-of-clamp, `width` IS the
+/// natural width, so scaling to it is a no-op ratio of 100 either way).
+func justifyPiecesPrinted(_ text: String, pitch: Double, x0: Double, justifyRightX: Double,
+                          baseFont: String, pt: Int) -> [PageLine.JustifyWordPiece]? {
+    let pieces = splitKeepingSpaceRuns(text)
+    let elastic = pieces.indices.filter { pieces[$0] == " " }
+    let naturalTotal = neumaierSum(pieces.map { Double($0.count) * pitch })
+    let stretchTotal = justifyRightX - x0 - naturalTotal
+    guard !elastic.isEmpty, stretchTotal > 0 else { return nil }
+    let n = elastic.count
+    let stretchTotalDp = roundHalfToEven(stretchTotal * 10)
+    let stretchDp: [Int] = (0..<n).map { i in
+        ((i + 1) * stretchTotalDp) / n - (i * stretchTotalDp) / n
+    }
+    var out: [PageLine.JustifyWordPiece] = []
+    var x = x0
+    var ei = 0
+    for (pi, piece) in pieces.enumerated() {
+        var pw = Double(piece.count) * pitch
+        let isElasticGap = piece == " " && ei < elastic.count && elastic[ei] == pi
+        let actualW: Double
+        if isElasticGap {
+            pw += Double(stretchDp[ei]) / 10.0
+            ei += 1
+            actualW = pw            // nothing is ever drawn for a space piece (see
+                                    // this function's own doc comment) -- no glyph-
+                                    // metric lookup
+        } else {
+            (_, actualW) = tzScale(piece, baseFont, pt, pw)
+        }
+        out.append(PageLine.JustifyWordPiece(text: piece, x: x, width: actualW))
+        x += actualW
+    }
+    return out
 }
 
 /// `segs` with each entry gaining an INDENT flag, and the first span split where a line's
@@ -1044,13 +1109,30 @@ private func expandBareTabsForPrintedLayout(_ segs: [LineSegment]) -> [LineSegme
     }
 }
 
+/// `recordGraphicCells` (planning #251(c)): `inout`, or `nil`. When non-`nil`, every
+/// cp437 graphic character this call draws as a vector (see the `graphicChars` branch
+/// below) appends its own `GraphicCellPlacement` -- the SAME x/width `graphicOps` just
+/// drew from -- so `attachGraphicCellsPrinted` can record the model's own answer with
+/// a real (throwaway-state) call to this function instead of re-deriving the advance
+/// rule itself. `nil` (every ordinary render call) costs nothing extra.
+///
+/// `justifyWordX` (planning #251(b)): this line's own PRECOMPUTED
+/// `justifyPiecesPrinted` result (`PageLine.justifyWordX`, set by
+/// `attachJustifyWordXPrinted`), or `nil`. When given, the justify branch below
+/// renders from it directly instead of recomputing the Bresenham split -- the model
+/// states it, the writer places it. `nil` (every call site this function had before
+/// this parameter existed, and any line `attachJustifyWordXPrinted` could not resolve
+/// on its own -- a styled/tagged span outside its narrow scope) falls back to
+/// computing it fresh here, unchanged from before.
 private func lineOpsPrinted(
     _ segs: [LineSegment], left: Double, y: Double, size: Int, res: FontResources,
     tzState: inout Int, colState: inout PDFFill, darkenState: inout Bool,
     colourMap: [Int: Double] = [:],
     rollPt: Double? = nil, fi: Double? = nil, ulContinuous: Bool = true,
     pclPrograms: [[UInt8]] = [], pageHeight: Double = Double(PDFMetrics.pageHeight),
-    kerning: Bool = true, justifyRightX: Double? = nil
+    kerning: Bool = true, justifyRightX: Double? = nil,
+    justifyWordX: [PageLine.JustifyWordPiece]? = nil,
+    recordGraphicCells: inout [PageLine.GraphicCellPlacement]?
 ) -> [[UInt8]] {
     var ops: [[UInt8]] = []
     // Planning #244 (the round-trip gauntlet fix) moved this expansion out of
@@ -1309,8 +1391,24 @@ private func lineOpsPrinted(
         // already answers that case with the document's own Courier 0.6em column, the
         // same fontless pitch every other fontless span in this function is measured on.
         if seg.text.contains(where: { graphicChars.contains($0) }) {
-            let pitch = (seg.entry?.proportional ?? false) ? Double(pt) : spanPitch(seg.entry, pt)
+            let proportionalCell = seg.entry?.proportional ?? false
+            let pitch = proportionalCell ? Double(pt) : spanPitch(seg.entry, pt)
             ops += graphicOps(seg.text, x: x, y: y, pitch: pitch, pt: pt)
+            // planning #251(c): the model's own per-cell x/width -- see
+            // `recordGraphicCells`'s own doc comment on this function's signature.
+            // Recorded here, the ONE place this run's per-character cell positions
+            // are ever computed, rather than re-derived by a model-build-time caller.
+            // `widthIsWholePointPitch: proportionalCell` -- see that field's own
+            // doc comment: ctrl-kd's matching Python branch uses the bare `int`
+            // `pt` here, not a float, and `json.dumps` shows it undecimaled.
+            if recordGraphicCells != nil {
+                for (i, ch) in seg.text.enumerated() {
+                    recordGraphicCells!.append(
+                        PageLine.GraphicCellPlacement(char: ch, x: x + Double(i) * pitch,
+                                                      width: pitch,
+                                                      widthIsWholePointPitch: proportionalCell))
+                }
+            }
             x += Double(seg.text.width) * pitch
             continue
         }
@@ -1390,102 +1488,65 @@ private func lineOpsPrinted(
             let pitch = supSubSpanPitch(seg.entry, seg.styles, seg.family, seg.size)
                 ?? spanPitch(seg.entry, pt)
             if justifyEligible, let justifyRightX {
-                let pieces = splitKeepingSpaceRuns(seg.text)
-                let elastic = pieces.indices.filter { pieces[$0] == " " }
-                // `neumaierSum`, not a naive left-to-right fold: Python's `natural_total =
-                // sum(len(p) * pitch for p in pieces)` calls CPython's OWN built-in `sum()`,
-                // which since Python 3.12 performs Neumaier (compensated) summation over a
-                // float sequence rather than plain left-to-right addition — verified
-                // (20000 random trials, exact bit match) against CPython 3.12.3's actual
-                // behavior. This is not a rounding nicety: on LSRBOX.WS's own justified
-                // paragraph ("LaserJet  Series II and later printers.  The  accompanying
-                // Mail-", the SAME document the research note's worked example cites), a
-                // naive fold lands 1 ULP below the line's exact target width, turning
-                // `stretchTotal` into a tiny positive epsilon (1.1e-13) instead of the
-                // EXACT 0.0 Python's own gate (`elastic and stretch_total > 0`) sees —
-                // which flips this line from "render as one natural-width Tj" (Python's
-                // real, recorded output) to "split into 9 pieces" (a real cross-engine
-                // divergence, caught by AnswerKeyParityTests: LSRBOX.WS.pdf.printed,
-                // 44870 bytes here vs ctrl-kd's own 42340).
-                let naturalTotal = neumaierSum(pieces.map { Double($0.count) * pitch })
-                let stretchTotal = justifyRightX - x - naturalTotal
-                if !elastic.isEmpty, stretchTotal > 0 {
-                    // Cumulative-floor Bresenham (planning #238, research/
-                    // 2026-09-08_justification-gap-model.md), port of ctrl-kd's own
-                    // change: whole-decipoint integer arithmetic, not a flat float
-                    // split. `stretchDp[i]` sums to exactly `stretchTotalDp` by
-                    // construction (telescoping floor differences), so there is no
-                    // float accumulation order to get wrong and no compensated-sum
-                    // needed for THIS arithmetic (`neumaierSum` above stays — it
-                    // guards the separate `stretchTotal > 0` gate, not this split).
-                    let n = elastic.count
-                    // `roundHalfToEven`, not `Double.rounded()` — this Foundation-free
-                    // Linux build can't link libm's `round`/`floor` symbols (see
-                    // `Formatting.swift`'s own note); matches Python's `round()` tie-break.
-                    let stretchTotalDp = roundHalfToEven(stretchTotal * 10)
-                    let stretchDp: [Int] = (0..<n).map { i in
-                        ((i + 1) * stretchTotalDp) / n - (i * stretchTotalDp) / n
-                    }
+                // planning #251(b): `justifyWordX` (the model's own precomputed
+                // answer, when `attachJustifyWordXPrinted` could resolve one) is
+                // used directly when present; every other call site recomputes via
+                // the same pure function, `justifyPiecesPrinted` -- see that
+                // function's own doc comment for the measured rule, its documented
+                // approximation, and the `neumaierSum`/`roundHalfToEven` parity
+                // notes (unchanged, just relocated).
+                let wordPieces = justifyWordX ?? justifyPiecesPrinted(
+                    seg.text, pitch: pitch, x0: x, justifyRightX: justifyRightX,
+                    baseFont: baseFont, pt: pt)
+                if let wordPieces, !wordPieces.isEmpty {
                     let symbolBoldJ = seg.family == .symbol && seg.styles.contains(.bold)
                     let symbolItalicJ = seg.family == .symbol && seg.styles.contains(.italic)
                     var ulX0: Double? = nil
                     var ulX1 = 0.0
                     let spanUL = ulContinuous && seg.styles.contains(.underline)
                     let pieceStyles = spanUL ? seg.styles.subtracting(.underline) : seg.styles
-                    var ei = 0
-                    for (pi, piece) in pieces.enumerated() {
-                        var pw = Double(piece.count) * pitch
-                        let isElasticGap = piece == " " && ei < elastic.count && elastic[ei] == pi
-                        if isElasticGap {
-                            pw += Double(stretchDp[ei]) / 10.0
-                            ei += 1
-                        }
+                    for piece in wordPieces {
+                        let text = piece.text, pieceX = piece.x, actualW = piece.width
+                        // Nothing is drawn for a bare elastic gap (a single blank --
+                        // the `piece.text.contains(where:)` check below is what
+                        // actually gates the draw); `tzScale` is skipped for it too,
+                        // same as before this was factored out (see
+                        // `justifyPiecesPrinted`'s own doc comment for why
+                        // recomputing against the STORED width is safe for every
+                        // piece that IS drawn).
                         let pscale: Double?
-                        let actualW: Double
-                        if isElasticGap {
-                            // `tzScale` width-matches a GLYPH's drawn shape via
-                            // percentage scaling -- sound for a word whose natural
-                            // width is close to its target, but a stretched gap can
-                            // need many hundreds of percent, well outside `tzScale`'s
-                            // own sanity clamp (`tzMin`/`tzMax`), which would silently
-                            // reject it and keep the UNSTRETCHED width (the bug this
-                            // branch exists to avoid). Nothing is drawn for a space
-                            // piece anyway (the `piece.contains(where:)` check below),
-                            // so the advance is simply `pw` itself -- no glyph-metric
-                            // question to ask.
+                        if text == " " {
                             pscale = nil
-                            actualW = pw
                         } else {
-                            (pscale, actualW) = tzScale(piece, baseFont, pt, pw)
+                            (pscale, _) = tzScale(text, baseFont, pt, actualW)
                         }
                         let pwant = hundredths(pscale ?? tzDefault)
-                        if piece.contains(where: { !$0.isWhitespace }) {
+                        if text.contains(where: { !$0.isWhitespace }) {
                             if symbolBoldJ || symbolItalicJ {
                                 ops.append(symbolStyleOp(
                                     font: font, pt: pt, rise: rise, want: pwant,
-                                    tzState: &tzState, x: x, y: y, textBytes: esc(piece),
+                                    tzState: &tzState, x: pieceX, y: y, textBytes: esc(text),
                                     isBold: symbolBoldJ, isItalic: symbolItalicJ))
                             } else if pwant == tzState {
                                 var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
-                                op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-                                op += esc(piece)
+                                op += Array("\(fixedOneDecimalDouble(pieceX)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                                op += esc(text)
                                 op += Array(") Tj ET".utf8)
                                 ops.append(op)
                             } else {
                                 var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
                                 op += Array("\(fixedTwoDecimal(hundredths: pwant)) Tz ".utf8)
-                                op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-                                op += esc(piece)
+                                op += Array("\(fixedOneDecimalDouble(pieceX)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                                op += esc(text)
                                 op += Array(") Tj ET".utf8)
                                 ops.append(op)
                                 tzState = pwant
                             }
-                            if ulX0 == nil { ulX0 = x }
-                            ulX1 = x + actualW
+                            if ulX0 == nil { ulX0 = pieceX }
+                            ulX1 = pieceX + actualW
                         }
-                        ops += rules(pieceStyles, piece, x: x, y: y, w: actualW,
+                        ops += rules(pieceStyles, text, x: pieceX, y: y, w: actualW,
                                     continuous: ulContinuous)
-                        x += actualW
                     }
                     if spanUL, let ulX0 {
                         ops.append(rule(xFrom: ulX0, xTo: ulX1, y: y - 1.5))
@@ -1597,17 +1658,11 @@ func pageStream(
     // family always needs one. See `lineOpsPrinted`'s colour block.
     var darkenState = false
     var prevOverprint = false
-    // planning #247: `.l#`'s own running state -- `lineNoState.interval` is the interval
-    // MOST RECENTLY resolved (per line, below), and `lineNoState.k` is a 0-based count of
-    // physical lines since it last changed value (including a change FROM or TO nil/off).
-    // Local to this call, so it starts fresh at every page's own first line for free
-    // (`pageStream` is invoked once per page) -- matching the one real oracle
-    // (sawyer/PRINT.TST: `.l#2` activates on a page's own first body line, `.l# 0`
-    // deactivates on its last) -- and ALSO restarts correctly if a checkpoint change ever
-    // lands mid-page (untested: no oracle exercises that), rather than counting from the
-    // page's own top regardless of where the interval itself began. Port of Python's
-    // `line_no_state`.
-    var lineNoState: (interval: Int?, k: Int) = (nil, 0)
+    // planning #251(d): the `.l#` running counter that used to live here (planning
+    // #247, `lineNoState`) moved to `docToPagelines`'s own `attachLineNumbersPrinted`
+    // -- see `PageLine.lineNo`'s own doc comment. This call site now only gates the
+    // DRAW (`lineNoCheckpoints != nil`, below), it no longer resolves the label/x
+    // itself.
     // planning #227 follow-up (2026-09-09, mirrored from ctrl-kd): `applyColumns`
     // concatenates every column's own lines into ONE flat `pagelines` array (column
     // 0's, then column 1's, ...; `PageLine.col` records which) -- this loop must
@@ -1704,26 +1759,20 @@ func pageStream(
         // real oracle happens to be Courier, which is also this engine's own fallback,
         // so this is untested against a document whose default body font is something
         // else.
-        let lineInterval: Int?
-        if let checkpoints = lineNoCheckpoints, let bi = line.bi {
-            lineInterval = lineNumberingAt(checkpoints, bi)
-        } else {
-            lineInterval = nil
-        }
-        if lineInterval != lineNoState.interval {
-            lineNoState = (lineInterval, 0)
-        }
-        let lineNoK = lineNoState.k
-        lineNoState.k += 1
-        if let interval = lineInterval, interval > 0, lineNoK % interval == 0 {
-            let label = String(lineNoK / interval + 1)
+        // planning #251(d): the label/x themselves are now `docToPagelines`'s own
+        // decision (`attachLineNumbersPrinted`, set on `PageLine.lineNo`) -- this
+        // call site's only remaining job is the `--line-numbers off` gate, which
+        // still works exactly as before: that flag makes `emitPDF` pass
+        // `lineNoCheckpoints: nil` into this function, same as today, so the draw
+        // is suppressed regardless of what the model carries (same shape
+        // `showHeaders`/`headers` already use).
+        if lineNoCheckpoints != nil, let lineNo = line.lineNo {
             let gutterRendered = spanRender("", font: nil, fonts: fonts, size: size)
             let gutterFont = res.ref(base14(gutterRendered.family, bold: false, italic: false))
             let gutterSize = gutterRendered.size
-            let gx = PDFMetrics.lineNoRightPt - Double(label.count) * Double(gutterSize) * 0.6
             var op = Array("BT /\(gutterFont) \(gutterSize) Tf 0 Ts ".utf8)
-            op += Array("\(fixedOneDecimalDouble(gx)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-            op += esc(label)
+            op += Array("\(fixedOneDecimalDouble(lineNo.x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+            op += esc(lineNo.text)
             op += Array(") Tj ET".utf8)
             ops.append(op)
         }
@@ -1743,14 +1792,173 @@ func pageStream(
                                     pcl: span.pcl, tabHMI: span.tabHMI,
                                     tabLeader: span.tabLeader))
         }
+        var discardedGraphicCells: [PageLine.GraphicCellPlacement]? = nil
         ops += lineOpsPrinted(segs, left: leftHere, y: y, size: size, res: res, tzState: &tzState,
                              colState: &colState, darkenState: &darkenState,
                              colourMap: colourMap, rollPt: rollHere,
                              fi: line.fi, ulContinuous: ulContinuous,
                              pclPrograms: pclPrograms, pageHeight: Double(pageHeight),
-                             kerning: line.kerning, justifyRightX: line.justifyRightX)
+                             kerning: line.kerning, justifyRightX: line.justifyRightX,
+                             justifyWordX: line.justifyWordX,
+                             recordGraphicCells: &discardedGraphicCells)
     }
     return joined(ops, separator: 0x0A)                                 // Python's b'\n'.join
+}
+
+/// planning #251(d): sets `PageLine.lineNo` (see that field's own doc comment) on every
+/// line an active `.l#` interval numbers -- moved from `pageStream`'s own render-time
+/// `lineNoState` counter, replicated here in the exact same shape (`pageStream` is
+/// invoked once per PAGE, so the interval/counter pair starts fresh at every page's own
+/// first line -- planning #247's own oracle, sawyer/PRINT.TST: `.l#2` activates on a
+/// page's own first body line, `.l# 0` deactivates on its last). A document that never
+/// declares `.l#` (`lineNumberingCheckpoints` stays empty) walks every line and sets
+/// nothing -- no behaviour change, just an O(lines) no-op pass. Port of ctrl-kd's
+/// `_attach_line_numbers_printed`.
+func attachLineNumbersPrinted(_ doc: Document, _ pages: inout [Page], size: Int) {
+    let checkpoints = lineNumberingCheckpoints(doc)
+    let gutterRendered = spanRender("", font: nil, fonts: doc.fonts, size: size)
+    let gutterSize = gutterRendered.size
+    for pi in pages.indices {
+        var lineNoState: (interval: Int?, k: Int) = (nil, 0)
+        for li in pages[pi].indices {
+            let line = pages[pi][li]
+            let interval: Int?
+            if let bi = line.bi {
+                interval = lineNumberingAt(checkpoints, bi)
+            } else {
+                interval = nil
+            }
+            if interval != lineNoState.interval {
+                lineNoState = (interval, 0)
+            }
+            let k = lineNoState.k
+            lineNoState.k += 1
+            if let interval, interval > 0, k % interval == 0 {
+                let label = String(k / interval + 1)
+                let gx = PDFMetrics.lineNoRightPt - Double(label.count) * Double(gutterSize) * 0.6
+                pages[pi][li].lineNo = PageLine.LineNumberLabel(text: label, x: gx)
+            }
+        }
+    }
+}
+
+/// planning #251(b): sets `PageLine.justifyWordX` (see that field's own doc comment) on
+/// every justified line that resolves, through the SAME preprocessing pipeline
+/// `lineOpsPrinted` itself runs (bare-tab expansion; `ljSubstitute`; `splitGraphics`;
+/// `splitSymbolFallback`; `splitIndent`), to exactly one FIXED-PITCH, untagged span
+/// with real slack to distribute. Anything outside that -- a styled/mixed line, a
+/// proportional span, a `pctlHMI`/`tabHMI`-tagged span (the writer's own preamble
+/// branches off those BEFORE reaching ordinary per-character placement, so this
+/// function's own arithmetic does not apply), or a line with no elastic gap or no slack
+/// -- leaves `justifyWordX` unset; `lineOpsPrinted` then computes it fresh at render
+/// time, byte-identical to before this function existed. Port of ctrl-kd's
+/// `_attach_justify_word_x_printed`.
+func attachJustifyWordXPrinted(_ doc: Document, _ pages: inout [Page], size: Int) {
+    let fonts = doc.fonts
+    let left = printedLeft(doc, size: size)
+    let rollPt = printedRollPt(doc)
+    let colourMap: [Int: Double] = doc.printerDriver == "LJ6DTP" ? colourGrayLJ6DTP : [:]
+    for pi in pages.indices {
+        for li in pages[pi].indices {
+            let line = pages[pi][li]
+            guard let justifyRightX = line.justifyRightX else { continue }
+            var segs: [LineSegment] = []
+            for span in coalesce(line) {
+                if span.text.isEmpty { continue }
+                let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
+                segs.append(LineSegment(text: rendered.text, styles: span.styles,
+                                        family: rendered.family, size: rendered.size,
+                                        entry: rendered.entry, indent: false,
+                                        colour: span.colour, pctlHMI: span.pctlHMI,
+                                        pcl: span.pcl, tabHMI: span.tabHMI,
+                                        tabLeader: span.tabLeader))
+            }
+            segs = expandBareTabsForPrintedLayout(segs)
+            if !colourMap.isEmpty {
+                segs = ljSubstitute(segs, kerning: line.kerning)
+            }
+            let splitSegs = splitIndent(splitSymbolFallback(splitGraphics(segs)))
+            guard splitSegs.count == 1 else { continue }
+            let seg = splitSegs[0]
+            if seg.pctlHMI != nil || seg.tabHMI != nil { continue }
+            if seg.entry?.proportional ?? false { continue }   // rule 4: fixed-pitch only
+            let leftHere = line.left ?? left
+            var fi = line.fi
+            if fi != nil, seg.indent { fi = nil }
+            let x0 = leftHere + (fi ?? 0.0)
+            let (pt, _) = sized(seg.styles, seg.size, rollPt: rollPt, family: seg.family)
+            let baseFont = base14(seg.family, bold: seg.styles.contains(.bold),
+                                  italic: seg.styles.contains(.italic))
+            let pitch = supSubSpanPitch(seg.entry, seg.styles, seg.family, seg.size)
+                ?? spanPitch(seg.entry, pt)
+            if let pieces = justifyPiecesPrinted(seg.text, pitch: pitch, x0: x0,
+                                                 justifyRightX: justifyRightX,
+                                                 baseFont: baseFont, pt: pt) {
+                pages[pi][li].justifyWordX = pieces
+            }
+        }
+    }
+}
+
+/// planning #251(c): sets `PageLine.graphicCells` (see that field's own doc comment) on
+/// every line carrying a cp437 graphic character, via a real -- but THROWAWAY-STATE
+/// (fresh `FontResources`/`tzState`/`colState`, a dummy `y`) -- call to `lineOpsPrinted`
+/// itself, using its own `recordGraphicCells` parameter. None of the throwaway state can
+/// change a graphic cell's own x/width: `graphicOps`'s advance is `pitch` alone (font-
+/// metric-driven Tz scaling, the fill colour state, and the actual `y` never enter that
+/// arithmetic -- see `lineOpsPrinted`'s own graphics branch), so this is not a parallel
+/// re-derivation, it is the SAME function computing the SAME values, just once, ahead of
+/// the real render pass. The ops themselves are discarded; only the recorded placements
+/// survive.
+///
+/// Skips a line outright when its RAW (pre-substitution) text has no character in
+/// `graphicChars` at all -- `ljSubstitute`'s own tables never turn a NON-graphic
+/// character into a graphic one (only graphic-to-non-graphic, or graphic-to-graphic),
+/// so this is a safe necessary-condition filter, not an approximation -- it just spares
+/// the overwhelming majority of ordinary prose lines a throwaway render call. Port of
+/// ctrl-kd's `_attach_graphic_cells_printed`.
+func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int) {
+    let fonts = doc.fonts
+    let left = printedLeft(doc, size: size)
+    let rollPt = printedRollPt(doc)
+    let ulContinuous = doc.formatting.underlineBlanks ?? true
+    let colourMap: [Int: Double] = doc.printerDriver == "LJ6DTP" ? colourGrayLJ6DTP : [:]
+    let pclPrograms = doc.pclPrograms
+    let pageHeight = resolvedPageHeight(doc, printed: true)
+    for pi in pages.indices {
+        for li in pages[pi].indices {
+            let line = pages[pi][li]
+            guard line.spans.contains(where: { $0.text.contains(where: { graphicChars.contains($0) }) })
+            else { continue }
+            var segs: [LineSegment] = []
+            for span in coalesce(line) {
+                if span.text.isEmpty { continue }
+                let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
+                segs.append(LineSegment(text: rendered.text, styles: span.styles,
+                                        family: rendered.family, size: rendered.size,
+                                        entry: rendered.entry, indent: false,
+                                        colour: span.colour, pctlHMI: span.pctlHMI,
+                                        pcl: span.pcl, tabHMI: span.tabHMI,
+                                        tabLeader: span.tabLeader))
+            }
+            let leftHere = line.left ?? left
+            let rollHere = line.roll ?? rollPt
+            var tzState = hundredths(tzDefault)
+            var colState = PDFFill.gray(0.0)
+            var darkenState = false
+            var record: [PageLine.GraphicCellPlacement]? = []
+            _ = lineOpsPrinted(segs, left: leftHere, y: 0.0, size: size, res: FontResources(),
+                              tzState: &tzState, colState: &colState, darkenState: &darkenState,
+                              colourMap: colourMap, rollPt: rollHere, fi: line.fi,
+                              ulContinuous: ulContinuous, pclPrograms: pclPrograms,
+                              pageHeight: Double(pageHeight), kerning: line.kerning,
+                              justifyRightX: line.justifyRightX, justifyWordX: line.justifyWordX,
+                              recordGraphicCells: &record)
+            if let record, !record.isEmpty {
+                pages[pi][li].graphicCells = record
+            }
+        }
+    }
 }
 
 /// `[UInt8].joined(separator:)` for a single byte — the stdlib's version wants a sequence and

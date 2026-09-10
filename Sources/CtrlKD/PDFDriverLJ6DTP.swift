@@ -286,6 +286,103 @@ public let graphicChars: Set<Character> =
     Set([fullBlock]).union(boxArms.keys).union(shadeGray.keys).union(partBlocks.keys)
         .union(symbolShapes.keys).union(arcCorners.keys)
 
+/// planning #251(c): a fixed cell-FRACTION line/arm thickness for `graphicCellRects` --
+/// `graphicOps`'s own weight (`t = max(0.5, pt / 12.0)`) is a POINT thickness
+/// independent of pitch, which has no exact cell-fraction equivalent (the same 0.5pt
+/// hairline is a different fraction of a 6pt cell than of a 24pt one); this is a
+/// documented visual approximation, not a re-derivation fitted to every possible point
+/// size. Port of ctrl-kd's `_GRAPHIC_CELL_LINE_FRAC`/`_GRAPHIC_CELL_DOUBLE_GAP_FRAC`.
+let graphicCellLineFrac = 0.08
+let graphicCellDoubleGapFrac = 0.08   // `graphicOps`'s own `d == t` rule
+
+/// Unit-cell-space rects for one cp437 graphic character's filled sub-shapes --
+/// `[(x, y, w, h), ...]`, each 0..1 fraction of the cell (x left-to-right, y
+/// bottom-to-top from the cell's own baseline-0.25pt floor `graphicOps` uses), ASSUMING
+/// A SQUARE CELL (pitch == height). `[]` for a character this module does not draw as
+/// geometry at all (`!graphicChars.contains(char)`).
+///
+/// planning #251(c): the single PUBLIC accessor for every one of this module's six
+/// graphic-geometry categories (arcCorners/boxArms/shadeGray/partBlocks/symbolShapes/
+/// fullBlock) — `boxArms`/`arcCorners`/`shadeGray`/`partBlocks`/`squarePartBlocks`/
+/// `symbolShapes` themselves stay module-internal; a consumer that wants to DRAW a
+/// graphic cell without linking this engine's own `graphicOps` (Soft Return.app's
+/// `PrintedVectorGraphics`, which used to hand-port boxArms/shadeGray/partBlocks/
+/// symbolShapes by eye from this file and had no arcCorners port at all — that table
+/// was never exposed anywhere) calls this instead of reading the tables. Port of
+/// ctrl-kd's `graphic_cell_rects`; see that function's own docstring for the full
+/// derivation (every rect here is exactly what `graphicOps` itself computes at
+/// `pitch == h == 1`, its own square-cell correction reducing to the identity at that
+/// ratio) and for `arcCorners`'/`shadeGray`'s/`symbolShapes`' own documented
+/// simplifications (a bounding-rect approximation of the curve; a flat rect with no fill
+/// color; one bounding-box rect per POSITIVE sub-shape, `.white` knockouts omitted).
+public func graphicCellRects(_ char: Character) -> [(x: Double, y: Double, w: Double, h: Double)] {
+    if char == fullBlock {
+        return [(0.0, 0.0, 1.0, 1.0)]
+    }
+    if shadeGray[char] != nil {
+        return [(0.0, 0.0, 1.0, 1.0)]
+    }
+    if let frac = partBlocks[char] {
+        return [(frac.x, frac.y, frac.w, frac.h)]
+    }
+    if let shapes = symbolShapes[char] {
+        var out: [(x: Double, y: Double, w: Double, h: Double)] = []
+        for shape in shapes {
+            switch shape {
+            case .white:
+                continue
+            case .rect(let fx, let fy, let fw, let fh):
+                out.append((fx, fy, fw, fh))
+            case .disc(let fx, let fy, let fr):
+                out.append((fx - fr, fy - fr, 2 * fr, 2 * fr))
+            case .poly(let pts):
+                let xs = pts.map(\.x), ys = pts.map(\.y)
+                let minX = xs.min()!, maxX = xs.max()!
+                let minY = ys.min()!, maxY = ys.max()!
+                out.append((minX, minY, maxX - minX, maxY - minY))
+            }
+        }
+        return out
+    }
+    if let arc = arcCorners[char] {
+        let t = graphicCellLineFrac
+        let rc = 0.42
+        let mx = 0.5, my = 0.5
+        let vFar = arc.vertical == .down ? 0.0 : 1.0
+        let hFar = arc.horizontal == .right ? 1.0 : 0.0
+        let ay = my + (arc.vertical == .up ? rc : -rc)
+        let bx = mx + (arc.horizontal == .right ? rc : -rc)
+        return [
+            (mx - t / 2, min(vFar, ay), t, abs(ay - vFar)),
+            (min(hFar, bx), my - t / 2, abs(bx - hFar), t),
+        ]
+    }
+    if let arms = boxArms[char] {
+        let t = graphicCellLineFrac
+        let d = graphicCellDoubleGapFrac
+        let mx = 0.5, my = 0.5
+        var out: [(x: Double, y: Double, w: Double, h: Double)] = []
+        for (weight, xa, xb) in [(arms.left, 0.0, mx), (arms.right, mx, 1.0)] {
+            if weight == 1 {
+                out.append((xa, my - t / 2, xb - xa, t))
+            } else if weight == 2 {
+                out.append((xa, my + d - t / 2, xb - xa, t))
+                out.append((xa, my - d - t / 2, xb - xa, t))
+            }
+        }
+        for (weight, ya, yc) in [(arms.up, my, 1.0), (arms.down, 0.0, my)] {
+            if weight == 1 {
+                out.append((mx - t / 2, ya, t, yc - ya))
+            } else if weight == 2 {
+                out.append((mx - d - t / 2, ya, t, yc - ya))
+                out.append((mx + d - t / 2, ya, t, yc - ya))
+            }
+        }
+        return out
+    }
+    return []
+}
+
 /// Vector ops for one all-graphics span (spaces advance, draw nothing).
 ///
 /// `leadFactor * pt` is the glyph's own CELL height -- a box-drawing arm's vertical

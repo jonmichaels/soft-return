@@ -220,6 +220,92 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     /// rather than repeated on every line. Port of Python's `PageLine.col`.
     public var col: Int?
 
+    /// One piece of a justified line's own PRECOMPUTED word/gap split -- see
+    /// `justifyWordX`'s own doc comment. A named struct, not a bare tuple, for the same
+    /// reason `ImageRef` is: `PageLine` is `Hashable` and Swift tuples are not.
+    public struct JustifyWordPiece: Hashable, Sendable {
+        public var text: String
+        public var x: Double
+        public var width: Double
+        public init(text: String, x: Double, width: Double) {
+            self.text = text
+            self.x = x
+            self.width = width
+        }
+    }
+
+    /// planning #251(b): this line's own PRECOMPUTED `justifyPiecesPrinted` result --
+    /// covering the whole line left to right -- or `nil`. Set by
+    /// `attachJustifyWordXPrinted` ONLY when this is a `justifyRightX`-carrying line
+    /// that resolves (after the SAME `splitIndent`/`splitSymbolFallback`/
+    /// `splitGraphics`/`ljSubstitute` pipeline `lineOpsPrinted` itself runs) to exactly
+    /// one FIXED-PITCH, untagged span with a real gap to stretch -- every other
+    /// justified line (styled/mixed, proportional, a pctl/tab span, or one with no
+    /// slack to distribute) leaves this `nil`, and `lineOpsPrinted` falls back to
+    /// computing it fresh at render time, unchanged from before this field existed.
+    /// Port of ctrl-kd's `PageLine.justify_word_x`.
+    public var justifyWordX: [JustifyWordPiece]?
+
+    /// This line's own `.l#` gutter label and ABSOLUTE x -- see `lineNo`'s own doc
+    /// comment. A named struct for the same `Hashable` reason as `JustifyWordPiece`.
+    public struct LineNumberLabel: Hashable, Sendable {
+        public var text: String
+        public var x: Double
+        public init(text: String, x: Double) {
+            self.text = text
+            self.x = x
+        }
+    }
+
+    /// planning #251(d): this line's own `.l#` gutter label and ABSOLUTE x, or `nil`
+    /// for a line no active `.l#` interval numbers -- moved off `pageStream`'s own
+    /// render-time `lineNoState` counter (which reset every PAGE, per planning #247's
+    /// own oracle) onto the model by `attachLineNumbersPrinted`. `pageStream` now only
+    /// draws from this field (still gated by its own `lineNoCheckpoints != nil`
+    /// parameter, which is how `--line-numbers off` keeps suppressing the draw even
+    /// though the model carries the label unconditionally -- same "model states it, a
+    /// flag may still tell the WRITER not to draw it" shape `headers`/`footers` already
+    /// use). Port of ctrl-kd's `PageLine.line_no`.
+    public var lineNo: LineNumberLabel?
+
+    /// One cp437 graphic character's own model-side placement -- see `graphicCells`'s
+    /// own doc comment. A named struct for the same `Hashable` reason as
+    /// `JustifyWordPiece`.
+    public struct GraphicCellPlacement: Hashable, Sendable {
+        public var char: Character
+        public var x: Double
+        public var width: Double
+        /// JSON-parity bookkeeping ONLY (planning #251(c)) -- `true` when this cell's
+        /// `width` came from a PROPORTIONAL run's own pitch (`pdf.py`'s
+        /// `pitch = pt if entry.get('proportional') else spanPitch(...)`, the TRUE
+        /// branch): ctrl-kd's own `pt` is a bare Python `int` there, so
+        /// `json.dumps` writes that `width` with no decimal point (`13`, not
+        /// `13.0`) -- `emitLayout` must reproduce that exact byte shape, not just
+        /// the numeric value, for cross-engine byte parity (`AnswerKeyParityTests`).
+        /// `false` (the `spanPitch`/`supSubSpanPitch` branch) is always a Python
+        /// `float` there, serialized with a decimal point same as every other
+        /// point measurement in this JSON. Never meaningful for anything but this
+        /// one serialization decision -- the PDF writer's own point math is
+        /// unaffected either way (`fixedOneDecimalDouble` et al. always emit a
+        /// decimal).
+        public var widthIsWholePointPitch: Bool
+        public init(char: Character, x: Double, width: Double,
+                   widthIsWholePointPitch: Bool = false) {
+            self.char = char
+            self.x = x
+            self.width = width
+            self.widthIsWholePointPitch = widthIsWholePointPitch
+        }
+    }
+
+    /// planning #251(c): every cp437 box-drawing/graphic character this line draws as
+    /// a vector, in document order, or `nil` for a line with no graphic character at
+    /// all. Set by `attachGraphicCellsPrinted` from a real (throwaway-state) call to
+    /// `lineOpsPrinted` itself -- see that function's own `recordGraphicCells`
+    /// parameter -- so the values are exactly what the writer draws, not a parallel
+    /// re-derivation. Port of ctrl-kd's `PageLine.graphic_cells`.
+    public var graphicCells: [GraphicCellPlacement]?
+
     public init() {
         spans = []
         lead = nil
@@ -235,13 +321,18 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         justifyRightX = nil
         parityLeft = nil
         col = nil
+        justifyWordX = nil
+        lineNo = nil
+        graphicCells = nil
     }
 
     public init(_ spans: [Span], soft: Bool = false, lead: Double? = nil,
                 overprint: Bool = false, fi: Double? = nil, bi: Int? = nil,
                 image: ImageRef? = nil, ws4Spacing: Bool = false, kerning: Bool = true,
                 left: Double? = nil, roll: Double? = nil, justifyRightX: Double? = nil,
-                parityLeft: ParityLeft? = nil, col: Int? = nil) {
+                parityLeft: ParityLeft? = nil, col: Int? = nil,
+                justifyWordX: [JustifyWordPiece]? = nil, lineNo: LineNumberLabel? = nil,
+                graphicCells: [GraphicCellPlacement]? = nil) {
         self.spans = spans
         self.soft = soft
         self.lead = lead
@@ -256,6 +347,9 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         self.justifyRightX = justifyRightX
         self.parityLeft = parityLeft
         self.col = col
+        self.justifyWordX = justifyWordX
+        self.lineNo = lineNo
+        self.graphicCells = graphicCells
     }
 
     public init(arrayLiteral elements: Span...) {
@@ -1154,20 +1248,36 @@ public func docToPagelines(
             // pages but never strips a page's own leading/trailing blank lines on
             // this branch, so a notes-path page ending in an authorial blank keeps
             // it. The blank paints nothing, so PDF ink is identical either way.
-            return applyColumns(doc,
+            var notesPages = applyColumns(doc,
                 finalizePages(layoutPrintedPages(doc, pixResults: pixResults,
                                                  pictures: pictures,
                                                  sentenceSpacing: sentenceSpacing),
                              printed: true, isPrintStream: isPrintStream,
                              stripBlanks: false,
                              fallbackHeaders: doc.headers, fallbackFooters: doc.footers))
+            // planning #251(b)/(c)/(d): the same three model-build-time attach
+            // passes as the plain path below -- see each function's own doc
+            // comment. Both `docToPagelines` branches converge here so `emitPDF`
+            // and `emitLayout` (which both call `docToPagelines` independently)
+            // see identical model data regardless of which pagination path a
+            // given document takes.
+            let attachSize = printedSize(doc)
+            attachJustifyWordXPrinted(doc, &notesPages, size: attachSize)
+            attachLineNumbersPrinted(doc, &notesPages, size: attachSize)
+            attachGraphicCellsPrinted(doc, &notesPages, size: attachSize)
+            return notesPages
         }
-        return applyColumns(doc,
+        var plainPages = applyColumns(doc,
             finalizePages(layoutPrintedPagesPlain(doc, pixResults: pixResults,
                                                   pictures: pictures,
                                                   sentenceSpacing: sentenceSpacing),
                          printed: true, isPrintStream: isPrintStream,
                          fallbackHeaders: doc.headers, fallbackFooters: doc.footers))
+        let attachSize = printedSize(doc)
+        attachJustifyWordXPrinted(doc, &plainPages, size: attachSize)
+        attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
+        attachGraphicCellsPrinted(doc, &plainPages, size: attachSize)
+        return plainPages
     }
     // Modern PDF's own real pipeline is `modernStreams` (PDFModernLayout.swift), which
     // embeds since round 22; this legacy Modern layout is not an emitter path for it,

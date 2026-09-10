@@ -1316,8 +1316,40 @@ private func jsonHFDict(_ dict: [Int: String], order: [Int]) -> LayoutJSONValue 
 /// byte-identical JSON to version 1. `col` is the field a consumer MUST use to decide
 /// "this line starts a new column, reset the vertical cursor to the page top" — an
 /// ordinary `left` change (a mid-document `.po`/`.poe`/`.poo` override) is NOT that
-/// signal and must not reset the flow; only a `col` change is. Old fields (`segments`,
-/// `soft`, `overprint`, `lead`) are unchanged; this is purely additive.
+/// signal and must not reset the flow; only a `col` change is.
+///
+/// version 3 (planning #251(b), 2026-09-09): each printed line MAY now carry
+/// `justify_word_x` — `[{"text", "x", "width"}, ...]` — the per-word/per-gap
+/// Bresenham justification split (`PageLine.justifyWordX`, set by
+/// `attachJustifyWordXPrinted`) covering the WHOLE line left to right, in the SAME
+/// absolute points `PDFWriter.swift`'s own writer draws from. Present only on a
+/// justified (`.oj on`) line that resolves to exactly one fixed-pitch, untagged span
+/// with real slack to distribute — every other justified line omits it, same
+/// "omitted, not null" and "byte-identical to version 2 when unused" convention
+/// `left`/`col` already use.
+///
+/// version 4 (planning #251(d), 2026-09-09): each printed line MAY now carry
+/// `line_no` — `{"text", "x"}` — the `.l#` gutter label and its ABSOLUTE x, moved off
+/// `PDFWriter.swift`'s own `pageStream` render-time counter (`PageLine.lineNo`, set by
+/// `attachLineNumbersPrinted`) onto the model. OMITTED, not null, on every line no
+/// active `.l#` interval numbers. Present regardless of the PDF writer's own
+/// `--line-numbers` flag (same "model states it unconditionally, a flag only tells the
+/// WRITER whether to draw it" convention `headers`/`footers` already use).
+///
+/// version 5 (planning #251(c), 2026-09-09): each printed line MAY now carry
+/// `graphic_cells` — `[{"char", "x", "width"}, ...]`, one entry per cp437 box-drawing/
+/// graphic character the line draws as a vector, document order — the exact per-cell
+/// x/width `PDFDriverLJ6DTP.swift`'s own `graphicOps` draws from
+/// (`PageLine.graphicCells`, set by `attachGraphicCellsPrinted`). OMITTED, not null,
+/// on every line with no graphic character at all. The unit-cell GEOMETRY a consumer
+/// needs to actually draw each character (arcCorners/boxArms/shadeGray/partBlocks/
+/// symbolShapes/fullBlock) is a separate, stable lookup — `graphicCellRects(_:)`, a
+/// PUBLIC function, not exported through this JSON (it depends on nothing per-
+/// document; a consumer calls it directly, in either engine, keyed only by the
+/// character).
+///
+/// Old fields (`segments`, `soft`, `overprint`, `lead`) are unchanged; this is purely
+/// additive.
 @Sendable
 public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                        options: EmitOptions = EmitOptions()) -> String {
@@ -1364,6 +1396,57 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
             // anywhere emits byte-identical JSON to version 1.
             if let left = pl.left { fields.append(("left", .double(left))) }
             if let col = pl.col { fields.append(("col", .int(col))) }
+            // 'justify_word_x'/'line_no'/'graphic_cells' below all round their own
+            // `x`/`width` to 1 decimal -- the SAME precision the PDF writer's own
+            // `%.1f`-shaped position operators (`fixedOneDecimalDouble`) have
+            // always used. sr's `Double` math and ctrl-kd's Python float math can
+            // round an identical formula to a different value in the 15th-16th
+            // significant digit (IEEE 754 accumulation order — e.g. this file's
+            // own `Double(pt)` cast vs Python's `pt` staying an `int` one step
+            // longer) -- invisible in the PDF bytes themselves (both engines round
+            // to the same `.1f` string) but a RAW `Double` export exposes it as a
+            // spurious cross-engine divergence with no real meaning (found via
+            // `AnswerKeyParityTests` once these fields started exporting full
+            // precision; ctrl-kd mirrors this same rounding, `layout.py`). Model
+            // fields themselves (`PageLine.justifyWordX`/`lineNo`/`graphicCells`)
+            // stay unrounded -- this is a JSON-serialization-time fix only. Port
+            // of ctrl-kd's `emit_layout` rounding, planning #251 follow-up.
+            //
+            // 'justify_word_x' (version 3, planning #251(b)): present ONLY on a
+            // justified line `attachJustifyWordXPrinted` could resolve one for --
+            // see `PageLine.justifyWordX`'s own doc comment.
+            if let jwx = pl.justifyWordX {
+                fields.append(("justify_word_x", .array(jwx.map {
+                    .object([("text", .string($0.text)), ("x", .double(roundToOneDecimal($0.x))),
+                            ("width", .double(roundToOneDecimal($0.width)))])
+                })))
+            }
+            // 'line_no' (version 4, planning #251(d)): present ONLY on a line an
+            // active `.l#` interval numbers -- see `PageLine.lineNo`'s own doc
+            // comment.
+            if let lineNo = pl.lineNo {
+                fields.append(("line_no", .object([
+                    ("text", .string(lineNo.text)), ("x", .double(roundToOneDecimal(lineNo.x))),
+                ])))
+            }
+            // 'graphic_cells' (version 5, planning #251(c)): present ONLY on a
+            // line carrying a cp437 graphic character -- see
+            // `PageLine.graphicCells`'s own doc comment.
+            if let cells = pl.graphicCells {
+                fields.append(("graphic_cells", .array(cells.map {
+                    // `widthIsWholePointPitch`: JSON-parity only -- see that
+                    // field's own doc comment. A proportional cell's width is
+                    // ctrl-kd's own bare Python `int` there (`json.dumps` shows
+                    // no decimal point); every other cell is a `float`. Python's
+                    // own `round(int, 1)` returns an `int` unchanged (verified),
+                    // so rounding here does not disturb that int/float split.
+                    let widthValue: LayoutJSONValue = $0.widthIsWholePointPitch
+                        ? .int(Int($0.width)) : .double(roundToOneDecimal($0.width))
+                    return .object([("char", .string(String($0.char))),
+                                    ("x", .double(roundToOneDecimal($0.x))),
+                                    ("width", widthValue)])
+                })))
+            }
             lines.append(.object(fields))
         }
         // b56040b (PDFLayout: content-free documents keep their own header/footer)
@@ -1405,7 +1488,7 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
     let flow = modernSemanticFlow(doc, notes: options.notes, noteRefs: options.noteRefs)
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
-        ("version", .int(2)),
+        ("version", .int(5)),
         ("meta", jsonMeta(doc)),
         ("page", jsonPage(doc.page)),
         ("fonts", .array(doc.fonts.map(jsonFont))),

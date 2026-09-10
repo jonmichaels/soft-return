@@ -435,7 +435,7 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     let emitter = try #require(EmitterRegistry.standard.getEmitter("layout"))
     let out = try #require(emitter.emit(doc, .modern, EmitOptions()).asText)
     #expect(out.contains("\"format\": \"ctrl-kd-layout\""))
-    #expect(out.contains("\"version\": 2"))
+    #expect(out.contains("\"version\": 5"))
     #expect(out.contains("\"encoding\": \"cp437\""))
     #expect(out.contains("\"size_name\": \"Letter\""))
     #expect(out.contains("\"kind\": \"para\""))                 // semantic flow present
