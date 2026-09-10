@@ -919,7 +919,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     // CSS-byte delta even though PDF/RTF (which only spend bytes on an actual
     // uncovered run) move by nothing, breaking cross-format consistency for the
     // exact same document. Ported from ctrl-kd emit.py's identical fix.
-    if nonpropFallback, parts.contains(where: { $0.contains("ws-nonprop") }) {
+    if nonpropFallback, parts.contains(where: { asciiContains($0, "ws-nonprop") }) {
         css += "\nspan.ws-nonprop{font-family:ui-monospace,Menlo,Consolas,monospace}"
     }
     // b24 round 18 (RULINGS-LEDGER row 4): TOC/Index at the document's own end, gated by
