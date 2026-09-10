@@ -570,9 +570,25 @@ func runningOps(
         }
         let hasControlByte = txt.unicodeScalars.contains { $0.value < 0x20 }
         if entry == nil, res == nil || !hasControlByte {
+            // `txt.replacingAll("\u{2219}", with: "\u{2022}")`: this fast path (no
+            // font block, no control/toggle byte anywhere) never calls `hfRuns` at
+            // all -- fine for style and control-byte handling, since the gate just
+            // above already proves there is neither to interpret, but `hfRuns` ALSO
+            // does one plain character substitution unconditionally: `∙` (U+2219
+            // BULLET OPERATOR) -> `•` (U+2022 BULLET), because cp1252 carries a real
+            // bullet glyph and WordStar's own list marker means the round one. This
+            // path skipped that too, reintroducing the exact "downgrades a round
+            // bullet to a middle dot for no encoding reason" regression that
+            // substitution fixed for every OTHER header/footer line -- found
+            // corpus-wide by `HeadFootModelPDFParityTests` on sawyer/REF/
+            // ADVANCE.DOT's own running head (a fontless `.h1`, no toggle bytes,
+            // `∙` typed directly) once that suite started comparing the model's
+            // `headerLines` text (which DOES carry the original `∙`, pre-`hfRuns`,
+            // by design) against the PDF's own drawn bytes. ctrl-kd's own `_hf_line_
+            // ops` carries the identical fix (pdf.py, same commit).
             var out = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
             out += Array("\(fixedOneDecimalDouble(left)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-            out += esc(txt)
+            out += esc(txt.replacingAll("\u{2219}", with: "\u{2022}"))
             out += Array(") Tj ET".utf8)
             return [out]
         }
@@ -2120,36 +2136,43 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
     let pgnumCheckpointsList = pgnumCheckpoints(doc)
     let pageNumbers = resolvePageNumbers(pnCheckpoints(doc), pages)
     for pi in pages.indices {
-        // See this function's own doc comment: on the notes-aware path, a page is
-        // only resolved when it is one Python would also resolve -- either
-        // `_endnote_pages`'s own `_flush` wrapped it in a real `Page(...)`
-        // (`explicitBreakBI != nil`), or `applyColumns` merged it from a `.co n>1`
-        // group (`columns != nil`, PRINT.TST's own oracle: its `.co3` region's
-        // merged page IS a real `Page` in ctrl-kd too, `_apply_columns`'s own
-        // `merged = Page([])` construction, regardless of what its SOURCE
-        // sub-page's own type was). Neither condition holding means this page
-        // is Python's bare-list-equivalent (never resolved, matching
-        // `isinstance(pg, Page)` there).
+        // planning #251 part d fix (found by the app coder, job 348 follow-up:
+        // ctrl-kd's own sawyer/-SCREEN.WS page 1, the app's own BOTHNOTE.WS page 1):
+        // this used to SKIP every notes-aware-path page with no `explicitBreakBI` and
+        // no columnar merge -- the proxy for Python's own bare-Python-list pages
+        // (`_paginate_printed_notes`'s footnote-area pages, `isinstance(pg, Page)`
+        // false there), on the theory that there was nothing TO resolve for them.
+        // That theory was wrong: `runningOps`'s real per-page render loop resolves
+        // and DRAWS their header/footer/auto-page-number regardless (a bare Python
+        // list still hits `getattr(pl, 'headers', None)`'s own `None` fallback, same
+        // as any other consumer) -- skipping here just left the MODEL's own copy
+        // stale while the PDF kept drawing correctly. Confirmed: ctrl-kd's own writer
+        // puts the automatic page number "1" at x=291.6/y=732.0 on -SCREEN.WS page 1
+        // while this function reported `nil`. ctrl-kd's own fix (pdf.py
+        // `_attach_head_foot_lines_printed`) promotes the bare list to a real `Page`
+        // instead of skipping; Swift's `Page` is uniformly a struct already (never a
+        // bare-list-equivalent type to check `isinstance` against) -- there is
+        // nothing to promote, so removing the skip is the whole fix here.
         let page0 = pages[pi]
-        let isColumnsMerge = page0.columns != nil
-        if isNotesPath, page0.explicitBreakBI == nil, !isColumnsMerge { continue }
-        // A columnar merge's own `headers`/`footers` on the notes path are
-        // Python's `merged.headers = getattr(pg, 'headers', None)` copying a
-        // bare-list source's MISSING attribute -- `None`, triggering `resolve
-        // HeadFootLines`'s own `doc.headers`/`doc.footers` fallback (`_apply_
-        // columns` never replays `hfEvents` any more than the notes-aware
-        // paginator whose output it is merging does). Swift's `Page.headers`
-        // is never optional, so `page.headers` here is always `[:]` rather than
-        // Python's `None` -- passing `nil` explicitly gets `resolveHeadFootLines`
-        // to apply the SAME fallback. `_endnote_pages`'s own wrap (the
-        // `explicitBreakBI` branch) is DIFFERENT: `Page(pg)` there defaults
+        // A columnar merge's own `headers`/`footers` on the notes path -- OR, as of
+        // this fix, ANY notes-path page that is not `_endnote_pages`'s own trailing-
+        // appendix wrap (`explicitBreakBI != nil`) -- are Python's `getattr(pg,
+        // 'headers', None)` reading a bare-list source's MISSING attribute -- `None`,
+        // triggering `resolveHeadFootLines`'s own `doc.headers`/`doc.footers`
+        // fallback (`applyColumns` never replays `hfEvents` any more than the
+        // notes-aware paginator whose output it is merging does, and an ordinary
+        // notes-path body/footnote-area page never had a `Page` of its own to begin
+        // with). Swift's `Page.headers` is never optional, so `page.headers` here is
+        // always `[:]` rather than Python's `None` -- passing `nil` explicitly gets
+        // `resolveHeadFootLines` to apply the SAME fallback. `_endnote_pages`'s own
+        // wrap (the `explicitBreakBI` branch) is DIFFERENT: `Page(pg)` there defaults
         // `headers`/`footers` to a REAL `{}` (Python never passes `None`), so
         // no fallback applies there -- its own real (possibly empty) values are
         // used as-is, matching DISPLAY.WS/REF/NOTES.TST's own oracle (no
         // running head on the endnote appendix, an unaffected automatic page
         // number).
-        let headersIn: [Int: String]? = (isNotesPath && isColumnsMerge) ? nil : page0.headers
-        let footersIn: [Int: String]? = (isNotesPath && isColumnsMerge) ? nil : page0.footers
+        let headersIn: [Int: String]? = (isNotesPath && page0.explicitBreakBI == nil) ? nil : page0.headers
+        let footersIn: [Int: String]? = (isNotesPath && page0.explicitBreakBI == nil) ? nil : page0.footers
         let page = pages[pi]
         let pageGeomChanged = page.mtLines != nil || page.mbLines != nil
             || page.hmLines != nil || page.fmLines != nil
