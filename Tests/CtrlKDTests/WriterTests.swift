@@ -245,6 +245,20 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     #expect(try rt(data) == data)
 }
 
+@Test func rrRulerImageOverprintTerminatorRoundtrips() throws {
+    // Mirrors ctrl-kd's test_rr_ruler_image_overprint_terminator_roundtrips
+    // (planning #249): the swallowed overprint-continuation entry is folded
+    // into the ruler's own round-trip ledger (rtDots, same tally anchor)
+    // rather than dropped -- its bytes (here, just the bare entry's own
+    // CRLF; the entry's text is empty) must still come back.
+    var data = ws5Seed + bytes("Line ending before the rulers.") + HARD + HARD
+    data += bytes(".rr\rL----P----R") + [0x0D] + HARD
+    data += bytes(".rr\rL----R") + HARD
+    data += HARD
+    data += bytes("Line after the rulers.") + HARD + [0x1A]
+    #expect(try rt(data) == data)
+}
+
 // ------------------------------------------------------------ the contract
 
 @Test func editorMutationSurvivesASave() throws {

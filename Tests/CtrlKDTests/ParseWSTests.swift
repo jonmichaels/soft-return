@@ -260,6 +260,38 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     #expect(paras[1].paraMargin == nil)      // cleared: the swallowed ruler image has no `P` pip
 }
 
+@Test func rrBareRulerImageOverprintTerminatorAddsNoBlankLine() {
+    // Mirrors ctrl-kd's test_rr_bare_ruler_image_overprint_terminator_adds_no_
+    // blank_line (planning #249, sawyer/INTERVU.WS, near the page 7/8
+    // boundary). A bare `.rr`'s ruler-image line (planning #240's swallowed-
+    // next-line form) can itself end with `^PM Overprint Line` (a bare CR, no
+    // LF) instead of an ordinary hard return -- WSFORMAT.TXT: "the next line
+    // prints at THIS line's baseline". Measured byte shape, INTERVU.WS offset
+    // 8711: the document's FIRST `.rr` pair writes `.rr\rL----P----!----!----
+    // ---------R\r\r\n` -- TWO CR-family breaks after the image, not the one
+    // CR+LF its OWN second `.rr` pair (three lines later, same document) uses
+    // for the exact same construct. WS7's real capture shows no extra blank
+    // line between the two ruler pairs (a normal 2-blank/72pt paragraph gap,
+    // same as everywhere else in this document) -- the overprint's
+    // continuation is an EMPTY line printed onto the ruler's own already-
+    // invisible baseline, contributing nothing. Before this fix the engine's
+    // parsed block carried 3 blank Lines here instead of 2, pushing
+    // "punctuation." (and 5 more words) from WS7's page 7 onto page 8.
+    var data = bytes("Line ending before the rulers.") + HARD
+    data += HARD
+    data += bytes(".rr\rL----P----!----!-------------R") + [0x0d] + HARD
+    data += bytes(".rr\rL----!---------------------------!------------------------------R") + HARD
+    data += HARD
+    data += bytes("Line after the rulers.") + HARD
+    let doc = parseWS(data)
+    let paras = doc.blocks.filter { $0.kind == .para }
+    #expect(paras.count == 2)
+    #expect(paras[0].lines.map { $0.spans.map(\.text).joined() } == [
+        "Line ending before the rulers.", "", ""])
+    #expect(paras[1].lines.map { $0.spans.map(\.text).joined() } == [
+        "Line after the rulers."])
+}
+
 @Test func ws7FootnoteExtractionAndRef() {
     // Mirrors test_ws7_footnote_extraction_and_ref.
     let data = ws7Block(0x00) + bytes("Treaties were made.") +

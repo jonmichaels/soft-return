@@ -643,6 +643,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
     /// (head2 == "RR") for the full citation. Port of Python's `parse_ws`
     /// `consume_next_as_ruler` fix.
     var consumeNextAsRuler = false
+    /// #249: set (below, where a swallowed ruler-image entry's OWN separator is
+    /// inspected) when that image line ended in a bare CR — `^PM` Overprint Line,
+    /// "the next line prints at THIS line's baseline" (WSFORMAT.TXT). The VERY
+    /// NEXT physical entry, if it is blank, is that overprint's continuation onto
+    /// the ruler's already-invisible line: real WordStar adds no new vertical
+    /// space for it. See the check's own citation below. Port of Python's
+    /// `parse_ws` `_rr_swallow_blank` fix.
+    var rrSwallowBlank = false
 
     // Round-trip ledger (tasks #20/#21): a running count of EVENTS in emission order —
     // Lines appended anywhere plus form-feed pagebreak blocks — and a locator for the
@@ -723,6 +731,27 @@ public func parseWS(_ data: [UInt8]) -> Document {
         // is still recognized, and a ws4 dot whose '.' carries bit 7 (0xAE) still is too.
         var stripped = raw.map { $0 & 0x7F }
 
+        // #249: this entry is the (blank) overprint continuation of a ruler-image
+        // line just swallowed below — see `rrSwallowBlank`'s own citation. Measured
+        // on sawyer/INTERVU.WS's first `.rr` pair near the page 7/8 boundary: the
+        // source writes the image as `.rr\rL----P----!----!-------------R\r\r\n` —
+        // TWO bare-CR-family breaks after the image text, not the one CR+LF the
+        // same document's OTHER `.rr` pair (three lines later) uses. The first CR
+        // is the image's own overprint terminator (already consumed by the
+        // `consumeNextAsRuler` branch below); this second, empty entry is what
+        // that overprint prints ON TOP OF the (invisible) ruler line — nothing.
+        // WS7's real capture shows no extra blank there. Folded into `rtDots` at
+        // the SAME tally anchor as the ruler entries (not dropped) so the
+        // byte-exact writer still replays it. Port of ctrl-kd core.py's identical
+        // fix.
+        if rrSwallowBlank {
+            rrSwallowBlank = false
+            if physical.separator == .blankSoft || physical.separator == .blankHard {
+                rtDots.append(RoundtripDot(anchor: rtTally, raw: physical.text,
+                                           brk: rtBrk ?? []))
+                continue
+            }
+        }
         // #240: this entry is a bare `.rr`'s own ruler-image line (see the flag's
         // own comment, set below) — consume it whole, exactly like a dot-command
         // line's own round-trip bookkeeping, and never let it reach
@@ -747,6 +776,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
             if fmt.blockFormat != rrBefore {
                 closeBlock()
             }
+            // #249: this image line's OWN separator — if it is a bare-CR
+            // overprint, the physical entry right after it is that overprint's
+            // continuation and gets special handling at the top of the next
+            // iteration (see `rrSwallowBlank`'s own citation above).
+            rrSwallowBlank = (physical.separator == .over)
             continue
         }
 
