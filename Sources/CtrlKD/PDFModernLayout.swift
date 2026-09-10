@@ -962,7 +962,17 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
 /// substituted paragraph never carries a graphic character in the first place (its
 /// runs are "exactly one resolved, decoded pix placeholder"), so `pictures: .off` here
 /// changes nothing this function could ever attach to.
-func attachGraphicCellsModern(_ doc: Document, notes: Set<NoteKind>, noteRefs: NoteRefs)
+///
+/// `public` (2026-09-10, planning #251 follow-up): this is the ONLY way to read a
+/// Modern paragraph's own drawn graphic-cell geometry outside `emitLayout`'s JSON --
+/// `modernSemanticFlow`'s own `SemanticFlow` carries no such field (the cells are
+/// keyed by `sem.items` index, not attached to any one `SemanticItem`). Was `internal`
+/// -- unreachable from the app, which needs this same geometry Native's own view
+/// draws from, matching `attachGraphicCellsPrinted`'s already-`public` precedent for
+/// Printed. ctrl-kd's own twin, `pdf.attach_graphic_cells_modern` (no leading
+/// underscore -- that module's own "public" convention), was never module-private to
+/// begin with; this brings Swift's visibility to the same place.
+public func attachGraphicCellsModern(_ doc: Document, notes: Set<NoteKind>, noteRefs: NoteRefs)
     -> [Int: [PageLine.GraphicCellPlacement]]
 {
     let hasGraphicContent = doc.blocks.contains { block in

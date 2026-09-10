@@ -187,6 +187,38 @@ import Testing
     #expect(json.contains("\"page\": 1"))
 }
 
+/// planning #251 follow-up (2026-09-10, coordinator follow-up): `attachGraphicCellsModern`
+/// was `internal` -- every OTHER test in this file reaches it only because `@testable
+/// import CtrlKD` bypasses access control, which would keep passing even if the function
+/// went back to `internal` and the app lost the ability to call it again. This test proves
+/// the actual app-shaped use: pair `modernSemanticFlow`'s own item list with
+/// `attachGraphicCellsModern`'s cells dict (both PUBLIC, called the identical way
+/// `emitLayout`'s own `modern.items`/`graphic_cells` call site does) and confirm every
+/// cell's key names a REAL `.para` item in the flow -- the app cannot place a Modern
+/// graphic cell without both being reachable AND agreeing on indexing.
+@Test func modernSemanticFlowAndGraphicCellsIndexAgree() {
+    var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
+    src += bytes("Prose before the rule.")
+    src += HARD
+    src += [UInt8](repeating: 0xCD, count: 6)      // ═ x 6, its own paragraph
+    src += HARD
+    src += bytes("Prose after the rule.")
+    src += HARD
+    let doc = parseWS(src)
+    let flow = modernSemanticFlow(doc, notes: EmitOptions.defaultNotes, noteRefs: .word)
+    let cells = attachGraphicCellsModern(doc, notes: EmitOptions.defaultNotes, noteRefs: .word)
+    #expect(!cells.isEmpty)
+    for key in cells.keys {
+        #expect(flow.items.indices.contains(key), "cell key \(key) is not a real item index")
+        if flow.items.indices.contains(key) {
+            guard case .para = flow.items[key] else {
+                Issue.record("cell key \(key) names item \(flow.items[key]), not a .para")
+                return
+            }
+        }
+    }
+}
+
 @Test func modernGraphicCellsAbsentForADocumentWithNoGraphics() {
     var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
     src += bytes("An ordinary line of prose, nothing graphic here at all.")
