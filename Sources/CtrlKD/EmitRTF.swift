@@ -128,7 +128,7 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], labels: [String], optio
                          fontControl: [Int: String] = [:], printed: Bool = false,
                          shownMap: [Int: String]? = nil, rollHalfPt: Int? = nil,
                          ulContinuous: Bool = true, inlineStyling: Bool = true,
-                         sentenceSpacing: Bool = false) -> String {
+                         sentenceSpacing: Bool = false, nonpropFallback: Bool = false) -> String {
     // A 0x0F print control's display string is SCREEN-ONLY: on paper WordStar sent the
     // raw printer payload and advanced by the block's HMI word. Printed pads that width
     // (10-CPI print columns); Modern shows NOTHING -- the string is an editor-screen
@@ -186,6 +186,17 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], labels: [String], optio
             else if theseStyles.contains(.sub) { c += #"\dn\#(rollHalfPt) "# }
         }
         c += span.font.flatMap { fontControl[$0] } ?? ""
+        // planning #252 (Jon's ruling 2026-09-09): a run no WS5+ font block covers
+        // (`span.font == nil`, the same test `fontControlRTF`/pdf.py's
+        // `modernTokFont` use) gets Courier instead of the inherited `\f0` body
+        // default, but ONLY in a document that declares fonts elsewhere AND
+        // declares itself non-proportional (`.ps off` -- `nonpropFallback`,
+        // resolved once per document in `emitRTF`, Modern only). `\f1` is always
+        // Courier New in this emitter's own `\fonttbl` (see the graphic-text
+        // override just below and `emitRTF`'s literal `{\f1 Courier New;}`) --
+        // reusing that slot rather than adding a target-varying one, same face
+        // either way. Ported from ctrl-kd emit.py's identical addition.
+        if nonpropFallback, span.font == nil { c += #"\f1 "# }
         if inlineStyling, let colour = span.colour {
             // b24 round 18 (RULINGS-LEDGER row 10): WordStar's own inline colour
             // (symmetric type 1) -- direct `\cfN` against the fixed 16-colour CGA table
@@ -766,6 +777,11 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // `rules`'s docstring (PDFWriter.swift) for the evidence. Explicit `.ul off` (key
     // present and `false`) still breaks at spaces. Printed only, same doctrine as `.sr`.
     let ulContinuous = printed ? (doc.formatting.underlineBlanks ?? true) : true
+    // planning #252 (Jon's ruling 2026-09-09): resolved ONCE per document, same rule
+    // and reasoning as `modernFlow`'s own `nonpropFallback` (`PDFModernLayout.swift`)
+    // -- Printed keeps its own Courier-body doctrine untouched (`.ps` never governed
+    // it and still doesn't), so this is Modern-only. Ported from ctrl-kd emit.py.
+    let nonpropFallback = !printed && !doc.fonts.isEmpty && doc.formatting.proportional == false
 
     // round 5: DIRECT FORMATTING IS THE ONLY RENDERING MECHANISM IN RTF. Every run's
     // effective attributes — its own toggles merged with whatever the containing Block's
@@ -793,7 +809,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
                                fontControl: fontTable.control, printed: printed,
                                shownMap: shownMap, rollHalfPt: rollHalfPt,
                                ulContinuous: ulContinuous, inlineStyling: options.inlineStyling,
-                               sentenceSpacing: ssOn) }
+                               sentenceSpacing: ssOn, nonpropFallback: nonpropFallback) }
             .joined()
     }
 

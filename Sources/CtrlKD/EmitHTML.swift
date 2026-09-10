@@ -74,7 +74,8 @@ func isGraphicText(_ text: String) -> Bool {
 /// significant and the browser will honour it. Everywhere else a run of five or more
 /// leading spaces is a deliberate indent (a poem, a typescript block quote) that HTML
 /// would otherwise collapse to nothing, so it is re-inflated to `&nbsp;`.
-func htmlSpan(_ span: Span, keepWS: Bool = false, inlineStyling: Bool = true) -> String {
+func htmlSpan(_ span: Span, keepWS: Bool = false, inlineStyling: Bool = true,
+             nonpropFallback: Bool = false) -> String {
     var text = htmlEscape(span.text)
 
     // emit.py:145-149 — five spaces is the threshold, but the count that survives is the
@@ -93,6 +94,15 @@ func htmlSpan(_ span: Span, keepWS: Bool = false, inlineStyling: Bool = true) ->
     var classes: [String] = []
     if let font = span.font {
         classes.append("ws-font-\(font)")
+    } else if nonpropFallback {
+        // planning #252 (Jon's ruling 2026-09-09): a run no WS5+ font block covers,
+        // in a document that declares fonts elsewhere AND declares itself
+        // non-proportional (`.ps off`) -- the RTF/PDF-side twin of this exact rule
+        // (`rtfBodySpan`'s own `nonpropFallback`, `modernTokFont`'s in
+        // PDFModernLayout.swift). `.ws-nonprop`'s CSS rule (appended in `emitHTML`,
+        // only when actually used) is the same monospace stack `.ws-graphic`
+        // already uses. Ported from ctrl-kd emit.py's identical addition.
+        classes.append("ws-nonprop")
     }
     // b24 round 18 (RULINGS-LEDGER row 10): inline colour -- `.ws-colour-N` matches
     // `styleCSS`'s own generated rule (N is the raw palette index, not an array index).
@@ -197,7 +207,7 @@ private func fixedThreeDecimals(_ v: Double) -> String {
 /// `sup` it carries (see `htmlSpanFnrefContributesNoTag`).
 private func htmlBodySpan(
     _ span: Span, keepWS: Bool = false, refNotes: [Note], labels: [String], options: EmitOptions,
-    shownMap: [Int: String]? = nil
+    shownMap: [Int: String]? = nil, nonpropFallback: Bool = false
 ) -> String {
     if let hmi = span.pctlHMI {
         // screen-only print-control display string: the printed physical layer
@@ -213,7 +223,8 @@ private func htmlBodySpan(
         return htmlImg(result, pictures: options.pictures, imageLinks: options.imageLinks)
     }
     guard span.styles.contains(.fnref) else {
-        return htmlSpan(span, keepWS: keepWS, inlineStyling: options.inlineStyling)
+        return htmlSpan(span, keepWS: keepWS, inlineStyling: options.inlineStyling,
+                        nonpropFallback: nonpropFallback)
     }
     switch resolveReference(span, refNotes: refNotes, labels: labels, options: options) {
     case .note(let note, let label, let index):
@@ -224,7 +235,9 @@ private func htmlBodySpan(
         }
         return htmlReferenceAnchor(note, label: label, shown: shownMap?[index])
     case .excluded: return ""
-    case .invalid: return htmlSpan(span, keepWS: keepWS, inlineStyling: options.inlineStyling)
+    case .invalid:
+        return htmlSpan(span, keepWS: keepWS, inlineStyling: options.inlineStyling,
+                        nonpropFallback: nonpropFallback)
     }
 }
 
@@ -344,7 +357,7 @@ func sliceSpans(_ spans: [Span], start: Int, end: Int? = nil) -> [Span] {
 /// `emit._html_line`.
 private func htmlLine(_ spans: [Span], keepWS: Bool = false, refNotes: [Note], labels: [String],
                       options: EmitOptions, shownMap: [Int: String]?,
-                      sentenceSpacing: Bool = false) -> String {
+                      sentenceSpacing: Bool = false, nonpropFallback: Bool = false) -> String {
     // N9 (b33 field notes): the sentence-spacing collapse runs FIRST, on the raw
     // incoming spans -- before this is the SINGLE choke point every HTML render path
     // (Printed physical lines, Modern paragraph units, `htmlSlice`'s structure-row
@@ -355,19 +368,20 @@ private func htmlLine(_ spans: [Span], keepWS: Bool = false, refNotes: [Note], l
     // box character back onto the prose beside it the moment they share a style.
     return splitGraphicSpans(coalesceSpans(spans)).map {
         htmlBodySpan($0, keepWS: keepWS, refNotes: refNotes, labels: labels, options: options,
-                    shownMap: shownMap)
+                    shownMap: shownMap, nonpropFallback: nonpropFallback)
     }.joined()
 }
 
 private func htmlSlice(_ spans: [Span], start: Int, end: Int?, refNotes: [Note], labels: [String],
                        options: EmitOptions, shownMap: [Int: String]?,
-                       sentenceSpacing: Bool = false) -> String {
+                       sentenceSpacing: Bool = false, nonpropFallback: Bool = false) -> String {
     // N9 scope note: sentence-spacing state does not carry ACROSS a slice boundary
     // (each slice is its own `htmlLine` call) -- immaterial for every real
     // structure-row split (bullet/def-list markers, spaces padding) since those land
     // on the marker, never mid-sentence. Mirrors ctrl-kd's own observable quirk.
     htmlLine(sliceSpans(spans, start: start, end: end), refNotes: refNotes, labels: labels,
-            options: options, shownMap: shownMap, sentenceSpacing: sentenceSpacing)
+            options: options, shownMap: shownMap, sentenceSpacing: sentenceSpacing,
+            nonpropFallback: nonpropFallback)
 }
 
 /// The centred line's own text with its alignment padding sliced off (both mechanisms: a
@@ -375,14 +389,16 @@ private func htmlSlice(_ spans: [Span], start: Int, end: Int?, refNotes: [Note],
 /// is a no-op; spaces-only centering strips the padding here for the first time). Port of
 /// `emit._html_centered_row`.
 private func htmlCenteredRow(_ line: Line, refNotes: [Note], labels: [String], options: EmitOptions,
-                             shownMap: [Int: String]?, sentenceSpacing: Bool = false) -> String {
+                             shownMap: [Int: String]?, sentenceSpacing: Bool = false,
+                             nonpropFallback: Bool = false) -> String {
     let raw = Array(line.spans.map(\.text).joined())
     var lead = 0
     while lead < raw.count, raw[lead] == " " { lead += 1 }
     var trail = 0
     while trail < raw.count, raw[raw.count - 1 - trail] == " " { trail += 1 }
     return htmlSlice(line.spans, start: lead, end: raw.count - trail, refNotes: refNotes, labels: labels,
-                     options: options, shownMap: shownMap, sentenceSpacing: sentenceSpacing)
+                     options: options, shownMap: shownMap, sentenceSpacing: sentenceSpacing,
+                     nonpropFallback: nonpropFallback)
 }
 
 /// `{block_index: [(Line, structure)]}` for every ordinary (non-heading, non-pagebreak,
@@ -608,6 +624,11 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     let builder = HTMLListBuilder()
     let margin = docMargin(doc)
     let (conventionIndent, headPosition) = paragraphLayoutContext(doc)
+    // planning #252 (Jon's ruling 2026-09-09): resolved ONCE per document, same rule
+    // as emitRTF's/modernFlow's own -- false whenever printed, so every call site
+    // below can carry this unconditionally rather than branch on mode itself.
+    // Ported from ctrl-kd emit.py's identical addition.
+    let nonpropFallback = !printed && !doc.fonts.isEmpty && doc.formatting.proportional == false
     // b24 round 20b (slate item 13): screenplay-detected regions get verse-class
     // (line/indent-preserving) treatment -- see emitText's identical comment for the
     // doctrine. Not printed: a facsimile already preserves every line's own position.
@@ -653,7 +674,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             let text = mergedLines(block)
                 .map { line in htmlLine(maybeStripAlign(block, line.spans), refNotes: refNotes,
                                         labels: labels, options: options, shownMap: shownMap,
-                                        sentenceSpacing: ssOn) }
+                                        sentenceSpacing: ssOn, nonpropFallback: nonpropFallback) }
                 .joined(separator: " ")             // heading lines read as one phrase
                 .trimmed()
             if !text.isEmpty {
@@ -742,7 +763,8 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                         indentCols = quoteIndentCols!
                     }
                     var rendered = [htmlLine(first, refNotes: refNotes, labels: labels, options: options,
-                                             shownMap: shownMap, sentenceSpacing: ssOn)]
+                                             shownMap: shownMap, sentenceSpacing: ssOn,
+                                             nonpropFallback: nonpropFallback)]
                     for line in unit.dropFirst() {
                         var spans = maybeStripAlign(block, line.spans)
                         if !isVerse {
@@ -750,7 +772,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                         }
                         rendered.append(htmlLine(spans, refNotes: refNotes, labels: labels,
                                                  options: options, shownMap: shownMap,
-                                                 sentenceSpacing: ssOn))
+                                                 sentenceSpacing: ssOn, nonpropFallback: nonpropFallback))
                     }
                     let para: String
                     if unit.count > 1, !isVerse {
@@ -809,7 +831,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                         plainRunIsBlockStart = false
                         let html = htmlCenteredRow(line, refNotes: refNotes, labels: labels,
                                                    options: options, shownMap: shownMap,
-                                                   sentenceSpacing: ssOn)
+                                                   sentenceSpacing: ssOn, nonpropFallback: nonpropFallback)
                         if !html.trimmed().isEmpty {
                             // b24 round 20 (slate item 4): a "wrapped centered unit" --
                             // same tight spacing as verse, same single named constant.
@@ -837,7 +859,8 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                     let bodyLen = s.body?.count ?? 0
                     let body = htmlSlice(line.spans, start: raw.count - bodyLen, end: nil,
                                          refNotes: refNotes, labels: labels, options: options,
-                                         shownMap: shownMap, sentenceSpacing: ssOn)
+                                         shownMap: shownMap, sentenceSpacing: ssOn,
+                                         nonpropFallback: nonpropFallback)
                     builder.addBullet(level: s.level, cls: cls, html: body)
                 case .def:
                     var lead = 0
@@ -846,10 +869,12 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                     let bodyLen = s.body?.count ?? 0
                     let dt = htmlSlice(line.spans, start: lead, end: lead + labelLen,
                                        refNotes: refNotes, labels: labels, options: options,
-                                       shownMap: shownMap, sentenceSpacing: ssOn)
+                                       shownMap: shownMap, sentenceSpacing: ssOn,
+                                       nonpropFallback: nonpropFallback)
                     let dd = htmlSlice(line.spans, start: raw.count - bodyLen, end: nil,
                                        refNotes: refNotes, labels: labels, options: options,
-                                       shownMap: shownMap, sentenceSpacing: ssOn)
+                                       shownMap: shownMap, sentenceSpacing: ssOn,
+                                       nonpropFallback: nonpropFallback)
                     builder.addDef(level: s.level, cls: cls, dt: dt, dd: dd)
                 }
             }
@@ -884,6 +909,18 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     if options.styles {
         let extra = styleCSS(doc, printed: printed, inlineStyling: options.inlineStyling)
         if !extra.isEmpty { css += "\n" + extra }
+    }
+    // planning #252 (Jon's ruling 2026-09-09): the `.ws-nonprop` rule is appended
+    // only when a span actually USED the class -- checked against the real rendered
+    // `parts`, not merely `nonpropFallback` being true for the document. A document
+    // can declare fonts + `.ps off` (`nonpropFallback` true) and still have every
+    // run covered by a real font block -- adding the rule unconditionally on
+    // `nonpropFallback` alone would move THAT document's html cells by a fixed
+    // CSS-byte delta even though PDF/RTF (which only spend bytes on an actual
+    // uncovered run) move by nothing, breaking cross-format consistency for the
+    // exact same document. Ported from ctrl-kd emit.py's identical fix.
+    if nonpropFallback, parts.contains(where: { $0.contains("ws-nonprop") }) {
+        css += "\nspan.ws-nonprop{font-family:ui-monospace,Menlo,Consolas,monospace}"
     }
     // b24 round 18 (RULINGS-LEDGER row 4): TOC/Index at the document's own end, gated by
     // `--toc` (default off). HTML is non-paged: no page references, ever.

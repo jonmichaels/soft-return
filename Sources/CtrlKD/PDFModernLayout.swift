@@ -91,12 +91,25 @@ func modernGeometry(_ doc: Document) -> (left: Double, top: Double, bottom: Doub
 /// (untransliteration, entry sizes); the one modern rule on top: a token with NO font
 /// information reads in Times at the sophisticated size, never Courier — the typescript
 /// aesthetic lives only in Printed now. Port of `_modern_tok_font`.
-func modernTokFont(_ text: String, font: Int?, fonts: [FontChange])
+///
+/// `nonpropFallback` (planning #252, Jon's ruling 2026-09-09 verbatim, ported from
+/// ctrl-kd pdf.py's identical parameter added the same round): the ONE exception. A
+/// document can carry font blocks elsewhere (so this run's own lack of one is a real
+/// gap, not a fontless document) AND separately declare itself non-proportional at the
+/// document level (`.ps off`, WSFORMAT register C19 — `doc.formatting.proportional ==
+/// false`, the SAME flag round 9 already parsed and deliberately left unconsumed — see
+/// Info.swift's old `ps_note`). Round 9's ruling stands for every run a real font block
+/// DOES cover (`pdfFamily`'s own `entry.proportional == false` check, unchanged); this
+/// is only the uncovered-run fallback. Caller resolves `nonpropFallback` ONCE per
+/// document (`!fonts.isEmpty && doc.formatting.proportional == false`) — a document
+/// with zero font blocks anywhere stays Times regardless of `.ps`, matching the
+/// ruling's explicit "no fonts -> Times (unchanged)."
+func modernTokFont(_ text: String, font: Int?, fonts: [FontChange], nonpropFallback: Bool = false)
     -> (written: String, family: PDFFamily, pt: Int, entry: FontChange?)
 {
     let rendered = spanRender(text, font: font, fonts: fonts, size: modernBodyPt)
     if rendered.entry == nil {
-        return (rendered.text, .times, rendered.size, nil)
+        return (rendered.text, nonpropFallback ? .courier : .times, rendered.size, nil)
     }
     return (rendered.text, rendered.family, rendered.size, rendered.entry)
 }
@@ -256,6 +269,10 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
         (0..<doc.blocks.count).filter {
             screenplayBlocks.contains($0 + 1) || screenplayBlocks.contains($0 + 2)
         })
+    // planning #252 (Jon's ruling 2026-09-09): resolved ONCE per document, not per
+    // token -- see `modernTokFont`'s own doc comment for the full reasoning. Ported
+    // from ctrl-kd pdf.py's identical `nonprop_fallback` local, added the same round.
+    let nonpropFallback = !doc.fonts.isEmpty && doc.formatting.proportional == false
     var flow: [ModernFlowItem] = []
     for item in sem.items {
         switch item {
@@ -318,7 +335,8 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                     continue
                 }
                 for piece in modernTokenize(run.text) {
-                    let resolved = modernTokFont(piece, font: run.font, fonts: doc.fonts)
+                    let resolved = modernTokFont(piece, font: run.font, fonts: doc.fonts,
+                                                 nonpropFallback: nonpropFallback)
                     // round 2026-09-07 (ported from ctrl-kd pdf.py's b26-modern item 4):
                     // a token whose family isn't already Symbol/ZapfDingbats may still
                     // carry cp437 Greek/math/Dingbats bytes cp1252 can't encode -- same
