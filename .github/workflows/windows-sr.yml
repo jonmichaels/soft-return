@@ -1,6 +1,14 @@
 # Experimental Windows build of the sr CLI. MANUAL TRIGGER ONLY
 # (workflow_dispatch) — this repo deliberately runs no CI on push.
 # The artifact is unverified: no Windows machine has run it. See README.
+#
+# Release checklist step 13: dispatch this AGAINST THE RELEASE TAG (already
+# pushed at step 9d, before the release object is even created) so the
+# build reflects the released source, not a later commit on main:
+#   gh workflow run windows-sr.yml --ref vX.Y.Z
+# This runs fine during the draft-release window (planning #267) -- the
+# git tag is a real ref as soon as it's pushed, independent of whether the
+# GitHub release object wrapping it is still a draft.
 name: Windows sr (experimental)
 
 on:

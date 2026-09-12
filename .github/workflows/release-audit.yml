@@ -4,7 +4,22 @@
 # verifies the assets actually match what the release checklist and
 # appcast promise, not just that an upload happened. Runs on every
 # release publish, and can be re-run by hand (workflow_dispatch, input
-# `tag`) against any past tag.
+# `tag`) against any past tag -- this is also how the release checklist
+# invokes it (step 16, `gh workflow run release-audit.yml -f tag=vX.Y.Z`),
+# after the appcast item has been added.
+#
+# The appcast entry is always the LAST thing the checklist adds (Jon signs
+# the published DMG locally, then the appcast is updated -- steps 10/11),
+# so the automatic `release: published` trigger fires BEFORE the appcast
+# item exists. Rather than fail on that every time (v4.0.1/v4.0.2/v4.0.3
+# all show this), the appcast checks below are SKIPPED WITH A NOTICE, not
+# failed, specifically when running on the automatic release-publish
+# trigger and the item genuinely isn't there yet. The manual
+# workflow_dispatch run (checklist step 16, run after the appcast lands)
+# has no such excuse: a missing appcast item there is a real FAIL, same as
+# always. Every other check (assets, dmg/zip byte-identity, exe strings,
+# latest-download links) runs and is graded the same way regardless of
+# trigger -- only the appcast checks get this trigger-conditioned pass.
 #
 # Checks (see the inline python for exact logic):
 #   1. All 5 expected asset names present: Soft-Return-X.Y.Z.dmg,
@@ -64,6 +79,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      EVENT_NAME: ${{ github.event_name }}
     steps:
       - name: Ensure strings(1) is available
         run: |
@@ -71,7 +87,7 @@ jobs:
 
       - name: Release audit
         run: |
-          python3 - "$REPO" "$TAG" <<'PY'
+          python3 - "$REPO" "$TAG" "$EVENT_NAME" <<'PY'
           import sys
           import os
           import re
@@ -87,6 +103,14 @@ jobs:
 
           REPO = sys.argv[1]
           TAG = sys.argv[2]
+          EVENT_NAME = sys.argv[3] if len(sys.argv) > 3 else ""
+          # The checklist adds the appcast item LAST, after publish (Jon
+          # signs the DMG, then the appcast is updated) -- so the automatic
+          # `release` trigger always runs before it exists. Only the manual
+          # workflow_dispatch run (checklist step 16, after the appcast
+          # lands) should fail on a missing appcast item; the automatic
+          # trigger skips those checks cleanly instead.
+          AUTO_TRIGGER = (EVENT_NAME == "release")
 
           results = []  # (check_name, status, detail) — status in PASS/FAIL/SKIP
 
@@ -270,7 +294,19 @@ jobs:
                       matched = enc
                       break
               if matched is None:
-                  record("appcast-item-present", False, f"no <item> enclosure URL contains {marker!r}")
+                  if AUTO_TRIGGER:
+                      print(f"::notice::appcast item for {TAG} not found yet -- expected on the automatic "
+                            f"release-publish trigger, since the release checklist adds the appcast entry "
+                            f"AFTER publish (Jon signs the DMG, then updates the appcast). Skipping the "
+                            f"appcast checks cleanly rather than failing; re-run manually once the appcast "
+                            f"is updated: gh workflow run release-audit.yml -f tag={TAG}")
+                      record("appcast-item-present", None,
+                              "appcast not yet published -- expected on the auto publish trigger, skipped (not failed)",
+                              skip=True)
+                      record("appcast-length-matches", None, "skipped -- appcast item not present yet", skip=True)
+                      record("appcast-edsignature-present", None, "skipped -- appcast item not present yet", skip=True)
+                  else:
+                      record("appcast-item-present", False, f"no <item> enclosure URL contains {marker!r}")
               else:
                   record("appcast-item-present", True)
                   asset_name = matched.get("url", "").rsplit("/", 1)[-1]

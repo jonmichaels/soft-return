@@ -14,7 +14,22 @@
 # Sparkle appcast update -- that is done locally with a private EdDSA key.
 #
 # Trigger: publishing a GitHub Release, or a manual workflow_dispatch run
-# with a `tag` input (see the `on:` block below).
+# with a `tag` input (see the `on:` block below). `release: types: [published]`
+# fires exactly once, when a release transitions to the non-draft published
+# state -- never for a draft being created or edited -- so no separate
+# draft-guard step is needed here; GitHub's own event semantics already
+# restrict this trigger to a real publish.
+#
+# REQUIRED SEQUENCE (release checklist, planning #267): create the release
+# as a DRAFT, upload every Mac asset (dmg x2, CLI pkg), run windows-sr.yml
+# against the release tag and upload both windows zips, THEN publish the
+# draft once. Publishing fires this `published` event with every asset
+# already in place, so asset-gate below passes on the first (only) run --
+# it previously failed and needed a hand re-run because releases were
+# published immediately, before the Windows zips existed (v4.1.0,
+# 2026-09-12). asset-gate's missing-asset list (see that job) IS the
+# early-exit guard: it fails loudly and names exactly which of the 5
+# required assets are absent, rather than silently passing partial state.
 #
 # Jobs:
 #   guard      - the release tag must equal srVersion in
