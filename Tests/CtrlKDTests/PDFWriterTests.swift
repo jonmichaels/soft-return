@@ -114,13 +114,22 @@ import Testing
     // PDF carries fonts now (ruling 2026-08-05) — a fontless bold heading reads in
     // Times-Bold at the sophisticated size (14pt), not Courier-Bold at 12pt, and each word
     // is its own Tj op under proportional reflow, not one combined string.
-    // The x values carry the style's own left margin as a real Modern indent since M2
-    // (ruling 2026-08-06: block margins are the document's explicit choices and win in
-    // Modern exactly as its fonts do) — re-pinned against the live Python reference.
+    // Re-pinned 2026-09-11, on BOTH axes (planning #263, ported from ctrl-kd
+    // fe87b41/a9c94d3/9fb1677) — and cross-checked against ctrl-kd's own Python output on
+    // this exact fixture before landing, which draws the identical two ops:
+    //
+    //   y  703.2 -> 706.2. The page baseline model: a Modern line's baseline sits one face
+    //      DESCENT above its own line box's bottom now (Times' AFM 217/1000 em = 3.038pt at
+    //      14pt), not on it. The box ladder did not move, so neither did the page break.
+    //   x  144.0/197.3 -> 72.0/125.3. A one-sided `.lm` IS NOT A STYLE (Jon's b17 ruling):
+    //      this heading's style record narrows the LEFT margin and nothing narrows the
+    //      right, so it is an indent nobody styled and the paragraph starts at Modern's own
+    //      margin. The M2 rule it replaces (a block's declared margins win in Modern) still
+    //      holds for a genuine two-sided block quote, where both margins narrow the measure.
     let pdf = emitPDF(parseWS(data), mode: .modern)
     #expect(contains(pdf, bytes("/BaseFont /Times-Bold")))
-    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 144.0 703.2 Td (Chapter) Tj ET")))
-    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 197.3 703.2 Td (One) Tj ET")))
+    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 72.0 706.2 Td (Chapter) Tj ET")))
+    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 125.3 706.2 Td (One) Tj ET")))
     #expect(contains(pdf, bytes("(realistic.)")))
 }
 
@@ -428,7 +437,10 @@ import Testing
     // the old Courier-grid 708.0.
     let ws = parseWS(ws4Text("Some words here") + HARD)
     #expect(ws.detection?.variant == .ws4)
-    #expect(latin1(emitPDF(ws, mode: .modern)).contains("72.0 703.2 Td"))
+    // Re-pinned 2026-09-11 (planning #263, ported from ctrl-kd 9fb1677): the box ladder is
+    // unchanged (792 - 72 - 16.8 = 703.2 is still this line's box BOTTOM), but the baseline
+    // now sits one Times descent (3.038pt at 14pt) above it -- 706.2.
+    #expect(latin1(emitPDF(ws, mode: .modern)).contains("72.0 706.2 Td"))
     // ctrl-kd 2.0.0: printed mode's left margin is now `.po`-derived, not the fixed 72pt
     // MARGIN this emitter used to guess. `ws` never sets `.po`, so it resolves to the
     // default 8 columns at the FIXED 7.2pt/column (ctrl-kd ace279b, pitch-independent) --
@@ -483,6 +495,22 @@ import Testing
     // page size joined the model (2026-08-06, task #16) -- the custom 50-line page.
     let modernText = latin1(emitPDF(doc, mode: .modern))
     #expect(modernText.contains("/MediaBox [0 0 612 600]"))
+}
+
+// MARK: - spanPitch (public 2026-09-08 for Soft Return.app's Native renderer)
+
+/// `spanPitch`'s two branches, pinned directly rather than only through the PDF bytes it
+/// feeds: the `.cw` fallback (no font block) at the library's own default 12pt, and a real
+/// WS5+ font block, which must ignore `pt` entirely once `width1800` is nonzero.
+@Test func spanPitchContract() throws {
+    // The `.cw` case: no font block, so `pt * 0.6` — 12pt document default -> 7.2pt/char
+    // (10 CPI Courier, the figure this doc comment and the app's Native renderer both cite).
+    #expect(abs(spanPitch(nil, 12) - 7.2) < 1e-9)
+    // A WS5+ font block: width1800 is HMIs (1/1800in), /25 to points. 150 HMI = 12 CPI
+    // Courier = 6.0pt/char, and `pt` (here 99, a value the .cw branch would answer very
+    // differently for) must be ignored once the font block is present.
+    let entry = FontChange(offset: 0, width1800: 150, height1440: 240, typestyle: 0)
+    #expect(abs(spanPitch(entry, 99) - 6.0) < 1e-9)
 }
 
 // MARK: - byte-oriented test helpers

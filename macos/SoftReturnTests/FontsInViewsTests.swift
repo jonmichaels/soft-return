@@ -11,11 +11,11 @@ import Testing
 /// on-screen views, matching the emitter's own classification rather than silently falling
 /// back to whatever the Modern font-size control happens to be set to.
 ///
-/// This mostly VERIFIES pre-existing behavior (job 240's `printedResolvedMacFont`, job 306's
+/// This mostly VERIFIES pre-existing behavior (job 240's `nativeResolvedMacFont`, job 306's
 /// Native Courier Prime substitution, job 312/b19's Modern parity ruling — all already wired
-/// through the ONE shared `attributedLine`/`appendSpan` code path both `renderPrinted`
+/// through the ONE shared `attributedLine`/`appendSpan` code path both `renderNative`
 /// (Native) and `renderModern` call) rather than adding new resolution logic: `resolveFont`
-/// deliberately does NOT replace the app's own `printedMacFontName` table (its own doc
+/// deliberately does NOT replace the app's own `nativeMacFontName` table (its own doc
 /// comment: PDF's `pdfFamily` is "a genuinely different ALGORITHM SHAPE... unifying it here
 /// would misrepresent what it actually does" — the app's Mac-native mapping is in the same
 /// position). What was missing was the "view-vs-emitter font parity check" itself — this file.
@@ -45,7 +45,7 @@ struct FontsInViewsTests {
         return try DocumentState(data: bytes, settings: SettingsStore(defaults: defaults), docPath: url.path)
     }
 
-    /// `printedMacFontName`'s own row keys (`DocumentRenderer.swift`'s private
+    /// `nativeMacFontName`'s own row keys (`DocumentRenderer.swift`'s private
     /// `courierPrimeRowKeys`), mirrored here since the constant itself isn't testable
     /// directly — the family names job 306's brief names verbatim: "courier|pica|elite|
     /// lineprinter" and "prestige".
@@ -55,7 +55,7 @@ struct FontsInViewsTests {
     /// name is one of the courier-class rows — found by search rather than assumed to be on
     /// any one fixture, since a font run's `proportional` bit and its typestyle-name FAMILY
     /// are independent signals (`FontChange`'s own fields) and this file cares about the
-    /// family-name row `printedMacFontName` keys off, not the bit `rtfFonts` keys off
+    /// family-name row `nativeMacFontName` keys off, not the bit `rtfFonts` keys off
     /// (`FontMap.swift`'s own `rtfFonts` doc comment — a SEPARATE algorithm, not this one).
     private static func firstCourierClassFontChange() throws -> FontChange {
         for fixture in try FileManager.default.contentsOfDirectory(atPath: Self.ws7Directory.path)
@@ -87,11 +87,11 @@ struct FontsInViewsTests {
     /// SCRIPT.WS's own typestyles 103/104 ("NPS SansSer Qual"/"NPS Serif Qual" — ctrl-kd's
     /// generic Non-PostScript categories, `Typestyles.swift` entries 103/104) are the exact
     /// job 391 root-cause-3 bug condition: `proportional == false`, and a family name
-    /// ("NPS SansSer Qual"/"NPS Serif Qual") that appears in NEITHER `printedMacFontRows`
-    /// NOR `printedMonoFamilies` — confirmed by direct inspection of `scriptDocument().fonts`
+    /// ("NPS SansSer Qual"/"NPS Serif Qual") that appears in NEITHER `nativeMacFontRows`
+    /// NOR `nativeMonoFamilies` — confirmed by direct inspection of `scriptDocument().fonts`
     /// (indices 0-3 alternate between these two typestyles, all four `proportional == false`).
-    /// Before job 394's fix, `printedMacFontName` had no short-circuit ahead of the
-    /// family-name table, so these fell through to `printedMacGenericPrimary`'s own
+    /// Before job 394's fix, `nativeMacFontName` had no short-circuit ahead of the
+    /// family-name table, so these fell through to `nativeMacGenericPrimary`'s own
     /// sans/serif bucket and rendered a real PROPORTIONAL Mac face.
     ///
     /// This drives the ACTUAL live view path end to end — `DocumentRenderer.render(_:style:)`
@@ -108,7 +108,7 @@ struct FontsInViewsTests {
         let state = try Self.documentState(fixture: "SCRIPT.WS")
         let needle = "WRITER'S OFFICE - DAY"
 
-        for style: RenderStyle in [.printed, .modern] {
+        for style: RenderStyle in [.native, .modern] {
             let rendered = DocumentRenderer.render(state, style: style)
             let haystack = rendered.text.string as NSString
             let range = haystack.range(of: needle)
@@ -126,8 +126,8 @@ struct FontsInViewsTests {
         let entry = try Self.firstCourierClassFontChange()
         let span = Span(text: "MONOSPACE", font: 0)
         let fallback = NSFont.systemFont(ofSize: 12)
-        // Both Native (`renderPrinted`) and Modern (`renderModern`) call this SAME
-        // `attributedLine` with `useCourierPrime: true` — see `printedMacFontName`'s own
+        // Both Native (`renderNative`) and Modern (`renderModern`) call this SAME
+        // `attributedLine` with `useCourierPrime: true` — see `nativeMacFontName`'s own
         // doc comment (job 312/b19) for the ruling that made Modern match Native here.
         let nativeText = DocumentRenderer.attributedLine(
             [span], font: fallback, paragraph: NSParagraphStyle(), fonts: [entry],
@@ -188,12 +188,12 @@ struct FontsInViewsTests {
 
     /// The RTF emitter's OWN real output (unmodified engine code, no test-side
     /// reimplementation of `rtfFonts`) for SCRIPT.WS's real font table, `.mac` target —
-    /// the same target `printedMacFontRows` ports. All four of `scriptDocument().fonts`
+    /// the same target `nativeMacFontRows` ports. All four of `scriptDocument().fonts`
     /// (indices 0-3, typestyles 103/104) are `proportional == false`, so `rtfFonts`'s own
     /// decisive short-circuit (`FontMap.swift`: "routed through the SAME per-target
     /// 'courier' table entry... never a family-name or falt garnish") means RTF's
     /// `\fonttbl` must carry the `.mac` courier row's own primary ("Courier New",
-    /// `targetFonts[.mac]["courier"]`) for these spans, not `printedMacGenericPrimary`'s
+    /// `targetFonts[.mac]["courier"]`) for these spans, not `nativeMacGenericPrimary`'s
     /// sans/serif terminus ("Helvetica"/"Times New Roman") — the exact wrong answer the
     /// pre-fix view produced. This is the concrete grounding proof that the RTF side of
     /// this document was ALREADY correct (job 391 root cause 3 was a VIEW-only gap);
@@ -223,7 +223,7 @@ struct FontsInViewsTests {
     /// on (`FontMap.swift`'s own doc comment — the two are textually the identical test,
     /// by the shared-function architecture this job's brief calls for). Exercised via
     /// `attributedLine` with `useCourierPrime: true`, matching both real view callers
-    /// (`renderPrinted`/`renderModern`) exactly.
+    /// (`renderNative`/`renderModern`) exactly.
     @Test @MainActor func verdictParityAcrossWS7CorpusMatchesEngineResolveFont() throws {
         var checked = 0
         for fixture in try FileManager.default.contentsOfDirectory(atPath: Self.ws7Directory.path)

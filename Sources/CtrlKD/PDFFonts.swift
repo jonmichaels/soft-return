@@ -17,7 +17,7 @@
 /// RTF/HTML exports, which CAN name a real face.
 
 /// One of the five base-14 families this emitter can select.
-enum PDFFamily: Hashable, Sendable {
+public enum PDFFamily: Hashable, Sendable {
     case courier
     case times
     case helvetica
@@ -125,7 +125,7 @@ let tzDefault = 100.0
 /// comment), not a candidate list terminating in a CSS/RTF generic. Unifying the two
 /// would misrepresent what this one actually does; `resolveFont`'s own doc comment
 /// names this function as the reason it stays independent.
-func pdfFamily(_ entry: FontChange?) -> PDFFamily {
+public func pdfFamily(_ entry: FontChange?) -> PDFFamily {
     guard let entry else { return .courier }
     switch fontTranslitKind(entry) {
     case .math: return .symbol

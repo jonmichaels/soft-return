@@ -244,9 +244,10 @@ let squarePartBlocks: Set<Character> = ["\u{25A0}"]
 /// 02-06/0F/F0 -- on the era's screen: ☻ ♥ ♦ ♣ ♠ ☼ ≡. Latin-1 has none of them, so the text
 /// path degraded all seven to '?'. Like the box set, they are geometry: each entry is a
 /// list of filled sub-shapes in cell fractions (x up-right, y up from cell bottom).
-/// `.white` wraps a sub-shape drawn paper-white (knockout). Scope is exactly the ruled
-/// seven; the rest of cp437's graphics repertoire (arrows, music notes...) still degrades
-/// until a document surfaces them.
+/// `.white` wraps a sub-shape drawn paper-white (knockout). Scope is the ruled seven plus
+/// ₧ (planning #266, see its own note at the foot of the table); the rest of cp437's
+/// graphics repertoire (arrows, music notes...) still degrades until a document surfaces
+/// them.
 indirect enum SymbolSubShape {
     case poly([(x: Double, y: Double)])
     case disc(x: Double, y: Double, r: Double)
@@ -280,6 +281,24 @@ let symbolShapes: [Character: [SymbolSubShape]] = [
                  .rect(x: 0.17, y: 0.17, w: 0.12, h: 0.12), .rect(x: 0.71, y: 0.17, w: 0.12, h: 0.12)],
     "\u{2261}": [.rect(x: 0.10, y: 0.62, w: 0.80, h: 0.09), .rect(x: 0.10, y: 0.42, w: 0.80, h: 0.09),
                  .rect(x: 0.10, y: 0.22, w: 0.80, h: 0.09)],
+    // planning #266 (Jon's ruling 2026-09-11): cp437 code 158, PESETA SIGN (U+20A7). Not a
+    // control-position glyph like the seven above, but the SAME problem and therefore the
+    // same answer: no base-14 face carries it, cp1252 has no slot for it, so the text path
+    // could only ever degrade it to '?'. The 2026-08-11 ruling that put the card suits and
+    // the sun on this table is the rule — a cp437 glyph with no encoding slot is drawn as
+    // geometry — and this is the next character a real corpus document surfaced. The IBM
+    // cp437 glyph is a "Pt" ligature (the CGA/VGA ROM font's own design for the peseta): a
+    // capital P whose bowl runs into a lower-case t. Drawn here as the P's stem and a
+    // knocked-out bowl (disc, inner disc, and the left-hand cut that squares the bowl off
+    // against the stem — the stem is drawn LAST so the cut never eats it), then the t's
+    // crossbar, stem and foot.
+    "\u{20A7}": [.disc(x: 0.36, y: 0.64, r: 0.22),
+                 .white(.disc(x: 0.36, y: 0.64, r: 0.105)),
+                 .white(.rect(x: 0.00, y: 0.36, w: 0.22, h: 0.58)),
+                 .rect(x: 0.12, y: 0.14, w: 0.10, h: 0.72),
+                 .rect(x: 0.50, y: 0.50, w: 0.28, h: 0.075),
+                 .rect(x: 0.62, y: 0.14, w: 0.09, h: 0.58),
+                 .rect(x: 0.62, y: 0.14, w: 0.19, h: 0.075)],
 ]
 
 public let graphicChars: Set<Character> =

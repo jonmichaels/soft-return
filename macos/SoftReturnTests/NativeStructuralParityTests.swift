@@ -6,7 +6,7 @@ import Testing
 
 /// NOTE (2026-09-07): `graphicChars` must now be QUALIFIED in any test file that imports
 /// both modules. There are two sets with that name — `SoftReturn.graphicChars`
-/// (`Rendering/PrintedVectorGraphics.swift`, the characters the APP draws as vectors) and
+/// (`Rendering/NativeVectorGraphics.swift`, the characters the APP draws as vectors) and
 /// `CtrlKD.graphicChars` (`PDFDriverLJ6DTP.swift`, the ones the ENGINE draws as vectors) —
 /// and the engine's became public in sr 506b2e0, so a bare name that used to resolve to the
 /// app's is ambiguous. Every bare use in this file meant the APP's set and is qualified as
@@ -57,7 +57,7 @@ import Testing
 /// to draw — a step that never writes back into `Page.lines`, so `docToPagelines`'s own text
 /// is PRE-substitution for an LJ6DTP document. `EngineTruth.structuralPages`'s body-line text
 /// below corrects for this the same "parallel port, not a re-derivation" way
-/// `printedLJ6DTPColourGray` already does for colour — see that call site's own citation.
+/// `nativeLJ6DTPColourGray` already does for colour — see that call site's own citation.
 ///
 /// The one piece of engine-internal KNOWLEDGE this harness depends on without a public API is
 /// the exact byte format of `pageStream`'s text-showing operators
@@ -297,6 +297,7 @@ enum EngineTruth {
         var pendingStr: [UInt8]?
         var pendingRect: (x: Double, y: Double, w: Double, h: Double)?
         var pathOpen = false
+        var pathHasCurve = false
         var pathPoints: [(x: Double, y: Double)] = []
         for tok in toks {
             switch tok {
@@ -340,6 +341,7 @@ enum EngineTruth {
                     if nums.count >= 2 {
                         pathPoints = [(nums[nums.count - 2], nums[nums.count - 1])]
                         pathOpen = true
+                        pathHasCurve = false
                     }
                     nums.removeAll()
                 case "l":
@@ -350,7 +352,40 @@ enum EngineTruth {
                 case "c":
                     if pathOpen, nums.count >= 6 {
                         pathPoints.append((nums[nums.count - 2], nums[nums.count - 1]))
+                        pathHasCurve = true
                     }
+                    nums.removeAll()
+                // A STROKED PATH IS A VECTOR OP TOO, and this extractor did not know it.
+                //
+                // Planning #251 follow-up: `graphicOps` draws the rounded box corners
+                // (`arcCorners`) as one open `m l c l S` — no `f` anywhere — so every one of
+                // them was invisible to this count. That went unnoticed while the app drew
+                // nothing for those characters at all: both sides were silently omitting the
+                // same eight shapes on LJ6DTP.WS page 3, and the totals agreed at 35 for the
+                // wrong reason. The moment the app started drawing them the count read 43
+                // against 35, which is this extractor's own blind spot, not a divergence.
+                //
+                // Counted the same way a filled path is: the path's own bounding rect, since
+                // that is the granularity every comparison here works at.
+                //
+                // ONLY A CURVED one. The engine's other stroked path is `rule` — the
+                // underline and the strike-through, a flat two-point `0.6 w x y m x y l S` —
+                // and the app draws those as AppKit text decoration on the run itself, which
+                // is right on screen and emits no vector op at all. Counting them would
+                // charge the app for eleven ops across YOURWAY.WS pages 2/3/5/7 that it is
+                // correct not to draw. A curve is the discriminator because it is exactly
+                // what an arcCorners cell has and a rule never does.
+                case "S", "s":
+                    if let r = pendingRect {
+                        rects.append(RawRect(x: r.x, y: r.y, w: r.w, h: r.h, gray: gray))
+                        pendingRect = nil
+                    } else if pathOpen, pathHasCurve, pathPoints.count >= 2 {
+                        let xs = pathPoints.map(\.x), ys = pathPoints.map(\.y)
+                        let minX = xs.min()!, maxX = xs.max()!, minY = ys.min()!, maxY = ys.max()!
+                        rects.append(RawRect(x: minX, y: minY, w: maxX - minX, h: maxY - minY, gray: gray))
+                    }
+                    pathOpen = false
+                    pathPoints = []
                     nums.removeAll()
                 case "f":
                     if let r = pendingRect {
@@ -573,7 +608,7 @@ enum EngineTruth {
             // every line after it. It was invisible only while the app emitted no automatic
             // number either, so both sides were missing the same row.
             //
-            // The ON/OFF decision reuses `DocumentRenderer.printedAutoPageNumberOn` rather
+            // The ON/OFF decision reuses `DocumentRenderer.nativeAutoPageNumberOn` rather
             // than restating it — one port of `pgnumCheckpoints`/`pgnumAt`, exercised by both
             // the thing under test and the truth it is measured against. That is safe HERE,
             // where the quantity is "which WordStar dot commands are in force", and is the
@@ -582,7 +617,7 @@ enum EngineTruth {
             // this file still derives independently from the real PDF ops.
             let footerInUse = pageLines.footers.values.contains { !$0.isEmpty }
             if !footerInUse,
-               DocumentRenderer.printedAutoPageNumberOn(page: pageLines, doc: doc),
+               DocumentRenderer.nativeAutoPageNumberOn(page: pageLines, doc: doc),
                runningLineFits(base: footLine, lead: metrics.lead, n: 1),
                !ops.isEmpty {
                 let op = takeRunningRow()
@@ -639,11 +674,11 @@ enum EngineTruth {
             //
             // Job 426: this harness's OWN copy of the first-line formula was STILL the flat
             // pre-b26 `pageHeight - top - size` — a FOURTH occurrence of the exact stale
-            // formula job 425 already found and fixed in `DocumentRenderer.renderPrinted`,
+            // formula job 425 already found and fixed in `DocumentRenderer.renderNative`,
             // `GeometryOracleTests`, and `PageSettingsPickerTests` (job 425's own report:
             // "THREE independent app-side blast-radius points"), missed there because this
             // file's own Class checks only compare indices BOTH sides key
-            // (`PrintedStructuralParityTests.divergences`'s own "only indices BOTH sides
+            // (`NativeStructuralParityTests.divergences`'s own "only indices BOTH sides
             // agree drew something are comparable" scope note) — a wrong first-line Y offsets
             // EVERY later line on the page by the same constant, so EVERY group-match on
             // EVERY page of a fixture whose first line's lead differs from the document's flat
@@ -686,7 +721,7 @@ enum EngineTruth {
                 // (`_`->em dash, `'`->curly, etc.) later, inside `lineOpsPrinted`
                 // (`PDFWriter.swift:509`'s `ljSubstitute`), directly on the segments about
                 // to draw, a step that never writes back into `Page.lines`. Applying the
-                // SAME substitution here (`DocumentRenderer.printedLJ6DTPSubstitute`,
+                // SAME substitution here (`DocumentRenderer.nativeLJ6DTPSubstitute`,
                 // widened to `internal` this job, byte-identical to the engine's own
                 // `ljSubst`/`ljSubstUnivers` tables — confirmed against
                 // `PDFDriverLJ6DTP.swift:26-41` fresh this job) is reusing the app's own
@@ -711,7 +746,14 @@ enum EngineTruth {
                     guard span.pctlHMI == nil else { return "" }
                     guard lj else { return span.text }
                     let entry = span.font.flatMap { doc.fonts.indices.contains($0) ? doc.fonts[$0] : nil }
-                    return printedLJ6DTPSubstitute(span.text, entry: entry)
+                    // AT THIS LINE'S OWN `.kr`, because one of the substitutions is gated on
+                    // it: a KERNED pair of single curly quotes is collapsed to the real
+                    // double one, and a loose pair is not. LJ6DTP.WS page 2 exists to
+                    // demonstrate exactly that, typing the identical characters once under
+                    // `.kr off` and once under `.kr on` — so a truth built at the default
+                    // `kerning: true` charges the app for the app being right about the
+                    // half of that page where kerning is off.
+                    return nativeLJ6DTPSubstitute(span.text, entry: entry, kerning: line.kerning)
                 }.joined()
 
                 // Job 405 (task #62, Class 3/5 closure): a PageLine whose own text is
@@ -755,7 +797,7 @@ enum EngineTruth {
                     // that fragment), never at whichever raw line happens to own the visible
                     // text. Keying this side at `n` instead — the line that "ownsRealText" —
                     // was a raw-index MISMATCH between the two sides for every chain whose
-                    // caption isn't its own base line: `PrintedStructuralParityTests
+                    // caption isn't its own base line: `NativeStructuralParityTests
                     // .divergences`'s own "only indices BOTH sides agree drew something are
                     // comparable" scope note silently absorbed the gap for the general
                     // structural-parity checks, but `knockoutRunsClassifyTheSameWayTheEngine
@@ -806,12 +848,12 @@ private extension Array where Element == UInt8 {
     }
 }
 
-/// The app's real Printed-style output, in the SAME shape as `EngineTruth`, so the two can diff
+/// The app's real Native output, in the SAME shape as `EngineTruth`, so the two can diff
 /// directly. Reuses `Oracle` (`GeometryOracleTests.swift`, same target) for the real
 /// `NSTextView`/`NSLayoutManager` drive rather than a second one.
 extension Oracle {
     /// Every rendered line fragment on a page, KEYED BY ORDINAL (0-based, blanks included) —
-    /// the same indexing `DocumentRenderer.renderPrinted` pads `Page.lines` to `capacity`
+    /// the same indexing `DocumentRenderer.renderNative` pads `Page.lines` to `capacity`
     /// with, so ordinal `n` here and `EngineTruth.Page.body[n]` describe the SAME `PageLine`.
     /// Measured the same way `EngineTruth` measures a body line: the baseline, and the x of
     /// the first VISIBLE (non-whitespace) glyph — not glyph 0, which is always the container's
@@ -898,8 +940,8 @@ enum AppOutput {
     /// Job 399 (Class 6 gate-debt): the GRAY actually painted for one real fragment ordinal,
     /// read straight off the pass content `DocumentRenderer` drew there — needed because
     /// `Oracle.structuralBodyLines` (below) can only measure `page.textView.textStorage`,
-    /// which `renderPrinted` deliberately leaves BLANK for a fragment whose true content
-    /// draws through a pass instead (`DocumentRenderer.renderPrinted`'s own `let content =
+    /// which `renderNative` deliberately leaves BLANK for a fragment whose true content
+    /// draws through a pass instead (`DocumentRenderer.renderNative`'s own `let content =
     /// oversized ? PageLine([], soft: base.soft) : base`): an oversized banner line
     /// (`oversizedSelfPasses`) or an `.overprint` chain's own base line, whose real ink is
     /// its LAST pass, not its blank fragment (`PageTextView.drawOverprintPasses`'s own doc
@@ -921,7 +963,7 @@ enum AppOutput {
         /// `drawOversizedSelfPasses` lays a pass out in isolation and draws it at the
         /// fragment's origin, i.e. the text container's left edge, so this plus
         /// `textFrame.origin.x` is where the ink really lands. Without it, an oversized line's
-        /// x was read off the BLANK placeholder fragment `renderPrinted` leaves in the main
+        /// x was read off the BLANK placeholder fragment `renderNative` leaves in the main
         /// flow (`let content = oversized ? PageLine([], soft: base.soft) : base`), whose only
         /// glyph is `attributedLine`'s single-space filler — which is why every oversized
         /// title in the corpus reported the identical x of one space past the margin.
@@ -1032,7 +1074,7 @@ enum AppOutput {
                     line.gray = chainInk.gray
                 } else if let selfInk = selfPass.flatMap(firstVisibleInk) {
                     // Job 401 (Class 3/5 diagnosis): an oversized banner/heading line's REAL
-                    // fragment is a blank placeholder (`DocumentRenderer.renderPrinted`'s own
+                    // fragment is a blank placeholder (`DocumentRenderer.renderNative`'s own
                     // `let content = oversized ? PageLine([], soft: base.soft) : base` —
                     // `attributedLine`'s single-space filler for an empty `PageLine`), so
                     // `body[ord]` here is the PLACEHOLDER's own text ("")/size (the document
@@ -1072,7 +1114,7 @@ enum AppOutput {
     /// two" discipline).
     ///
     /// Closes the residual `structuralParity`'s Class 3/5/7 comments name: an oversized or
-    /// `.overprint`-chain line's REAL AppKit fragment is `DocumentRenderer.renderPrinted`'s
+    /// `.overprint`-chain line's REAL AppKit fragment is `DocumentRenderer.renderNative`'s
     /// blank placeholder — this walk's caller previously only ever visited that blank real
     /// fragment, so a graphics-only oversized/chain line (LJ6DTP.WS's "█" bars) counted zero
     /// vector ops no matter what actually painted through the self-pass/chain overlay.
@@ -1112,7 +1154,7 @@ enum AppOutput {
         return boxes
     }
 
-    /// The app's real Printed rendering. Running lines come straight from
+    /// The app's real Native rendering. Running lines come straight from
     /// `RenderedDocument.runningLines` — the SAME values `PagedDocumentView` actually draws
     /// (`DocumentRenderer.runningLines`/`PagedDocumentView.drawRunningLines`), not re-measured
     /// via `NSLayoutManager`: a running line is point-drawn (`NSAttributedString.draw(at:)`),
@@ -1138,7 +1180,7 @@ enum AppOutput {
     /// So the comparison skips them, exactly as it already skips cp437 blocks. Keyed on the
     /// SUBSTITUTED forms because that substitution runs before anything measures the line.
     static let charactersTheEngineStrokesRatherThanSets: Set<Character> =
-        SoftReturn.graphicChars.union(printedLJ6DTPCharSubstUnivers.values)
+        SoftReturn.graphicChars.union(nativeLJ6DTPCharSubstUnivers.values)
 
     /// Width of the literal leading spaces a running line still carries in its own text —
     /// the indent a fixed-pitch line draws for itself. Zero for a line with no leading space,
@@ -1247,7 +1289,7 @@ enum AppOutput {
                     // its base line is oversized or the base of an `.overprint` chain — its
                     // true content (including graphics) paints through
                     // `oversizedSelfPasses`/`overprintPasses` instead
-                    // (`DocumentRenderer.renderPrinted`'s own `let content = oversized ?
+                    // (`DocumentRenderer.renderNative`'s own `let content = oversized ?
                     // PageLine([], soft:) : base`). Mirrors `PagedDocumentView
                     // .drawOversizedSelfPasses`/`drawOverprintPasses`'s own branch exactly:
                     // an oversized self-pass ALSO carries its own chain continuation (if
@@ -1275,13 +1317,13 @@ enum AppOutput {
                 }
             }
             // Job 495 (Class 7 residual, re-diagnosed): LJ6DTP's page-border PCL execution
-            // (`PrintedPCLGraphics.swift`, job 490) draws OUTSIDE any `PageTextView`'s own
+            // (`NativePCLGraphics.swift`, job 490) draws OUTSIDE any `PageTextView`'s own
             // glyph walk — `PagedDocumentView.drawPCLGraphics` is called at the PAGE level,
             // alongside `drawRunningLines`, precisely because the border bleeds past the
             // text container's own margins (that function's own doc comment). The vector
             // walk just above only ever visits `laidOutPage.manager`'s OWN glyph fragments
             // (box-drawing cp437 fills, self-pass/overprint-pass content) — it never asked
-            // whether any of those fragments also carried a `.printedPCLProgram` attachment,
+            // whether any of those fragments also carried a `.nativePCLProgram` attachment,
             // so this harness's own `vectors` count silently omitted every border rect the
             // app was ALREADY drawing on screen, undercounting the app's real count by
             // exactly 4 (one page-border's top/left/bottom/right rule fills) on every
@@ -1317,7 +1359,7 @@ enum AppOutput {
             // ordinal onto the same per-RAW-PageLine index `EngineTruth.structuralPages`'s
             // `n` uses. The two disagreed whenever a page opened with (or contained before
             // its first divergence) an `.overprint` chain: job 224 collapses a whole chain
-            // into ONE real AppKit fragment (`DocumentRenderer.renderPrinted`'s own `i = j +
+            // into ONE real AppKit fragment (`DocumentRenderer.renderNative`'s own `i = j +
             // 1` loop), so `structuralBodyLines`'s `ordinal` undercounts by
             // `chainLength - 1` for every fragment after the chain, while `EngineTruth`
             // still walks `docToPagelines`'s raw (uncollapsed) `PageLine` array — every body
@@ -1353,7 +1395,7 @@ enum AppOutput {
 /// and with the suites that drive real windows, QuickLook and the UI target. Serializing
 /// them costs nothing when they are the only thing running and stops the full suite from
 /// thrashing.
-@Suite(.serialized) struct PrintedStructuralParityTests {
+@Suite(.serialized) struct NativeStructuralParityTests {
     /// Job 535: routes through `PrivateCorpusSupport` — see that file's own doc comment.
     static var ws7Fixtures: [String] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: PrivateCorpusSupport.ws7Directory.path)) ?? []
@@ -1381,7 +1423,7 @@ enum AppOutput {
     static func divergences(fixtureName: String) throws -> [Divergence] {
         let url = PrivateCorpusSupport.ws7Directory.appendingPathComponent(fixtureName)
         let bytes = [UInt8](try Data(contentsOf: url))
-        let defaults = UserDefaults(suiteName: "PrintedStructuralParity.\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: "NativeStructuralParity.\(UUID().uuidString)")!
         let state = try DocumentState(data: bytes, settings: SettingsStore(defaults: defaults))
         state.style.setManually(.printed)
 
@@ -1505,7 +1547,7 @@ enum AppOutput {
 
         // Class 1 — running heads/footers never rendered (DocumentRenderer has no header/
         // footer model at all; see `EngineTruth.Page`'s own doc comment). FIXED in this job —
-        // see `DocumentRenderer.renderPrinted`'s header/footer block, added after this harness
+        // see `DocumentRenderer.renderNative`'s header/footer block, added after this harness
         // first ran and found every one of these.
         #expect(headerFooterCount.isEmpty,
                 "header/footer divergences (should be fixed): \(headerFooterCount.map(\.description))")
@@ -1530,12 +1572,12 @@ enum AppOutput {
         //    substitution (`_`->em dash, curly quotes, etc.) runs later, inside
         //    `lineOpsPrinted` (`PDFWriter.swift:509`'s `ljSubstitute`), directly on the
         //    segments about to draw, a step that never writes back into `Page.lines`. Fixed
-        //    by applying the SAME substitution (`DocumentRenderer.printedLJ6DTPSubstitute`,
+        //    by applying the SAME substitution (`DocumentRenderer.nativeLJ6DTPSubstitute`,
         //    widened `private` -> `internal` this job, confirmed byte-identical against
         //    `PDFDriverLJ6DTP.swift:26-41` fresh this job) when building `EngineTruth`'s own
         //    body-line text — see that call site's own citation.
         // 2. A real app gap: an oversized banner/heading line's REAL AppKit fragment is a
-        //    blank single-space placeholder (`DocumentRenderer.renderPrinted`'s own `let
+        //    blank single-space placeholder (`DocumentRenderer.renderNative`'s own `let
         //    content = oversized ? PageLine([], soft: base.soft) : base`) — job 399 taught
         //    `AppOutput` to read the correct GRAY off the self-pass `DocumentRenderer` drew
         //    instead (Class 6), but never TEXT/SIZE, so every oversized title/H1 read back as
@@ -1558,7 +1600,7 @@ enum AppOutput {
         //   paints ONLY through `PageTextView.drawVectorGraphics`'s `NSRect.fill()` calls
         //   (`PagedDocumentView.swift`) — a SEPARATE painted layer with no text attribute to
         //   read at all, the same class of gap job 211's own doc comment
-        //   (`PrintedVectorGraphics.swift` top) already names. STILL not fixed — needs its
+        //   (`NativeVectorGraphics.swift` top) already names. STILL not fixed — needs its
         //   own mechanism, not an extension of `firstVisibleInk`, and out of this job's own
         //   scope (item 1 was the VECTOR-op walk, not TEXT-attribute reading).
         // - A 0x0F user-print-control span's decoded display string (`Span.pctlHMI` non-nil
@@ -1578,7 +1620,7 @@ enum AppOutput {
         //   citation.
         //
         // Job 404 (task #62, item 3 re-measurement): UNCHANGED at 2 (`LJ6DTP.WS` only) —
-        // expected, this job's fix (deleting `.printedGraphicsEligible`, Class 7 below)
+        // expected, this job's fix (deleting `.nativeGraphicsEligible`, Class 7 below)
         // touches `graphicCells`' FILL decision, never `EngineTruth`/`AppOutput`'s TEXT
         // reading (`firstVisibleInk`/`remapToRawIndices`, untouched this job).
         //
@@ -1603,7 +1645,7 @@ enum AppOutput {
         // straight from the base's OWN spans) still correctly named the bar, so the
         // resulting `StructuralLine` described two different `PageLine`s at once: the
         // bar's own text, paired with the caption's own size/x/gray. The APP's real
-        // fragment for an oversized base is `DocumentRenderer.renderPrinted`'s blank
+        // fragment for an oversized base is `DocumentRenderer.renderNative`'s blank
         // placeholder (`AppOutput.remapToRawIndices`'s own self-pass branch is what fixes
         // that — see its own citation), so `app` read blank/12pt: correct against ITS OWN
         // (fixed) model, wrong only against the engine side's own mixed-up value. FIXED at
@@ -1620,7 +1662,7 @@ enum AppOutput {
 
         // Class 2 — horizontal placement of WS5+ proportional-font blocks. RECLASSIFIED job
         // 240 (b13, Part 2; MAC VIEWING RULING): this is no longer "not yet ported" — job 229's
-        // per-word AFM x Tz corrective-kern port (`PrintedWordAnchor.swift`, the mechanism this
+        // per-word AFM x Tz corrective-kern port (`NativeWordAnchor.swift`, the mechanism this
         // class used to describe closing) was REMOVED, on purpose. A proportional run now lays
         // out at its resolved Mac font's own NATURAL advance; that advance will never
         // bit-for-bit match the engine's base-14/HMI-grid PDF positions, and per the ruling it
@@ -1681,7 +1723,7 @@ enum AppOutput {
         //
         // Job 404 (task #62, item 3 re-measurement): UNCHANGED — same 9 fixtures, same 1,362
         // total, same per-fixture counts job 403 recorded above. Expected: this job's fix
-        // (deleting `.printedGraphicsEligible`, Class 7 below) only changes WHICH characters
+        // (deleting `.nativeGraphicsEligible`, Class 7 below) only changes WHICH characters
         // paint as vector fills, never any fragment's Y origin.
         //
         // Job 408 (task #62, item 3 — DIAGNOSIS, no fix landed; see the job's own report for
@@ -1699,7 +1741,7 @@ enum AppOutput {
         // offset (`location(forGlyphAt:).y` relative to `fragment.origin.y`): `BOXES.WS`
         // toggles between 9.0pt — every blank-filler `PageLine` AND every graphics-only
         // box-border `PageLine` (both render an all-whitespace `NSTextStorage` run; the real
-        // ink is a vector overlay, `PrintedVectorGraphics.swift`) — and 8.0pt — every
+        // ink is a vector overlay, `NativeVectorGraphics.swift`) — and 8.0pt — every
         // `PageLine` with real printable-character content — under the IDENTICAL pinned
         // `minimumLineHeight == maximumLineHeight` paragraph style. The fixture's own first
         // line (a graphics-only box-top border) lands EXACTLY on the engine's own Y at its
@@ -1778,7 +1820,7 @@ enum AppOutput {
         // mechanism at its worst: its title stack, several `.overprint` chains (job 224) and
         // oversized self-passes (job 227/269) each introduce their OWN `ΔK` (an
         // oversized/chain-base line's REAL fragment is the BLANK placeholder,
-        // `DocumentRenderer.renderPrinted`'s own `content = oversized ? PageLine([], ...) :
+        // `DocumentRenderer.renderNative`'s own `content = oversized ? PageLine([], ...) :
         // base` — K≈3.0, the "blank" figure, regardless of how large or styled the VISIBLE
         // self-pass content actually is), and a heavily `.overprint`-chained page like p3/p6
         // stacks a dozen-plus such transitions in a few dozen lines, compounding to the
@@ -1824,7 +1866,7 @@ enum AppOutput {
         // banner-to-body-text size range (72pt down to 8pt) was never checked page by
         // page against the engine before this job. `resolvedFont` already reads
         // `entry.points`, so this class exists to PROVE that wiring is actually correct
-        // under the fixed per-line-height paragraph style `renderPrinted` uses, not to
+        // under the fixed per-line-height paragraph style `renderNative` uses, not to
         // assume it from reading the code.
         //
         // Job 401 (task #62 diagnosis): every real divergence found was the SAME oversized-
@@ -1867,7 +1909,7 @@ enum AppOutput {
 
         // Class 6 — knockout text (white-on-black groups, job 210) — CLOSED, job 399.
         // `DocumentRenderer.attributedRun` already ported the colour decision (job 210's
-        // `driverColour`/`printedLJ6DTPColourGray`, byte-identical to `colourGrayLJ6DTP`,
+        // `driverColour`/`nativeLJ6DTPColourGray`, byte-identical to `colourGrayLJ6DTP`,
         // `PDFDriverLJ6DTP.swift:15-19`) — it was never hardcoding black by the time this
         // job ran (that finding, job 382's audit, was stale). The real remaining blockers,
         // both fixed this job:
@@ -1877,7 +1919,7 @@ enum AppOutput {
         //   colour), so the tint was a pure app decoration with no engine counterpart.
         //   Removed — see `attributedRun`'s own doc comment at the call site.
         // - `LJ6DTP.WS`: the harness's OWN measurement gap, not a rendering bug.
-        //   `DocumentRenderer.renderPrinted` deliberately leaves an oversized banner line's
+        //   `DocumentRenderer.renderNative` deliberately leaves an oversized banner line's
         //   (or an `.overprint` chain's base line's) REAL AppKit fragment BLANK and draws
         //   its true content through a separate pass (`oversizedSelfPasses`/
         //   `overprintPasses`) `Oracle.structuralBodyLines` never reads (it only sees
@@ -1897,17 +1939,17 @@ enum AppOutput {
         // Class 7 — the vector-op layer (box-drawing arms, shades, part blocks, full
         // blocks, and — job 402 — `symbolShapes`' disc/polygon sub-shapes —
         // `PDFDriverLJ6DTP.swift`'s `graphicOps`). FIXED in job 211
-        // (`PageTextView.drawVectorGraphics`/`graphicCells`, `PrintedVectorGraphics.swift`):
+        // (`PageTextView.drawVectorGraphics`/`graphicCells`, `NativeVectorGraphics.swift`):
         // BOXES.WS (3481 ops), FORMFEED.WS (1280), OLDTIMES.WS (20), SCRIPT.WS (88), and
         // WORDSTAR.WS (20) all match the engine's own count exactly, page by page.
         //
         // Job 401 (task #62 diagnosis) root-caused SOME of the residual to `graphicChars`
-        // (`PrintedVectorGraphics.swift`) never porting the engine's own fifth set,
+        // (`NativeVectorGraphics.swift`) never porting the engine's own fifth set,
         // `symbolShapes` (`PDFDriverLJ6DTP.swift:131-173` — card suits ♥♦♣♠, ☻/☼ smiley/sun,
         // ≡ triple bar) — and guessed the SAME cause explained the small residual counts on
         // `BOX.WS`/`BOXES.WS`/`CONVERT.WS`/`POWERUSE.WS`/`STRENGTH.WS`/`VERSIONS.WS`. Job 402
         // ported `symbolShapes` (`GraphicShape` enum — `.rect`/`.disc`/`.poly` —
-        // `PrintedVectorGraphics.swift`, wired at all three `PagedDocumentView.swift` call
+        // `NativeVectorGraphics.swift`, wired at all three `PagedDocumentView.swift` call
         // sites job 401 cited, plus widened `EngineTruth.scanOps` — this file — to replay
         // `m`/`l`/`c` path ops so a disc/poly fill counts as a vector op on the ENGINE side
         // too, not just the app's) and re-measured every fixture job 401 named:
@@ -1922,7 +1964,7 @@ enum AppOutput {
         //   mechanism). CLOSED in job 403 (task #62, item 1): `AppOutput.structuralPages`'s
         //   vector walk (this file) previously only walked `laidOutPage.glyphs`/`manager
         //   .lineFragmentRect` — the REAL base text-container fragments — but an oversized
-        //   line's REAL fragment is `DocumentRenderer.renderPrinted`'s blank single-space
+        //   line's REAL fragment is `DocumentRenderer.renderNative`'s blank single-space
         //   placeholder; its true cp437 content paints through a SEPARATE self-pass/
         //   overprint-pass overlay this walk never visited. Fixed on BOTH sides of the same
         //   gap: `AppOutput.structuralPages`'s vector walk (this file) now also replays
@@ -1946,8 +1988,8 @@ enum AppOutput {
         //   block in force, `BOX.WS`/`CONVERT.WS`/`POWERUSE.WS`/`STRENGTH.WS`/`VERSIONS.WS`
         //   are plain WS4 files with `doc.fonts.isEmpty`; `BOXES.WS` is WS5+ but its own
         //   FIRST box, lines 0-6, sits BEFORE the document's first font change). Job 403
-        //   attributed the app's own then-existing `.printedGraphicsEligible` gate
-        //   (`PrintedVectorGraphics.swift`) to a PORT of `PDFDriverLJ6DTP.swift`'s
+        //   attributed the app's own then-existing `.nativeGraphicsEligible` gate
+        //   (`NativeVectorGraphics.swift`) to a PORT of `PDFDriverLJ6DTP.swift`'s
         //   `splitGraphics`'s `seg.entry != nil` guard — CORRECTED by job 404 (task #62,
         //   item 1): that guard never existed. `splitGraphics` (`PDFDriverLJ6DTP.swift:
         //   315-336`) and `lineOpsPrinted` (`PDFWriter.swift:545`, the actual op-emitting
@@ -1956,8 +1998,8 @@ enum AppOutput {
         //   (proportional vs `spanPitch`), never to exclude a fontless span from the vector
         //   path. CP437 decoding is UNIVERSAL (`CP437.swift`'s own top doc comment)
         //   regardless of any font block, so there was never a real ambiguity for a
-        //   font-block flag to resolve. Fixed by deleting `.printedGraphicsEligible`
-        //   entirely — `graphicCells` (`PrintedVectorGraphics.swift`) now mirrors the
+        //   font-block flag to resolve. Fixed by deleting `.nativeGraphicsEligible`
+        //   entirely — `graphicCells` (`NativeVectorGraphics.swift`) now mirrors the
         //   engine's own single-condition gate (character-set membership, already checked
         //   one line above the deleted guard) exactly, with no font-derived exclusion at
         //   all. Quantitatively exact on `BOX.WS`/`BOXES.WS` before the fix: `BOX.WS`'s
@@ -1993,7 +2035,7 @@ enum AppOutput {
         let state = try Oracle.state(for: url)
         let structural = AppOutput.structuralPages(for: state)
 
-        // LJ6DTP's driver fill bands (colour indices 9-14, `printedLJ6DTPColourGray`'s own
+        // LJ6DTP's driver fill bands (colour indices 9-14, `nativeLJ6DTPColourGray`'s own
         // table) render as a mid-gray, distinct from white paper (1.0) and plain black body
         // text (0.0) — the punch-out bar under "Manual Copyright..." (page 1) is built from
         // these.
@@ -2080,7 +2122,7 @@ enum AppOutput {
     // MARK: - Class 7 closure evidence (job 402: symbolShapes port)
 
     /// Geometry law: every `symbolShapes` character produces the SAME NUMBER of `GraphicCell`
-    /// fills as its own table entry (`PrintedVectorGraphics.swift`'s `symbolShapes`), each one
+    /// fills as its own table entry (`NativeVectorGraphics.swift`'s `symbolShapes`), each one
     /// a real, non-degenerate shape — not the placeholder every one of the seven fell through
     /// to before job 402 (this file's own Class 7 comment, job 401: "still fall through to the
     /// ordinary (missing-glyph) text path instead of drawing as vectors at all"). Runs
@@ -2121,6 +2163,13 @@ enum AppOutput {
                         area += p1.x * p2.y - p2.x * p1.y
                     }
                     #expect(abs(area) > 0.01, "\(ch): degenerate (zero-area) polygon \(points)")
+                case .strokePath(let segments, let lineWidth):
+                    // Planning #251 follow-up: the rounded corners arrive from the engine's
+                    // own `graphicCellOps` as ONE open stroked path. This law is about a
+                    // shape having real extent, and for a stroke that is its segment list
+                    // and its pen width, not an enclosed area.
+                    #expect(segments.count >= 2, "\(ch): degenerate stroked path (\(segments.count) segment(s))")
+                    #expect(lineWidth > 0, "\(ch): zero-width stroked path")
                 }
             }
         }
@@ -2129,7 +2178,7 @@ enum AppOutput {
     /// Pixel-ink law: painting a `symbolShapes` cell (the SAME erase-then-fill sequence
     /// `PageTextView.drawVectorGraphics`/`drawOverprintPasses` use, job 211/402) must leave
     /// real dark ink on the canvas — proof that the DRAWING side (`GraphicShape.fill()`,
-    /// `PrintedVectorGraphics.swift`) actually paints the geometry the law above proves exists,
+    /// `NativeVectorGraphics.swift`) actually paints the geometry the law above proves exists,
     /// not just that the data model produces non-empty numbers. Draws directly into a bitmap
     /// rather than through a full `PagedDocumentView`/`PixelOracleAppEngine` page render — a
     /// unit-level proof of the compositing call, same scoping reasoning as the geometry law

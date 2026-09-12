@@ -700,6 +700,60 @@ func shownLabels(_ refNotes: [Note], doc: Document, noteRefs: NoteRefs) -> [Int:
     return shown
 }
 
+/// The printer drivers that were patched so cp437 code 158 prints a euro (planning #266,
+/// Jon's ruling 2026-09-11). Port of `layout.EURO_PATCHED_DRIVERS`.
+///
+/// This is the SAME class of thing as the LJ6DTP character substitutions (`ljSubstitute`,
+/// "driver character substitutions are content", ruling 2026-08-06 M7) — a printer-driver
+/// patch that changes which glyph a character prints as, and therefore CONTENT the
+/// semantic flow applies, not a per-renderer decision.
+///
+/// The trick is documented by the author of the corpus this engine is verified against, in
+/// his own read-me ("THE EURO CURRENCY SYMBOL"): WordStar was last updated in 1992, seven
+/// years before the euro was adopted in 1999, so he patched three PRINTER DEFINITION FILES
+/// — in this era a `.PDF` is WordStar's own printer driver, nothing to do with Adobe —
+/// LASERJET.PDF, LJ6DTP.PDF and HP4.PDF, so that PC-8 character 9E (the peseta slot, cp437
+/// code 158) selects Roman-8 BA, the euro. A document naming one of those three in its own
+/// WS7 header driver-name field is a document printed through a patched driver, so its
+/// code 158 MEANS the euro. Every other document means the peseta, and gets it: a renderer
+/// with no peseta glyph draws it as geometry (`symbolShapes`, the 2026-08-11 cp437 ruling),
+/// never as `?`.
+///
+/// Jon's ruling, verbatim: "driver keyed ... So anyone using Sawyer's trick gets the Euro.
+/// Any other old docs which actually use a Peseta in them, see it as intended."
+///
+/// Scope: the semantic flow and the PDF views built on it. The RTF/HTML/text emitters' own
+/// handling of code 158 is planning #264's review and is deliberately untouched.
+let euroPatchedDrivers: Set<String> = ["LASERJET", "LJ6DTP", "HP4"]
+
+/// Whether `doc` is printed through one of `euroPatchedDrivers`, i.e. whether cp437 code
+/// 158 (PESETA SIGN, U+20A7) on it means EURO SIGN. Port of `layout.peseta_euro_table`,
+/// which returns a `str.translate` table or `None`; Swift says the same thing as a Bool and
+/// leaves the one-character mapping to `euroText` below.
+///
+/// The driver name is the WS7 header's own 9-byte driver-name field, `Document.printerDriver`
+/// — the same field the LJ6DTP character substitutions and colour map key on. The parser
+/// extracts it as the leading upper-case/digit run with the record tag stripped, so a real
+/// document always arrives as `LASERJET`/`LJ6DTP`/`HP4`; the match is stated
+/// case-insensitively anyway so the rule does not silently depend on that one parser detail.
+///
+/// `public` for Soft Return, which has to be able to SAY which documents this rule applies
+/// to even though it never applies the rule itself: the semantic flow above has already
+/// mapped the character by the time the app's Native and Modern renderers see a run. Nothing
+/// else about this function changed — visibility only (planning #266, Native half).
+public func pesetaMeansEuro(_ doc: Document) -> Bool {
+    let name = (doc.printerDriver ?? "").trimmed().uppercased()
+    return euroPatchedDrivers.contains(name)
+}
+
+/// `text` with cp437 code 158 mapped to EURO SIGN when `patched` (`pesetaMeansEuro`), and
+/// unchanged otherwise — the ordinary document, which keeps its peseta. Port of
+/// `layout.euro_texts`.
+func euroText(_ text: String, _ patched: Bool) -> String {
+    guard patched, text.contains("\u{20A7}") else { return text }
+    return String(text.map { $0 == "\u{20A7}" ? "\u{20AC}" : $0 })
+}
+
 /// The document as the semantic Modern flow — see the module docstring for the item
 /// contract. This is the single implementation of the M-rules; measuring consumers
 /// (`PDFModernLayout.swift`, the app) convert columns to their own units and wrap at
@@ -711,6 +765,8 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
 
     // every kept note, in document order, with its indices stable for the
     // 'ref'/'footnotes'/'index' fields below
+    // planning #266: this document's own driver-keyed cp437-158 rule.
+    let euro = pesetaMeansEuro(doc)
     var noteRows: [SemanticNoteRow] = []
     var rowIndexByRef: [Int: Int] = [:]
     for (i, note) in refNotes.enumerated() {
@@ -718,7 +774,8 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
         rowIndexByRef[i] = noteRows.count
         noteRows.append(SemanticNoteRow(kind: note.kind,
                                         label: noteLabel(note, doc: doc, index: i),
-                                        shown: shownByIndex[i] ?? "", text: note.text,
+                                        shown: shownByIndex[i] ?? "",
+                                        text: euroText(note.text, euro),
                                         origin: note.origin))
     }
 
@@ -876,6 +933,10 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
                         text = ljSubstituteText(text, entry: entry)
                     }
                 }
+                // planning #266: the driver-keyed cp437-158 rule, applied here for the
+                // same M7 reason as the LJ6DTP substitutions just above — a driver patch
+                // that changes which glyph a character prints as is CONTENT.
+                text = euroText(text, euro)
                 if !text.isEmpty {
                     runs.append(SemanticRun(text: text, styles: styles, font: span.font,
                                             colour: colour, pix: span.pix,

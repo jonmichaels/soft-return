@@ -4,7 +4,7 @@ import CtrlKD
 import Testing
 @testable import SoftReturn
 
-/// Job 447 (b27 item 7 part 2 — wires job 445's `printedCoverageAwareResolvedMacFont` into the
+/// Job 447 (b27 item 7 part 2 — wires job 445's `nativeCoverageAwareResolvedMacFont` into the
 /// real render path job 442 diagnosed and job 445 built the resolver for but did not wire).
 ///
 /// RUN-BOUNDARY RULE (stated before any code, per the brief): a run is a maximal contiguous
@@ -14,7 +14,7 @@ import Testing
 /// font `attributedRun` already picked for it, untouched. The wiring itself lives in
 /// `DocumentRenderer.swift`'s `coverageSplitAttributedString`/`coverageAwareGraphicFont`
 /// (new, this job), called from `attributedRun`'s own tail — see that file for the full
-/// citation trail. `graphicCells` (`PrintedVectorGraphics.swift`) itself is UNCHANGED: once the
+/// citation trail. `graphicCells` (`NativeVectorGraphics.swift`) itself is UNCHANGED: once the
 /// text storage carries the right font per run, AppKit's own real layout (which `graphicCells`
 /// already trusts via `manager.location(forGlyphAt:)`) is correct by construction, with no new
 /// per-glyph position math needed in the historically fragile shared function itself.
@@ -97,7 +97,7 @@ struct Job447GraphicCellsCoverageWiringTests {
     // MARK: - Section B: high column index (40+) and an 87-column row, through the WIRED path,
     // fail-before/pass-after — both Native and Modern share this exact call (see
     // `FontsInViewsTests.courierClassFontRunIsMonospaceInBothViews`'s own citation: both
-    // `renderPrinted` (Native) and `renderModern` call this SAME `attributedLine` with
+    // `renderNative` (Native) and `renderModern` call this SAME `attributedLine` with
     // `useCourierPrime: true`, so proving it here proves it for both on-screen views at once).
 
     /// This run's own left-arm fill x0 for glyph `n` (0-based) — `graphicCells` emits exactly
@@ -135,7 +135,7 @@ struct Job447GraphicCellsCoverageWiringTests {
         // BEFORE reconstruction (same technique `Job445CoverageAwareFontResolutionTests
         // .resolvedAdvanceMatchesEngineGridButCurrentResolutionDoesNot` already uses): what
         // `attributedRun` built for this exact span BEFORE this job — one uniform font
-        // (`printedResolvedMacFont`'s own pre-wiring pick for this courier-class row, "Courier
+        // (`nativeResolvedMacFont`'s own pre-wiring pick for this courier-class row, "Courier
         // Prime") for the WHOLE run, no coverage check, no run splitting.
         let oldFont = try #require(NSFont(name: "Courier Prime", size: 12))
         let oldAttributed = NSAttributedString(string: text, attributes: [.font: oldFont])
@@ -267,7 +267,7 @@ struct Job447GraphicCellsCoverageWiringTests {
     }
 
     @Test @MainActor func realBoxesWSNativeHighColumnRowsMatchCanonicalGrid() throws {
-        try Self.assertHighColumnRowsMatchCanonicalGrid(style: .printed)
+        try Self.assertHighColumnRowsMatchCanonicalGrid(style: .native)
     }
 
     @Test @MainActor func realBoxesWSModernHighColumnRowsMatchCanonicalGrid() throws {

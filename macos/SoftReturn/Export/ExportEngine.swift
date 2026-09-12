@@ -35,7 +35,7 @@ enum ExportEngine {
     /// the caller passes the document's actual on-screen/current-default `ViewStyle` and it
     /// is `.native`, PDF export reuses the exact same `appKitRenderedPDF` route as Modern
     /// (the print path — `DocumentWindowController.makePrintOperation`'s own render call),
-    /// just under `RenderStyle.printed`'s facsimile pass instead of Modern's reflow. This is
+    /// just under `RenderStyle.native`'s facsimile pass instead of Modern's reflow. This is
     /// deliberately separate from `style`: `style` still only ever carries `printed`/`modern`
     /// (RenderStyle stays two-case for every other format, per its own doc comment — Native
     /// truly has no export format of its own there), so a caller that does not know or care
@@ -91,7 +91,7 @@ enum ExportEngine {
         // --page-settings` and `DocumentOperations.convert` already do: `EmitOptions
         // .pageSettings` is read by `emitPDF` alone, so carrying it into every format's
         // options is harmless for the four that ignore it and is exactly what makes a
-        // Printed-mode PDF export match the on-screen page (`DocumentRenderer.renderPrinted`
+        // Printed-mode PDF export match the on-screen page (`DocumentRenderer.renderNative`
         // applies the SAME preset before laying anything out).
         //
         // `title` goes straight into `EmitOptions.title` (`<title>` in HTML) — job 270:
@@ -123,10 +123,10 @@ enum ExportEngine {
             if format == .pdf && viewStyle == .native {
                 // Not `style`/`nil` here — `effectiveStyle` is already known `.printed` (the
                 // `.modern` case returned above), and the native-view carve-out always means
-                // the FACSIMILE pass (`RenderStyle.printed`), the same one
+                // the FACSIMILE pass (`RenderStyle.native`), the same one
                 // `makePrintOperation` renders for a Native window.
                 products.append(Product(format: .pdf,
-                                        bytes: try appKitRenderedPDF(state: state, style: .printed, options: options)))
+                                        bytes: try appKitRenderedPDF(state: state, style: .native, options: options)))
                 continue
             }
             let bytes = try convertData(
@@ -165,7 +165,7 @@ enum ExportEngine {
     /// defaults every OTHER caller (the live document window, `makePrintOperation`,
     /// `QuickLookNativeRenderer`) to unchanged "everything on" behavior — only an export can
     /// ask for less. `toc` is handled entirely here, by rendering a second small document
-    /// and appending its pages, since neither `renderModern` nor `renderPrinted` has any TOC
+    /// and appending its pages, since neither `renderModern` nor `renderNative` has any TOC
     /// concept to gate. `inlineStyling` is a disclosed gap — see this function's own doc
     /// comment below.
     private static func appKitRenderedPDF(state: DocumentState, style: RenderStyle? = nil,
@@ -183,7 +183,9 @@ enum ExportEngine {
             let rect = view.rect(ofPage: index)
             guard rect.width > 0, rect.height > 0 else { continue }
             try autoreleasepool {
+                view.capturingPageIndex = index
                 let onePageData = view.dataWithPDF(inside: rect)
+                view.capturingPageIndex = nil
                 guard let onePagePDF = PDFDocument(data: onePageData), let page = onePagePDF.page(at: 0) else {
                     throw ExportError.pdfContextUnavailable
                 }
@@ -252,7 +254,7 @@ enum ExportEngine {
             pinnedBaselines: [:],
             // Job 427: same flat, shared anchor as Modern's own construction — no per-page
             // margin concept for a synthesized page.
-            perPageTextTop: [Double(textFrame.origin.y)], pinnedPageBottoms: [],
+            perPageTextTop: [Double(textFrame.origin.y)], pinnedPageBottoms: [], pinnedPageTops: [], flowTopAdjustment: 0, pageColumnFragmentCounts: [], lineNumberPasses: [], graphicCellRows: [],
             // b28 note 11: a synthesized TOC/Index page has no screenplay-marker concept —
             // see `RenderedDocument.modernForcedPageBreakOffsets`'s own doc comment.
             modernForcedPageBreakOffsets: [],
@@ -260,6 +262,7 @@ enum ExportEngine {
             // `RenderedDocument.modernFootnoteEvents`'s own doc comment.
             modernFootnoteEvents: [],
             modernFootnoteSeparator: NSAttributedString(),
+            modernEndnoteAppendixStart: nil,
             // Job 490: a synthesized TOC/Index page has no `Document.pclPrograms` concept
             // either — see `RenderedDocument.pclPrograms`'s own doc comment.
             pclPrograms: [])
@@ -273,7 +276,9 @@ enum ExportEngine {
             let rect = view.rect(ofPage: index)
             guard rect.width > 0, rect.height > 0 else { continue }
             try autoreleasepool {
+                view.capturingPageIndex = index
                 let onePageData = view.dataWithPDF(inside: rect)
+                view.capturingPageIndex = nil
                 guard let onePagePDF = PDFDocument(data: onePageData), let page = onePagePDF.page(at: 0) else {
                     throw ExportError.pdfContextUnavailable
                 }

@@ -35,7 +35,39 @@ final class PageScan {
 
     /// PDF matrices are [a b c d e f]; `CGAffineTransform` is the same six in the same order.
     private var ctm: CGAffineTransform = .identity
-    private var ctmStack: [CGAffineTransform] = []
+    private var stateStack: [SavedState] = []
+
+    /// EVERYTHING `q` SAVES AND `Q` RESTORES, not just the CTM.
+    ///
+    /// This stack used to hold the CTM alone, and the text parameters below simply ran on
+    /// past every `Q`. PDF 32000-1 §8.4.2 puts the text state — character and word spacing,
+    /// horizontal scale, leading, rise, and the selected font — in the graphics state
+    /// alongside the CTM, so all of it is saved and restored together.
+    ///
+    /// It was not academic. The app's Quartz output draws every line as its own
+    /// `q … BT … ET Q`, and sets a `Tc` inside that pair only on the lines that need one. A
+    /// reader that keeps the last `Tc` it saw applies a per-character correction to every
+    /// LATER line that never had one. On -README that leaked a `Tc` of -0.0214 — at the
+    /// text matrix's own 12x scale, a quarter-point per character — into the whole rest of
+    /// the page, and the drift is proportional to how far into a line a word sits, which is
+    /// indistinguishable from the app misplacing its text. `AppPDFWordsAdvanceTests
+    /// .anEarlierLinesCharacterSpacingDoesNotSurviveItsOwnQ` is that reproduced in a
+    /// fourteen-line PDF written by hand.
+    ///
+    /// The text MATRIX is deliberately not here: `Tm`/`Tlm` are reset by `BT`, and are not
+    /// part of the graphics state.
+    private struct SavedState {
+        let ctm: CGAffineTransform
+        let fontSize: Double
+        let leading: Double
+        let charSpacing: Double
+        let wordSpacing: Double
+        let horizontalScale: Double
+        let rise: Double
+        let font: PDFFont?
+        let fillAlpha: Double
+        let textRenderMode: Int
+    }
 
     private var textMatrix: CGAffineTransform = .identity
     private var lineMatrix: CGAffineTransform = .identity
@@ -48,6 +80,27 @@ final class PageScan {
     fileprivate var horizontalScale: Double = 1
     fileprivate var rise: Double = 0
     private var currentFont: PDFFont?
+
+    /// INK, NOT TEXT — a glyph that paints nothing is not on the page.
+    ///
+    /// Two ways to draw invisibly, and this reader needs both because the app's own output
+    /// uses one of them. `Tr 3` (and its clipping twin `Tr 7`) is the classic scanned-page
+    /// "invisible OCR layer" mode. `/ca 0` through an `ExtGState` is what QUARTZ does for a
+    /// COLOR EMOJI: it paints the real mark as an image XObject and then draws the glyph
+    /// again, fully transparent, for text selection — at its own CTM, which is not the
+    /// flipped one the visible text uses.
+    ///
+    /// PS.TST's ZapfDingbats line is the case. Its ✅ ❎ ❓ ❔ are Apple Color Emoji, so the
+    /// page carries `q 15 0 0 15 120 513 cm /Im1 Do Q` for the mark and
+    /// `/Gs1 gs q 1 0 0 1 119.87 516 cm BT 12 0 0 -12 47.87 241 Tm /TT21 1 Tf (!) Tj ET` for
+    /// the transparent copy — which lands at y=35 from the paper's top instead of 276.
+    /// Reading those as ink gave every such page a phantom FIRST line ("❎ ❔ ❓ ✅") and
+    /// pushed every real line down one; PRINTER.PS page 1 came back as 146 lines against the
+    /// engine's 55.
+    private var fillAlpha: Double = 1
+    private var textRenderMode: Int = 0
+    /// `Tr 3`/`Tr 7` paint nothing; `ca 0` paints nothing.
+    private var paintsNoInk: Bool { textRenderMode == 3 || textRenderMode == 7 || fillAlpha == 0 }
 
     /// Fonts by resource name, resolved once per page and extended by each Form XObject's
     /// own resources as it is entered.
@@ -125,6 +178,8 @@ final class PageScan {
         CGPDFOperatorTableSetCallback(table, "Tw", pdfOpSetWordSpacing)
         CGPDFOperatorTableSetCallback(table, "Tz", pdfOpSetHorizontalScale)
         CGPDFOperatorTableSetCallback(table, "Ts", pdfOpSetRise)
+        CGPDFOperatorTableSetCallback(table, "Tr", pdfOpSetTextRenderMode)
+        CGPDFOperatorTableSetCallback(table, "gs", pdfOpSetExtGState)
         CGPDFOperatorTableSetCallback(table, "Td", pdfOpMoveLine)
         CGPDFOperatorTableSetCallback(table, "TD", pdfOpMoveLineSettingLeading)
         CGPDFOperatorTableSetCallback(table, "Tm", pdfOpSetTextMatrix)
@@ -159,6 +214,19 @@ final class PageScan {
     fileprivate func setWordSpacingValue(_ value: Double) { wordSpacing = value }
     fileprivate func setHorizontalScaleValue(_ value: Double) { horizontalScale = value }
     fileprivate func setRiseValue(_ value: Double) { rise = value }
+    fileprivate func setTextRenderMode(_ value: Double) { textRenderMode = Int(value) }
+
+    /// `gs`: the only field this reader wants out of an `ExtGState` is the fill alpha.
+    fileprivate func applyExtGState(named name: String?) {
+        guard let name, let resources else { return }
+        var states: CGPDFDictionaryRef?
+        guard CGPDFDictionaryGetDictionary(resources, "ExtGState", &states), let states
+        else { return }
+        var state: CGPDFDictionaryRef?
+        guard CGPDFDictionaryGetDictionary(states, name, &state), let state else { return }
+        var alpha: CGPDFReal = 0
+        if CGPDFDictionaryGetNumber(state, "ca", &alpha) { fillAlpha = Double(alpha) }
+    }
 
     fileprivate static func popNumber(_ scanner: CGPDFScannerRef) -> Double {
         var value: CGPDFReal = 0
@@ -188,8 +256,26 @@ final class PageScan {
 
     // MARK: - State transitions
 
-    fileprivate func pushCTM() { ctmStack.append(ctm) }
-    fileprivate func popCTM() { if let last = ctmStack.popLast() { ctm = last } }
+    fileprivate func pushCTM() {
+        stateStack.append(SavedState(
+            ctm: ctm, fontSize: fontSize, leading: leading, charSpacing: charSpacing,
+            wordSpacing: wordSpacing, horizontalScale: horizontalScale, rise: rise,
+            font: currentFont, fillAlpha: fillAlpha, textRenderMode: textRenderMode))
+    }
+
+    fileprivate func popCTM() {
+        guard let last = stateStack.popLast() else { return }
+        ctm = last.ctm
+        fontSize = last.fontSize
+        leading = last.leading
+        charSpacing = last.charSpacing
+        wordSpacing = last.wordSpacing
+        horizontalScale = last.horizontalScale
+        rise = last.rise
+        currentFont = last.font
+        fillAlpha = last.fillAlpha
+        textRenderMode = last.textRenderMode
+    }
     fileprivate func concatCTM(_ matrix: CGAffineTransform) { ctm = matrix.concatenating(ctm) }
 
     fileprivate func beginText() {
@@ -327,6 +413,10 @@ final class PageScan {
     fileprivate func show(_ bytes: [UInt8]) {
         guard let font = currentFont else { return }
         let fontClass = AppPDFWords.fontClass(for: font.baseFont)
+        // An invisible run still MOVES THE PEN (it is text, and the next visible run may
+        // continue from it), so the advance below runs either way — only the glyph is not
+        // recorded. See `paintsNoInk`.
+        let inked = !paintsNoInk
         for code in font.codes(in: bytes) {
             let character = font.character(for: code.value)
             let space = spaceWidth(for: font, fontClass: fontClass)
@@ -336,17 +426,19 @@ final class PageScan {
             let ownWidth = font.width(for: code.value) / 1000.0 * fontSize * horizontalScale
             advance(by: ownWidth)
             let end = penPosition
-            glyphs.append(Glyph(
-                text: character, xStart: start.x, xEnd: end.x,
-                // EFFECTIVE size in page points, not the raw `Tf` operand. Quartz emits a
-                // nominal `Tf 1` and carries the real size in the text matrix, so the raw
-                // value was reported as 1 for all 12,939 characters of the app's LYING —
-                // against ctrl-kd's 16 for the same document. Downstream that is not
-                // cosmetic: `char_space_width_pt` derives the word-boundary threshold from
-                // this size, so a size of 1 shrinks a fixed face's threshold from 1.35pt to
-                // 0.45pt and re-segments the whole document.
-                baseline: start.y, size: fontSize * abs(textToPageScale), font: font.baseFont,
-                fontClass: fontClass, isSpace: character == " ", spaceWidthPt: space))
+            if inked {
+                glyphs.append(Glyph(
+                    text: character, xStart: start.x, xEnd: end.x,
+                    // EFFECTIVE size in page points, not the raw `Tf` operand. Quartz emits a
+                    // nominal `Tf 1` and carries the real size in the text matrix, so the raw
+                    // value was reported as 1 for all 12,939 characters of the app's LYING —
+                    // against ctrl-kd's 16 for the same document. Downstream that is not
+                    // cosmetic: `char_space_width_pt` derives the word-boundary threshold from
+                    // this size, so a size of 1 shrinks a fixed face's threshold from 1.35pt to
+                    // 0.45pt and re-segments the whole document.
+                    baseline: start.y, size: fontSize * abs(textToPageScale), font: font.baseFont,
+                    fontClass: fontClass, isSpace: character == " ", spaceWidthPt: space))
+            }
             // Character and word spacing advance the pen but are not part of the glyph.
             let spacing = charSpacing + (code.isSingleByteSpace ? wordSpacing : 0)
             if spacing != 0 { advance(by: spacing * horizontalScale) }
@@ -442,7 +534,20 @@ final class PageScan {
         // the property it cannot see. Noted rather than fixed there — making that comparison
         // order-sensitive would reintroduce the pairing problem it was written to avoid.
         for baseline in byLine.keys.sorted(by: >) {
-            let line = byLine[baseline]!.sorted { $0.xStart < $1.xStart }
+            // IN THE ORDER THEY WERE DRAWN, not sorted by x — `glyphs` is already drawing
+            // order, and that order is the only thing on the page that separates two RUNS
+            // sharing one baseline.
+            //
+            // An overprint chain is exactly that: the engine draws the base line's words and
+            // then the pass's, each left to right, and so does the app (its overlay paints
+            // after its page's own text view). Sorted by x the two interleave, and MICKEE.WS
+            // page 12 came back as "UsiTnhge MLIeCfKtE Eb uwthtiolne..." — "Using MICKEE
+            // while Editing a File" zipped through "The Left button brings down the File
+            // pulldown menu if". Both sides draw the same marks; a fraction of a point in one
+            // run's x flips two characters, so what was being compared was the reader's own
+            // sort. Read in drawing order the two runs come out whole and in the same order
+            // on both sides.
+            let line = byLine[baseline]!
             var current: [Glyph] = []
             func finish() {
                 guard let first = current.first else { return }
@@ -459,7 +564,20 @@ final class PageScan {
                 if let previous = current.last {
                     let gap = glyph.xStart - previous.xEnd
                     let threshold = min(previous.spaceWidthPt, glyph.spaceWidthPt)
-                    if gap >= threshold - Self.wordGapSlackPt { finish() }
+                    // A BACKWARDS JUMP IS A NEW RUN. Reading in drawing order means the pen
+                    // can go back to the margin, which is what the start of an overprint pass
+                    // looks like.
+                    //
+                    // Measured against the PREVIOUS GLYPH'S OWN WIDTH, not against `threshold`
+                    // — that one is a word-GAP threshold, capped at 1.5pt, and a tightened run
+                    // overlaps its own glyphs by more than that all the time. DARKNESS.WS's
+                    // title is drawn at a 20pt matrix with `Tc -0.15`, so every glyph starts
+                    // 3pt before the one before it ends, and a 1.5pt test broke "TO THE PERSON
+                    // SITTING IN DARKNESS" into thirty-three one-character words. Going back
+                    // past a whole character is a different thing from setting tight.
+                    let ownWidth = previous.xEnd - previous.xStart
+                    if gap >= threshold - Self.wordGapSlackPt
+                        || gap < -max(threshold, ownWidth) { finish() }
                 }
                 current.append(glyph)
             }
@@ -515,11 +633,11 @@ final class PageScan {
         formDepth += 1
         defer { formDepth -= 1 }
 
-        let savedCTM = ctm, savedStack = ctmStack, savedFonts = fonts
+        let savedCTM = ctm, savedStack = stateStack, savedFonts = fonts
         let savedResources = resources, savedStream = contentStream
         let savedText = textMatrix, savedLine = lineMatrix
         defer {
-            ctm = savedCTM; ctmStack = savedStack; fonts = savedFonts
+            ctm = savedCTM; stateStack = savedStack; fonts = savedFonts
             resources = savedResources; contentStream = savedStream
             textMatrix = savedText; lineMatrix = savedLine
         }
@@ -606,6 +724,16 @@ private let pdfOpSetHorizontalScale: CGPDFOperatorCallback = { scanner, info in
 }
 private let pdfOpSetRise: CGPDFOperatorCallback = { scanner, info in
     pdfScan(info)?.setRiseValue(PageScan.popNumber(scanner))
+}
+
+private let pdfOpSetTextRenderMode: CGPDFOperatorCallback = { scanner, info in
+    pdfScan(info)?.setTextRenderMode(PageScan.popNumber(scanner))
+}
+
+private let pdfOpSetExtGState: CGPDFOperatorCallback = { scanner, info in
+    var name: UnsafePointer<Int8>?
+    CGPDFScannerPopName(scanner, &name)
+    pdfScan(info)?.applyExtGState(named: name.map { String(cString: $0) })
 }
 
 private let pdfOpMoveLine: CGPDFOperatorCallback = { scanner, info in

@@ -69,7 +69,7 @@ import Testing
         }
         return """
         ctrl-kd's answer key is present, but the private corpus is not: set \
-        CTRLKD_PRIVATE_CORPUS to a private-corpus clone (see docs/TESTING.md). NOT a \
+        CTRLKD_PRIVATE_CORPUS to a soft-return-corpus clone (see docs/TESTING.md). NOT a \
         pass: these cells were not checked.
         """
     }
@@ -180,7 +180,7 @@ import Testing
         let title = fixture.deletingPathExtension().lastPathComponent
         let products = try ExportEngine.render(
             document: state.document, state: state, formats: [format],
-            notes: NoteSelection(), style: mode == .modern ? .modern : .printed,
+            notes: NoteSelection(), style: mode == .modern ? .modern : .native,
             title: title, docPath: fixture.path)
         guard let product = products.first else {
             throw ExportProbeError.noProduct("\(fixture.lastPathComponent) \(format.rawValue).\(mode)")

@@ -12,21 +12,28 @@ import Foundation
 /// needs the two-case axis.
 enum RenderStyle: String, Hashable, CaseIterable, Sendable {
     /// Line-for-line typescript reproduction: Courier, the file's own page geometry.
-    case printed
+    ///
+    /// Called `printed` until planning #265 (Jon: "Native view should be referenced with
+    /// some kind of 'native' label and Printed views should have 'printed' label. Even in
+    /// internal code"). This case is the AppKit facsimile pass — `DocumentRenderer
+    /// .renderNative` — so it is Native. The name it maps to on the library's side stays
+    /// `EmitMode.printed`, because that IS the engine's Printed output; `emitMode` below is
+    /// where the two vocabularies meet, and it is the only place they should.
+    case native
     /// Reflowed to a modern page: fixed 1in margins, the user's font and size.
     case modern
 
     var displayName: String {
         switch self {
-        case .printed: return "Printed"
-        case .modern:  return "Modern"
+        case .native: return "Native"
+        case .modern: return "Modern"
         }
     }
 
     /// The library's own mode enum, for handing to emitters.
     var emitMode: EmitMode {
         switch self {
-        case .printed: return .printed
+        case .native:  return .printed
         case .modern:  return .modern
         }
     }
@@ -36,8 +43,8 @@ enum RenderStyle: String, Hashable, CaseIterable, Sendable {
     /// about what it is a preview OF, even though a preview is never shown in Native.
     var viewStyle: ViewStyle {
         switch self {
-        case .printed: return .native
-        case .modern:  return .modern
+        case .native: return .native
+        case .modern: return .modern
         }
     }
 }
@@ -49,7 +56,7 @@ enum RenderStyle: String, Hashable, CaseIterable, Sendable {
 enum ViewStyle: String, Hashable, CaseIterable, Sendable {
     /// Today's on-screen renderer: AppKit, Mac-mapped fonts, selectable text, Show
     /// Invisibles' reflow. Was called "Printed" before job 265 — RENAMED, not changed in
-    /// substance: it is still `DocumentRenderer.renderPrinted`'s facsimile layout, just
+    /// substance: it is still `DocumentRenderer.renderNative`'s facsimile layout, just
     /// under its honest name now that "Printed" means something more literal (below).
     case native
     /// The engine's own PDF (`emitPDF(doc, mode: .printed)`), shown in a `PDFView` — byte-
@@ -69,11 +76,11 @@ enum ViewStyle: String, Hashable, CaseIterable, Sendable {
 
     /// What this view corresponds to for "export what you see": Native and Printed both mean
     /// the facsimile (one shows it via AppKit, the other via the engine's literal PDF, but
-    /// exporting either one means a Printed-style export), Modern maps straight across.
+    /// exporting either one means a facsimile export), Modern maps straight across.
     var renderStyle: RenderStyle {
         switch self {
-        case .native, .printed: return .printed
-        case .modern:            return .modern
+        case .native, .printed: return .native
+        case .modern:           return .modern
         }
     }
 }
@@ -242,7 +249,7 @@ final class DocumentState {
     /// default: whatever the
     /// file's own dot commands declared, filled in with WordStar's factory geometry for
     /// anything the file left unsaid. A non-nil preset flows through `effectivePage` in both
-    /// `DocumentRenderer.renderPrinted` (screen) and `ExportEngine.render` (Printed-mode PDF
+    /// `DocumentRenderer.renderNative` (screen) and `ExportEngine.render` (Printed-mode PDF
     /// export) — the SAME channel the CLI's own `--page-settings` flag uses, so a preset
     /// chosen here can never disagree with what `sr --page-settings <name>` would produce for
     /// the same file. Jon's ruling (2026-08-10): no corpus gets a hardcoded default of its
@@ -254,8 +261,8 @@ final class DocumentState {
     /// explicit that there are no per-kind toggles.
     var showInvisibles: Bool = false
 
-    /// Modern style's typeface, from Settings. Printed style ignores both (it is Courier
-    /// at the file's own `.cw` size, by definition).
+    /// Modern style's typeface, from Settings. Native and Printed ignore both (each is
+    /// Courier at the file's own `.cw` size, by definition).
     var modernFontName: String
     var modernFontSize: Int
 

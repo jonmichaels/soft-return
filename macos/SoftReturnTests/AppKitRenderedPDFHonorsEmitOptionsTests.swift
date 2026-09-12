@@ -104,10 +104,10 @@ import Testing
     @Test @MainActor func nativeCarveOutPDFHeadersFlagTogglesTheRunningHeadText() throws {
         let state = try Self.headersAndTOCState()
         let on = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
-                                         notes: NoteSelection(), style: .printed, viewStyle: .native,
+                                         notes: NoteSelection(), style: .native, viewStyle: .native,
                                          headers: true, toc: false)
         let off = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
-                                          notes: NoteSelection(), style: .printed, viewStyle: .native,
+                                          notes: NoteSelection(), style: .native, viewStyle: .native,
                                           headers: false, toc: false)
         let onText = try Self.pdfString(try #require(on.first).bytes)
         let offText = try Self.pdfString(try #require(off.first).bytes)

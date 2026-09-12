@@ -14,7 +14,7 @@ import Testing
 /// old inline placement put it on page 1 instead, and nowhere else. POWERUSE.WS's header
 /// showed on whichever single page it happened to flow onto and nowhere else, when it should
 /// show on every page from its own declaration point forward — the "paged views = paged
-/// surfaces" doctrine `renderPrinted`'s own `runningLines` already honors, and the engine's
+/// surfaces" doctrine `renderNative`'s own `runningLines` already honors, and the engine's
 /// own Modern PDF (`PDFModernLayout.swift`'s `modernStreams`, ruling 2026-08-06 M5: "Modern
 /// keeps headers") already replays correctly.
 ///

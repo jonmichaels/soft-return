@@ -46,10 +46,10 @@ enum QuickLookNativeRenderer {
     }
 
     /// Parse `bytes` and lay them out through the SAME `DocumentState`/`DocumentRenderer`
-    /// pipeline the app's own document window renders — Printed style (per the spec: "a
+    /// pipeline the app's own document window renders — Native style (per the spec: "a
     /// preview should look like the paper"), with job 203's app-group Page Settings default
     /// applied the same one-shot way the footer's own control applies it
-    /// (`DocumentState.setPageSettingsPreset` -> `DocumentRenderer.renderPrinted`'s own
+    /// (`DocumentState.setPageSettingsPreset` -> `DocumentRenderer.renderNative`'s own
     /// `effectivePage` channel), so a preview/thumbnail can never disagree with what the app's
     /// bottom-bar control would show for the same file under the same default.
     ///
@@ -88,7 +88,7 @@ enum QuickLookNativeRenderer {
         if let pageSettingsPreset {
             state.setPageSettingsPreset(pageSettingsPreset)
         }
-        return DocumentRenderer.render(state, style: .printed)
+        return DocumentRenderer.render(state, style: .native)
     }
 
     /// A `PagedDocumentView` carrying `rendered`'s full page chain, laid out and ready to
@@ -122,7 +122,9 @@ enum QuickLookNativeRenderer {
             let rect = pagedView.rect(ofPage: index)
             guard rect.width > 0, rect.height > 0 else { continue }
             autoreleasepool {
+                pagedView.capturingPageIndex = index
                 let onePageData = pagedView.dataWithPDF(inside: rect)
+                pagedView.capturingPageIndex = nil
                 if let onePagePDF = PDFDocument(data: onePageData), let page = onePagePDF.page(at: 0) {
                     combined.insert(page, at: combined.pageCount)
                 }

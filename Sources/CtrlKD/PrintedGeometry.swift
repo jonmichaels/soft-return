@@ -48,7 +48,14 @@ public struct PrintedPageMetrics: Hashable, Sendable {
     /// Type size in whole points, from `.cw`. Courier advances 0.6em, so the character
     /// pitch this implies is `Double(size) * 0.6` — the figure a monospace grid needs.
     public let size: Int
-    /// Left edge of the text column, from `.po`.
+    /// Left edge of the text column, from `.po` — the DOCUMENT DEFAULT only (the file's
+    /// first `.po`), exactly like `lead` above. It resolves `.po` alone and CANNOT carry a
+    /// per-page `.poe`/`.poo` (even/odd offset, planning #231) or a line's own `.po`
+    /// override (register b31) — both are stateful per-line/per-page facts this
+    /// document-wide struct has no room for. A caller that needs the real per-page-or-line
+    /// left edge (running heads split by page parity, a body line after a mid-document
+    /// `.po`/`.poe`/`.poo`) must read it off the laid-out `PageLine.left` instead — this
+    /// field is only the fallback a line without its own override inherits.
     public let left: Double
     /// Text lines per page — the capacity `docToPagelines` paginates against.
     public let capacity: Int

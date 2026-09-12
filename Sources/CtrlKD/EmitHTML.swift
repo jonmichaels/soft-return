@@ -59,13 +59,13 @@ func htmlEscape(_ text: String) -> String {
 /// allowed, e.g. a box's own top-border run of `─`) — the HTML/RTF-side twin of PDF's own
 /// graphics doctrine ("the reason the box shows up is that it could be done in that era"),
 /// used to force a monospace face on exactly the pieces `splitGraphicSpans` isolated,
-/// never on prose sharing their line. Reuses PDF's own `graphicChars` set (single source
-/// of truth in this module — ctrl-kd's Python keeps two independent copies for its own
-/// file-organization reasons, which don't apply here). Port of `emit._is_graphic_text`.
+/// never on prose sharing their line. Over `contentGraphicChars` (ParagraphAssembly.swift),
+/// NOT the PDF drawing tables' `graphicChars` — the two are genuinely different sets since
+/// planning #266; see that constant's own note. Port of `emit._is_graphic_text`.
 func isGraphicText(_ text: String) -> Bool {
     let stripped = text.replacingAll(" ", with: "")
     guard !stripped.isEmpty else { return false }
-    return stripped.allSatisfy { graphicChars.contains($0) }
+    return stripped.allSatisfy { contentGraphicChars.contains($0) }
 }
 
 /// One span -> escaped, tagged HTML. emit.py:143-154.

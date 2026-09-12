@@ -6,7 +6,7 @@ import Testing
 
 /// Job 224 (b12 leg, branch `native-overprint`): `.overprint` `PageLine` chains (LJ6DTP's
 /// white-on-black knockouts, two-pass flush-right bars, banner strikeovers) now composite
-/// onto ONE fragment's baseline (`DocumentRenderer.renderPrinted`'s `overprintPasses`,
+/// onto ONE fragment's baseline (`DocumentRenderer.renderNative`'s `overprintPasses`,
 /// `PagedDocumentView.swift`'s `PageTextView.drawOverprintPasses`) instead of each chain
 /// member getting its own separate (if `nearZeroLead`-tall) fragment. See this job's report
 /// for the full before/after — this file is the PERMANENT regression coverage, not the
@@ -46,7 +46,7 @@ struct OverprintCompositingTests {
     /// Job 227 added a SECOND, entirely separate pass mechanism for a different reason
     /// (`RenderedDocument.oversizedSelfPasses` — a chain base's own glyph too tall for its
     /// fragment, LJ6DTP.WS's 72pt banner chief among them) that does NOT touch
-    /// `overprintPasses` at all (`renderPrinted`'s own call site: the self-pass goes into a
+    /// `overprintPasses` at all (`renderNative`'s own call site: the self-pass goes into a
     /// SEPARATE array precisely so this invariant — unrelated to job 227 — never has to
     /// know it exists). `oversizedSelfPassesMatchLineExceedsFragment` below is that job's own
     /// permanent coverage.
@@ -72,7 +72,7 @@ struct OverprintCompositingTests {
             // Every chained line (every `.overprint == true` PageLine) is EITHER the first
             // member of its own chain (never true — the first member's OWN flag can be true
             // too, if the chain is 3+ deep) or captured in some fragment's pass list. The
-            // exact invariant `DocumentRenderer.renderPrinted` establishes: real fragments
+            // exact invariant `DocumentRenderer.renderNative` establishes: real fragments
             // emitted for this page's REAL content == number of chains (maximal overprint
             // runs) on it, and every chain member from the 2nd on is a pass — i.e.
             // `page.count == realFragments + totalPassedLines`.
@@ -98,10 +98,10 @@ struct OverprintCompositingTests {
 
     /// Job 227's own permanent regression coverage: `RenderedDocument.oversizedSelfPasses`
     /// carries a self-pass for a chain base EXACTLY where `DocumentRenderer
-    /// .lineExceedsFragment` — the SAME predicate `renderPrinted` itself calls — says that
+    /// .lineExceedsFragment` — the SAME predicate `renderNative` itself calls — says that
     /// base's own tallest glyph is too tall for its fragment, nowhere else. Re-derives
     /// `advanceLead`'s own tiny formula the same deliberate way the test above duplicates
-    /// the chain-walk itself, rather than trusting `renderPrinted`'s internal bookkeeping
+    /// the chain-walk itself, rather than trusting `renderNative`'s internal bookkeeping
     /// against itself.
     @Test func oversizedSelfPassesMatchLineExceedsFragment() throws {
         let doc = try Self.lj6dtpDoc
@@ -113,7 +113,7 @@ struct OverprintCompositingTests {
             .appendingPathComponent("LJ6DTP.WS"))
         let rendered = DocumentRenderer.render(state)
 
-        // `DocumentRenderer.renderPrinted`'s own `nearZeroLead`/`advanceLead` — a line's
+        // `DocumentRenderer.renderNative`'s own `nearZeroLead`/`advanceLead` — a line's
         // fragment height is the gap BEFORE THE NEXT GROUP, not its own lead.
         let nearZeroLead = 0.01
         func advanceLead(_ page: Page, after i: Int) -> Double {
@@ -154,7 +154,7 @@ struct OverprintCompositingTests {
     /// container's `usedRect` height is unchanged to the point before/after this fix, and
     /// the same single glyph still overflows page 8 into a 9th container. The real cause is
     /// the SAME pre-existing "isolated probe measurably disagrees with the real embedded
-    /// chain" residual `DocumentRenderer.renderPrinted`'s own doc comment on `measuredHeight`
+    /// chain" residual `DocumentRenderer.renderNative`'s own doc comment on `measuredHeight`
     /// already documents for this fixture (job 202) — a different, still-open follow-up.
     /// Job 224 found this was NOT an overprint-compositing regression (verified A/B); the
     /// actual root cause — job 202's isolated-vs-embedded AppKit measurement residual — is

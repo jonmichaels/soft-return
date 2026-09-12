@@ -13,7 +13,7 @@ import AppKit
 /// now draws ~20pt down. This file is the port: `PCLOp`/`parsePCLProgram` are copied
 /// VERBATIM from the engine (pure byte tokenizing, frame-independent — both are `internal`
 /// to `CtrlKD`, so this app target cannot call them directly, same "parallel port, not a
-/// call" discipline as `PrintedVectorGraphics.swift`'s own box-glyph fills). Only the
+/// call" discipline as `NativeVectorGraphics.swift`'s own box-glyph fills). Only the
 /// EXECUTION half (`pclRectOps` there) is re-derived here, in `pclGraphicRects` below,
 /// because the engine's version emits PDF content-stream ops in PDF's bottom-up frame and
 /// this app draws directly into AppKit's own top-down (flipped) view frame — see that
@@ -21,14 +21,14 @@ import AppKit
 ///
 /// `PageTextView.drawPCLGraphics` (`PagedDocumentView.swift`) is the draw-time caller: it
 /// walks each line fragment's glyphs the same way `drawVectorGraphics`/`graphicCells`
-/// already do for box-drawing glyphs, finds any `.printedPCLProgram`-tagged attachment
+/// already do for box-drawing glyphs, finds any `.nativePCLProgram`-tagged attachment
 /// glyph (`DocumentRenderer.pctlAdvanceAttachment`'s own doc comment), and executes that
 /// control's own program anchored at the attachment's real, laid-out position.
 extension NSAttributedString.Key {
     /// The `Int` index into `RenderedDocument.pclPrograms`/`Document.pclPrograms` this pctl
     /// attachment's own control carries, or absent for a display-only control with no
     /// surviving printer payload. See `DocumentRenderer.pctlAdvanceAttachment`.
-    static let printedPCLProgram = NSAttributedString.Key("SoftReturn.printedPCLProgram")
+    static let nativePCLProgram = NSAttributedString.Key("SoftReturn.nativePCLProgram")
 }
 
 /// One tokenized PCL operation. Port of `CtrlKD.PCLOp` (`PDFDriverLJ6DTP.swift`) — see this
@@ -151,7 +151,7 @@ func parsePCLProgram(_ data: [UInt8]) -> [PCLOp] {
 /// Execute one parsed PCL program into this app's own top-down (flipped) view frame —
 /// `anchorX`/`anchorY` are the real, laid-out AppKit position (points, distance from the
 /// page's own top-left) of the pctl attachment glyph this control sits at, the same anchor
-/// convention `graphicCells` already uses for cp437 fills (`PrintedVectorGraphics.swift`).
+/// convention `graphicCells` already uses for cp437 fills (`NativeVectorGraphics.swift`).
 ///
 /// This is NOT a call into `CtrlKD.pclRectOps` (that function is `internal` to `CtrlKD` and
 /// works in PDF's own bottom-up frame besides) — it re-derives the same cursor arithmetic
@@ -169,7 +169,7 @@ func parsePCLProgram(_ data: [UInt8]) -> [PCLOp] {
 ///   - `moveX` needs no sign flip either way (X's sense is frame-independent).
 ///   - A fill's own anchor is its TOP edge in this frame (mirrors the engine's own anchor
 ///     being the rect's bottom-up TOP): `CGRect(x: curX, y: curY, width: wPt, height: hPt)`
-///     extends DOWN the page from the cursor, matching `PrintedVectorGraphics`'s own
+///     extends DOWN the page from the cursor, matching `NativeVectorGraphics`'s own
 ///     `cellTop`/`addRect` convention (smaller Y is higher on the page).
 func pclGraphicRects(_ progOps: [PCLOp], anchorX: Double, anchorY: Double) -> [GraphicRect] {
     var rects: [GraphicRect] = []
@@ -254,9 +254,9 @@ func pclProgramIsAbsoluteOnly(_ progOps: [PCLOp]) -> Bool {
 /// walk (above) only ever visits a page's REAL base fragments — but LJ6DTP's own border
 /// control does not always sit on an ordinary line. On 4 of this fixture's 8 pages it sits
 /// on that page's own OVERSIZED opening line (`docToPagelines`'s page-open banner/heading),
-/// whose REAL AppKit fragment is `DocumentRenderer.renderPrinted`'s blank placeholder (`let
+/// whose REAL AppKit fragment is `DocumentRenderer.renderNative`'s blank placeholder (`let
 /// content = oversized ? PageLine([], soft:) : base` — same gap `AppOutput.passVectors`'s
-/// own citation already names for cp437 box fills). The control's `.printedPCLProgram`
+/// own citation already names for cp437 box fills). The control's `.nativePCLProgram`
 /// attribute survives fine — `naturalPass`/`attributedLine` build the self-pass from the
 /// SAME `appendSpan` this file's own attachment comes from — it just lands on the SELF-PASS
 /// overlay's own isolated `NSTextStorage`, which neither `drawPCLGraphics` nor (before this
@@ -322,7 +322,7 @@ func pclRectsInIsolatedPass(
         defer { g += 1 }
         let charIndex = manager.characterIndexForGlyph(at: g)
         guard charIndex < text.length else { continue }
-        guard let idx = storage.attribute(.printedPCLProgram, at: charIndex, effectiveRange: nil) as? Int,
+        guard let idx = storage.attribute(.nativePCLProgram, at: charIndex, effectiveRange: nil) as? Int,
               pclPrograms.indices.contains(idx)
         else { continue }
         let prog = parsePCLProgram(pclPrograms[idx])

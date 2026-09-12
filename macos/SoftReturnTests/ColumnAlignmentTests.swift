@@ -70,7 +70,7 @@ import Testing
     // MARK: - End-to-end: real columns in the real fixture land at the same real X
 
     /// LJ6DTP.WS p5's "Color Mappings" chart draws each bar as a run of real block(219)
-    /// glyphs (`\u{2588}`, `PrintedVectorGraphics.swift`'s own `fullBlockChar`) immediately
+    /// glyphs (`\u{2588}`, `NativeVectorGraphics.swift`'s own `fullBlockChar`) immediately
     /// after that row's own label + filler run — so the bar's own FIRST glyph is real,
     /// measurable text, not a picture. Two rows use a plain-space label ("Black", no dots);
     /// two use a dot-leader label ("Shading 85%....", "Shading 50%...."). All four are typed
@@ -83,7 +83,7 @@ import Testing
         let defaults = UserDefaults(suiteName: "ColumnAlignmentTests.\(UUID().uuidString)")!
         let state = try DocumentState(data: bytes, settings: SettingsStore(defaults: defaults), docPath: url.path)
         state.style.setManually(.native)
-        let rendered = DocumentRenderer.render(state, style: .printed)
+        let rendered = DocumentRenderer.render(state, style: .native)
 
         let storage = NSTextStorage(attributedString: rendered.text)
         let layoutManager = NSLayoutManager()

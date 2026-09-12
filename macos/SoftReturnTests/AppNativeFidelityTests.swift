@@ -10,7 +10,7 @@ import Testing
 /// ## Why this suite has to exist
 ///
 /// Everything the app had before this was APP-VS-ENGINE parity —
-/// `PrintedStructuralParityTests`, `NativeVsEngineGeometryTests`, `PixelOracleAppEngineTests`
+/// `NativeStructuralParityTests`, `NativeVsEngineGeometryTests`, `PixelOracleAppEngineTests`
 /// all compare the app's render against this repo's own `emitPDF`. That is a PROXY. It
 /// establishes that the app agrees with the engine; it establishes nothing directly about
 /// whether either agrees with what WordStar 7 actually put on paper. The app's fidelity
@@ -150,7 +150,7 @@ struct AppNativeFidelityTests {
     /// The app's AppKit-rendered Printed PDF for one document — the Cmd-P facsimile pass,
     /// not the library emitter.
     @MainActor
-    static func appPrintedPDF(forDocumentNamed name: String) throws -> [UInt8] {
+    static func appNativePDF(forDocumentNamed name: String) throws -> [UInt8] {
         let url = try #require(resolveSource(name), "no .WS/.WS4 source for \(name) in this corpus")
         let bytes = [UInt8](try Data(contentsOf: url))
         let defaults = UserDefaults(suiteName: "AppPCLFidelity.\(UUID().uuidString)")!
@@ -158,7 +158,7 @@ struct AppNativeFidelityTests {
                                       docPath: url.path)
         let products = try ExportEngine.render(
             document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-            style: .printed, viewStyle: .native,
+            style: .native, viewStyle: .native,
             title: url.deletingPathExtension().lastPathComponent, docPath: url.path)
         return try #require(products.first?.bytes, "the app produced no Printed PDF for \(name)")
     }
@@ -249,8 +249,8 @@ struct AppNativeFidelityTests {
     /// Every captured document, through the app's own Printed view, measured against the
     /// real WordStar captures by ctrl-kd's own tolerance model.
     @Test(.enabled(if: isArmed, skipReason), arguments: documents)
-    @MainActor func appPrintedViewMatchesTheWordStarCapture(doc: String) throws {
-        let pdf = try Self.appPrintedPDF(forDocumentNamed: doc)
+    @MainActor func appNativeViewMatchesTheWordStarCapture(doc: String) throws {
+        let pdf = try Self.appNativePDF(forDocumentNamed: doc)
         // Extracted on THIS side, by AppPDFWords, because ctrl-kd cannot read these bytes.
         // AppPDFWordsProofTests is what makes that trustworthy: it runs ctrl-kd's own
         // --dump-engine-words and this extractor over the SAME engine PDF and requires them
@@ -314,13 +314,13 @@ struct AppNativeFidelityTests {
                 reads `pdf=None` ("no corresponding word anywhere"), \
                 counts_by_reason=\(counts). This is not \(realBugs) rendering defects. \
                 ctrl-kd's fidelity_gate parses ITS OWN emitter's op shape by regex \
-                (`... Td (TEXT) Tj ET`); the app's Printed view is Quartz/AppKit, which \
+                (`... Td (TEXT) Tj ET`); the app's Native view is Quartz/AppKit, which \
                 writes `Tm` + `TJ`, and the regex matches zero ops against it. Verified two \
                 ways: the same driver on the ENGINE's PDF for BOXES returns clean with \
                 matches_recorded=true, and _TEXT_OP_RE matches 1 op of ctrl-kd's shape and \
                 0 of either Quartz shape. The tier needs a real PDF text extractor on the \
                 app side (PDFKit) feeding the gate word positions instead of PDF bytes, or \
-                a ruling that the app's Printed facsimile is measured some other way. \
+                a ruling that the app's Native facsimile is measured some other way. \
                 Named: \(named)
                 """)
             return

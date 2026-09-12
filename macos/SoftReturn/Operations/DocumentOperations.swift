@@ -312,7 +312,7 @@ public enum DocumentOperations {
     // MARK: - Page count
 
     /// The library's own pagination — `docToPagelines(doc, printed: true).count`, the same
-    /// call `emitLayout` and the app's Printed-style renderer (`DocumentRenderer`) make.
+    /// call `emitLayout` and the app's Native renderer (`DocumentRenderer`) make.
     ///
     /// Deliberately NOT the app's Modern-style page count: that number only exists after
     /// AppKit reflows the text at a user-chosen font in a live view (see
@@ -351,7 +351,7 @@ public enum DocumentOperations {
     /// Modern-mode plain text: searchable words, not control bytes — the "text" emitter
     /// already strips dot commands, note markers and page furniture. This is the source
     /// Spotlight indexing reads (see `SpotlightIndexing`) rather than the raw bytes or the
-    /// Printed facsimile, which would index page-break padding and column rules as if they
+    /// Native facsimile, which would index page-break padding and column rules as if they
     /// were words.
     public static func plainTextContent(data: [UInt8], variant: Variant? = nil) throws -> String {
         let opened = try open(data: data, variant: variant)

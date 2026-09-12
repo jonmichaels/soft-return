@@ -112,6 +112,34 @@ func coalesceSpans(_ spans: [Span]) -> [Span] {
     return out
 }
 
+/// The CONTENT-side cp437 graphics classification set — box-drawing, shades, blocks and
+/// the card suits/smiley/sun/triple-bar, and nothing else. Port of `core.GRAPHIC_CHARS`,
+/// which ctrl-kd keeps deliberately INDEPENDENT of the PDF drawing tables' own
+/// `graphicChars` (`PDFDriverLJ6DTP.swift`): those are per-glyph drawing recipes, this is a
+/// plain classification with two Modern/HTML/RTF-side jobs — `looksLikeVerse` and
+/// `splitGraphicSpans` below, plus `EmitHTML`'s `isGraphicText`.
+///
+/// This port used to reuse `graphicChars` for both jobs, on the reasoning that the two sets
+/// had the same members and one source of truth was better than two. Planning #266 ended
+/// that: `₧` (cp437 code 158) joined `symbolShapes` so the PDF path can DRAW it as the "Pt"
+/// ligature instead of degrading it to `?`, but the peseta is an ordinary currency
+/// character in prose — not box art — and classifying it as graphics would put a
+/// forced-monospace `ws-graphic` span around it in HTML, an `\f1` override in RTF, and one
+/// more "this line is a picture" vote into `looksLikeVerse`. The two sets are different
+/// sets; they are now written down as different sets. Arc corners (`arcCorners`) are
+/// likewise absent here, exactly as in ctrl-kd: they are never decoded from a file, only
+/// produced by the LJ6DTP Univers substitution at PDF render time, so no content-side
+/// classifier ever sees one.
+let contentGraphicChars: Set<Character> = Set(
+    "\u{2588}\u{2591}\u{2592}\u{2593}\u{2580}\u{2584}\u{258C}\u{2590}\u{25A0}"
+    + "\u{2666}\u{2665}\u{2660}\u{2663}\u{263B}\u{263C}\u{2261}"
+    + "\u{2500}\u{2502}\u{250C}\u{2510}\u{2514}\u{2518}\u{251C}\u{2524}\u{252C}"
+    + "\u{2534}\u{253C}"
+    + "\u{2550}\u{2551}\u{2554}\u{2557}\u{255A}\u{255D}\u{2560}\u{2563}\u{2566}"
+    + "\u{2569}\u{256C}\u{2552}\u{2553}\u{2555}\u{2556}\u{2558}\u{2559}\u{255B}"
+    + "\u{255C}\u{255E}\u{255F}\u{2561}\u{2562}\u{2564}\u{2565}\u{2567}\u{2568}"
+    + "\u{256A}\u{256B}")
+
 /// Break spans that MIX graphic (box-drawing/shade/block/card-suit) characters with
 /// ordinary text into consecutive same-kind pieces, each its own Span carrying the
 /// original styles/font/colour unchanged — so a renderer can single out the purely-
@@ -119,13 +147,13 @@ func coalesceSpans(_ spans: [Span]) -> [Span] {
 /// EmitHTML.swift, and the RTF `\f1` override in EmitRTF.swift) without touching the
 /// prose sharing their line (a figure caption's own text, e.g. "Figure 1" between a
 /// box's two vertical bars). Mirrors PDF's own `splitGraphics`, at the Span level
-/// instead of PDF's segment tuples, reusing the SAME `graphicChars` set (single source
-/// of truth in this module). A span with no graphic character at all passes through
-/// unchanged. Port of `core.split_graphic_spans` (ctrl-kd round 8).
+/// instead of PDF's segment tuples, over `contentGraphicChars` (see its own note above for
+/// why that is not the PDF tables' `graphicChars`). A span with no graphic character at all
+/// passes through unchanged. Port of `core.split_graphic_spans` (ctrl-kd round 8).
 func splitGraphicSpans(_ spans: [Span]) -> [Span] {
     var out: [Span] = []
     for sp in spans {
-        guard sp.text.contains(where: { graphicChars.contains($0) }) else {
+        guard sp.text.contains(where: { contentGraphicChars.contains($0) }) else {
             out.append(sp)
             continue
         }
@@ -139,7 +167,7 @@ func splitGraphicSpans(_ spans: [Span]) -> [Span] {
             out.append(piece)
         }
         while idx < sp.text.endIndex {
-            let isG = graphicChars.contains(sp.text[idx])
+            let isG = contentGraphicChars.contains(sp.text[idx])
             if let cur = runIsGraphic, cur != isG {
                 flush(to: idx)
                 runStart = idx
@@ -288,7 +316,7 @@ func looksLikeVerse(_ run: [Line], dominantStyles: StyleKey = StyleKey()) -> Boo
     // paragraphs, misaligned once a proportional font entered the picture).
     if nonBlank.count >= 2 {
         let graphicHits = nonBlank.filter { t in
-            !t.contains(where: \.isLetter) && t.contains(where: { graphicChars.contains($0) })
+            !t.contains(where: \.isLetter) && t.contains(where: { contentGraphicChars.contains($0) })
         }.count
         if Double(graphicHits) / Double(nonBlank.count) >= 0.5 {
             return true

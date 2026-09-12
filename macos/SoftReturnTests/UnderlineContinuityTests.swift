@@ -31,7 +31,7 @@ struct UnderlineContinuityTests {
             guard let bytes = try? [UInt8](Data(contentsOf: url)) else { continue }
             let defaults = UserDefaults(suiteName: "UnderlineContinuityTests.\(UUID().uuidString)")!
             guard let state = try? DocumentState(data: bytes, settings: SettingsStore(defaults: defaults)) else { continue }
-            let rendered = DocumentRenderer.render(state, style: .printed)
+            let rendered = DocumentRenderer.render(state, style: .native)
             let ns = rendered.text.string as NSString
             var ranges: [NSRange] = []
             rendered.text.enumerateAttribute(.underlineStyle, in: NSRange(location: 0, length: rendered.text.length)) { value, range, _ in

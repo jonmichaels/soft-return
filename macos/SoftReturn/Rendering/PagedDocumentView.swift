@@ -1,4 +1,5 @@
 import AppKit
+import CtrlKD
 
 /// The pages of one document, stacked, inside a scroll view that supplies zoom.
 ///
@@ -27,6 +28,25 @@ final class PagedDocumentView: NSView {
     /// directly), so no cumulative table is needed.
     private var pageTops: [CGFloat] = []
 
+    /// WHICH PAGE A `dataWithPDF(inside:)` CAPTURE IS ASKING FOR, or `nil` on screen.
+    ///
+    /// This view's own `draw(_:)` needs nothing from it — measured: a capture is NOT re-based
+    /// for the parent, so drawing every page's furniture at document coordinates is correct
+    /// there and always was. The OVERLAY subview is the problem. Its frame spans the whole
+    /// document, so its drawing is not re-based either, and it walks EVERY page: page one's
+    /// oversized title is painted into page two's and page three's captures, at document
+    /// coordinates that land above their own sheets.
+    ///
+    /// Measured on DARKNESS.WS, page-local y read back out of the app's own exported PDF:
+    /// its running head landed at -764.0 on page 2 and -1576.0 on page 3 — 48.0 less one
+    /// page height plus the gap, and less two of them — while the engine's own PDF has it at
+    /// 48.0. Off the top of its own sheet, so invisible to anyone looking at the export,
+    /// which is why it stood.
+    ///
+    /// A capture states its page rather than being guessed at. Set around the capture by
+    /// `ExportEngine` and `QuickLookNativeRenderer`, the only two callers.
+    var capturingPageIndex: Int?
+
     /// Job 396 (391 root cause 5): extra blank canvas `RenderedDocument.leadingHeadroom`
     /// says local page `index` needs ABOVE its own nominal top, or `0` when `rendered` is
     /// nil, `index` is out of range, or that page's own first line isn't an oversized
@@ -44,7 +64,7 @@ final class PagedDocumentView: NSView {
     /// paper's top — `RenderedDocument.perPageTextTop[index]` when that page has its own
     /// entry, else `rendered.textFrame.origin.y` (every non-Printed render path's flat,
     /// shared anchor, and Printed's own fallback for an index the per-page array somehow
-    /// doesn't cover — defensive only, `renderPrinted` always sizes the array to
+    /// doesn't cover — defensive only, `renderNative` always sizes the array to
     /// `pages.count`). Replaces the single shared `rendered.textFrame.origin.y` every call
     /// site below used before this job — see `RenderedDocument.perPageTextTop`'s own doc
     /// comment for why a single shared anchor could not represent a page whose own `.mt`/
@@ -74,8 +94,29 @@ final class PagedDocumentView: NSView {
     /// own frame bounds — SCRIPT.WS page 10's own real content needs a container ~147pt
     /// taller than the flat frame provided, and QuickLook's PDF silently dropped the
     /// overflow (`QLCLIByteParityTests` job 426's own diagnosis, `missingInActual`).
+    /// How tall page `index`'s own text area is — the TALLEST of its columns.
+    ///
+    /// `containers[index]` was right while there was exactly one container per page and
+    /// became a straight index error when item 19 gave every COLUMN its own
+    /// (`containerPage` is the map). On a columnar document every page from the first
+    /// multi-column one onward took some other page's column's height: MICKEE.WS page 16
+    /// was framed 423.5pt tall — a height belonging to `containers[16]`, which by then was
+    /// page 9's second column — against its own columns' 555.5 and 579.5.
+    ///
+    /// That is a frame, and a text view CLIPS to its frame, so the bottom of the page simply
+    /// did not export. `syncColumnViews` hands every one of a page's columns this same
+    /// frame, so both halves of MICKEE's page 16 lost their tails: the app's own PDF ended
+    /// that page at "shows a single entire page, unless you are already" where the library's
+    /// carries eleven more lines. PRINT.TST page 2 is the same story at 383.5 against 613.5.
+    ///
+    /// The MAXIMUM rather than column 0's, because that one frame has to hold every column
+    /// on the page, and a later column is routinely the longer one (MICKEE's 48 against 46).
     private func textHeight(atPage index: Int) -> CGFloat {
         guard let rendered else { return 0 }
+        let own = containerPage.indices.filter {
+            containerPage[$0] == index && containers.indices.contains($0)
+        }
+        if let tallest = own.map({ containers[$0].size.height }).max() { return tallest }
         guard containers.indices.contains(index) else { return rendered.textFrame.size.height }
         return containers[index].size.height
     }
@@ -103,8 +144,17 @@ final class PagedDocumentView: NSView {
     }
 
     private var storage = NSTextStorage()
-    private var layoutManager = NSLayoutManager()
+    private var layoutManager = softReturnLayoutManager()
     private var containers: [NSTextContainer] = []
+    /// Which page and which of its columns each container in `containers` belongs to — item
+    /// 19. The layout delegate matches a fragment's own `PinnedBaseline.page`/`.column`
+    /// against these to know whether the container it is being asked to lay into is the one
+    /// that fragment belongs in.
+    private var containerPage: [Int] = []
+    private var containerColumn: [Int] = []
+    /// Per page, the text views for its SECOND and later columns — `pageViews` keeps the
+    /// first, so every page-indexed thing in this file still means what it did.
+    private var columnViews: [[NSTextView]] = []
     /// Job 412: `true` only while `buildExplicitPages`'s own throwaway, whole-document probe
     /// container is attached — see that call site's own doc comment for why the
     /// `NSLayoutManagerDelegate` conformance below must stay a no-op there.
@@ -166,10 +216,27 @@ final class PagedDocumentView: NSView {
         pageViews.forEach { $0.removeFromSuperview() }
         pageViews = []
         containers = []
+        containerPage = []
+        containerColumn = []
+        columnViews = []
         if let old = storage.layoutManagers.first { storage.removeLayoutManager(old) }
 
         storage = NSTextStorage(attributedString: rendered.text)
-        layoutManager = NSLayoutManager()
+        layoutManager = softReturnLayoutManager()
+        // MODERN'S LEADING IS THE LIBRARY'S, AND NOTHING IS ADDED TO IT.
+        //
+        // `modernParagraphStyle` already pins `minimumLineHeight == maximumLineHeight ==
+        // size * 1.2`, which is `PDFModernLayout`'s own `modernLine * pt` exactly — and
+        // AppKit then added the FACE's external leading on top of the clamp, because
+        // `usesFontLeading` defaults to true. Measured on -README.WS's Modern pages: the
+        // library advances 16.80pt line to line at a 14pt body and the app advanced
+        // 17.394pt, the difference being Times New Roman's own 0.594pt leading, every line,
+        // so the app fitted fewer lines per page and paginated 22 pages against 21.
+        //
+        // Printed keeps it: its fragments are pinned through the layout-manager delegate
+        // rather than by the paragraph clamp alone, and changing what AppKit adds underneath
+        // that is a separate question from this one.
+        layoutManager.usesFontLeading = rendered.clipsLines
         // A viewer never edits, so nothing needs the extra glyph generation that
         // non-contiguous layout trades away — and turning it off makes the page-count loop
         // below exact rather than eventually-consistent.
@@ -235,10 +302,42 @@ final class PagedDocumentView: NSView {
         needsDisplay = true
     }
 
-    /// Build the container chain for `rendered`. Printed style places each `docToPagelines`
+    /// Build the container chain for `rendered`. Native style places each `docToPagelines`
     /// page in its own EXPLICITLY sized container (`buildExplicitPages`); Modern style has
     /// no library pagination to honour, so AppKit grows the chain and reflows on its own —
     /// the only way to learn ITS page count is to lay out and ask.
+    /// The character offset the container AFTER `container` will begin at — one past the
+    /// last character this one actually placed. `nil` once the document is exhausted, so the
+    /// caller stops rather than collapsing a blank nothing will ever open on.
+    private func nextContainerStart(for container: NSTextContainer) -> Int? {
+        let glyphs = layoutManager.glyphRange(for: container)
+        guard glyphs.length > 0 else { return nil }
+        let chars = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let next = chars.location + chars.length
+        return next < storage.length ? next : nil
+    }
+
+    /// Gives one recorded blank line a hairline's height, so the page it would have opened
+    /// spends nothing on it. A paragraph style is copied and re-set rather than mutated in
+    /// place: `NSAttributedString` copies the value at set-time, so mutating the style
+    /// object a laid-out run already holds would not invalidate anything.
+    private func collapseBlankLine(_ range: NSRange) {
+        guard range.location >= 0, NSMaxRange(range) <= storage.length, range.length > 0 else { return }
+        storage.beginEditing()
+        storage.enumerateAttribute(.paragraphStyle, in: range, options: []) { value, subrange, _ in
+            let style = (value as? NSParagraphStyle).map {
+                ($0.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+            } ?? NSMutableParagraphStyle()
+            style.lineHeightMultiple = 0
+            style.minimumLineHeight = 0.01
+            style.maximumLineHeight = 0.01
+            style.paragraphSpacing = 0
+            style.paragraphSpacingBefore = 0
+            self.storage.addAttribute(.paragraphStyle, value: style, range: subrange)
+        }
+        storage.endEditing()
+    }
+
     private func buildPages(for rendered: RenderedDocument) {
         let containerSize = rendered.textFrame.size
         if rendered.clipsLines {
@@ -256,6 +355,23 @@ final class PagedDocumentView: NSView {
         // populate, which is every document but a screenplay-detected one — this loop is
         // then IDENTICAL to before this job, container for container.
         var pendingBreaks = rendered.modernForcedPageBreakOffsets
+        // Blank lines by their own START offset, so "does the next page open on one?" is a
+        // dictionary lookup rather than a scan — see the collapse below.
+        var blankRanges: [Int: NSRange] = [:]
+        for range in rendered.modernBlankLineRanges { blankRanges[range.location] = range }
+
+        // A BLANK BEFORE ANY CONTENT COSTS NOTHING EITHER. The library's guard is
+        // `!body.isEmpty`, which is false for the document's very first items as well as for
+        // a page top — so a leading blank is dropped there too. The per-page collapse below
+        // can never see those: it asks where the NEXT container will start, and the first
+        // container starts at 0. Measured on VERSIONS.WS, whose first body baseline sat at
+        // 102.60 against the library's 88.80 — one whole line of nothing.
+        var leadingOffset = 0
+        while let blank = blankRanges[leadingOffset] {
+            collapseBlankLine(blank)
+            blankRanges[leadingOffset] = nil
+            leadingOffset = NSMaxRange(blank)
+        }
 
         repeat {
             let container = BreakingTextContainer(size: containerSize)
@@ -270,6 +386,9 @@ final class PagedDocumentView: NSView {
             container.forcedBreakOffset = pendingBreaks.first
             layoutManager.addTextContainer(container)
             containers.append(container)
+            containerPage.append(pageViews.count)
+            containerColumn.append(0)
+            columnViews.append([])
 
             let view = makePageView(container: container, rendered: rendered, pageIndex: pageViews.count)
             pageViews.append(view)
@@ -283,10 +402,120 @@ final class PagedDocumentView: NSView {
             // container should pick up — see `RenderedDocument.modernFootnoteEvents`'s own
             // doc comment for why this has to run HERE, one real page at a time, rather than
             // resolved after the whole chain exists the way running heads/feet are.
+            var footnoteEntries: [NSAttributedString] = []
             if !rendered.modernFootnoteEvents.isEmpty {
-                let entries = reserveFootnoteBlock(in: container, fullHeight: containerSize.height,
-                                                    rendered: rendered)
-                self.rendered?.modernFootnoteBlocks.append(entries)
+                footnoteEntries = reserveFootnoteBlock(in: container, fullHeight: containerSize.height,
+                                                       rendered: rendered)
+            }
+
+            // Planning #221 (Jon's ruling 2026-09-07, verbatim): "endnotes go right at the
+            // end of text / image on the last page unless there are footnotes on that page.
+            // Then the endnotes start on a new page." Endnotes are never interleaved with a
+            // footnote block.
+            //
+            // The engine applies this in `modernStreams`, which knows each page's reserved
+            // note lines before it places anything. AppKit does not decide a Modern page
+            // break until the page has actually been laid out, so the identical test runs
+            // HERE instead — on a real page, right after its own footnote block is known,
+            // which is the same reason `reserveFootnoteBlock` itself has to run in this loop
+            // rather than after it.
+            //
+            // The guard is deliberately a STRICT interior test. If the appendix already
+            // begins this page, breaking would open an empty page rather than move anything;
+            // and once the break is taken the next container begins AT the appendix, so its
+            // own `location` check cannot fire a second time.
+            if let appendixStart = rendered.modernEndnoteAppendixStart, !footnoteEntries.isEmpty {
+                let laid = layoutManager.characterRange(
+                    forGlyphRange: layoutManager.glyphRange(for: container), actualGlyphRange: nil)
+                if appendixStart > laid.location, appendixStart < laid.location + laid.length {
+                    container.forcedBreakOffset = appendixStart
+                    // `forcedBreakOffset` is consulted during TYPESETTING, so text already
+                    // laid into this container has to be invalidated for the new refusal to
+                    // mean anything — a container's own geometry change is what does that
+                    // implicitly inside `reserveFootnoteBlock`; here it is stated directly,
+                    // from the appendix to the end of the document.
+                    let tail = NSRange(location: appendixStart,
+                                       length: max(0, rendered.text.length - appendixStart))
+                    layoutManager.invalidateLayout(forCharacterRange: tail, actualCharacterRange: nil)
+                    layoutManager.ensureLayout(for: container)
+                    // This page just lost its appendix, so its footnote block is measured
+                    // again. That set can only have stayed the same or shrunk — every
+                    // footnote marker sits in body text, ahead of the appendix — never grown.
+                    footnoteEntries = reserveFootnoteBlock(in: container, fullHeight: containerSize.height,
+                                                           rendered: rendered)
+                }
+            }
+
+            if !rendered.modernFootnoteEvents.isEmpty {
+                self.rendered?.modernFootnoteBlocks.append(footnoteEntries)
+            }
+
+            // `.cp`: A PARAGRAPH THAT ASKS FOR ROOM THIS PAGE HAS NOT GOT STARTS THE NEXT
+            // ONE. The engine's own test, made here because only a real page can answer it:
+            // `if !body.isEmpty, y - (margb + noteBlockH()) < need { close() }`. `need` came
+            // with the offset (`RenderedDocument.modernConditionalBreaks`); the room left is
+            // this container's own height below where the paragraph would start.
+            //
+            // Only the FIRST unmet `.cp` in a container matters: forcing the break there
+            // moves everything after it to the next page, where the next `.cp` is asked
+            // again against that page's own room.
+            //
+            // ASKED AGAIN AFTER THE BLANK COLLAPSE BELOW, because the collapse changes the
+            // answer: a page that could not hold the blank CAN hold the hairline it becomes,
+            // and then whatever followed that blank — measured on -README.WS page 18, whose
+            // foot took the collapsed blank and the 3.70pt leading spacer behind it, leaving
+            // page 19's heading to open with its own headroom stranded on the page before.
+            func applyConditionalBreak() {
+                guard !rendered.modernConditionalBreaks.isEmpty,
+                      container.forcedBreakOffset == nil else { return }
+                let glyphs = layoutManager.glyphRange(for: container)
+                let chars = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+                let pageEnd = chars.location + chars.length
+                let bottom = container.size.height
+                for entry in rendered.modernConditionalBreaks
+                where entry.charOffset > chars.location && entry.charOffset < pageEnd {
+                    let glyph = layoutManager.glyphIndexForCharacter(at: entry.charOffset)
+                    let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                    guard Double(bottom - fragment.minY) < entry.needPt else { continue }
+                    container.forcedBreakOffset = entry.charOffset
+                    let tail = NSRange(location: entry.charOffset,
+                                       length: max(0, rendered.text.length - entry.charOffset))
+                    layoutManager.invalidateLayout(forCharacterRange: tail, actualCharacterRange: nil)
+                    layoutManager.ensureLayout(for: container)
+                    break
+                }
+            }
+            applyConditionalBreak()
+
+            // A BLANK LINE AT A PAGE TOP COSTS NOTHING (`RenderedDocument
+            // .modernBlankLineRanges`). This container has just been laid out, so where the
+            // NEXT one will begin is now known — and if that is a recorded blank, the
+            // library would have dropped it (`PDFModernLayout`'s paginator: "no blank at a
+            // page top"). Collapsed to a hairline rather than deleted: deleting would move
+            // every offset this render already recorded (the forced breaks above, the
+            // footnote events, the appendix start), and a hairline fragment is absorbed by
+            // THIS page, leaving the next to open on the real line — the same outcome the
+            // library reaches by skipping it.
+            //
+            // `while`, because the library drops EVERY blank at a page top, not just the
+            // first: its guard is `!body.isEmpty`, which stays false across a run of them.
+            // Each collapse is re-laid before the next offset is read, so this converges on
+            // the first non-blank — and cannot loop, since each pass consumes one recorded
+            // blank strictly ahead of the last.
+            if !blankRanges.isEmpty {
+                var collapsed = 0
+                while let next = nextContainerStart(for: container),
+                      let blank = blankRanges[next], collapsed < maxPages {
+                    collapseBlankLine(blank)
+                    layoutManager.ensureLayout(for: container)
+                    blankRanges[next] = nil
+                    collapsed += 1
+                }
+                // The page holds different content now — see `applyConditionalBreak`'s own
+                // note. Only ever asked once more: a forced break can only move content OFF
+                // this page, and there is no blank left at the next container's start to
+                // collapse again.
+                if collapsed > 0 { applyConditionalBreak() }
             }
 
             // Did THIS container's own real content reach the break it was given? A break
@@ -375,9 +604,24 @@ final class PagedDocumentView: NSView {
         guard !entries.isEmpty else { return 0 }
         let block = NSMutableAttributedString(attributedString: separator)
         for entry in entries { block.append(entry) }
+        // WITHOUT THE TRAILING TERMINATOR. Every note line carries its own `\n`
+        // (`DocumentRenderer`'s `noteLineAttributedString`), so the concatenated block ends
+        // with one — and AppKit gives a string ending in a newline an extra, empty line
+        // fragment. Measured on LYING.WS's one-note page: the block reserved 39.60pt where
+        // the library reserves `sepH + noteLead * count` = 26.40, a whole note line too much,
+        // and the page's last body line landed at 673.80 against the library's 691.20.
+        if block.string.hasSuffix("\n") {
+            block.deleteCharacters(in: NSRange(location: block.length - 1, length: 1))
+        }
+        // NOT `.usesFontLeading`. The note paragraph already pins its own line height to the
+        // library's own figure — `noteLead = modernLine * modernNotePt`, 13.20pt at 11pt —
+        // and `.usesFontLeading` tells AppKit to ignore that and add the FACE's leading
+        // instead. Measured on LYING.WS: the library reserves `sepH + noteLead * count` =
+        // 26.40pt for its one-note page and this reserved 30.07, which cost the page a whole
+        // body line — its last line landed at 673.80 against the library's 691.20.
         let bounds = block.boundingRect(
             with: CGSize(width: max(1, width), height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading])
+            options: [.usesLineFragmentOrigin])
         return bounds.height
     }
 
@@ -479,8 +723,36 @@ final class PagedDocumentView: NSView {
         // oracles already treat as "on the grid" (`GeometryOracleTests.swift`).
         let epsilon: CGFloat = 0.5
 
+        // ONE CONTAINER PER COLUMN PER PAGE (item 19, Jon's ruling 2026-09-10).
+        //
+        // `pageColumnFragmentCounts` is the model's own answer for how many fragments each
+        // of a page's newspaper columns contributes, so each container is sized to its own
+        // column's content rather than its page's. On an ordinary page there is exactly one
+        // column and this is what it always was.
+        //
+        // Every container is FULL PAGE WIDTH, not column width: a line already carries its
+        // own column's left edge as a paragraph indent (`extraLeftPt`, from the engine's own
+        // `PageLine.left`), so the text lands in its column without this having to know any
+        // x at all. Only the HEIGHT differs per column, and the height is what stops one
+        // column's spare room being filled with the next page's content.
+        // A RENDER THAT STATES NO COLUMNS HAS ONE PER PAGE. `renderNativeAnnotated` (Show
+        // Invisibles) and `ExportEngine`'s synthesized TOC page both build a
+        // `RenderedDocument` without this field, the same way they build without
+        // `pinnedBaselines`; without this fallback they got no containers and therefore no
+        // pages at all, which is what turned every Show Invisibles and evidence-sheet
+        // lookup into `noMatchingPage`.
+        let columnCountsByPage = rendered.pageColumnFragmentCounts.isEmpty
+            ? lineCounts.map { [$0] }
+            : rendered.pageColumnFragmentCounts
         var cursor = 0
-        for (pageIndex, count) in lineCounts.enumerated() {
+        for (pageIndex, columnCounts) in columnCountsByPage.enumerated() {
+        // PAGE-LOCAL, unlike `cursor`: `overprintPasses`/`oversizedSelfPasses`/
+        // `graphicCellRows` are indexed by fragment ordinal within the PAGE, and each
+        // column owns its own stretch of that numbering — see `makePageView`'s `fragments`.
+        var pageFragmentStart = 0
+        for (column, count) in columnCounts.enumerated() {
+            let columnFragments = pageFragmentStart..<(pageFragmentStart + max(0, count))
+            pageFragmentStart += max(0, count)
             var height: CGFloat
             if count > 0, cursor + count <= fragmentTops.count {
                 height = (fragmentBottoms[cursor + count - 1] - fragmentTops[cursor]) + epsilon
@@ -503,15 +775,25 @@ final class PagedDocumentView: NSView {
             // proposal can still fit inside a container sized for the less-compact natural
             // stacking. The real per-page container has to be sized to EXACTLY this page's
             // own pinned content, not to whichever of the two measurements is bigger.
-            if rendered.pinnedPageBottoms.indices.contains(pageIndex) {
+            if rendered.pinnedPageBottoms.indices.contains(pageIndex),
+               rendered.pinnedPageBottoms[pageIndex].indices.contains(column) {
+                let pinnedBottom = rendered.pinnedPageBottoms[pageIndex][column]
+                // MEASURED FROM WHERE THE FLOW STARTS, which is not always the text frame's
+                // top — see `RenderedDocument.pinnedPageTops`. At any ordinary lead the two
+                // are the same number and this changes nothing; at MARKUP.WS's 2pt lead the
+                // flow begins a point above the frame and the container has to hold it.
+                let flowTop = rendered.pinnedPageTops.indices.contains(pageIndex)
+                    && rendered.pinnedPageTops[pageIndex].indices.contains(column)
+                    ? min(CGFloat(rendered.pinnedPageTops[pageIndex][column]), textTop(atPage: pageIndex))
+                    : textTop(atPage: pageIndex)
                 // Job 427: THIS page's own container-local anchor (`textTop(atPage:)`), not
                 // the single shared `rendered.textFrame.origin.y` — `pinnedPageBottoms
                 // [pageIndex]` is an absolute paper-Y built from this SAME page's own
-                // `pageFirstBaseline` (`DocumentRenderer.renderPrinted`'s per-page loop), so
+                // `pageFirstBaseline` (`DocumentRenderer.renderNative`'s per-page loop), so
                 // converting it to a container-local height has to subtract this page's own
                 // origin or a page whose own `.mt`/`.mb` differs from the document's global
                 // pair gets a container sized against the WRONG anchor.
-                height = CGFloat(rendered.pinnedPageBottoms[pageIndex]) - textTop(atPage: pageIndex) + epsilon
+                height = CGFloat(pinnedBottom) - flowTop + epsilon
             }
 
             let container = NSTextContainer(size: CGSize(width: max(1, width), height: max(1, height)))
@@ -521,10 +803,23 @@ final class PagedDocumentView: NSView {
             layoutManager.addTextContainer(container)
             containers.append(container)
 
-            let view = makePageView(container: container, rendered: rendered, pageIndex: pageViews.count)
-            pageViews.append(view)
+            containerPage.append(pageIndex)
+            containerColumn.append(column)
+
+            let view = makePageView(container: container, rendered: rendered,
+                                    pageIndex: pageIndex, fragments: columnFragments)
+            if column == 0 {
+                pageViews.append(view)
+                columnViews.append([])
+            } else {
+                // A later column draws its own glyphs over the same sheet its page's own
+                // view already painted, so it must not paint a second one on top of it.
+                view.drawsBackground = false
+                columnViews[pageIndex].append(view)
+            }
             addSubview(view)
             layoutManager.ensureLayout(for: container)
+        }
         }
     }
 
@@ -580,8 +875,21 @@ final class PagedDocumentView: NSView {
         }
     }
 
+    /// `fragments` is this view's own slice of its PAGE's fragment ordinals.
+    ///
+    /// `overprintPasses`, `oversizedSelfPasses` and `graphicCellRows` are all indexed by
+    /// fragment ordinal WITHIN THE PAGE, and a page's columns share that numbering — column
+    /// 0's fragments, then column 1's, exactly as the renderer appends them. Every column's
+    /// view used to be handed the whole page's arrays, so column 0's view looked up column
+    /// 1's overprint pass at column 0's ordinal and column 1's view never found its own at
+    /// all. BOOKLET.WS page 3 is the case: its second column holds 27 model lines forming 26
+    /// fragments — one overprint pair — and the pass on that pair simply never reached the
+    /// paper, so the app's page 3 was one run short of the engine's.
+    ///
+    /// `nil` for a caller with no column information (`buildExplicitPages`' own single
+    /// container per page), which keeps the whole-page arrays it always had.
     private func makePageView(container: NSTextContainer, rendered: RenderedDocument,
-                               pageIndex: Int) -> NSTextView {
+                               pageIndex: Int, fragments: Range<Int>? = nil) -> NSTextView {
         // Job 460: a real frame from construction, not `.zero` — belt-and-braces alongside
         // `applyDisplayMode()` setting it again before ever clearing `isHidden`. This first
         // assignment is what covers Single Page (its own geometry is ready at this point,
@@ -601,14 +909,23 @@ final class PagedDocumentView: NSView {
         // for LJ6DTP.WS's "Black Text on a Gray Background" (28pt gray band, `page[50]`,
         // oversized) — the closing heading text (`page[51]`) painted here, UNDER the
         // overlay, so the band's own self-pass glyphs painted OVER it afterward and hid it.
-        let selfPasses = rendered.oversizedSelfPasses.indices.contains(pageIndex)
-            ? rendered.oversizedSelfPasses[pageIndex] : []
-        let rawPasses = rendered.overprintPasses.indices.contains(pageIndex)
-            ? rendered.overprintPasses[pageIndex] : []
+        func ownSlice<Element>(_ whole: [Element]) -> [Element] {
+            guard let fragments else { return whole }
+            let lower = min(fragments.lowerBound, whole.count)
+            let upper = min(fragments.upperBound, whole.count)
+            return Array(whole[lower..<upper])
+        }
+        let selfPasses = ownSlice(rendered.oversizedSelfPasses.indices.contains(pageIndex)
+            ? rendered.oversizedSelfPasses[pageIndex] : [])
+        let rawPasses = ownSlice(rendered.overprintPasses.indices.contains(pageIndex)
+            ? rendered.overprintPasses[pageIndex] : [])
         view.overprintPasses = rawPasses.enumerated().map { index, passes in
             (selfPasses.indices.contains(index) && selfPasses[index] != nil) ? [] : passes
         }
         view.baselineOffset = rendered.baselineOffset
+        view.graphicCellRows = ownSlice(rendered.graphicCellRows.indices.contains(pageIndex)
+            ? rendered.graphicCellRows[pageIndex] : [])
+        view.graphicLeftAnchor = Double(rendered.textFrame.origin.x)
         // Job 211: gates the vector-graphics overlay — Printed only, same as
         // `softLineFlags`/`runningLines` (`RenderedDocument.clipsLines`'s own convention).
         view.isPrintedStyle = rendered.clipsLines
@@ -655,6 +972,13 @@ final class PagedDocumentView: NSView {
 
     /// How many pages this document laid out. The Go menu bounds itself against this.
     var pageCount: Int { pageViews.count }
+
+    /// Item 19: the text views for local page `index`'s SECOND and later newspaper columns,
+    /// in column order — empty for every ordinary page. Internal for the same "a test needs
+    /// this page's own content directly" reason `runningLines(atPageIndex:)` below is.
+    func columnTextViews(atPage index: Int) -> [NSTextView] {
+        columnViews.indices.contains(index) ? columnViews[index] : []
+    }
 
     /// The running heads/feet `drawRunningLines` will actually paint for local page `index`
     /// — `internal`, not `private`, purely so tests can assert per-page header/footer content
@@ -790,6 +1114,24 @@ final class PagedDocumentView: NSView {
     /// page whose frame this leaves at `.zero` (Continuous Scroll, if ever called before
     /// `pageTops` is ready) simply stays `.zero`; the fix only guarantees ISHIDDEN and FRAME
     /// change together, not that geometry no one has computed yet springs into existence.
+
+    /// Item 19: a page's SECOND and later column views get the same frame and the same
+    /// visibility as the page they belong to.
+    ///
+    /// They are full-page-width overlays on their own page's sheet — a line already carries
+    /// its own column's left edge as a paragraph indent, so nothing here needs an x — which
+    /// means they must be framed exactly like `pageViews[index]` and never left at the
+    /// origin. Left unframed they land on page 1: FORMFEED.WS drew its page-7 second column
+    /// on page 1, the identical 240x36pt rect reported extraInActual there and
+    /// missingInActual where it belonged.
+    private func syncColumnViews(atPage index: Int, frame: NSRect?, hidden: Bool) {
+        guard columnViews.indices.contains(index) else { return }
+        for view in columnViews[index] {
+            if let frame { view.frame = frame }
+            view.isHidden = hidden
+        }
+    }
+
     private func applyDisplayMode() {
         switch display {
         case .continuousScroll:
@@ -797,6 +1139,7 @@ final class PagedDocumentView: NSView {
                 view.frame = frameForPage(index)
                 if view.isHidden { (view as? PageTextView)?.didDrawSinceShown = false }
                 view.isHidden = false
+                syncColumnViews(atPage: index, frame: view.frame, hidden: false)
             }
         case .singlePage:
             for (index, view) in pageViews.enumerated() {
@@ -805,6 +1148,7 @@ final class PagedDocumentView: NSView {
                     if view.isHidden { (view as? PageTextView)?.didDrawSinceShown = false }
                 }
                 view.isHidden = index != currentPageIndex
+                syncColumnViews(atPage: index, frame: view.frame, hidden: view.isHidden)
             }
         }
         logPageDiagnostics(event: "applyDisplayMode(\(display))")
@@ -942,10 +1286,12 @@ final class PagedDocumentView: NSView {
         case .singlePage:
             for (index, view) in pageViews.enumerated() where index == currentPageIndex {
                 view.frame = frameForPage(index)
+                syncColumnViews(atPage: index, frame: view.frame, hidden: view.isHidden)
             }
         case .continuousScroll:
             for (index, view) in pageViews.enumerated() where pageTops.indices.contains(index) {
                 view.frame = frameForPage(index)
+                syncColumnViews(atPage: index, frame: view.frame, hidden: view.isHidden)
             }
         }
     }
@@ -1051,7 +1397,7 @@ final class PagedDocumentView: NSView {
 
         // PAPER IS WHITE. Not `textBackgroundColor`, which follows the system appearance and
         // turned the page black — white type on a black sheet — the moment the Mac switched
-        // to Dark Mode. Printed style is a line-for-line reproduction of a 1980s typescript;
+        // to Dark Mode. Native style is a line-for-line reproduction of a 1980s typescript;
         // a facsimile that inverts with the time of day is not a facsimile. The print output
         // was always correct (it never consulted the screen's appearance), so this was a
         // screen-only defect, and only a screenshot could catch it — every test passed and
@@ -1073,6 +1419,16 @@ final class PagedDocumentView: NSView {
                               pageOrigin: CGPoint(x: 0, y: nominalTop))
         case .continuousScroll:
             for index in 0..<max(1, pageViews.count) {
+                // A capture draws ONLY the page it asked for — but at the same DOCUMENT
+                // coordinates it always used. Selecting the page and re-basing the origin
+                // are two different changes and only the first is wanted: a capture is not
+                // re-based for the parent view, so drawing at document coordinates is
+                // correct here, and moving it to (0,0) is what broke the Modern export
+                // against its viewer on 100 pages. Without the selection, page one's running
+                // lines are drawn into every later page's file — report.ps page 2 carried
+                // its "2" at a page-local -80.0, which is 732.0 less one page height and the
+                // gap, while the model puts it at 732.0 on every page.
+                if let capturingPageIndex, index != capturingPageIndex { continue }
                 let rect = self.rect(ofPage: index)
                 if rect.intersects(dirtyRect) {
                     rect.fill()
@@ -1146,12 +1502,15 @@ final class PagedDocumentView: NSView {
             x: rendered.textFrame.origin.x, y: pageOrigin.y + containerBottom,
             width: rendered.textFrame.size.width, height: max(0, fullBottom - containerBottom)
         )
-        block.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+        // Same options the reservation above measures with, for the same reason — drawing
+        // with a leading the reservation did not reserve is how a block overflows its own
+        // reserved strip.
+        block.draw(with: rect, options: [.usesLineFragmentOrigin])
     }
 
     /// Job 490 (item 1, LJ6DTP title-top): a `.pctl` attachment glyph carrying
-    /// `.printedPCLProgram` (`DocumentRenderer.pctlAdvanceAttachment`) — execute that
-    /// control's own raw PCL program (`PrintedPCLGraphics.swift`) anchored at its real,
+    /// `.nativePCLProgram` (`DocumentRenderer.pctlAdvanceAttachment`) — execute that
+    /// control's own raw PCL program (`NativePCLGraphics.swift`) anchored at its real,
     /// laid-out position, ADDED to the PAPER canvas here rather than inside the owning
     /// `PageTextView` (same reasoning as `drawOversizedSelfPasses`'s own doc comment just
     /// below: LJ6DTP's page border draws OUTSIDE the text container's own margins, all the
@@ -1244,6 +1603,7 @@ final class PagedDocumentView: NSView {
         guard let rendered, !rendered.pclPrograms.isEmpty else { return }
         for (pageIndex, view) in pageViews.enumerated() {
             guard !view.isHidden, view.frame.intersects(dirtyRect) else { continue }
+            guard capturingPageIndex == nil || capturingPageIndex == pageIndex else { continue }
             guard let layoutManager = view.layoutManager, let textContainer = view.textContainer,
                   let textStorage = view.textStorage
             else { continue }
@@ -1293,7 +1653,7 @@ final class PagedDocumentView: NSView {
     /// own CONTAINER-local rect by it gives this view's (and the overlay's, since they
     /// share a coordinate space) own local coordinates directly — no separate page-origin
     /// bookkeeping needed. The isolated pass is laid out unbounded (`isolatedLineLayout`,
-    /// `PrintedVectorGraphics.swift`) and its own BASELINE (not merely its fragment's top
+    /// `NativeVectorGraphics.swift`) and its own BASELINE (not merely its fragment's top
     /// edge — `RenderedDocument.baselineOffset`'s own doc comment on why top-alignment is
     /// only a good proxy for same-size content) is translated onto the target every
     /// ordinary line in that fragment's slot would sit on.
@@ -1335,10 +1695,51 @@ final class PagedDocumentView: NSView {
         return reserved
     }
 
+    /// Planning #227 follow-up: every line of a page's SECOND and later newspaper columns,
+    /// painted where the library puts it.
+    ///
+    /// Only the `.l#` gutter numbers use this now — a page's newspaper columns are real
+    /// text again (item 19). The
+    /// arithmetic here is the simplest in this file precisely because they are: a pass
+    /// carries an absolute paper X and an absolute paper baseline Y, so all this does is put
+    /// the paper's own top-left corner under them. `pclOverlayPageOrigin` is that corner —
+    /// the page view's own origin less this page's margin, the same conversion the PCL
+    /// overlay beside it already needed for absolute coordinates.
+    func drawColumnPasses(_ dirtyRect: NSRect) {
+        guard let rendered,
+              !rendered.lineNumberPasses.isEmpty
+        else { return }
+        for (pageIndex, view) in pageViews.enumerated() {
+            guard !view.isHidden, view.frame.intersects(dirtyRect) else { continue }
+            guard capturingPageIndex == nil || capturingPageIndex == pageIndex else { continue }
+            let passes = rendered.lineNumberPasses.indices.contains(pageIndex)
+                ? rendered.lineNumberPasses[pageIndex] : []
+            guard !passes.isEmpty, let textContainer = view.textContainer else { continue }
+            let paperOrigin = Self.pclOverlayPageOrigin(
+                viewOrigin: view.frame.origin,
+                marginOrigin: CGPoint(x: rendered.textFrame.origin.x,
+                                      y: textTop(atPage: pageIndex)))
+            let width = textContainer.size.width
+            for pass in passes {
+                guard let isolated = isolatedLineLayout(pass.text, width: width) else { continue }
+                // Where this line's own baseline sits inside the isolated layout, so the
+                // offset below lands the REAL baseline on the engine's figure rather than
+                // the fragment's top edge.
+                let isolatedBaseline = isolated.fragmentRect.origin.y
+                    + isolated.manager.location(forGlyphAt: isolated.glyphRange.location).y
+                let origin = NSPoint(
+                    x: paperOrigin.x + CGFloat(pass.xPt) - isolated.fragmentRect.origin.x,
+                    y: paperOrigin.y + CGFloat(pass.baselineY) - isolatedBaseline)
+                isolated.manager.drawGlyphs(forGlyphRange: isolated.glyphRange, at: origin)
+            }
+        }
+    }
+
     func drawOversizedSelfPasses(_ dirtyRect: NSRect) {
         guard let rendered, rendered.clipsLines, !rendered.oversizedSelfPasses.isEmpty else { return }
         for (pageIndex, view) in pageViews.enumerated() {
             guard !view.isHidden, rendered.oversizedSelfPasses.indices.contains(pageIndex) else { continue }
+            guard capturingPageIndex == nil || capturingPageIndex == pageIndex else { continue }
             let selfPasses = rendered.oversizedSelfPasses[pageIndex]
             guard selfPasses.contains(where: { $0 != nil }) else { continue }
             guard let layoutManager = view.layoutManager, let textContainer = view.textContainer else { continue }
@@ -1559,7 +1960,7 @@ final class PagedDocumentView: NSView {
 /// screenplay page-number marker, e.g. the "1." ahead of a scene's slugline): the idiomatic
 /// TextKit 1 way to force `NSLayoutManager` to end the CURRENT container and continue laying
 /// text out in the NEXT one at a chosen character offset — there is no other API to request a
-/// break mid-flow the way Printed style's own library pagination already dictates its page
+/// break mid-flow the way Native style's own library pagination already dictates its page
 /// boundaries (`buildExplicitPages`, this file's own sibling method, sidesteps the question
 /// entirely by pre-sizing each container to its own known page instead).
 ///
@@ -1666,7 +2067,8 @@ extension PagedDocumentView: NSLayoutManagerDelegate {
         // races" diagnostic those pointers did.
         let textContainerID = ObjectIdentifier(textContainer)
         let pinned: (baselines: [Int: PinnedBaseline], perPageTextTop: [Double],
-                     fallbackTextTop: Double, containerPageIndex: Int?)? = MainActor.assumeIsolated {
+                     fallbackTextTop: Double, containerPageIndex: Int?,
+                     containerColumnIndex: Int?)? = MainActor.assumeIsolated {
             // Job 412: the probe is ONE container spanning the WHOLE document — `entry.y`
             // resets to `firstBaseline` at the start of EVERY page (see `RenderedDocument
             // .pinnedBaselines`'s own doc comment), so pinning it here would make page 2's
@@ -1683,10 +2085,17 @@ extension PagedDocumentView: NSLayoutManagerDelegate {
             // pinned page's real height comes from `pinnedPageBottoms` instead.
             guard !isMeasuringProbeContainer,
                   let rendered, !rendered.pinnedBaselines.isEmpty else { return nil }
-            return (rendered.pinnedBaselines, rendered.perPageTextTop, Double(rendered.textFrame.origin.y),
-                    containers.firstIndex(where: { ObjectIdentifier($0) == textContainerID }))
+            // Item 19: which PAGE and which of its COLUMNS this container is, not just an
+            // index into a per-page list — the two together name the container a fragment
+            // belongs in, now that a page can have more than one.
+            let index = containers.firstIndex(where: { ObjectIdentifier($0) == textContainerID })
+            return (rendered.pinnedBaselines, rendered.perPageTextTop,
+                    Double(rendered.textFrame.origin.y),
+                    index.flatMap { containerPage.indices.contains($0) ? containerPage[$0] : nil },
+                    index.flatMap { containerColumn.indices.contains($0) ? containerColumn[$0] : nil })
         }
-        guard let pinned, let containerPageIndex = pinned.containerPageIndex else { return false }
+        guard let pinned, let containerPageIndex = pinned.containerPageIndex,
+              let containerColumnIndex = pinned.containerColumnIndex else { return false }
         let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
         // A fragment whose OWN intended page (`entry.page`, from `DocumentRenderer`'s own
         // per-line page assignment) doesn't match the REAL container it's being asked to
@@ -1702,7 +2111,9 @@ extension PagedDocumentView: NSLayoutManagerDelegate {
         // lets AppKit's own UNPINNED proposal stand for this one fragment, restoring the
         // natural "doesn't fit, break here" signal — the pin resumes on the NEXT container,
         // where this same fragment's `entry.page` finally matches.
-        guard let entry = pinned.baselines[charRange.location], entry.page == containerPageIndex else { return false }
+        guard let entry = pinned.baselines[charRange.location],
+              entry.page == containerPageIndex, entry.column == containerColumnIndex
+        else { return false }
         // `k`: this fragment's own DETERMINISTIC baseline-from-fragment-TOP offset —
         // `PinnedBaseline.k` (job 413; see its own doc comment), not the delegate's own
         // `baselineOffset` out-param job 412 originally read here. Same "distance down from
@@ -1715,7 +2126,7 @@ extension PagedDocumentView: NSLayoutManagerDelegate {
         // drawing baseline is THIS `k`, not whatever it would have proposed live.
         let k = CGFloat(entry.k)
         // Job 427: THIS page's own container-to-paper anchor
-        // (`pinned.perPageTextTop[containerPageIndex]`, `DocumentRenderer.renderPrinted`'s
+        // (`pinned.perPageTextTop[containerPageIndex]`, `DocumentRenderer.renderNative`'s
         // per-page `pageFirstBaseline - normalBaselineOffset`), not a single shared one —
         // converting `entry.y` (absolute, measured from THIS PAGE's own paper top, reset
         // every page, and itself now built from this SAME page's own `.mt`/`.mb` when it
@@ -1723,7 +2134,7 @@ extension PagedDocumentView: NSLayoutManagerDelegate {
         // above places container-local Y = 0 at exactly that same page's own text top
         // (`view.frame.origin.y` is `textTop(atPage:)` plus a page-level constant, never a
         // function of fragment content). Falls back to `pinned.fallbackTextTop` for a page
-        // index the array somehow doesn't cover — defensive only, `renderPrinted` always
+        // index the array somehow doesn't cover — defensive only, `renderNative` always
         // sizes `perPageTextTop` to `pages.count`, the same count `containers` has here.
         let pageTextTop = pinned.perPageTextTop.indices.contains(containerPageIndex)
             ? pinned.perPageTextTop[containerPageIndex] : pinned.fallbackTextTop
@@ -1769,6 +2180,7 @@ private final class OversizedPassOverlayView: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func draw(_ dirtyRect: NSRect) {
+        owner?.drawColumnPasses(dirtyRect)
         owner?.drawOversizedSelfPasses(dirtyRect)
         owner?.drawPCLGraphicsOverlay(dirtyRect)
     }
@@ -1779,19 +2191,25 @@ private final class OversizedPassOverlayView: NSView {
 /// after `super.draw`, gated on `isDrawingToScreen` so it could never ride into
 /// `RenderedDocument.text` and leak into print/export). That is gone — invisible ink is now
 /// real text baked into a SEPARATE `RenderedDocument` (`DocumentRenderer
-/// .renderPrintedAnnotated`, screen-only via `renderWithInvisibles`), so this view draws
+/// .renderNativeAnnotated`, screen-only via `renderWithInvisibles`), so this view draws
 /// exactly the same glyphs regardless of the toggle; screen-only-ness is enforced one layer
 /// up, at which `RenderedDocument` gets requested, not here.
 private final class PageTextView: NSTextView {
     /// Job 211: `RenderedDocument.clipsLines` for this page — gates the vector-graphics
     /// overlay below, same convention `runningLines` already uses (Modern
-    /// reflows cp437 glyphs as plain text; see `PrintedVectorGraphics.swift`'s top comment).
+    /// reflows cp437 glyphs as plain text; see `NativeVectorGraphics.swift`'s top comment).
     var isPrintedStyle = false
     /// Job 224: this page's `RenderedDocument.overprintPasses[pageIndex]` — one entry per
     /// line fragment (same indexing as `softLineFlags`), each a (possibly empty) list of
     /// extra `.overprint`-chained `PageLine`s sharing that fragment's baseline. See
     /// `drawOverprintPasses` below.
     var overprintPasses: [[NSAttributedString]] = []
+    /// Planning #251(c): this page's `RenderedDocument.graphicCellRows[pageIndex]` — one
+    /// entry per line fragment, the engine's own x and width for each graphic cell that
+    /// fragment draws. `leftAnchor` is the paper x this view's own local x = 0 sits at
+    /// (`RenderedDocument.textFrame.origin.x`), which is what converts one to the other.
+    var graphicCellRows: [[PageLine.GraphicCellPlacement]] = []
+    var graphicLeftAnchor: Double = 0
     /// `RenderedDocument.baselineOffset` — see `drawOverprintPasses`'s job 246 doc comment
     /// for why it, not the real fragment's own raw origin, is the chain's shared baseline.
     var baselineOffset: CGFloat = 0
@@ -1810,7 +2228,7 @@ private final class PageTextView: NSTextView {
     }
 
     /// Job 211 (b11 leg 3b): cp437 box/shade/block glyphs as vector fills — see
-    /// `PrintedVectorGraphics.swift`'s top doc comment for the port citation and the
+    /// `NativeVectorGraphics.swift`'s top doc comment for the port citation and the
     /// architecture reasoning (real AppKit glyph geometry, not a `DocumentRenderer`-side
     /// precomputed Y). UNLIKE `drawSoftReturnMarkers` above, this is facsimile CONTENT, not
     /// a screen affordance — no `isDrawingToScreen` guard, same reasoning as
@@ -1823,10 +2241,16 @@ private final class PageTextView: NSTextView {
         guard let layoutManager, let textContainer, let textStorage else { return }
 
         let glyphRange = layoutManager.glyphRange(for: textContainer)
+        var fragmentIndex = -1
         layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, effectiveGlyphRange, _ in
+            fragmentIndex += 1
             guard rect.intersects(dirtyRect) else { return }
+            let placements = self.graphicCellRows.indices.contains(fragmentIndex)
+                ? self.graphicCellRows[fragmentIndex] : []
             for cell in graphicCells(manager: layoutManager, storage: textStorage,
-                                      glyphRange: effectiveGlyphRange, fragment: rect) {
+                                      glyphRange: effectiveGlyphRange, fragment: rect,
+                                      placements: placements,
+                                      leftAnchor: self.graphicLeftAnchor) {
                 NSColor.white.setFill()
                 cell.eraseFrame.fill()
                 for fill in cell.fills {
@@ -1841,10 +2265,10 @@ private final class PageTextView: NSTextView {
     /// directly onto that fragment's own real glyph geometry — LJ6DTP's white-on-black
     /// knockouts and flush-right two-pass bars, previously laid out as their own separate
     /// (if `nearZeroLead`-tall) fragments, which is what pushed the fixture one whole page
-    /// past the engine's own count (see `DocumentRenderer.renderPrinted`'s own doc comment
+    /// past the engine's own count (see `DocumentRenderer.renderNative`'s own doc comment
     /// on `overprintPasses` for the pagination arithmetic this replaces).
     ///
-    /// Each pass is laid out in ISOLATION (`isolatedLineLayout`, `PrintedVectorGraphics.swift`
+    /// Each pass is laid out in ISOLATION (`isolatedLineLayout`, `NativeVectorGraphics.swift`
     /// — the same "unbounded, freshly-built `NSLayoutManager`" technique
     /// `DocumentRenderer.measuredHeight`/`firstBaselineOffset` already use and job 202 already
     /// proved accurate) rather than inserted into this view's own shared `layoutManager` —
@@ -1852,7 +2276,7 @@ private final class PageTextView: NSTextView {
     /// between that isolated layout's own fragment origin and the REAL base fragment this
     /// pass shares a baseline with; translating by it is what lands the pass exactly on that
     /// baseline, not merely near it. Passes draw in DOCUMENT ORDER (the array's own order,
-    /// `DocumentRenderer.renderPrinted`'s `(i + 1...j).map`), matching the engine's own
+    /// `DocumentRenderer.renderNative`'s `(i + 1...j).map`), matching the engine's own
     /// painter's-model compositing (`PDFWriter.swift`'s content stream: later ops paint over
     /// earlier ones at the same position) — a bar's own two flush-right passes land in the
     /// order that closes the bar, and the knockout text (always last in the chain) draws on

@@ -2,6 +2,21 @@ import AppKit
 import CoreText
 import CtrlKD
 
+/// ONE PIECE OF INK AT AN ABSOLUTE PLACE ON THE PAPER — a second-or-later newspaper
+/// column's line, or a `.l#` gutter number.
+///
+/// `xPt` and `baselineY` are both absolute on the PAPER — measured from its left and top
+/// edges, not from the text container — because that is the form the engine's own page-lines
+/// model states them in (`PageLine.left`, already resolved to points, carries the column
+/// offset `applyColumns` gave it) and because this line has no fragment of its own to be
+/// relative to. See `RenderedDocument.columnPasses` for why it has none.
+struct ColumnPass {
+    let text: NSAttributedString
+    let xPt: Double
+    let baselineY: Double
+}
+
+
 /// A document turned into something AppKit can lay out: one attributed string, plus the
 /// page geometry to flow it through.
 ///
@@ -20,7 +35,7 @@ import CtrlKD
 ///
 /// ## How the library's pagination is honoured
 ///
-/// In Printed style, pagination is CtrlKD's decision, not AppKit's — `docToPagelines`
+/// In Native style, pagination is CtrlKD's decision, not AppKit's — `docToPagelines`
 /// already assigned every line to a page using WordStar's own vertical model. This function
 /// renders each page's own real lines ONLY, no padding to `capacity` — `PagedDocumentView
 /// .buildPages` is what makes the boundaries land where the library put them: it measures
@@ -51,7 +66,7 @@ struct RenderedDocument {
     /// undid the physical wrap the flag would describe. Job 256 (Show Invisibles part 2/4):
     /// no longer what Show Invisibles overlays — the margin arrow this fed
     /// (`drawSoftReturnMarkers`) is gone, superseded by real inline marks baked into
-    /// `renderPrintedAnnotated`'s own `text` (a SEPARATE `RenderedDocument`,
+    /// `renderNativeAnnotated`'s own `text` (a SEPARATE `RenderedDocument`,
     /// `DocumentRenderer.renderWithInvisibles`'s screen-only output — never what print/
     /// export/QuickLook request). This field's only remaining job is the container-sizing
     /// one described above; its per-line VALUES are otherwise unused.
@@ -61,7 +76,7 @@ struct RenderedDocument {
     /// fragment's baseline, in document order, rendered but never given a fragment of their
     /// own. `PageTextView` composites each one directly on top of the fragment's real glyph
     /// geometry (`PagedDocumentView.swift`'s `drawOverprintPasses`) instead of laying it out
-    /// as its own (even near-zero-height) paragraph — see `renderPrinted`'s own doc comment
+    /// as its own (even near-zero-height) paragraph — see `renderNative`'s own doc comment
     /// on the pagination bug this replaces. Empty in Modern style, which has no `PageLine`s
     /// (and therefore no overprint concept) at all.
     let overprintPasses: [[[NSAttributedString]]]
@@ -69,7 +84,7 @@ struct RenderedDocument {
     /// unless that fragment's own base `PageLine` is OVERSIZED (`lineExceedsFragment`: its
     /// tallest resolved glyph is far taller than the fragment `advanceLead` assigned it —
     /// LJ6DTP.WS's 72pt banner title and its `.lh .05"` shadow copy). The fragment's real,
-    /// flowed content is left BLANK in that case (`renderPrinted`'s own call site); this is
+    /// flowed content is left BLANK in that case (`renderNative`'s own call site); this is
     /// that line's TRUE content instead, rendered at its own natural (unbounded) height for
     /// `PagedDocumentView.drawOversizedSelfPasses` to composite at the PAPER level — this
     /// view's own text container is exactly the box the glyph doesn't fit in, so unlike an
@@ -77,7 +92,7 @@ struct RenderedDocument {
     /// `PageTextView` itself. Empty in Modern style, which has no `PageLine`s at all.
     let oversizedSelfPasses: [[NSAttributedString?]]
     /// Job 227: a fragment's TOP, plus this constant, is where a NORMAL (non-oversized)
-    /// line's own baseline sits — the same quantity `renderPrinted` already derives once to
+    /// line's own baseline sits — the same quantity `renderNative` already derives once to
     /// place the container itself (`firstBaseline - firstBaselineOffset(...)`, this file's
     /// own doc comment on `textTop`). `PagedDocumentView.drawOversizedSelfPasses` uses it to
     /// land an oversized self-pass's baseline at that SAME target. `0` in Modern style,
@@ -104,7 +119,7 @@ struct RenderedDocument {
     /// `PageTextView` draws them unconditionally, with no `isDrawingToScreen` gate.
     ///
     /// `var`, not `let` (job 393, 391 root cause 2): Printed's own real pages are known at
-    /// render time (`docToPagelines`), so `renderPrinted`/`renderPrintedAnnotated` fill this
+    /// render time (`docToPagelines`), so `renderNative`/`renderNativeAnnotated` fill this
     /// in directly and it never changes again. Modern's pages are NOT known until AppKit lays
     /// the flow out (`PagedDocumentView.buildPages`'s own "AppKit is to decide" doc comment)
     /// — `renderModern` leaves this empty and hands back `hfEvents` instead;
@@ -134,7 +149,7 @@ struct RenderedDocument {
     /// engine page whose content that local page shows (or is about to show, if the local
     /// page opens with dot-command marks before any real line). Identity (`0, 1, 2, ...`)
     /// for the plain render, where local page IS the real page; for
-    /// `renderPrintedAnnotated`, invisible-only lines can push a real page's content across
+    /// `renderNativeAnnotated`, invisible-only lines can push a real page's content across
     /// SEVERAL local pages once reflow spills it, so more than one local page can carry the
     /// SAME real-page index. This is the anchor `PagedDocumentView.realPageIndex(at:)`/
     /// `pageIndex(forRealPage:)` use to keep the reader's place across the Show Invisibles
@@ -143,7 +158,7 @@ struct RenderedDocument {
     /// Job 412 (Jon's ruling on job 408's decision brief, option (a): "pin it"): per real
     /// AppKit fragment, the ENGINE's own absolute baseline Y (points, top-down from the
     /// paper's top edge — same convention as `EngineTruth.StructuralLine.yFromTop`,
-    /// `PrintedStructuralParityTests.swift`) that fragment's content must land on, keyed by
+    /// `NativeStructuralParityTests.swift`) that fragment's content must land on, keyed by
     /// the CHARACTER OFFSET into `text` where that fragment's own content begins (its
     /// `lineAndTerminator`/`attributedLine` call's first character) rather than by fragment
     /// order. A character-offset key survives `PagedDocumentView`'s
@@ -160,14 +175,14 @@ struct RenderedDocument {
     /// uncorrected gap every later fragment on the page inherits (job 411's own root-cause
     /// citation has the full mechanism and the measured K values). Pinning the fragment's
     /// TOP directly from the engine's own Y-advance arithmetic (the same `advanceLead`
-    /// walk `renderPrinted` already performs for pagination — see `PagedDocumentView`'s own
+    /// walk `renderNative` already performs for pagination — see `PagedDocumentView`'s own
     /// delegate implementation) removes the accumulation at its source, leaving AppKit's own
     /// per-fragment `K` (and therefore its own font metrics) completely untouched — only
     /// WHERE the fragment sits changes, never how tall it is or where its own baseline sits
     /// within it.
     ///
     /// Empty in Modern style (reflowed by design — explicitly NOT pinned, Jon's ruling) and
-    /// in `renderPrintedAnnotated`'s Show Invisibles screen path (never measured by any
+    /// in `renderNativeAnnotated`'s Show Invisibles screen path (never measured by any
     /// structural-parity gate; left exactly as AppKit lays it out, unchanged by this job).
     let pinnedBaselines: [Int: PinnedBaseline]
     /// Job 427 (Jon's ruling: "Native only changes fonts. Otherwise it's the same as
@@ -224,10 +239,81 @@ struct RenderedDocument {
     /// root cause not fully isolated; this ONE-FRAGMENT isolated measurement sidesteps
     /// whatever that whole-document-scale mechanism was).
     ///
-    /// Empty in Modern style and `renderPrintedAnnotated`'s Show Invisibles path, matching
+    /// Empty in Modern style and `renderNativeAnnotated`'s Show Invisibles path, matching
     /// `pinnedBaselines`'s own emptiness there — `buildExplicitPages` falls back to its
     /// existing AppKit-probe-only measurement whenever this is empty or missing an entry.
-    let pinnedPageBottoms: [Double]
+    /// Per page, each of its newspaper columns' own bottom — one entry for an ordinary
+    /// page. A column is about to become its own text container, and a container is sized
+    /// from its own content, not its page's.
+    let pinnedPageBottoms: [[Double]]
+    /// And the same column's own TOP — its first fragment's top edge, which is that
+    /// fragment's own pinned baseline less its own ascent, on the same absolute paper scale
+    /// as `pinnedPageBottoms`.
+    ///
+    /// A container is measured from where its flow actually STARTS, and that is not always
+    /// the text frame's top. `textFrame.origin.y` is the document's top margin plus a fixed
+    /// three points, which is right at any ordinary lead and wrong at a small one: MARKUP.WS
+    /// sets its whole page at a 2pt lead, so its first baseline is 38.0 against a text frame
+    /// starting at 39.0 — the flow begins a point ABOVE the box it is measured in. Measured
+    /// from the frame, that page's container came to 43.5pt for a flow that stacks 44.0, and
+    /// the last of its 22 lines did not fit.
+    let pinnedPageTops: [[Double]]
+    /// How far the container anchor had to be LOWERED to reach the flow it holds — zero on
+    /// every ordinary document, negative only where the lead is smaller than the face's own
+    /// first-baseline offset (MARKUP.WS's 2pt page). `buildPages` gives the container that
+    /// much extra room at the bottom, because the flow that used to start above the anchor
+    /// now starts at it and still has to end where it did.
+    let flowTopAdjustment: Double
+    /// Planning #227 follow-up: every line of a page's SECOND and later newspaper columns,
+    /// with the place on the paper the library puts it — drawn as an overlay pass, never
+    /// flowed.
+    ///
+    /// Why they leave the flow. The engine restarts each column at the page's own top
+    /// (`PageLine.col`, engine commit cd9776c), and AppKit's one-container-per-page flow
+    /// cannot hold that: a container proposes each fragment at the previous fragment's own
+    /// bottom, so pulling a column back up to the page top frees room the fitting pass then
+    /// hands to the NEXT page (measured on BOOKLET.WS: 78 fragments on a page the model
+    /// gives 52, the extra 26 page 2's). Cutting the container to the repositioned extent
+    /// starves it instead, because a column's first line is proposed at the bottom of the
+    /// column before it and only afterwards pulled up (WINGDING.CHT: 36 fragments against
+    /// 220). No height separates the two: the room a column start needs to be PROPOSED and
+    /// the room the next page's first line FITS INTO are the same room, and a line limit
+    /// truncates the document rather than flowing it (FONTS.REF page 10: nothing at all).
+    ///
+    /// So column 0 flows exactly as it always has — every container height and page
+    /// boundary in this file is untouched by columns — and the rest are painted, the same
+    /// arrangement `overprintPasses`/`oversizedSelfPasses` already use for content whose
+    /// position is the engine's decision rather than AppKit's. Like those, a painted line
+    /// is ink and not text: it does not take part in selection, find, or Show Invisibles.
+    /// Per page, how many line FRAGMENTS each of its newspaper columns contributes — the
+    /// model's own answer, counted the way this renderer forms fragments (an overprint chain
+    /// is one) rather than measured from a layout.
+    ///
+    /// Nothing reads it yet. It is what sizes each column's own text container when the
+    /// columns come back into the flow as real text (Jon's ruling, 2026-09-10): a container
+    /// has to be sized to its own column's lines, and the only trustworthy count of those is
+    /// the engine's, not a probe of a layout that has not happened.
+    let pageColumnFragmentCounts: [[Int]]
+    /// Planning #251(d): per page, the `.l#` gutter numbers — `PageLine.lineNo`, which the
+    /// engine resolves onto the model (the label AND its absolute, already right-aligned x)
+    /// rather than counting lines at render time.
+    ///
+    /// Painted rather than flowed for the plain reason that they are not in the flow: the
+    /// gutter sits in the margin `.po`已 reserved, LEFT of the text container's own edge, and
+    /// edge, and no line of body text has any relationship to it. One document in the corpus
+    /// uses them
+    /// (PRINT.TST, 23 lines); the app drew none of them before this.
+    let lineNumberPasses: [[ColumnPass]]
+    /// Planning #251(c): per page, per line fragment, the engine's own placement for every
+    /// cp437 graphic character that fragment draws — `PageLine.graphicCells`, carried
+    /// through untouched.
+    ///
+    /// The app has drawn these as vectors for a long time (`NativeVectorGraphics`), but it
+    /// placed them at AppKit's own glyph positions, which are the Mac face's advances rather
+    /// than the library's cells. The model now states the cell, so the two stop being
+    /// independent answers to the same question. Empty in Modern style and the Show
+    /// Invisibles path, like the pinned arrays beside it.
+    let graphicCellRows: [[[PageLine.GraphicCellPlacement]]]
     /// b28 note 11 (Jon's screenplay page-break ruling): character offsets into `text`,
     /// ascending, where a screenplay page-number-marker paragraph (`ModernScreenplay
     /// .matchesPageMarker`) begins — rule (a) of `ModernScreenplay`'s own doc comment,
@@ -272,6 +358,28 @@ struct RenderedDocument {
     /// needing a nil-handling branch for a field that, in practice, is either fully unused
     /// or unconditionally needed.
     let modernFootnoteSeparator: NSAttributedString
+    /// Planning #221 (Jon's ruling 2026-09-07, verbatim): "endnotes go right at the end of
+    /// text / image on the last page unless there are footnotes on that page. Then the
+    /// endnotes start on a new page." Character offset into `text` of the end-matter
+    /// appendix's own first character — the 20-dash separator `renderModern`'s
+    /// `.noteSeparator` case appends — or nil for a document with no end-matter notes at
+    /// all, which is nearly all of them.
+    ///
+    /// This is the app's counterpart to the engine's `ModernFlowItem.para(endNotesStart:)`
+    /// flag, and deliberately the same shape: the engine sets it on exactly the ONE
+    /// paragraph built from `.noteSeparator`, and so does this. What differs is only WHERE
+    /// the rule can be applied. The engine's `modernStreams` knows each page's reserved
+    /// footnote lines before it places anything, so it can test the appendix against them
+    /// up front; AppKit does not decide Modern's page breaks until a container has actually
+    /// been laid out, so `PagedDocumentView.buildPages` applies the identical rule one real
+    /// page at a time, right after that page's own footnote reservation — the same place,
+    /// and for the same reason, that `reserveFootnoteBlock` already has to run there.
+    ///
+    /// Nil in every other render path, including `renderModernAnnotated` and both Printed
+    /// paths, on the same boundary `modernFootnoteEvents` already draws — Printed's endnote
+    /// placement is the engine's own `docToPagelines` decision, already real by the time
+    /// `DocumentRenderer` sees it.
+    let modernEndnoteAppendixStart: Int?
     /// Job 502: per REAL local page (`PagedDocumentView.buildPages`'s own container index —
     /// filled in as that loop goes, not resolved after like `runningLines`, since the value
     /// itself is what decides that page's own container height), the footnote entries
@@ -279,8 +387,33 @@ struct RenderedDocument {
     /// order. Empty for every LOCAL page with no footnote attached to it, and for every
     /// render path that never populates `modernFootnoteEvents` in the first place.
     var modernFootnoteBlocks: [[NSAttributedString]] = []
+    /// A BLANK LINE AT A PAGE TOP COSTS NOTHING — the library's own rule, stated in
+    /// `PDFModernLayout`'s paginator as `case .blank: guard !body.isEmpty else { continue }
+    /// // no blank at a page top`, and again one line down (a blank that does not fit closes
+    /// the page and is dropped rather than carried over).
+    ///
+    /// The app cannot express that where the string is built, because nothing there knows
+    /// where a page will break — AppKit decides that. So `renderModern` records each blank
+    /// line's own character range here, ascending and non-overlapping, and
+    /// `PagedDocumentView.buildPages` — the one place Modern's REAL pages exist — collapses
+    /// a recorded blank that lands at the top of a page it has just opened.
+    ///
+    /// Measured against the library's own Modern PDF (2026-09-11): six of -README.WS's 21
+    /// pages and two of SCRIPT.WS's 16 began one whole line lower than the library's with
+    /// identical content, and everything below shifted with them.
+    ///
+    /// Populated ONLY by `renderModern`, like `modernForcedPageBreakOffsets` beside it —
+    /// Show Invisibles draws its own "¶" on a blank line (it is a mark the reader asked to
+    /// SEE), and neither Printed path has a reflowed blank at all.
+    var modernBlankLineRanges: [NSRange] = []
+    /// `.cp` — a CONDITIONAL page break, recorded as (where, how much room it wants) because
+    /// only the view can answer the second half. The engine's rule is `if !body.isEmpty,
+    /// y - (margb + noteBlockH()) < need { close() }` with `need = n * modernLine *
+    /// modernBodyPt`; `PagedDocumentView.buildPages` applies exactly that against a real
+    /// page. Populated only by `renderModern`.
+    var modernConditionalBreaks: [ModernConditionalBreak] = []
     /// Job 490 (item 1, LJ6DTP title-top): `Document.pclPrograms` verbatim, threaded through
-    /// so `PageTextView.drawPCLGraphics` (`PrintedPCLGraphics.swift`) can execute a `.pctl`
+    /// so `PageTextView.drawPCLGraphics` (`NativePCLGraphics.swift`) can execute a `.pctl`
     /// attachment's own embedded PCL program at draw time — see that file's top doc comment.
     /// Empty in Modern style, which has no `PageLine`/paper-facsimile concept for a PCL
     /// rectangle to draw against at all.
@@ -297,6 +430,11 @@ struct RenderedDocument {
 /// containers use (see that delegate's own doc comment for the two call shapes).
 struct PinnedBaseline: Sendable {
     let page: Int
+    /// Which of that page's newspaper columns the fragment belongs to — 0 for every line of
+    /// every ordinary page. `PagedDocumentView` builds one text container per column per
+    /// page (item 19, Jon's ruling 2026-09-10), and `page` and `column` together name the
+    /// container a fragment belongs in.
+    var column: Int = 0
     let y: Double
     /// Job 413: this line's own deterministic baseline-from-fragment-top offset, computed
     /// once here via an isolated off-screen probe (`isolatedFragmentK`) of this line's own
@@ -427,11 +565,18 @@ struct ModernFootnoteEvent {
     let entries: [NSAttributedString]
 }
 
+/// One `.cp`: the character it sits at, and the room in points the paragraph after it needs
+/// before a page may start it. See `RenderedDocument.modernConditionalBreaks`.
+struct ModernConditionalBreak {
+    let charOffset: Int
+    let needPt: Double
+}
+
 /// Job 240 (b13, Part 1) — MAC VIEWING RULING (decision register 2026-08-11, restated and
 /// binding; skill registry #25): "We are on a MAC now... we don't have to fool around with
 /// making sure we only use native-to-PDF fonts... We are using that same availability to
 /// make the Mac viewer awesome." Printed-mode font resolution no longer clamps a WS5+ font
-/// run to the base-14 PDF set (the `PrintedFontFamily` enum this replaced); it maps the
+/// run to the base-14 PDF set (the `NativeFontFamily` enum this replaced); it maps the
 /// typestyle name through the SAME `.mac` render-target table the CLI's `--fonts mac`
 /// target uses, so the viewer shows the real typeface family (Univers/Aachen/etc.) instead
 /// of whichever of Times/Helvetica/Courier its generic-style bits happened to clamp to.
@@ -440,14 +585,14 @@ struct ModernFootnoteEvent {
 
 /// Port of `targetFonts[.mac]` (`CtrlKD/FontMap.swift:192-217`, `internal` — same
 /// "parallel port, not a call" discipline as this file's other engine ports, e.g.
-/// `printedLJ6DTPColourGray`/`printedLJ6DTPCharSubst` above). Keys are the RENDERED family
+/// `nativeLJ6DTPColourGray`/`nativeLJ6DTPCharSubst` above). Keys are the RENDERED family
 /// (`FontChange.family`, i.e. the typestyle name up to its first parenthetical), lowercased.
 /// `falt` is that row's own second modern name — "fallback chain per the mapping's
 /// alternates" (this job's brief) — tried when the primary can't be resolved to an
-/// installed font; unlisted families fall through to `printedMacGenericPrimary` below,
+/// installed font; unlisted families fall through to `nativeMacGenericPrimary` below,
 /// the font block's own generic-style bits as terminus, exactly like `rtfFonts`'s own
 /// fallback order (`FontMap.swift:279-281`).
-private let printedMacFontRows: [String: (primary: String, falt: String?)] = {
+private let nativeMacFontRows: [String: (primary: String, falt: String?)] = {
     func expand(_ rows: [(keys: String, primary: String, falt: String?)])
         -> [String: (primary: String, falt: String?)] {
         var flat: [String: (primary: String, falt: String?)] = [:]
@@ -485,26 +630,26 @@ private let printedMacFontRows: [String: (primary: String, falt: String?)] = {
 }()
 
 /// Port of `genericPrimary[.mac]` (`CtrlKD/FontMap.swift:116-117`). The terminus for any
-/// typestyle name `printedMacFontRows` doesn't carry — an unmapped family still gets a
+/// typestyle name `nativeMacFontRows` doesn't carry — an unmapped family still gets a
 /// USEFUL Mac-native face from its font block's own generic-style bits, never nothing.
-private let printedMacGenericPrimary: [GenericStyle: String] = [
+private let nativeMacGenericPrimary: [GenericStyle: String] = [
     .sans: "Helvetica", .serif: "Times New Roman", .script: "Apple Chancery", .display: "Futura",
 ]
 
 /// `entry.family`, lowercased, redirected to the short mono key ("courier"/"pica"/"elite"/
 /// "lineprinter") when it's one of those NAMES WITH A SUFFIX the spec's own table carries
 /// (e.g. `"Courier Italic (TI 855)"` -> family `"Courier Italic"`) — same `hasPrefix` guard
-/// and same reasoning `printedMonoFamilies`'s own doc comment already gives: these are
+/// and same reasoning `nativeMonoFamilies`'s own doc comment already gives: these are
 /// monospace-family variants the `.mac` table's exact-string keys don't spell out
 /// individually, and belong on that family's own mapped face, not the generic-style
 /// fallback its OTHER bits (serif/sans) might otherwise select.
-private func printedMacFamilyKey(_ family: String) -> String {
+private func nativeMacFamilyKey(_ family: String) -> String {
     let lower = family.lowercased()
-    if let mono = printedMonoFamilies.first(where: { lower.hasPrefix($0) }) { return mono }
+    if let mono = nativeMonoFamilies.first(where: { lower.hasPrefix($0) }) { return mono }
     return lower
 }
 
-/// Job 306 (b18): the `printedMacFontRows` keys Jon's ruling names — Native's courier-class
+/// Job 306 (b18): the `nativeMacFontRows` keys Jon's ruling names — Native's courier-class
 /// mapping (`"courier|pica|elite|lineprinter"` and `"prestige"`, the two rows this job's
 /// brief quotes verbatim; `"letter gothic|gothic"`'s primary is Menlo, not this class, so it
 /// is untouched even though its OWN `falt` happens to be "Courier New" too).
@@ -514,7 +659,7 @@ private func printedMacFamilyKey(_ family: String) -> String {
 /// `renderModern`/`renderModernAnnotated`'s `attributedLine` calls now pass
 /// `useCourierPrime: true` (`DocumentRenderer.swift`). What still keeps the views apart is the
 /// EMITTED-output boundary, not a Modern/Native split: every emitter (RTF/HTML/MD/DOCX/CLI/QL
-/// text) calls `printedMacFontName`/`attributedLine`'s callers with `useCourierPrime`
+/// text) calls `nativeMacFontName`/`attributedLine`'s callers with `useCourierPrime`
 /// defaulted `false` or explicitly `false`, so `OutputParityTests` still pins every output
 /// surface to "Courier New" — only the two on-screen views (Native's Printed render and
 /// Modern's) pass `true`. See `ModernViewerStyleTests
@@ -522,7 +667,7 @@ private func printedMacFamilyKey(_ family: String) -> String {
 /// expectation this must never regress.
 private let courierPrimeRowKeys: Set<String> = ["courier", "pica", "elite", "lineprinter", "prestige"]
 
-/// Job 394 (391 root cause 3): the DECISIVE monospace verdict for `printedMacFontName`
+/// Job 394 (391 root cause 3): the DECISIVE monospace verdict for `nativeMacFontName`
 /// below, consulted BEFORE any name/generic-style lookup there — a direct call to the
 /// engine's own shared `resolveFont` (`CtrlKD/FontMap.swift`'s b24 round 21 item 5
 /// architectural deliverable: "ONE public function so the app's own view layer... can
@@ -531,26 +676,26 @@ private let courierPrimeRowKeys: Set<String> = ["courier", "pica", "elite", "lin
 /// states the rule this mirrors: "`proportional == false`... is DECISIVE and short-
 /// circuits all of the above... routed through the SAME per-target 'courier' table entry
 /// every genuine mono family already resolves through, never a family-name or falt
-/// garnish." Before this job, `printedMacFontName` had NO such short-circuit: a WSFORMAT
-/// typestyle with `proportional == false` but no entry in `printedMacFontRows` (ctrl-kd's
+/// garnish." Before this job, `nativeMacFontName` had NO such short-circuit: a WSFORMAT
+/// typestyle with `proportional == false` but no entry in `nativeMacFontRows` (ctrl-kd's
 /// generic Non-PostScript categories — "NPS SansSer Qual"/"NPS Serif Qual", typestyle
 /// numbers 103/104, SCRIPT.WS's own screenplay body font) fell all the way through to
-/// `printedMacGenericPrimary`'s sans/serif bucket and rendered a real PROPORTIONAL Mac
+/// `nativeMacGenericPrimary`'s sans/serif bucket and rendered a real PROPORTIONAL Mac
 /// face for a record whose own bit says it is NOT one — the live Native/Modern view (and
 /// therefore print and the AppKit-rendered PDF export, which both call this same
 /// function) diverging from the RTF/PDF emitters, which already apply this identical
 /// short-circuit via `rtfFonts`/`pdfFamily`.
-private func printedMacIsMonospace(_ entry: FontChange) -> Bool {
+private func nativeMacIsMonospace(_ entry: FontChange) -> Bool {
     resolveFont(entry).isMonospace
 }
 
 /// The Mac font name (plus fallback alternate) for one WS5+ font-block span — replaces the
-/// base-14 `printedFontFamily`/`printedFontPostScriptName` pair this job removed. Symbol/
+/// base-14 `nativeFontFamily`/`nativeFontPostScriptName` pair this job removed. Symbol/
 /// dingbat BYTE-ENCODING detection (`entry.symbolMap`, and the typestyle-name prefix checks
 /// job 186/210 already established) still takes priority over the name-driven table lookup,
 /// unchanged from before this job: those bytes need the Symbol/Zapf Dingbats glyphs to mean
 /// anything at all, independent of what face the typestyle name would otherwise select.
-/// `printedMacIsMonospace` (job 394, its own doc comment above) takes priority right after
+/// `nativeMacIsMonospace` (job 394, its own doc comment above) takes priority right after
 /// those two — same "decisive, ahead of the name table" position `rtfFonts` gives the
 /// identical bit.
 ///
@@ -559,8 +704,8 @@ private func printedMacIsMonospace(_ entry: FontChange) -> Bool {
 /// job 312/b19, 2026-08-14), substituting the bundled Courier Prime
 /// (`CourierPrimeFontRegistration`) as primary with "Courier New" as `falt` — reached only if
 /// the bundled face somehow failed to register/load — for exactly the two rows
-/// `courierPrimeRowKeys` names, ahead of the shared `printedMacFontRows` lookup.
-private func printedMacFontName(_ entry: FontChange, useCourierPrime: Bool = false) -> (primary: String, falt: String?) {
+/// `courierPrimeRowKeys` names, ahead of the shared `nativeMacFontRows` lookup.
+private func nativeMacFontName(_ entry: FontChange, useCourierPrime: Bool = false) -> (primary: String, falt: String?) {
     let name = (entry.typestyleName ?? "").lowercased()
     if name.hasPrefix("symbol") { return ("Symbol", nil) }
     if name.contains("dingbat") { return ("Zapf Dingbats", nil) }
@@ -569,16 +714,16 @@ private func printedMacFontName(_ entry: FontChange, useCourierPrime: Bool = fal
     case .symbols: return ("Zapf Dingbats", nil)
     case .cp437, .cp850: break
     }
-    if printedMacIsMonospace(entry) {
+    if nativeMacIsMonospace(entry) {
         if useCourierPrime { return ("Courier Prime", "Courier New") }
-        return printedMacFontRows["courier"] ?? ("Courier New", nil)
+        return nativeMacFontRows["courier"] ?? ("Courier New", nil)
     }
-    let key = printedMacFamilyKey(entry.family)
+    let key = nativeMacFamilyKey(entry.family)
     if useCourierPrime, courierPrimeRowKeys.contains(key) {
         return ("Courier Prime", "Courier New")
     }
-    if let row = printedMacFontRows[key] { return row }
-    return (printedMacGenericPrimary[entry.genericStyle] ?? "Helvetica", nil)
+    if let row = nativeMacFontRows[key] { return row }
+    return (nativeMacGenericPrimary[entry.genericStyle] ?? "Helvetica", nil)
 }
 
 /// Bold/italic traits onto a resolved Mac face via `NSFontManager`, same mechanism
@@ -589,7 +734,7 @@ private func printedMacFontName(_ entry: FontChange, useCourierPrime: Bool = fal
 /// find on the family risks it substituting a DIFFERENT family entirely rather than doing
 /// nothing — the same risk `styled(_:with:)`'s own early-return-on-no-traits avoids for the
 /// common case, made explicit here for these two.
-private func printedApplyTraits(_ font: NSFont, bold: Bool, italic: Bool) -> NSFont {
+private func nativeApplyTraits(_ font: NSFont, bold: Bool, italic: Bool) -> NSFont {
     guard font.familyName != "Symbol" && font.familyName != "Zapf Dingbats" else { return font }
     var traits: NSFontTraitMask = []
     if bold { traits.insert(.boldFontMask) }
@@ -600,17 +745,69 @@ private func printedApplyTraits(_ font: NSFont, bold: Bool, italic: Bool) -> NSF
 
 /// `NSFont` for one WS5+ font-block span at `size`, trying the mapped primary name, then
 /// its `falt`, then giving up (the caller falls back to the document's own Courier — see
-/// `resolvedFont`'s call site). Every name in `printedMacFontRows`/`printedMacGenericPrimary`
+/// `resolvedFont`'s call site). Every name in `nativeMacFontRows`/`nativeMacGenericPrimary`
 /// is a real installed macOS font (Jon's device verification, `FontMap.swift:140-142`'s own
 /// citation — "every mac cell device-verified... Font Book, locked-flag test"), so the
 /// `falt`/`nil` path is a defensive fallback, not an expected one.
-private func printedResolvedMacFont(
+/// THE BASE-14 FACE THE LIBRARY'S OWN MODERN PDF WOULD SET THIS RUN IN.
+///
+/// Used only under `DocumentRenderer.modernBase14MeasurementPin` — see that flag's own doc
+/// comment for why a gate needs it and why the product never does. `pdfFamily` is the
+/// library's own answer (`PDFFonts.swift`, now `public`), so the two sides cannot drift: this
+/// asks the emitter which of the five families it would select, and then names the Mac face
+/// that is metric-compatible with it.
+///
+/// Times New Roman for `.times` is not an approximation of convenience: measured glyph by
+/// glyph across the printable ASCII range, macOS's Times New Roman matches the engine's AFM
+/// Times-Roman table to 0.24/1000 em at worst and 0.08 on average.
+/// The PDF `/BaseFont` name the library would set this run in — `base14(pdfFamily(entry),
+/// bold:italic:)`, re-derived here because `base14` is `internal` to CtrlKD while the family
+/// it takes is not. The four-variant order is the library's own
+/// (`(bold ? 1 : 0) + (italic ? 2 : 0)`), and neither symbol face has variants.
+private func modernBase14Name(_ entry: FontChange?, bold: Bool, italic: Bool) -> String {
+    base14Name(pdfFamily(entry), bold: bold, italic: italic)
+}
+
+/// `base14(family, bold:italic:)` itself, re-spelled here because the library's own is
+/// `internal` while the family it takes is not. Split out from `modernBase14Name` for the
+/// one caller that has already decided the family by Modern's own rule rather than
+/// `pdfFamily`'s — see `renderModern`'s `modernFontlessFamily`.
+private func base14Name(_ family: CtrlKD.PDFFamily, bold: Bool, italic: Bool) -> String {
+    let index = (bold ? 1 : 0) + (italic ? 2 : 0)
+    switch family {
+    case .times:
+        return ["Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"][index]
+    case .helvetica:
+        return ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"][index]
+    case .courier:
+        return ["Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"][index]
+    case .symbol: return "Symbol"
+    case .zapfDingbats: return "ZapfDingbats"
+    }
+}
+
+private func modernBase14MacFont(
+    _ entry: FontChange?, size: CGFloat, bold: Bool, italic: Bool
+) -> NSFont? {
+    let family: String
+    switch pdfFamily(entry) {
+    case .times: family = "Times New Roman"
+    case .helvetica: family = "Helvetica"
+    case .courier: family = "Courier New"
+    case .symbol: family = "Symbol"
+    case .zapfDingbats: family = "Zapf Dingbats"
+    }
+    guard let base = NSFont(name: family, size: size) else { return nil }
+    return nativeApplyTraits(base, bold: bold, italic: italic)
+}
+
+private func nativeResolvedMacFont(
     _ entry: FontChange, size: CGFloat, bold: Bool, italic: Bool, useCourierPrime: Bool = false
 ) -> NSFont? {
-    let (primary, falt) = printedMacFontName(entry, useCourierPrime: useCourierPrime)
+    let (primary, falt) = nativeMacFontName(entry, useCourierPrime: useCourierPrime)
     for name in [primary, falt].compactMap({ $0 }) {
         if let base = NSFont(name: name, size: size) {
-            return printedApplyTraits(base, bold: bold, italic: italic)
+            return nativeApplyTraits(base, bold: bold, italic: italic)
         }
     }
     return nil
@@ -622,7 +819,7 @@ private func printedResolvedMacFont(
 /// `NSFont(name:size:)` succeeding only proves the FAMILY exists; it says nothing about
 /// which Unicode blocks that face's own cmap covers — job 442 measured that neither
 /// `Courier` nor `Courier Prime` covers cp437 box-drawing, yet both construct cleanly,
-/// which is exactly the gap `printedResolvedMacFont` above never checks. `NSFont`/`CTFont`
+/// which is exactly the gap `nativeResolvedMacFont` above never checks. `NSFont`/`CTFont`
 /// are toll-free bridged on macOS, so `font as CTFont` needs no re-lookup.
 private func fontCoversAllCharacters(_ font: NSFont, in text: String) -> Bool {
     let units = Array(text.utf16)
@@ -631,38 +828,38 @@ private func fontCoversAllCharacters(_ font: NSFont, in text: String) -> Bool {
     return CTFontGetGlyphsForCharacters(font as CTFont, units, &glyphs, units.count)
 }
 
-/// Coverage-aware sibling of `printedResolvedMacFont` above (job 445, part 1 of the b27
+/// Coverage-aware sibling of `nativeResolvedMacFont` above (job 445, part 1 of the b27
 /// box-corner fix). Tries the SAME `[primary, falt]` candidate order that function already
 /// tries, but its stop condition is stricter: a candidate is accepted only once it both
 /// CONSTRUCTS and COVERS (`fontCoversAllCharacters`) every character actually being set —
-/// `printedResolvedMacFont` stops at construction alone, which is how it silently keeps
+/// `nativeResolvedMacFont` stops at construction alone, which is how it silently keeps
 /// `Courier Prime` for a box-drawing run neither `Courier Prime` nor its own bundled name
 /// contains a glyph for, letting AppKit's own missing-glyph substitution pick an unmanaged
 /// fallback (Menlo on this machine) instead. When NO candidate covers `text`, falls back to
 /// the first candidate that at least constructed — same "never return nil when the old code
-/// would have shown something" guarantee `printedResolvedMacFont` itself keeps.
+/// would have shown something" guarantee `nativeResolvedMacFont` itself keeps.
 ///
 /// NOT YET WIRED into any render path — `resolvedFont`/`graphicCells` still call
-/// `printedResolvedMacFont`. Wiring this in (and the per-glyph run-boundary tracking that
+/// `nativeResolvedMacFont`. Wiring this in (and the per-glyph run-boundary tracking that
 /// needs, per job 442's own recommended-fix section) is part 2, a separate job.
-func printedCoverageAwareResolvedMacFont(
+func nativeCoverageAwareResolvedMacFont(
     _ entry: FontChange, size: CGFloat, bold: Bool, italic: Bool, useCourierPrime: Bool = false,
     coveringCharactersIn text: String
 ) -> NSFont? {
-    let (primary, falt) = printedMacFontName(entry, useCourierPrime: useCourierPrime)
+    let (primary, falt) = nativeMacFontName(entry, useCourierPrime: useCourierPrime)
     var firstConstructed: NSFont?
     for name in [primary, falt].compactMap({ $0 }) {
         guard let base = NSFont(name: name, size: size) else { continue }
         if firstConstructed == nil { firstConstructed = base }
         if fontCoversAllCharacters(base, in: text) {
-            return printedApplyTraits(base, bold: bold, italic: italic)
+            return nativeApplyTraits(base, bold: bold, italic: italic)
         }
     }
-    return firstConstructed.map { printedApplyTraits($0, bold: bold, italic: italic) }
+    return firstConstructed.map { nativeApplyTraits($0, bold: bold, italic: italic) }
 }
 
 /// Job 210 (b11 leg 3): port of `colourGrayLJ6DTP` (`CtrlKD/PDFDriverLJ6DTP.swift:15-19`,
-/// `internal` — same "parallel port, not a call" discipline as `printedFontFamily` above).
+/// `internal` — same "parallel port, not a call" discipline as `nativeFontFamily` above).
 /// LJ6DTP's colour palette as grayscale (0 black, 1 white). Applied ONLY when the document
 /// declares driver LJ6DTP (`Document.printerDriver`, `public`); every other document's
 /// `span.colour` is ignored, matching the engine's own `doc.printerDriver == "LJ6DTP" ?
@@ -670,7 +867,7 @@ func printedCoverageAwareResolvedMacFont(
 /// KNOCKOUT — white text set to overprint a black-filled vector bar (`PDFWriter.swift:484`'s
 /// own comment: "white (15) text overprinted onto a black bar punches out of it exactly as
 /// the LaserJet printed it").
-private let printedLJ6DTPColourGray: [Int: Double] = [
+private let nativeLJ6DTPColourGray: [Int: Double] = [
     1: 0.15, 2: 0.25, 3: 0.50, 4: 0.75, 5: 0.85, 6: 0.95, 7: 0.98,
     15: 1.0,
 ]
@@ -678,27 +875,27 @@ private let printedLJ6DTPColourGray: [Int: Double] = [
 /// job-489 (C1 — "Pattern fills are FLATTENED TO GREY"): indices 9-14 (HP1-HP6) are NOT flat
 /// grays at all — they're six visually distinct tiling patterns (horizontal, vertical, two
 /// diagonals, crosshatch, dense X), `LJ6DTPPattern`'s own doc comment
-/// (`PrintedVectorGraphics.swift`), port of the engine's `lj6dtpHPPatterns`
-/// (`PDFDriverLJ6DTP.swift:43-50`). Collapsing them into `printedLJ6DTPColourGray`'s single
+/// (`NativeVectorGraphics.swift`), port of the engine's `lj6dtpHPPatterns`
+/// (`PDFDriverLJ6DTP.swift:43-50`). Collapsing them into `nativeLJ6DTPColourGray`'s single
 /// mid-gray (as this app did before this job) made page 5's whole point — six textures
 /// distinguishable from each other — read as one swatch repeated six times. Kept as its own
-/// set (rather than folded into `printedLJ6DTPColourGray`) because a pattern needs a
+/// set (rather than folded into `nativeLJ6DTPColourGray`) because a pattern needs a
 /// DIFFERENT resolution path than a flat gray: `driverColour` returns a real tiled
 /// `NSColor(patternImage:)` for these, never a `colourMap` lookup.
 let lj6dtpHPPatternIndices: Set<Int> = [9, 10, 11, 12, 13, 14]
 
 /// Job 226: port of `ljSubst`/`ljSubstUnivers` (`CtrlKD/PDFDriverLJ6DTP.swift:26-41`,
-/// `private` — same parallel-port discipline as `printedLJ6DTPColourGray` above, one level
+/// `private` — same parallel-port discipline as `nativeLJ6DTPColourGray` above, one level
 /// deeper: even the ENGINE'S OWN `DocumentRenderer`-facing callers can't see these, they're
 /// `private` to that one file). LJ6DTP's driver patches PC-8 slots so typing `_` PRINTS an
 /// em dash, `` ` ``/`'` print curly singles, `«»` print curly doubles, and the WordStar-era
 /// smiley/sun glyphs the author typed for ©/… print as such — "an em dash is an em dash in
 /// any century" (the engine's own ruling 2026-08-06 M7 comment). Gated identically to the
-/// engine (`entry.proportional`, `PDFDriverLJ6DTP.swift:49`/`61`) by `printedLJ6DTPSubstitute`
+/// engine (`entry.proportional`, `PDFDriverLJ6DTP.swift:49`/`61`) by `nativeLJ6DTPSubstitute`
 /// below — fixed-pitch runs (Courier, Letter Gothic, LinePrinter) are never patched, matching
 /// the driver's own chart.
 // Job 401 (Class 3 diagnosis): widened from `private` to `internal` (no behaviour change)
-// so `PrintedStructuralParityTests.swift`'s `EngineTruth` — a different file in the same
+// so `NativeStructuralParityTests.swift`'s `EngineTruth` — a different file in the same
 // module — can reuse this SAME verified port instead of a second copy. Needed because
 // `docToPagelines`'s own `PageLine.text` is PRE-substitution: the engine applies
 // `ljSubstitute` later, inside `lineOpsPrinted` (`PDFWriter.swift:509`), directly on the
@@ -707,7 +904,7 @@ let lj6dtpHPPatternIndices: Set<Int> = [9, 10, 11, 12, 13, 14]
 // glyph, but the "engine truth" this test harness read via `docToPagelines` was still the
 // raw pre-substitution character — a harness blind spot, not an app defect. See that
 // file's own `EngineTruth.structuralPages` for the call site and citation.
-let printedLJ6DTPCharSubst: [Character: Character] = [
+let nativeLJ6DTPCharSubst: [Character: Character] = [
     "\u{263B}": "\u{00A9}",   // ☻ -> ©
     "\u{263C}": "\u{2026}",   // ☼ -> …
     "'": "\u{2019}",          // ' -> '
@@ -727,7 +924,7 @@ let printedLJ6DTPCharSubst: [Character: Character] = [
 // chart names for these slots is the plain box corner" — i.e. explicitly NOT what a
 // vector-capable Printed renderer should draw). Job 226 ported the semantic table by
 // mistake. Landing on plain ┌┐└┘ additionally happens to collide with `boxArms`
-// (`PrintedVectorGraphics.swift`) — a SECOND, real box-drawing character set — so
+// (`NativeVectorGraphics.swift`) — a SECOND, real box-drawing character set — so
 // LJ6DTP.WS's own "You type / Shows on screen as / Prints as" reference table
 // (page 3, and the isolated "rounded box corner (Univers only)" demo lines just above
 // it) wrongly decomposed into sharp-corner box ARMS instead of showing a rounded-corner
@@ -739,33 +936,75 @@ let printedLJ6DTPCharSubst: [Character: Character] = [
 // a real Unicode box-drawing glyph most system fonts carry directly (not the missing-
 // glyph '?' case `graphicChars` exists to patch), a closer visual match to the engine's
 // own rounded join than a sharp corner, with no vector geometry needed to port.
-let printedLJ6DTPCharSubstUnivers: [Character: Character] = [
+let nativeLJ6DTPCharSubstUnivers: [Character: Character] = [
     "\u{2665}": "\u{256D}",   // ♥ -> ╭
     "\u{2666}": "\u{256E}",   // ♦ -> ╮
     "\u{2663}": "\u{2570}",   // ♣ -> ╰
     "\u{2660}": "\u{256F}",   // ♠ -> ╯
 ]
 
-/// LJ6DTP's character substitutions for one proportional run — port of `ljSubstituteText`
-/// (`PDFDriverLJ6DTP.swift:48-55`). `entry` `nil` (no font block) or fixed-pitch: no-op,
-/// matching the engine's own guard.
-func printedLJ6DTPSubstitute(_ text: String, entry: FontChange?) -> String {
-    guard let entry, entry.proportional else { return text }
-    var out = String(text.map { printedLJ6DTPCharSubst[$0] ?? $0 })
-    if (entry.typestyleName ?? "").hasPrefix("Univers") {
-        out = String(out.map { printedLJ6DTPCharSubstUnivers[$0] ?? $0 })
+/// A KERNED PAIR OF SINGLE CURLY QUOTES IS A DOUBLE ONE.
+///
+/// Two of the driver's substituted slots are only SINGLE quotes (backtick to single open,
+/// typed apostrophe to single close), and doubling them is how an LJ6DTP document fakes a
+/// proper curly DOUBLE quote that the DeskTop symbol set has no character for — its own
+/// prose says so: "we've also added these two pairs to the PDF kerning tables", so the pair
+/// prints TUCKED TOGETHER and reads as one glyph, and only while `.kr` is on.
+///
+/// The engine collapses the pair to the real double quote rather than inventing a sub-glyph
+/// kern (`PDFDriverLJ6DTP.swift`'s `collapsingDoubled`, measured against the page's own
+/// capture), and this had the per-character half of that substitution and not this half:
+/// LJ6DTP.WS page 2 read "``But these quotation marks are just right..." on the app's side
+/// against the engine's proper pair. Page 2 is where the document demonstrates the
+/// difference on purpose, typing the identical characters once under `.kr off` and once
+/// under `.kr on`, so the kerning gate is not optional.
+///
+/// Left to right and NON-overlapping, matching the engine's own port of Python's
+/// `str.replace`: three in a row collapse to one replacement plus one leftover.
+private func nativeCollapsingDoubled(_ text: String, _ character: Character,
+                                      to replacement: Character) -> String {
+    let characters = Array(text)
+    guard characters.contains(character) else { return text }
+    var out = ""
+    var index = 0
+    while index < characters.count {
+        if characters[index] == character, index + 1 < characters.count,
+           characters[index + 1] == character {
+            out.append(replacement)
+            index += 2
+        } else {
+            out.append(characters[index])
+            index += 1
+        }
     }
     return out
 }
 
-/// Job 240 (b13, Part 1): `printedEscDegrade`/`printedEscFallback` (job 226's port of
+/// LJ6DTP's character substitutions for one proportional run — port of `ljSubstitute`
+/// (`PDFDriverLJ6DTP.swift`), the PRINT-path one: `entry` `nil` (no font block) or
+/// fixed-pitch is a no-op, matching the engine's own guard, and `kerning` is the line's own
+/// `.kr` state (see `nativeCollapsingDoubled` above).
+func nativeLJ6DTPSubstitute(_ text: String, entry: FontChange?, kerning: Bool = true) -> String {
+    guard let entry, entry.proportional else { return text }
+    var out = String(text.map { nativeLJ6DTPCharSubst[$0] ?? $0 })
+    if kerning {
+        out = nativeCollapsingDoubled(out, "\u{2018}", to: "\u{201C}")
+        out = nativeCollapsingDoubled(out, "\u{2019}", to: "\u{201D}")
+    }
+    if (entry.typestyleName ?? "").hasPrefix("Univers") {
+        out = String(out.map { nativeLJ6DTPCharSubstUnivers[$0] ?? $0 })
+    }
+    return out
+}
+
+/// Job 240 (b13, Part 1): `nativeEscDegrade`/`nativeEscFallback` (job 226's port of
 /// `escFallback`, `CtrlKD/PDFWriter.swift:40-47`) REMOVED from this native path — MAC
 /// VIEWING RULING (decision register 2026-08-11; skill registry #25). That degradation
 /// existed only because `emitPDF` hand-encodes Printed-mode text as a `/WinAnsiEncoding`
 /// (cp1252) PDF string literal, which has no slot for •, ‼, or the box-drawing rule
 /// characters — a PDF-EXPORT constraint. AppKit's text stack draws real Unicode against a
 /// real installed font; every Mac face this renderer now resolves through
-/// `printedMacFontName` carries all six of these glyphs natively, so there is nothing here
+/// `nativeMacFontName` carries all six of these glyphs natively, so there is nothing here
 /// for a degradation table to guard against. The engine's own `emitPDF`/QL-via-PDF path is
 /// untouched — Jon ruled that PDF output looks good as is; this removal is scoped to the
 /// native viewer's own text attributes only.
@@ -787,12 +1026,12 @@ func printedLJ6DTPSubstitute(_ text: String, entry: FontChange?) -> String {
 /// (Whether the ENGINE is right about a raw tab in a plain-text file is a separate question
 /// that only a real WS7 print of a tabbed .TXT can answer. None of the 18 PCL captures has
 /// one; filed as a phase-2 capture question, and it does not block this.)
-private func printedTabStops(_ style: NSMutableParagraphStyle, columnWidthPt: Double) {
+private func nativeTabStops(_ style: NSMutableParagraphStyle, columnWidthPt: Double) {
     style.tabStops = []
     style.defaultTabInterval = CGFloat(columnWidthPt)
 }
 
-/// Job 226: disables `NSAttributedString`'s default kerning on every Printed-style string
+/// Job 226: disables `NSAttributedString`'s default kerning on every Native-style string
 /// this renderer builds. `PDFWriter.lineOpsPrinted`/`runningOps`'s whole positioning model —
 /// `spanPitch`, `spanTarget`, `tzScale`, the running-head/footer `Td` math — assumes a FIXED
 /// per-character advance with no font-pair kerning at all: PDF's plain `Tj` operator (this
@@ -812,13 +1051,388 @@ private func printedTabStops(_ style: NSMutableParagraphStyle, columnWidthPt: Do
 /// specifically — several other fixes landed in the same pass. Left in as a real, defensible
 /// correctness fix on its own terms; the header's remaining pixel drift is NOT closed and
 /// its root cause is still open — see this job's report/LESSONS, not a re-derivation here.
-private let printedNoKerning: Float = 0
+private let nativeNoKerning: Float = 0
 
-/// Disables AppKit's default LIGATURES on every Printed-style string this renderer builds,
-/// for exactly the reason `printedNoKerning` above disables kerning — and unlike that one,
+
+/// A JUSTIFIED LINE'S OWN WORD AND GAP WIDTHS, AS THE LIBRARY SPREAD THEM.
+///
+/// Planning #251(b): `PageLine.justifyWordX` is the engine's own precomputed
+/// `justifyPiecesPrinted` result — every word and every gap of a justified line, left to
+/// right, each with its own x and width. The pieces are contiguous, so pinning each one's
+/// total advance to its own width lands every one of them on its own x by construction.
+///
+/// It has to be pinned rather than left to AppKit for the same reason a fixed-pitch cell
+/// does: the app's own spread is its Mac face's, and the library's is a whole-point
+/// distribution over a fixed-pitch grid. REFORM.DOT line 18 is the corpus case — the engine
+/// puts `.pf` at 273.60 and `on` at 511.20, a gap of over 200pt, where the app ran the line
+/// together at its own natural spacing.
+///
+/// Bails out entirely rather than partially if the pieces and the built string ever
+/// disagree: a line half-pinned to a model it does not match is worse than one not pinned.
+@MainActor
+private func nativePinJustifiedWords(
+    _ assembled: NSAttributedString, pieces: [PageLine.JustifyWordPiece]
+) -> NSAttributedString {
+    guard !pieces.isEmpty, assembled.length > 0 else { return assembled }
+    let text = assembled.string as NSString
+    // Every piece's own character range in the built string, checked as we go.
+    var ranges: [NSRange] = []
+    var cursor = 0
+    for piece in pieces {
+        let piece = piece.text as NSString
+        guard cursor + piece.length <= text.length,
+              text.substring(with: NSRange(location: cursor, length: piece.length)) == piece as String
+        else { return assembled }
+        ranges.append(NSRange(location: cursor, length: piece.length))
+        cursor += piece.length
+    }
+    let pinned = NSMutableAttributedString(attributedString: assembled)
+    for (index, range) in ranges.enumerated() where range.length > 0 {
+        // This piece's own advance as it currently stands, kerns already applied by the
+        // fixed-pitch and graphic-cell pins included.
+        var advance = 0.0
+        var last = NSRange(location: NSNotFound, length: 0)
+        var at = range.location
+        while at < NSMaxRange(range) {
+            let composed = text.rangeOfComposedCharacterSequence(at: at)
+            let clamped = NSIntersectionRange(composed, range)
+            guard clamped.length > 0 else { break }
+            last = clamped
+            if let font = pinned.attribute(.font, at: clamped.location, effectiveRange: nil) as? NSFont {
+                advance += nativeResolvedAdvance(of: text.substring(with: clamped), in: font)
+            }
+            advance += (pinned.attribute(.kern, at: clamped.location, effectiveRange: nil) as? Double) ?? 0
+            at = NSMaxRange(composed)
+        }
+        guard last.location != NSNotFound else { continue }
+        let existing = (pinned.attribute(.kern, at: last.location, effectiveRange: nil) as? Double) ?? 0
+        pinned.addAttribute(.kern, value: existing + (pieces[index].width - advance), range: last)
+    }
+    return pinned
+}
+
+/// EVERY GRAPHIC CHARACTER GETS THE CELL THE LIBRARY GAVE IT.
+///
+/// Planning #251(c): `PageLine.graphicCells` states each cp437 box-drawing/graphic
+/// character's own x and width, recorded from a real call to the writer's own
+/// `lineOpsPrinted`, so it IS the cell the library draws rather than a re-derivation.
+///
+/// The vector overlay could be placed from that alone, but the glyphs underneath could not:
+/// these characters are real text in this app's own storage, and their ADVANCES are the Mac
+/// face's, which decide where everything after them on the line begins. `nativePinToCells`
+/// already pins a fixed-pitch run's advances to the document's pitch, and for a graphic
+/// character inside such a run the two answers agree — but it declines a PROPORTIONAL run
+/// outright, and the library gives a graphic cell in a proportional run the type size
+/// itself. -LASERJE.FNT line 9 is that case: its box-drawing prelude advanced 15.57pt a cell
+/// against the library's own, so the "Scalable" that follows started 4.46pt early, and
+/// PAGE.RND line 56's rule drifted its whole width.
+///
+/// So the advance is pinned here too, per character, from the model. Matched by ORDER and
+/// confirmed by character: a cell the model and this string disagree about keeps whatever
+/// advance it already had rather than borrowing a neighbour's.
+@MainActor
+private func nativePinGraphicCells(
+    _ assembled: NSAttributedString, placements: [PageLine.GraphicCellPlacement]
+) -> NSAttributedString {
+    guard !placements.isEmpty, assembled.length > 0 else { return assembled }
+    let pinned = NSMutableAttributedString(attributedString: assembled)
+    let text = pinned.string as NSString
+    // This character's own advance in its own face, WITHOUT any kern already on it.
+    //
+    // The distinction matters and getting it wrong is a real bug this had: `.kern` REPLACES,
+    // so a pin that sets `width - (natural + existingKern)` subtracts the existing kern
+    // twice. BOX.WS's interior spaces already carry a +6.54 kern of their own, and the first
+    // version of this measured that in and then replaced it — every space came out 0.66pt
+    // wide instead of 7.2, and a 23-cell row measured 28.22pt against its own border's
+    // 165.60. A pin that ADDS (the between-cell one below) wants the kern-inclusive figure;
+    // a pin that REPLACES wants this one.
+    func naturalAdvance(of range: NSRange) -> Double {
+        guard let font = pinned.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+        else { return 0 }
+        return nativeResolvedAdvance(of: text.substring(with: range), in: font)
+    }
+    func advance(of range: NSRange) -> Double {
+        naturalAdvance(of: range)
+            + ((pinned.attribute(.kern, at: range.location, effectiveRange: nil) as? Double) ?? 0)
+    }
+    // Where each cell landed in this string, so the runs BETWEEN them can be pinned too.
+    var matched: [(range: NSRange, placement: PageLine.GraphicCellPlacement)] = []
+    // A GRAPHIC RUN'S OWN SPACES ARE CELLS TOO, and missing that is what made a box's
+    // closing border miss its column by 59.82pt.
+    //
+    // `splitGraphics` treats a maximal run that STARTS and ENDS on a graphic character with
+    // only graphic characters or spaces between as one graphic segment, so the model records
+    // a cell for every character of it — BOX.WS's `│` + 21 spaces + `│` comes back as 23
+    // cells, not 2. A walk that only looked at `graphicChars` matched the opening `│` against
+    // cell 0, skipped every space without consuming its cell, and then compared the closing
+    // `│` against cell 1, which is a SPACE: no match, so the closing border was never pinned
+    // at all while the all-graphic border row above it was. That is the whole of the gap.
+    //
+    // Matched character by character against the cell list instead, advancing the list only
+    // on an equal character. A character that does not match consumes nothing, which is what
+    // lets the WORD JOINERS this renderer splices between adjacent graphic glyphs pass
+    // through, and a run may only START on a graphic character, so a space in ordinary prose
+    // before one cannot claim the run's first cell.
+    var index = 0
+    var placementIndex = 0
+    var started = false
+    while index < text.length, placementIndex < placements.count {
+        let range = text.rangeOfComposedCharacterSequence(at: index)
+        defer { index = NSMaxRange(range) }
+        guard let character = text.substring(with: range).first else { continue }
+        let placement = placements[placementIndex]
+        guard placement.char == character else { continue }
+        if !started {
+            guard nativeGeometryChars.contains(character) else { continue }
+            started = true
+        }
+        placementIndex += 1
+        guard placement.width > 0 else { continue }
+        let own = naturalAdvance(of: range)
+        guard own > 0 else { continue }
+        pinned.addAttribute(.kern, value: placement.width - own, range: range)
+        matched.append((range, placement))
+    }
+    // AND THE TEXT BETWEEN TWO CELLS, which is what makes a box a box.
+    //
+    // Pinning only the cells themselves puts a row of `─` on the library's grid and leaves
+    // the prose inside a `│ ... │` row on the reading face's own widths, so the closing
+    // border of a box lands wherever that prose happens to end — measured on Modern's own
+    // box evidence, 59.82pt right of where the top border closes.
+    //
+    // The model states each cell's absolute x as well as its width, so the gap between two
+    // cells on the same visual line is stated too: `x(k+1) - (x(k) + width(k))`. Pinning the
+    // run between them to that gap lands the closing border on the library's own column
+    // whatever the prose measures. A pair whose x DECREASES is a pair the library put on two
+    // different visual lines, and there is no gap between them to pin.
+    for (first, second) in zip(matched, matched.dropFirst()) {
+        let between = NSRange(location: NSMaxRange(first.range),
+                              length: second.range.location - NSMaxRange(first.range))
+        guard between.length > 0 else { continue }
+        let wanted = second.placement.x - (first.placement.x + first.placement.width)
+        guard wanted > 0 else { continue }
+        var measured = 0.0
+        var last = NSRange(location: NSNotFound, length: 0)
+        var at = between.location
+        while at < NSMaxRange(between) {
+            let composed = text.rangeOfComposedCharacterSequence(at: at)
+            let clamped = NSIntersectionRange(composed, between)
+            guard clamped.length > 0 else { break }
+            last = clamped
+            measured += advance(of: clamped)
+            at = NSMaxRange(composed)
+        }
+        guard last.location != NSNotFound else { continue }
+        let existing = (pinned.attribute(.kern, at: last.location, effectiveRange: nil) as? Double) ?? 0
+        pinned.addAttribute(.kern, value: existing + (wanted - measured), range: last)
+    }
+    return pinned
+}
+
+/// Planning #221 follow-up (Athena's ruling, 2026-09-08): a fixed-pitch run must advance at
+/// the LIBRARY's pitch, not at the substituted face's own.
+///
+/// ## The defect this closes
+///
+/// Native substitutes the bundled Courier Prime for the document's Courier
+/// (`CourierPrimeFontRegistration`). Courier Prime's `hmtx` gives every glyph an
+/// advanceWidth of 1228 at unitsPerEm 2048 — 0.599609375 em, not the 0.6 em Courier is built
+/// on and the engine's grid assumes. At a 12pt type size that is 7.1953125pt per character
+/// against the library's 7.2pt column: a deficit of 0.0046875pt each, six and a half parts
+/// in ten thousand, which ACCUMULATES one character at a time along the line.
+///
+/// It predicted the failures exactly before it was fixed. `appNativeViewMatchesTheWordStarCapture`
+/// named rows at x=360 (column 50) with residuals of -0.20 to -0.23pt against a predicted
+/// 50 x 0.0046875 = 0.234, and rows at x=504 (column 70) at -0.30 against a predicted 0.328.
+/// The drift is neither rounding nor a scaled font: it is the face's own designed advance.
+///
+/// This also explains why that gate's licence ceiling kept moving. The ceiling was never
+/// counting a font-substitution constant — it was counting how many words on a page happened
+/// to sit far enough right for the accumulation to cross the 0.2pt tolerance, so anything
+/// that pushed words rightward (today: bare-tab expansion) raised the count with no new
+/// defect behind it.
+///
+/// ## Why the pitch comes from the engine
+///
+/// `spanPitch` is the emitter's OWN per-run pitch function, made public for this
+/// (`PDFWriter.swift`). Deriving `0.6` here instead would be a second copy of the engine's
+/// grid constant in a file whose whole job is to agree with it, and it would miss the case
+/// `spanPitch` handles that a constant cannot: a font block carrying an explicit `.cw`
+/// character width (`FontChange.width1800`), where the pitch is not an em fraction at all.
+///
+/// ## Why only fixed-pitch runs
+///
+/// A proportional run has no grid to land on — the engine advances it by its own widths and
+/// scales it with `Tz` — so correcting it toward a per-character pitch would be wrong, not
+/// merely unnecessary.
+///
+/// BOTH halves of the guard are load-bearing, and the first version of this had only one.
+/// `NSFont.isFixedPitch` asks about the MAC face this app substituted; `FontChange
+/// .proportional` is the LIBRARY's own answer about the document's font block, and they
+/// disagree exactly where it matters — a document declaring a proportional face that
+/// resolves to a fixed-pitch Mac fallback answers true to the first and is still a
+/// proportional run the engine advances by its own widths. Correcting those to a
+/// per-character pitch took -README from 43 divergences to 2174 and broke SAWYER and
+/// VERSIONS, which had been passing: the words stopped matching at all rather than drifting.
+/// The engine's flag decides; the face's own metric only says whether there is a uniform
+/// advance to correct.
+///
+/// Modern never reaches here: every caller on this path passes `disableKerning: true`, and
+/// Modern passes false.
+/// EVERY GLYPH IN A FIXED-PITCH RUN OCCUPIES EXACTLY ONE CELL, whatever face draws it.
+///
+/// Athena's ruling, 2026-09-09: -SCREEN's cp437 line is fixed-pitch text on WordStar's own
+/// column grid, and a substituted face does not change the grid. So the correction is not
+/// "nudge Courier Prime onto the grid", it is "this cell is `spanPitch` wide" — and it holds
+/// for the declared face, for a Greek fallback, and for a box-drawing fallback alike.
+///
+/// WHY THE PREVIOUS SHAPE WAS WRONG. It computed ONE kern for the whole run, from the
+/// DECLARED face's advance, and `.kern` is added to whatever advance the face that actually
+/// draws each glyph has. AppKit substitutes per character — Courier Prime carries no Greek
+/// and no box drawing — so a run's single kern, derived from Courier Prime's 7.1953, was
+/// added to a fallback's own 7.2012 and overshot. The first attempt at this papered over it
+/// with a coverage guard that skipped any run the declared face could not fully cover, which
+/// left -SCREEN's Greek uncorrected (it drew about 0.3pt wide per glyph, enough to push ink
+/// into the next 12pt cell of the pixel oracle's grid) and was only ever right by accident
+/// for box drawing.
+///
+/// Corrected per CHARACTER against the face that will actually render it, the arithmetic
+/// stops depending on which face that is: each character's kern is `pitch` minus THAT
+/// character's own advance in THAT face, so the effective advance is the cell, exactly, for
+/// every glyph in the run.
+///
+/// Modern never reaches here: every caller on this path passes `disableKerning: true`, and
+/// Modern passes false. A proportional run is still excluded — `FontChange.proportional` is
+/// the library's own answer and the engine advances those by their own widths — as is a run
+/// whose declared face is not fixed pitch at all.
+@MainActor
+private func nativePinToCells(
+    _ assembled: NSAttributedString, font: NSFont, entry: FontChange?
+) -> NSAttributedString {
+    guard font.isFixedPitch, entry?.proportional != true, assembled.length > 0 else {
+        return assembled
+    }
+    let pitch = spanPitch(entry, Int(font.pointSize.rounded()))
+    guard pitch > 0 else { return assembled }
+
+    let out = NSMutableAttributedString(attributedString: assembled)
+    let text = assembled.string as NSString
+    // Per CHARACTER, reading the font the assembled run already carries for it — the
+    // coverage split (job 447) and the graphic-font resolution have both run by now, so this
+    // asks the same face that will actually be painted.
+    var index = 0
+    while index < text.length {
+        let composed = text.rangeOfComposedCharacterSequence(at: index)
+        let glyphFont = assembled.attribute(.font, at: index, effectiveRange: nil) as? NSFont
+            ?? font
+        let character = text.substring(with: composed)
+        let advance = nativeResolvedAdvance(of: character, in: glyphFont)
+        if advance > 0 {
+            out.addAttribute(.kern, value: Float(pitch - advance), range: composed)
+        }
+        index = composed.location + composed.length
+    }
+    return out
+}
+
+/// A GRAPHIC CELL IN MODERN COSTS ONE DECLARED CELL, whatever the face draws.
+///
+/// The library's `modernTokenWidth` splits a token that mixes geometry and prose and gives
+/// each half its own rule: `total += Double(range.count) * pitch` for the graphic run — the
+/// RAW `spanPitch`, never scaled by `faceTz` — and the tz-scaled natural width for the text
+/// between. The app drew a graphic character at the covering face's own advance instead.
+///
+/// Measured on -README.WS's list rows, whose marker is the cp437 solid square: the library
+/// draws it as geometry occupying an 8.4pt cell and starts the row's text 11.7pt in; the app
+/// drew the glyph at about 5pt and started 8.4pt in, so every one of those rows measured
+/// narrower than the library's and wrapped a word later.
+///
+/// `.expansion` is removed on the same range it kerns: the cell is the cell, and the library
+/// applies no `Tz` to it.
+@MainActor
+private func modernPinGraphicCells(
+    _ assembled: NSAttributedString, entry: FontChange?, pt: Int
+) -> NSAttributedString {
+    guard assembled.length > 0 else { return assembled }
+    let pitch = nativeSpanPitch(entry, pt)
+    guard pitch > 0 else { return assembled }
+    let text = assembled.string as NSString
+    guard text.length > 0, (assembled.string.contains { graphicChars.contains($0) }) else {
+        return assembled
+    }
+    // THE GRAPHIC CHARACTERS THEMSELVES, and not the spaces between them.
+    //
+    // The library's `graphicRunRanges` does treat a border-gap-border shape as ONE run and
+    // charge `range.count * pitch` for the whole of it, interior spaces included, and pinning
+    // those interiors here looked like the faithful port. It is not: job 512 already pins a
+    // box row's interior, to the neighbouring BORDER GLYPH's own advance in the face that
+    // actually draws it, which is what makes a box's right edge line up on screen. Pinning
+    // the same spaces to `spanPitch` on top of that took BOXES.WS's interior rows to
+    // x=222.70 against a top border at x=165.60 — a 57pt overhang, five rows of it. Measured
+    // both ways: the interior pin moved no gate row in either direction, and it breaks this
+    // one, so the graphic characters keep the cell and the gaps keep job 512's.
+    let out = NSMutableAttributedString(attributedString: assembled)
+    var index = 0
+    while index < text.length {
+        let composed = text.rangeOfComposedCharacterSequence(at: index)
+        index = composed.location + composed.length
+        let piece = text.substring(with: composed)
+        guard let character = piece.first, graphicChars.contains(character),
+              let glyphFont = assembled.attribute(.font, at: composed.location,
+                                                  effectiveRange: nil) as? NSFont
+        else { continue }
+        let advance = nativeResolvedAdvance(of: piece, in: glyphFont)
+        guard advance > 0 else { continue }
+        out.removeAttribute(.expansion, range: composed)
+        out.addAttribute(.kern, value: Float(pitch - advance), range: composed)
+    }
+    return out
+}
+
+
+/// One character's real advance, in points, in the face AppKit will actually draw it with —
+/// `font` when it has a glyph, and CoreText's own substitute when it does not, which is the
+/// same decision AppKit's own layout makes.
+@MainActor
+private func nativeResolvedAdvance(of character: String, in font: NSFont) -> Double {
+    let key = NativeAdvanceKey(font: font.fontName, size: Double(font.pointSize),
+                                character: character)
+    if let cached = nativeAdvanceCache[key] { return cached }
+    let string = character as CFString
+    let resolved = CTFontCreateForString(font as CTFont, string,
+                                         CFRange(location: 0, length: CFStringGetLength(string)))
+    var characters = Array(character.utf16)
+    var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+    var advance = 0.0
+    if CTFontGetGlyphsForCharacters(resolved, &characters, &glyphs, characters.count) {
+        var sizes = [CGSize](repeating: .zero, count: glyphs.count)
+        CTFontGetAdvancesForGlyphs(resolved, .horizontal, &glyphs, &sizes, glyphs.count)
+        // A surrogate pair is one character and one glyph plus a zero-advance mate; summing
+        // is correct for both cases and needs no special case.
+        advance = sizes.reduce(0.0) { $0 + Double($1.width) }
+    }
+    nativeAdvanceCache[key] = advance
+    return advance
+}
+
+/// Keyed on the face's NAME rather than the `NSFont` itself: two `NSFont` values for the same
+/// face and size are equal for this purpose and hashing the object would miss the cache.
+private struct NativeAdvanceKey: Hashable {
+    let font: String
+    let size: Double
+    let character: String
+}
+
+/// Measured once per (face, size, character) and reused. The corpus draws millions of
+/// characters through this and CoreText's own fallback resolution is the expensive part.
+@MainActor private var nativeAdvanceCache: [NativeAdvanceKey: Double] = [:]
+
+
+/// Disables AppKit's default LIGATURES on every Native-style string this renderer builds,
+/// for exactly the reason `nativeNoKerning` above disables kerning — and unlike that one,
 /// this is CONFIRMED by a measurement rather than applied on principle.
 ///
-/// A Printed facsimile is fixed pitch: every character occupies one 7.2pt Courier cell,
+/// A Native facsimile is fixed pitch: every character occupies one 7.2pt Courier cell,
 /// because that is what WordStar on a LaserJet put on the paper. `NSAttributedString`
 /// defaults to `.ligature: 1`, so AppKit was drawing `fi` as a SINGLE glyph in one cell
 /// where the capture has two. Everything after it on the line then sits exactly one column
@@ -833,8 +1447,8 @@ private let printedNoKerning: Float = 0
 /// ligate.
 ///
 /// PRINTED ONLY. Modern is a modern reading surface and its typography is deliberately not
-/// a facsimile, so this is applied where `printedNoKerning` is and nowhere else.
-private let printedNoLigatures: Int = 0
+/// a facsimile, so this is applied where `nativeNoKerning` is and nowhere else.
+private let nativeNoLigatures: Int = 0
 
 /// MECHANISM G (engine commit f79ff29, mirroring ctrl-kd f328838) — the SIZE half.
 ///
@@ -845,8 +1459,8 @@ private let printedNoLigatures: Int = 0
 /// with a captured sup/sub example in the corpus, and the engine deliberately declines to
 /// extrapolate. Values and call-site semantics mirror `PDFWriter.swift`'s
 /// `supSubXHeightRatio`/`supSubDefaultRatio`.
-private let printedSupSubCourierRatio = 9.25 / 12.0
-private let printedSupSubDefaultRatio = 2.0 / 3.0
+private let nativeSupSubCourierRatio = 9.25 / 12.0
+private let nativeSupSubDefaultRatio = 2.0 / 3.0
 
 /// MECHANISM G — the PITCH half (`PDFWriter.swift`'s `supSubCellRatio`).
 ///
@@ -855,13 +1469,13 @@ private let printedSupSubDefaultRatio = 2.0 / 3.0
 /// 7.2pt (10 cpi) Courier body cell narrows to 5.5pt (13.04 cpi) — measured to the
 /// decipoint against -SCREEN.pcl's raw x-positions. Applied proportionally to whatever the
 /// span's own body cell actually is.
-private let printedSupSubCellRatio = 5.5 / 7.2
+private let nativeSupSubCellRatio = 5.5 / 7.2
 
 /// Banker's rounding, matching the engine's own `roundHalfToEven` — `sized()` rounds a
 /// reduced point size with it, and 12 * (9.25/12) lands exactly on 9.25, a .25 case where
 /// the rounding MODE is what decides the answer. Swift's `.toNearestOrEven` is the same
 /// rule; spelled out here because the engine's helper is `internal`.
-private func printedRoundHalfToEven(_ x: Double) -> Int { Int(x.rounded(.toNearestOrEven)) }
+private func nativeRoundHalfToEven(_ x: Double) -> Int { Int(x.rounded(.toNearestOrEven)) }
 
 /// Whether this span's face is the engine's `PDFFamily.courier` — the only family with a
 /// measured mechanism-G ratio of its own.
@@ -869,11 +1483,11 @@ private func printedRoundHalfToEven(_ x: Double) -> Int { Int(x.rounded(.toNeare
 /// Mirrors `PDFFonts.swift`'s `pdfFamily`, in its own order: a span with NO font block at
 /// all is Courier (every WS4 file and every print stream); a symbol/dingbat transliteration
 /// is not; otherwise the DECISIVE monospace bit decides. That last test goes through
-/// `printedMacIsMonospace` -> the engine's own shared public `resolveFont`, which is the
+/// `nativeMacIsMonospace` -> the engine's own shared public `resolveFont`, which is the
 /// same call `pdfFamily`'s `!entry.proportional` short-circuit and its `monoFamilies`
-/// prefix scan between them amount to — see `printedMacIsMonospace`'s own doc comment on
+/// prefix scan between them amount to — see `nativeMacIsMonospace`'s own doc comment on
 /// why this app asks that one question rather than reimplementing the bit test.
-private func printedFamilyIsCourier(_ entry: FontChange?) -> Bool {
+private func nativeFamilyIsCourier(_ entry: FontChange?) -> Bool {
     guard let entry else { return true }
     let name = (entry.typestyleName ?? "").lowercased()
     if name.hasPrefix("symbol") || name.contains("dingbat") { return false }
@@ -881,14 +1495,14 @@ private func printedFamilyIsCourier(_ entry: FontChange?) -> Bool {
     case .math, .symbols: return false
     case .cp437, .cp850: break
     }
-    return printedMacIsMonospace(entry)
+    return nativeMacIsMonospace(entry)
 }
 
 /// The engine's `spanPitch` (`PDFWriter.swift`): a font block's own declared width word
 /// when it has one (1/1800in units, `hmiPerPoint` = 1800/72 = 25), else Courier's 0.6em at
 /// the span's declared size. `width1800` is `public` on `FontChange`, so this reads the
 /// same field the emitter does rather than re-deriving a pitch from AppKit metrics.
-private func printedSpanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
+private func nativeSpanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
     if let width = entry?.width1800, width != 0 { return Double(width) / (1800.0 / 72.0) }
     return Double(pt) * 0.6
 }
@@ -913,8 +1527,23 @@ private func printedSpanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
 /// advance, zero ink — without inventing a bold-toggle PORT (this renderer has no
 /// running-head style support at all, and adding one is out of this fix's scope; see
 /// this job's LESSONS).
-private func printedStripControlChars(_ text: String) -> String {
-    String(text.unicodeScalars.map { $0.value >= 0x20 && $0.value != 0x7F ? Character($0) : " " })
+private func nativeStripControlChars(_ text: String) -> String {
+    // AND `∙` IS A MIDDLE DOT IN PRINTED — `escFallback`'s own mapping (U+2219 -> U+00B7),
+    // not `runningOps`' fast-path one (U+2219 -> U+2022). Which of the two the engine applies
+    // depends on the line: the fast path is for a running head with NO toggle bytes of its
+    // own, and a head that has them goes run by run through `esc`, where `escFallback`
+    // decides. LJ6DTP.WS's `.h1` wraps its title in a bold toggle, so it takes the second
+    // path — measured, its PDF draws a middle dot, and the app drew the BULLET OPERATOR
+    // itself, which is a third glyph again.
+    //
+    // Modern is the other way and keeps its own substitution at its own call site: its writer
+    // takes the fast path, so `∙` really is a `•` there (measured on the same document, its
+    // Modern head reads "PDF • 2"). That replacement runs BEFORE this function, so what
+    // arrives here already has no `∙` in it.
+    String(text.unicodeScalars.map { scalar -> Character in
+        if scalar.value == 0x2219 { return "\u{00B7}" }
+        return scalar.value >= 0x20 && scalar.value != 0x7F ? Character(scalar) : " "
+    })
 }
 
 /// Job 489 (b29 adoption): port of the engine's own `hfToggles`/`hfRuns` (`EmitRTF.swift`,
@@ -924,10 +1553,10 @@ private func printedStripControlChars(_ text: String) -> String {
 /// (`Document.headerFonts`/`footerFonts`, register C6) needs those bytes INTERPRETED —
 /// consumed as style flips, never drawn as literal control characters — the same way the
 /// engine's `hfLineOps` reads them, rather than degraded to blank spaces the way
-/// `printedStripControlChars` treats every OTHER control byte. Only reached when a font
+/// `nativeStripControlChars` treats every OTHER control byte. Only reached when a font
 /// block is present; the plain (no font block) path below is untouched and still uses
-/// `printedStripControlChars` alone.
-private let printedHFToggles: [UInt32: Style] = [
+/// `nativeStripControlChars` alone.
+private let nativeHFToggles: [UInt32: Style] = [
     0x02: .bold, 0x19: .italic, 0x13: .underline,
     0x14: .sup, 0x16: .sub, 0x18: .strike,
 ]
@@ -936,7 +1565,7 @@ private let printedHFToggles: [UInt32: Style] = [
 /// and every other control byte dropped (not space-degraded). Returns `[]` for a head that
 /// is nothing but control bytes — the caller treats that as "nothing to draw," matching
 /// `hfRuns`'s own doc comment. Port of `hfRuns` (`EmitRTF.swift`, CtrlKD).
-private func printedHeadFootRuns(_ text: String) -> [(text: String, styles: Style)] {
+private func nativeHeadFootRuns(_ text: String) -> [(text: String, styles: Style)] {
     var runs: [(text: String, styles: Style)] = []
     var buf = ""
     var active: Style = []
@@ -945,7 +1574,7 @@ private func printedHeadFootRuns(_ text: String) -> [(text: String, styles: Styl
     }
     for scalar in text.unicodeScalars {
         if scalar.value == 0x2219 { buf.unicodeScalars.append(Unicode.Scalar(0x2022)!); continue }
-        if let toggle = printedHFToggles[scalar.value] {
+        if let toggle = nativeHFToggles[scalar.value] {
             flush()
             active.formSymmetricDifference(toggle)
             continue
@@ -961,7 +1590,7 @@ private func printedHeadFootRuns(_ text: String) -> [(text: String, styles: Styl
 /// Fixed-pitch era faces, matched on the typestyle NAME — same list and same "run before the
 /// generic-style bits" ordering as the engine's `monoFamilies` (`PDFFonts.swift`), and for the
 /// same reason: the spec's own `Courier` font block declares generic style `serif`.
-private let printedMonoFamilies = ["courier", "pica", "elite", "lineprinter"]
+private let nativeMonoFamilies = ["courier", "pica", "elite", "lineprinter"]
 
 
 /// Job 256 (Show Invisibles, part 2/4): the ink every invisible mark draws in — same gray
@@ -994,6 +1623,32 @@ nonisolated(unsafe) var invisibleMarkColour = NSColor(white: 0.45, alpha: 0.55)
 /// silently fail across colour spaces.
 extension NSAttributedString.Key {
     static let invisibleMarkRun = NSAttributedString.Key("SoftReturn.invisibleMarkRun")
+
+    /// Planning #222: tags the invisible spacer paragraph `modernLeadingSpacer` inserts
+    /// before an oversized-title line (job 434), so a reader can identify one BY
+    /// CONSTRUCTION instead of by guessing at its shape.
+    ///
+    /// `InvisiblesModernLayoutOracle` used to recognise a spacer as "a paragraph style with
+    /// `minimumLineHeight == maximumLineHeight > 0`", on the stated grounds that
+    /// `modernParagraphStyle` never sets either field. That was true when it was written and
+    /// stopped being true the moment Modern's leading was pinned to the library's 1.2x — at
+    /// which point EVERY ordinary paragraph matched the spacer signature, the oracle's
+    /// paired-skip walked over real content, and three fixtures reported divergences whose
+    /// every measurable input was identical. Same reasoning as `invisibleMarkRun` above: a
+    /// dedicated key beats an inference that can silently start matching everything.
+    static let modernLeadingSpacer = NSAttributedString.Key("SoftReturn.modernLeadingSpacer")
+
+    /// THE BASE-14 `/BaseFont` NAME THE LIBRARY'S OWN MODERN PDF WOULD SET THIS RUN IN,
+    /// carried on the run so a measurement can ask the AFM tables about it.
+    ///
+    /// Modern only (`attributedRun`'s own `modernPitchScale` gate — Printed and Native never
+    /// carry it). It exists for `modernAscentDeficit`, which computes the leading spacer's
+    /// height from the library's tables rather than from AppKit's glyph-path bounds, and the
+    /// face name is the one input that cannot be recovered from the laid-out string: the run
+    /// is SET in a real Mac face, and the mapping from that face back to the base-14 row is
+    /// not one-to-one (Courier Prime and Courier New both stand in for `Courier`). Recorded
+    /// where `pdfFamily` is already in hand rather than guessed at later from a family name.
+    static let modernBase14 = NSAttributedString.Key("SoftReturn.modernBase14")
 }
 
 @MainActor
@@ -1038,8 +1693,8 @@ enum DocumentRenderer {
     static func render(_ state: DocumentState, style: RenderStyle? = nil,
                        exportFlags: ExportFlags = .allOn) -> RenderedDocument {
         switch style ?? state.style.value.renderStyle {
-        case .printed: return renderPrinted(state, exportFlags: exportFlags)
-        case .modern:  return renderModern(state, exportFlags: exportFlags)
+        case .native: return renderNative(state, exportFlags: exportFlags)
+        case .modern: return renderModern(state, exportFlags: exportFlags)
         }
     }
 
@@ -1060,9 +1715,9 @@ enum DocumentRenderer {
     /// through anyway.
     static func renderWithInvisibles(_ state: DocumentState) -> RenderedDocument {
         switch state.style.value {
-        case .native:  return renderPrintedAnnotated(state)
+        case .native:  return renderNativeAnnotated(state)
         case .modern:  return renderModernAnnotated(state)
-        case .printed: return render(state, style: .printed)
+        case .printed: return render(state, style: .native)
         }
     }
 
@@ -1072,7 +1727,7 @@ enum DocumentRenderer {
     /// (`Page.mtLines`/`.mbLines`, engine Finding 3/b26-print-fidelity-2), in which case a
     /// local copy with `.page` swapped — the SAME "swap `.page` on a local `Document`
     /// copy, scoped to just this call" idiom `emitPDF`'s own per-page loop uses
-    /// (`PDFWriter.swift`, the source this ports) and `PrintedStructuralParityTests.swift`'s
+    /// (`PDFWriter.swift`, the source this ports) and `NativeStructuralParityTests.swift`'s
     /// `EngineTruth.structuralPages` already ported for its own test-harness reads. Callers
     /// check `page.mtLines != nil || page.mbLines != nil` themselves before calling this
     /// (matching the engine's own guard) so a page with no override never pays for a
@@ -1098,7 +1753,7 @@ enum DocumentRenderer {
     /// and the CLI's `--page-settings` flag make (`EmitOptions.swift`'s `effectivePage`), so
     /// every figure this function derives from `doc.page` (margins, header/footer lines,
     /// page length) already reflects the chosen preset with no separate override plumbing.
-    private static func renderPrinted(_ state: DocumentState,
+    private static func renderNative(_ state: DocumentState,
                                       exportFlags: ExportFlags = .allOn) -> RenderedDocument {
         var doc = state.document
         if let preset = state.pageSettingsPreset.value, let page = doc.page {
@@ -1139,7 +1794,7 @@ enum DocumentRenderer {
         // Job 210: driver-aware colour, gated exactly like the engine's own
         // `colourMap` (`PDFWriter.swift:708`) — non-empty only for LJ6DTP documents, so
         // every other driver's `span.colour` (if any) stays inert, same as before this job.
-        let colourMap = doc.printerDriver == "LJ6DTP" ? printedLJ6DTPColourGray : [:]
+        let colourMap = doc.printerDriver == "LJ6DTP" ? nativeLJ6DTPColourGray : [:]
 
         // Clipping, not wrapping — see the type's doc comment. A wrapped line would add a
         // line to a page and push every later page break off by one.
@@ -1241,7 +1896,7 @@ enum DocumentRenderer {
         // (`resolvePrintedBody`/`resolvePlainBody` in `PDFLayout.swift` compute it via
         // the library's own internal `resolveLeftPt`, which this app cannot call
         // directly — same "internal helper, public resolved field" shape
-        // `PrintedPCLGraphics.swift`'s own top doc comment already established for
+        // `NativePCLGraphics.swift`'s own top doc comment already established for
         // `pclRectOps`) — this function only has to READ it, not re-derive the formula.
         // Both `firstLineHeadIndent`/`headIndent` get the SAME value: Printed mode clips
         // rather than wraps (`lineBreakMode = .byClipping`), so every paragraph here is
@@ -1252,7 +1907,7 @@ enum DocumentRenderer {
             style.minimumLineHeight = CGFloat(lead)
             style.maximumLineHeight = CGFloat(lead)
             style.lineBreakMode = .byClipping
-            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
+            nativeTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             if extraLeftPt != 0 {
                 style.firstLineHeadIndent = CGFloat(extraLeftPt)
                 style.headIndent = CGFloat(extraLeftPt)
@@ -1267,7 +1922,7 @@ enum DocumentRenderer {
         func naturalParagraphStyle() -> NSParagraphStyle {
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byClipping
-            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
+            nativeTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             return style
         }
         func lineAndTerminator(_ line: PageLine, lead: Double) -> NSAttributedString {
@@ -1285,16 +1940,21 @@ enum DocumentRenderer {
                 let piece = NSMutableAttributedString(attributedString: Self.pixAttachmentString(
                     state.pixResults, index: image.pixIndex,
                     widthPt: image.widthPt, heightPt: image.heightPt, paragraph: paragraph,
-                    descentClearancePt: Self.printedPixDescentPt(metrics.size)))
+                    descentClearancePt: Self.nativePixDescentPt(metrics.size)))
                 piece.append(lineTerminator(font: courier(size: CGFloat(metrics.size)),
                                             paragraph: paragraph))
                 return piece
             }
-            let piece = NSMutableAttributedString(attributedString: attributedLine(
-                coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
-                paragraph: paragraph, fonts: doc.fonts, defaultSize: metrics.size,
-                colourMap: colourMap, disableKerning: true, useCourierPrime: true,
-                printedSupSub: true))
+            let piece = NSMutableAttributedString(attributedString: nativePinJustifiedWords(
+                nativePinGraphicCells(
+                    attributedLine(
+                        coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
+                        paragraph: paragraph, fonts: doc.fonts, defaultSize: metrics.size,
+                        colourMap: colourMap, disableKerning: true, useCourierPrime: true,
+                        nativeSupSub: true, nativePMActive: line.pmActive,
+                        nativeKerning: line.kerning),
+                    placements: line.graphicCells ?? []),
+                pieces: line.justifyWordX ?? []))
             piece.append(lineTerminator(font: courier(size: CGFloat(metrics.size)),
                                         paragraph: paragraph))
             return piece
@@ -1380,7 +2040,15 @@ enum DocumentRenderer {
         // see `RenderedDocument.pinnedPageBottoms`'s own doc comment for why
         // `PagedDocumentView.buildExplicitPages` needs this instead of trusting its own
         // AppKit probe measurement for a pinned page's container height.
-        var pinnedPageBottoms: [Double] = []
+        var pinnedPageBottoms: [[Double]] = []
+        var pinnedPageTops: [[Double]] = []
+        // The highest flow top on any page whose own FIRST LINE is too short to hold the
+        // face's ascent — the only shape that can put the anchor below the flow. See
+        // `flowTopAdjustment`.
+        var tightestFlowTop: Double?
+        var pageColumnFragmentCounts: [[Int]] = []
+        var allNumberPasses: [[ColumnPass]] = []
+        var allGraphicRows: [[[PageLine.GraphicCellPlacement]]] = []
         // Job 224: one line's `.overprint` flag means the NEXT line shares ITS baseline
         // (`PDFWriter.pageStream`'s own `prevOverprint` skip, `PDFWriter.swift:600-604`; the
         // flag itself comes from a bare-CR "^PM Overprint Line" separator,
@@ -1422,7 +2090,8 @@ enum DocumentRenderer {
             attributedLine(coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
                            paragraph: naturalParagraphStyle(), fonts: doc.fonts,
                            defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
-                           useCourierPrime: true, printedSupSub: true)
+                           useCourierPrime: true, nativeSupSub: true,
+                           nativePMActive: line.pmActive, nativeKerning: line.kerning)
         }
         // Job 227: LJ6DTP.WS's 72pt "LJ6DTP" banner title, immediately followed by its own
         // `.lh .05"` (3.6pt) shadow copy — the reference archive document `PDFWriter
@@ -1470,12 +2139,13 @@ enum DocumentRenderer {
                     state.pixResults, index: image.pixIndex,
                     widthPt: image.widthPt, heightPt: image.heightPt,
                     paragraph: naturalParagraphStyle(), reservedLeadPt: reservedLead,
-                    descentClearancePt: Self.printedPixDescentPt(metrics.size))
+                    descentClearancePt: Self.nativePixDescentPt(metrics.size))
             }
             return attributedLine(coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
                            paragraph: naturalParagraphStyle(), fonts: doc.fonts,
                            defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
-                           useCourierPrime: true, printedSupSub: true)
+                           useCourierPrime: true, nativeSupSub: true,
+                           nativePMActive: line.pmActive, nativeKerning: line.kerning)
         }
         // Job 225: this function no longer tries to make each page's own block of lines
         // RENDER to any particular height — it emits page N's own real lines and nothing
@@ -1500,7 +2170,7 @@ enum DocumentRenderer {
             // per-page idiom exactly (`PDFWriter.swift`'s per-page loop over `pages`,
             // "a local COPY of doc with .page swapped ... scoped to just this page's
             // printedTop/runningOps calls") — already ported to this test suite's own
-            // `EngineTruth.structuralPages` (`PrintedStructuralParityTests.swift`) but never
+            // `EngineTruth.structuralPages` (`NativeStructuralParityTests.swift`) but never
             // to the real render path until now. SCRIPT.WS's figure-listing pages (a very
             // different `.mt` from the screenplay body) are the proving case: without this,
             // every page rendered at the document's global top margin regardless of its own
@@ -1541,6 +2211,10 @@ enum DocumentRenderer {
             var flags: [Bool] = []
             var passes: [[NSAttributedString]] = []
             var selfPasses: [NSAttributedString?] = []
+            var graphicRows: [[PageLine.GraphicCellPlacement]] = []
+            var pageColumnCounts: [Int] = []
+            var numberPasses: [ColumnPass] = []
+            let pageIsColumnar = (page.columns ?? 1) > 1
             if page.isEmpty {
                 // One blank line, not `capacity` — a wholly blank page is still a blank
                 // sheet (`PagedDocumentView`'s page rect is drawn from `pageSize`
@@ -1550,11 +2224,14 @@ enum DocumentRenderer {
                 let blankK = Self.isolatedFragmentK(piece, width: metrics.pageWidth - metrics.left)
                 pinnedBaselines[output.length] = PinnedBaseline(
                     page: index, y: pageFirstBaseline, k: blankK, height: metrics.lead)
-                pinnedPageBottoms.append(pageFirstBaseline + metrics.lead - blankK)
+                pinnedPageBottoms.append([pageFirstBaseline + metrics.lead - blankK])
+                pinnedPageTops.append([pageFirstBaseline - blankK])
+                pageColumnFragmentCounts.append([1])
                 output.append(piece)
                 flags.append(false)
                 passes.append([])
                 selfPasses.append(nil)
+                graphicRows.append([])
             } else {
                 let pageChunk = NSMutableAttributedString()
                 let pageStartOffset = output.length
@@ -1565,23 +2242,56 @@ enum DocumentRenderer {
                 // `pageStream` performs, accumulated top-down instead of bottom-up. `nil`
                 // means "not yet anchored," distinguishing the page's first group from
                 // every later one without a separate `Bool`.
+                // ONE COLUMN, ONE CONTAINER (item 19, Jon's ruling 2026-09-10).
+                //
+                // Every column's lines are in the flow, in the engine's own order
+                // (`applyColumns` concatenates column 0's, then column 1's), each column
+                // restarting at the page's own top. `PagedDocumentView` gives each its own
+                // text container, so AppKit flows one into the next the way its multi-column
+                // model always did, and the text stays real: selectable, findable, spoken.
+                //
+                // `col` is `nil` on every ordinary page — `applyColumns` is the only thing
+                // that sets it — so a non-columnar document runs this once with every line
+                // in it and is byte-for-byte what it was.
+                var columnBottoms: [Double] = []
+                var columnTops: [Double] = []
+                var columnCounts: [Int] = []
+                for column in 0..<max(1, page.columns ?? 1) {
+                let flowPage = pageIsColumnar
+                    ? Page(page.lines.filter { ($0.col ?? 0) == column })
+                    : page
+                if flowPage.isEmpty { break }
+                // THIS COLUMN's own anchor: the page's top plus its own first line's lead,
+                // the same formula the page's own first line uses and the same thing
+                // `pageStream` does at a column boundary.
+                let columnFirstLead = flowPage.first?.lead ?? metrics.lead
+                let columnFirstBaseline = pageTop + columnFirstLead
+                // COUNTED HERE, not off the model. `pageColumnFragmentCounts` slices this
+                // page's fragments into its columns for `buildExplicitPages`, and a count
+                // that disagrees with the fragments this loop actually appends drifts the
+                // slice for every page after it. Measured on PRINT.TST: the model assigns
+                // page 3 forty-six lines, the renderer forms thirty-four fragments from
+                // them, and reading the model's number left page 4 with nothing at all.
+                var columnFragments = 0
                 var pageEngineY: Double?
-                var lastGroupBottom = pageFirstBaseline
+                var lastGroupBottom = columnFirstBaseline
                 var lastGroupPiece: NSAttributedString?
+                // THIS COLUMN's own first fragment top — see `pinnedPageTops`.
+                var firstGroupTop: Double?
                 var i = 0
-                while i < page.count {
+                while i < flowPage.count {
                     // The chain runs while each member is itself `overprint` — its
                     // successor shares ITS baseline too.
                     var j = i
-                    while page[j].overprint, j + 1 < page.count { j += 1 }
-                    let base = page[i]
+                    while flowPage[j].overprint, j + 1 < flowPage.count { j += 1 }
+                    let base = flowPage[i]
                     // `i`, not `j` (job 245): the fragment's rendered height is the gap
                     // BEFORE THIS GROUP, i.e. `advanceLead`'s rule applied to the group's
-                    // OWN base line — `page[i].lead ?? metrics.lead`, checking whether the
+                    // OWN base line — `flowPage[i].lead ?? metrics.lead`, checking whether the
                     // line immediately before the GROUP (not within it) was itself
                     // overprint. The chain's interior members (`i+1...j`) never form their
                     // own fragment regardless, so their own `.lead` is moot here.
-                    let lead = advanceLead(page, at: i)
+                    let lead = advanceLead(flowPage, at: i)
                     // Job 227: an oversized base line (see `lineExceedsFragment`) renders NO
                     // glyphs of its own inline — squeeze-drawing them into this tiny real
                     // fragment is exactly what clipped the banner off the top of the page.
@@ -1600,8 +2310,8 @@ enum DocumentRenderer {
                     // top, and has to carry the NEXT LINE's own gap (`advanceLead` applied to
                     // the line after this group), not this line's own (`lead` above, correct
                     // for pagination and for a real-content fragment, but not for what a
-                    // self-pass needs). LJ6DTP.WS's title (`page[0]`) into its `.lh .05"`
-                    // shadow copy (`page[1]`, lead 3.6) is exactly this: the title's own gap
+                    // self-pass needs). LJ6DTP.WS's title (`flowPage[0]`) into its `.lh .05"`
+                    // shadow copy (`flowPage[1]`, lead 3.6) is exactly this: the title's own gap
                     // (`lead`, the ordinary document default) correctly pins how far down the
                     // TITLE ITSELF sits below whatever came before it, untouched — but the OLD
                     // code also used that same `lead` for the title's own fragment height, so
@@ -1611,21 +2321,21 @@ enum DocumentRenderer {
                     // the whole stack that much closer to the gray bar beneath it. Borrowing
                     // the NEXT real line's own lead instead reproduces `pageStream`'s own
                     // baseline chain (`y -= line[n].lead`) for a self-pass exactly the way job
-                    // 245's `page[i].lead` convention already does for ordinary content. Only
+                    // 245's `flowPage[i].lead` convention already does for ordinary content. Only
                     // the fragment HEIGHT changes here — pagination (`lead` above), the
                     // chain's own oversized test, and every non-oversized line are untouched;
                     // when the next line's lead already equals this line's own (the common,
                     // unstacked case, e.g. OLDTIMES.WS's single title), `fragmentLead == lead`
                     // and nothing visibly changes.
                     let fragmentLead: Double
-                    if oversized, j + 1 < page.count {
-                        fragmentLead = advanceLead(page, at: j + 1)
+                    if oversized, j + 1 < flowPage.count {
+                        fragmentLead = advanceLead(flowPage, at: j + 1)
                     } else {
                         // `ownLead`, not `lead`: identical for every line but a page's
                         // first, where `advanceLead` deliberately answers the document
                         // default because the GAP before line 0 positions nothing. Its
                         // HEIGHT is not cosmetic — see `ownLead`'s own doc comment.
-                        fragmentLead = ownLead(page, at: i)
+                        fragmentLead = ownLead(flowPage, at: i)
                     }
                     // Job 412: `lead` (not `fragmentLead`) is this GROUP's own gap from the
                     // fragment before it — `fragmentLead` only exists to give an oversized
@@ -1633,7 +2343,7 @@ enum DocumentRenderer {
                     // change how far down THIS group's own baseline sits. Matches
                     // `pageStream`'s own `y -= line[n].lead` exactly: advance once per real
                     // fragment (group), by that group's own base line's lead.
-                    let engineY = pageEngineY.map { $0 + lead } ?? pageFirstBaseline
+                    let engineY = pageEngineY.map { $0 + lead } ?? columnFirstBaseline
                     pageEngineY = engineY
                     let piece = lineAndTerminator(content, lead: fragmentLead)
                     // Job 413: probed from a DE-SUPERSCRIPTED copy of this same content —
@@ -1650,8 +2360,11 @@ enum DocumentRenderer {
                         content, fallback: courier(size: CGFloat(metrics.size)), fonts: doc.fonts,
                         defaultSize: metrics.size, useCourierPrime: true)
                     pinnedBaselines[pageStartOffset + pageChunk.length] = PinnedBaseline(
-                        page: index, y: engineY + compensation, k: k, height: fragmentLead)
+                        page: index, column: column, y: engineY + compensation, k: k,
+                        height: fragmentLead)
+                    if firstGroupTop == nil { firstGroupTop = engineY + compensation - k }
                     pageChunk.append(piece)
+                    columnFragments += 1
                     // Job 412: whatever this holds when the loop ends is the PAGE's own
                     // LAST group — exactly what `RenderedDocument.pinnedPageBottoms` needs
                     // (see that field's own doc comment).
@@ -1661,11 +2374,25 @@ enum DocumentRenderer {
                     // and carries no flags of its own (it only ever needed `lead`, see
                     // its doc comment in PDFLayout.swift).
                     flags.append(base.soft)
-                    let linePasses = i == j ? [] : (i + 1...j).map { overprintPass(page[$0]) }
+                    let linePasses = i == j ? [] : (i + 1...j).map { overprintPass(flowPage[$0]) }
                     passes.append(linePasses)
                     selfPasses.append(oversized
                         ? naturalPass(base, reservedLead: base.lead ?? (base.image?.heightPt ?? metrics.lead))
                         : nil)
+                    graphicRows.append(base.graphicCells ?? [])
+                    if let label = base.lineNo {
+                        // Plain Courier at the document's own size — the engine's gutter is
+                        // its own fallback face, never a `.f#` font block, and `x` arrives
+                        // already right-aligned to `PDFMetrics.lineNoRightPt`.
+                        numberPasses.append(ColumnPass(
+                            text: NSAttributedString(string: label.text, attributes: [
+                                .font: courier(size: CGFloat(metrics.size)),
+                                .foregroundColor: NSColor.black,
+                                .kern: nativeNoKerning,
+                                .ligature: nativeNoLigatures,
+                            ]),
+                            xPt: label.x, baselineY: engineY))
+                    }
                     i = j + 1
                 }
                 let lastGroupK = lastGroupPiece.map {
@@ -1680,13 +2407,36 @@ enum DocumentRenderer {
                 // every fixture measured), so it cannot let a whole extra line sneak into
                 // a page the way an UNCOMPENSATED-K guess did (this field's own doc
                 // comment has that citation).
-                let isolatedKSafetyMargin: Double = 2.0
-                pinnedPageBottoms.append(lastGroupBottom - lastGroupK + isolatedKSafetyMargin)
+                // 3.0, not 2.0: MARKUP.WS's 2pt-lead page is where the isolated probe is
+                // furthest out. Its last fragment's real in-context baseline sits ONE POINT
+                // ABOVE its own top (top 79, baseline 78) while the isolated probe answers
+                // two points below — a 3pt discrepancy, and at 2.0 the container came out
+                // half a point short of its own last line, which then did not lay out at all.
+                //
+                // Still far below a line: a leak needs room for the NEXT fragment's whole
+                // height, and the smallest lead in this corpus is 2pt. One more point cannot
+                // admit a line anywhere, which is the property job 412's straight override
+                // exists to keep.
+                let isolatedKSafetyMargin: Double = 3.0
+                columnBottoms.append(lastGroupBottom - lastGroupK + isolatedKSafetyMargin)
+                let columnTop = firstGroupTop ?? columnFirstBaseline
+                columnTops.append(columnTop)
+                if columnFirstLead < normalBaselineOffset {
+                    tightestFlowTop = min(tightestFlowTop ?? columnTop, columnTop)
+                }
+                columnCounts.append(columnFragments)
+                }
+                pinnedPageBottoms.append(columnBottoms)
+                pinnedPageTops.append(columnTops)
+                pageColumnCounts = columnCounts
                 output.append(pageChunk)
             }
             softLineFlags.append(flags)
             overprintPasses.append(passes)
             oversizedSelfPasses.append(selfPasses)
+            pageColumnFragmentCounts.append(pageColumnCounts)
+            allNumberPasses.append(numberPasses)
+            allGraphicRows.append(graphicRows)
         }
         // The flow needs no trailing newline: the last line's own terminator already closed
         // it, and an extra one would start a phantom page.
@@ -1732,11 +2482,47 @@ enum DocumentRenderer {
         // that hoist's own doc comment) stays the flat, document-global figure — used for
         // `textFrame` below (sizing, and every non-Printed path's shared anchor) and as the
         // BASE every page's own `perPageTextTop` entry adds its own override delta to.
+        // AND THE ANCHOR NEVER SITS BELOW THE FLOW IT ANCHORS.
+        //
+        // `textTop` is `firstBaseline` less an ISOLATED probe fragment's own first-baseline
+        // offset, which is right wherever the document's lead leaves room for the face's
+        // ascent and wrong where it does not: MARKUP.WS sets its whole page at a 2pt lead, so
+        // the probe answers a NEGATIVE offset and the anchor lands at 39.0 for a first
+        // baseline of 38.0 — the flow begins a point above the box that holds it, and its
+        // first line was clipped straight out of the exported page.
+        //
+        // `pinnedPageTops` is the real answer, measured from the fragments this loop actually
+        // built. Lowering the anchor to it moves the container's own origin and every page's
+        // `perPageTextTop` by the SAME amount, so every absolute baseline still converts to
+        // the same place and nothing on any ordinary page moves: the adjustment is zero
+        // unless some page's flow really does start above the anchor.
+        //
+        // GATED ON THE PROBE'S OWN ANSWER BEING NEGATIVE, which is the only way the anchor can
+        // end up below the flow. Measured without that gate and it was far too wide: an
+        // OVERSIZED first line's fragment top sits well above its baseline by construction
+        // (DARKNESS.WS's 16pt title, SCRIPT.WS's), so taking the minimum over every page
+        // dragged the whole document's anchor and cost DARKNESS.WS its title off page 1 and
+        // SCRIPT.WS page 10 a 56pt top-margin shift. A tall line is not an anchor error; a
+        // negative baseline offset is.
+        // ONLY WHERE A LINE IS TOO SHORT TO HOLD ITS OWN ASCENT, which is the only shape
+        // that can put the anchor below the flow. Measured without that gate and it was far
+        // too wide: an OVERSIZED first line's fragment top sits well above its baseline by
+        // construction, so taking the minimum over every page dragged the whole document's
+        // anchor — DARKNESS.WS lost its 16pt title off page 1 and SCRIPT.WS page 10 took a
+        // 56pt top-margin shift. The condition is the page's own FIRST LINE's lead against
+        // the face's own first-baseline offset, not the document's default lead: MARKUP.WS
+        // declares `.lh` 12 and sets every line of page 1 at 2.
+        let flowTopAdjustment = min(0, (tightestFlowTop ?? textTop) - textTop)
+        if flowTopAdjustment < 0 {
+            for index in perPageTextTop.indices {
+                perPageTextTop[index] = max(0, perPageTextTop[index] + flowTopAdjustment)
+            }
+        }
         let textFrame = CGRect(
             x: printedLeftAnchor,
-            y: textTop,
+            y: max(0, textTop + flowTopAdjustment),
             width: max(1, metrics.pageWidth - printedLeftAnchor),
-            height: CGFloat(capacity) * metrics.lead
+            height: CGFloat(capacity) * metrics.lead - flowTopAdjustment
         )
         let leadingHeadroom = Self.leadingHeadroom(oversizedSelfPasses, firstBaselines: perPageFirstBaselines)
 
@@ -1761,6 +2547,11 @@ enum DocumentRenderer {
             pinnedBaselines: pinnedBaselines,
             perPageTextTop: perPageTextTop,
             pinnedPageBottoms: pinnedPageBottoms,
+            pinnedPageTops: pinnedPageTops,
+            flowTopAdjustment: flowTopAdjustment,
+            pageColumnFragmentCounts: pageColumnFragmentCounts,
+            lineNumberPasses: allNumberPasses,
+            graphicCellRows: allGraphicRows,
             // Printed has no screenplay-marker concept — see `RenderedDocument
             // .modernForcedPageBreakOffsets`'s own doc comment.
             modernForcedPageBreakOffsets: [],
@@ -1769,13 +2560,14 @@ enum DocumentRenderer {
             // `RenderedDocument.modernFootnoteEvents`'s own doc comment.
             modernFootnoteEvents: [],
             modernFootnoteSeparator: NSAttributedString(),
+            modernEndnoteAppendixStart: nil,
             pclPrograms: doc.pclPrograms
         )
     }
 
     // MARK: - Printed, Show Invisibles (job 256/257, parts 2-3/4)
 
-    /// `renderPrinted`'s sibling for the `showInvisibles` screen path — same page metrics,
+    /// `renderNative`'s sibling for the `showInvisibles` screen path — same page metrics,
     /// margins and Courier grid, but the text comes from `CtrlKD.annotatedLayout(doc)`
     /// instead of `docToPagelines`: an ordered stream where dot-command lines, comments,
     /// style-toggle tokens and soft/hard end-of-line marks are already tagged, interleaved
@@ -1800,21 +2592,21 @@ enum DocumentRenderer {
     ///      lines this feature inserts push a page over budget. Invisible lines have no
     ///      `.lh` of their own (they are screen furniture, not source text) and spend the
     ///      document's default lead; a real line spends its own `.lh`-aware lead exactly
-    ///      like `renderPrinted`'s `advanceLead`. This is why a dot-heavy page can render
+    ///      like `renderNative`'s `advanceLead`. This is why a dot-heavy page can render
     ///      MORE pages with Invisibles on than off, never fewer — the ruling.
     ///   2. Running heads/feet are looked up from whichever REAL `docToPagelines` page is
     ///      "in force" at each local page's own position (tracked per real line via
     ///      `flatPageIndex`, not by matching index) — correct once reflow has made the two
     ///      page counts diverge, and identical to job 256's approximation on any document
     ///      that never diverges (the common case).
-    ///   3. Reuses `renderPrinted`'s own two per-line mechanisms directly against the REAL
+    ///   3. Reuses `renderNative`'s own two per-line mechanisms directly against the REAL
     ///      `PageLine` each annotated real line pairs with: `.overprint` chain compositing
     ///      (job 224) and oversized-self-pass routing (job 227, `lineExceedsFragment`) — a
     ///      real line's `.visible` text is suppressed inline and the SAME annotated content
     ///      (marks included) re-rendered as a natural-height pass/self-pass, so LJ6DTP's
     ///      banners and knockouts survive Invisibles being on. Dot-command/mark-only lines
     ///      never chain and are never oversized (`baseFont`, always well under any `.lh`).
-    private static func renderPrintedAnnotated(_ state: DocumentState) -> RenderedDocument {
+    private static func renderNativeAnnotated(_ state: DocumentState) -> RenderedDocument {
         var doc = state.document
         if let preset = state.pageSettingsPreset.value, let page = doc.page {
             doc.page = effectivePage(page, settings: preset.settings)
@@ -1836,7 +2628,7 @@ enum DocumentRenderer {
             style.minimumLineHeight = CGFloat(lead)
             style.maximumLineHeight = CGFloat(lead)
             style.lineBreakMode = .byClipping
-            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
+            nativeTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             return style
         }
         // Job 267 (field bug 3, mark wrapping): a line whose marks make it wider than the
@@ -1856,13 +2648,13 @@ enum DocumentRenderer {
             style.minimumLineHeight = CGFloat(lead)
             style.maximumLineHeight = CGFloat(lead)
             style.lineBreakMode = .byWordWrapping
-            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
+            nativeTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             return style
         }
         func naturalParagraphStyle() -> NSParagraphStyle {
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byClipping
-            printedTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
+            nativeTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             return style
         }
         let defaultParagraph = paragraphStyle(lead: metrics.lead)
@@ -1893,7 +2685,7 @@ enum DocumentRenderer {
         func rowCount(_ content: NSAttributedString) -> Int {
             guard content.length > 0 else { return 1 }
             let storage = NSTextStorage(attributedString: content)
-            let manager = NSLayoutManager()
+            let manager = softReturnLayoutManager()
             manager.allowsNonContiguousLayout = false
             let container = NSTextContainer(size: CGSize(width: textWidth, height: .greatestFiniteMagnitude))
             container.lineFragmentPadding = 0
@@ -1907,7 +2699,7 @@ enum DocumentRenderer {
             return max(1, count)
         }
         // Stands in for a true zero-height fragment, same trick and same value as
-        // `renderPrinted`'s own `nearZeroLead` (this file's citation on that one) — an
+        // `renderNative`'s own `nearZeroLead` (this file's citation on that one) — an
         // overprint continuation shares its predecessor's baseline, so its OWN fragment
         // (job 256 never gave it a chain, job 257 does) must not add a visible gap.
         let nearZeroLead: Double = 0.01
@@ -1952,7 +2744,7 @@ enum DocumentRenderer {
         }
 
         // JOB 257: `suppressVisible` blanks a line's OWN `.visible` text — used only for an
-        // oversized real line's INLINE fragment, mirroring `renderPrinted`'s own
+        // oversized real line's INLINE fragment, mirroring `renderNative`'s own
         // `content = oversized ? PageLine([], soft: base.soft) : base` — while keeping
         // every invisible mark on that same line (page-break prefix, dot-command/comment/
         // style-toggle marks, the end-of-line symbol): none of those is ever the oversized
@@ -1992,6 +2784,11 @@ enum DocumentRenderer {
                     let syntheticFonts: [FontChange] = span.font.map { [$0] } ?? []
                     let synthetic = Span(text: span.text, styles: span.style,
                                          font: syntheticFonts.isEmpty ? nil : 0)
+                    // `nativePMActive` unset: `AnnotatedLine` carries no `.pm` state, so a
+                    // proportional line's typed leading indent keeps this path's own long-
+                    // standing 10-CPI measure rather than the engine's two-measure rule. Same
+                    // documented shape as this conversion's colour loss above; the marks
+                    // overlay is not the facsimile.
                     appendSpan(synthetic, to: result, leading: &leading, font: baseFont,
                               paragraph: paragraph, fonts: syntheticFonts, defaultSize: metrics.size,
                               colourMap: [:], disableKerning: true, useCourierPrime: true)
@@ -2234,7 +3031,7 @@ enum DocumentRenderer {
                 if let fi = unit.flatIndex {
                     currentRealPageIndex = flatPageIndex[fi]
                     // The chain runs while each member is itself `overprint` — its
-                    // successor shares ITS baseline too (see `renderPrinted`'s own doc
+                    // successor shares ITS baseline too (see `renderNative`'s own doc
                     // comment on this exact loop). A mark line or a fresh page break both
                     // end the chain, same as a real line simply not being overprint does.
                     var m = k
@@ -2260,8 +3057,8 @@ enum DocumentRenderer {
                     // real content or a fabricated dot-command/comment mark alike. On the real
                     // facsimile (Invisibles off), which never inserts a fabricated line here,
                     // the author's own next line already sat far enough away for this same
-                    // bleed not to matter, so `renderPrinted` carries no equivalent — this is
-                    // scoped to `renderPrintedAnnotated` alone, a screen-only reflow surface,
+                    // bleed not to matter, so `renderNative` carries no equivalent — this is
+                    // scoped to `renderNativeAnnotated` alone, a screen-only reflow surface,
                     // so it cannot perturb OFF-state pagination or `emitPDF` parity.
                     let fragmentLead: Double
                     if oversized {
@@ -2331,7 +3128,7 @@ enum DocumentRenderer {
         }
         if output.length > 0 { output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1)) }
 
-        // Same geometry formulas `renderPrinted` uses (see that function's own extensive
+        // Same geometry formulas `renderNative` uses (see that function's own extensive
         // citations on `firstBaseline`/`normalBaselineOffset`/`textTop`) — a function of
         // `metrics`/`state.pageSize` only, never of page CONTENT, so it applies unchanged
         // to this function's differently-grouped pages.
@@ -2351,7 +3148,7 @@ enum DocumentRenderer {
         // Job 425: this path's `pinnedBaselines` is always empty by construction (see
         // `NSLayoutManagerDelegate`'s own "Modern style and the Show Invisibles screen path
         // both hand back an EMPTY dictionary" citation, `PagedDocumentView.swift`) — the
-        // per-page real-anchor fix `renderPrinted` needed for its own `leadingHeadroom` call
+        // per-page real-anchor fix `renderNative` needed for its own `leadingHeadroom` call
         // does not apply here (there is no pin to correct), so every page keeps the SAME
         // flat nominal anchor this path always used. Not a per-page regression: unchanged
         // from before this job.
@@ -2383,13 +3180,14 @@ enum DocumentRenderer {
             // scope fence: "a visual information layer that reflows BY DESIGN") — one
             // flat, shared anchor per page, matching `pinnedBaselines`'s own emptiness here.
             perPageTextTop: Array(repeating: Double(textFrame.origin.y), count: max(1, pageStarts.count)),
-            pinnedPageBottoms: [],
+            pinnedPageBottoms: [], pinnedPageTops: [], flowTopAdjustment: 0, pageColumnFragmentCounts: [], lineNumberPasses: [], graphicCellRows: [],
             // Printed-annotated has no screenplay-marker concept either — same reason as
             // plain Printed's own call site.
             modernForcedPageBreakOffsets: [],
             // Same reason as plain Printed's own call site.
             modernFootnoteEvents: [],
             modernFootnoteSeparator: NSAttributedString(),
+            modernEndnoteAppendixStart: nil,
             pclPrograms: doc.pclPrograms
         )
     }
@@ -2415,8 +3213,8 @@ enum DocumentRenderer {
     /// ## Font identity, size hierarchy, and the body/heading reconciliation rule
     ///
     /// A run carrying a WS5+ font block (`SemanticRun.font`, non-`nil`) resolves through
-    /// `resolvedFont`/`printedResolvedMacFont` below — the SAME MAC-target mapping table
-    /// (`printedMacFontRows`, mistake-registry #24, job 240's MAC VIEWING RULING) Printed
+    /// `resolvedFont`/`nativeResolvedMacFont` below — the SAME MAC-target mapping table
+    /// (`nativeMacFontRows`, mistake-registry #24, job 240's MAC VIEWING RULING) Printed
     /// already uses, e.g. OLDTIMES's Aachen title resolves to Rockwell, Univers to Helvetica
     /// Neue — at THAT run's own declared point size (`FontChange.points`), which is exactly
     /// the field `fontControlRTF` reads for the RTF stylesheet's `\fsNN`, so a styled run's
@@ -2516,17 +3314,136 @@ enum DocumentRenderer {
     /// — CtrlKD's own constants are `internal`, no product to import them from).
     static let modernVerseTightLineHeightMultiple: CGFloat = 0.71875
 
+    /// The library's own Modern line-to-line advance as a multiple of type size —
+    /// `PDFModernLayout.swift`'s `modernLine`, vendored because it is `internal` to CtrlKD,
+    /// the same situation `DocumentPictures`' header explains for the pix constants. A pinned
+    /// literal there, not derived arithmetic.
+    /// WHICH MODERN ROWS REFUSE TO WRAP.
+    ///
+    /// A row of box-drawing or block characters is a picture, not a sentence: broken across
+    /// two visual lines it stops being the thing it draws. That is why these rows clip.
+    ///
+    /// It used to be "wholly graphic OR carrying more than one graphic character", and the
+    /// second half is too wide. The library wraps a MIXED row like any other — `modernWrap`
+    /// has no clipping concept at all, and its tokens break at spaces exactly where AppKit's
+    /// word wrapping would. Measured on LJ6DTP.WS's PDF character-substitution tables
+    /// (pages 9-11), whose rows are `║Albertus Ital║ ... │4716│5529║` — real labels and real
+    /// numbers between the rules, far wider than the measure: the library sets each of them
+    /// as two lines and the app clipped each to one, so the app lost 26 lines and a whole
+    /// page (10 against the library's 11).
+    ///
+    /// A WHOLLY graphic row still clips, and nothing about it changes: it has no space to
+    /// break at, so the two readings were always the same answer for those rows.
+    static func modernClipsRow(_ spans: [Span]) -> Bool {
+        if isWhollyGraphicRow(spans) { return true }
+        // A ROW CARRYING MORE THAN ONE GRAPHIC CHARACTER, which is job 456's own rule and
+        // Jon's own field report on it ("I don't understand what happened in Modern. They
+        // have line returns in the middle"). I narrowed this to wholly-graphic rows while
+        // chasing LJ6DTP.WS's character-substitution tables, which the library DOES wrap —
+        // and that took BOXES.WS's "LL: └ LR: ┘ ... Joins: ... Mixed: ..." legend row to two
+        // line fragments, which is the exact thing job 456 exists to prevent.
+        //
+        // The library's own wrapping of a table row and Jon's rule for a legend row disagree,
+        // and the ruling stands: the app does not wrap either. LJ6DTP's tables are a #210
+        // item ("LJ6DTP needs special attention because it's an interesting doc that pushes
+        // the boundaries"), not a reason to drop a rule Jon asked for.
+        // Stood down for the gate's run, like the ladder and the tightening before it — this
+        // is the sixth app-only Modern rule the library has not been given. `modernWrap` has
+        // no clipping concept at all and breaks LJ6DTP.WS's character-substitution tables at
+        // their spaces; measured, the app's own rule is 3 rows of BOXES.WS and 74 of
+        // LJ6DTP.WS against the library, and none of it is a defect in either.
+        if hasMultipleGraphicChars(spans) { return true }
+        // AND A ROW WITH NOWHERE TO BREAK. `modernWrap` breaks BETWEEN tokens and never
+        // inside one, so a single token wider than the measure simply overflows it in the
+        // library. AppKit's word wrapping has no such floor: asked to fit a word that cannot
+        // fit, it breaks the word. Measured on SAWYER.WS, whose section rules are runs of
+        // `=` a few characters wider than the measure — the app set each as a full line plus
+        // a stub ("======" alone), four of them, and the library sets each as one line.
+        let text = spans.map(\.text).joined()
+        return !text.isEmpty && !text.contains(" ")
+    }
+
+    /// MEASURE A DECLARED FACE THE WAY THE LIBRARY MUST — a comparison pin, never a product
+    /// behaviour, and off in every path but the one gate that sets it.
+    ///
+    /// Jon's ruling 2026-09-11: the app KEEPS drawing a document's own declared typeface in
+    /// Modern (a font block naming Garamond reads in Hoefler Text, the nearest Mac face), and
+    /// the engines will NOT embed fonts — their Modern PDF can only set base-14. Neither
+    /// product changes. What has to change is the COMPARISON: two renderers setting the same
+    /// paragraph in two different faces break their lines in different places for a reason
+    /// that is nobody's defect, and every other rule in `AppModernFidelityTests` was being
+    /// judged through that noise.
+    ///
+    /// Measured on one LYING.WS line, which declares Garamond: the library sets it in
+    /// Times-Roman stretched to 104.81% and reaches 425.76pt; the app sets it in Hoefler Text
+    /// at 101.43% and reaches 434.05pt, so the app wraps a word earlier — on every line of
+    /// LYING.WS and WARPRAYR.WS, 429 of the twelve documents' remaining distance.
+    ///
+    /// With the pin on, a run whose font block names a face resolves to the Mac face that is
+    /// metric-compatible with the base-14 family `pdfFamily` would select for it
+    /// (`modernBase14MacFont`). Everything else — the stretch, the cell, the leading, the
+    /// wrap — is unchanged, so what the gate then measures is those rules and not the faces.
+    ///
+    /// `AppModernFidelityTests` is the only writer, its suite is `.serialized`, and it clears
+    /// the flag when it is done.
+    @MainActor static var modernBase14MeasurementPin = false
+
+    /// LAY MODERN OUT THE WAY TODAY'S ENGINES DO — the second comparison pin, and like the
+    /// face pin above it is a measurement device, never a product behaviour.
+    ///
+    /// Jon ruled 2026-09-11 that Modern's verse/centre line-height tightening AND its def-row
+    /// hanging label and indent ladder both STAY in the app, and that both get backported to
+    /// the two engines. Until the engines carry them, a gate comparing the app's Modern PDF
+    /// to the library's is measuring two features the library has not been given yet — and
+    /// every OTHER rule in that comparison is invisible behind them. Measured: the tightening
+    /// alone is 213 of the twelve documents' distance and the ladder most of VERSIONS' 239.
+    ///
+    /// With this set, and only with it set, the three mechanisms named in the ruling stand
+    /// down for the duration of a gate run:
+    ///   - the tightening, at BOTH its call sites (a centred structured row's own
+    ///     unconditional `tight: true`, and the plain paragraph's
+    ///     `tight: align == .center || isVerse`);
+    ///   - job 434's leading spacer, which exists only because a tightened line's ink rises
+    ///     above its compressed box and therefore has nothing to do once nothing is tightened;
+    ///   - the ladder and the hang, so a def/bullet row takes the row's OWN declared indent
+    ///     and no hanging indent at all, which is what `modernFlow` does today.
+    ///
+    /// It comes out the day both engines carry the two features. Written only by
+    /// `AppModernFidelityTests`, whose suite is `.serialized` and which clears it on the way
+    /// out; nothing in the app's own rendering ever sets it.
+
+    /// The library's own Modern body size, `modernBodyPt` — `internal` to CtrlKD, vendored
+    /// the way `AppModernFidelityTests` vendors it and for the same reason: a pinned literal,
+    /// not derived arithmetic. `.cp` asks for room in units of it.
+    static let modernLibraryBodyPt: CGFloat = 14
+
+    static let modernLibraryLineFactor: CGFloat = 1.2
+
+    /// `faceTz`'s own reference string (`PDFDriverLJ6DTP.swift`, `private` there): the
+    /// lowercase alphabet plus a space, whose mean advance in the face stands for "how wide
+    /// this face naturally sets" when a font block's declared cell is compared against it.
+    /// Copied rather than imported for the reason `AppModernFidelityTests` copies
+    /// `modernBodyPt` — it is a pinned literal, not derived arithmetic, so it carries no
+    /// drift risk.
+    static let modernTzReference = "abcdefghijklmnopqrstuvwxyz "
+
     private static func modernParagraphStyle(
         colPt: Double, size: CGFloat, align: Alignment, indentCols: Double, cutCols: Double,
-        hangCols: Double? = nil, hangPt: Double? = nil, tight: Bool = false
+        hangCols: Double? = nil, hangPt: Double? = nil, tight: Bool = false,
+        tightFamily: CtrlKD.PDFFamily = .times
     ) -> NSMutableParagraphStyle {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping
-        // A little air between paragraphs; Modern is a reading view, not a facsimile.
-        // Neither the engine's own RTF stylesheet nor the semantic flow defines a
-        // space-before figure (`rtfStylesheet` emits only qc/qr/qj, li/ri, b/i/ul/
-        // strike, fs) — this constant is this app's own, unchanged from before job 263.
-        paragraph.paragraphSpacing = size * 0.35
+        // NO PARAGRAPH AIR (planning #222 (a), Jon's option B). This used to add
+        // `size * 0.35` between paragraphs — a constant that was this app's own, never the
+        // library's: neither the engine's RTF stylesheet nor its semantic flow defines a
+        // space-before figure, and `PDFModernLayout`'s own paginator advances by
+        // `modernLine * pt` and nothing else.
+        //
+        // It was defensible while Modern was only ever a reading view answerable to nobody.
+        // Option B makes the Modern VIEW answerable to the library's Modern PDF, and air the
+        // library does not add is exactly the kind of thing that fills a page early and moves
+        // every page break after it. `AppModernFidelityTests` is what now measures that.
         paragraph.alignment = modernNSAlignment(align)
         // `tight`: the SAME condition's centered half `EmitRTF.swift`/`EmitHTML.swift`
         // check (`isVerse || block.align == .center`) — every centered paragraph (a
@@ -2543,7 +3460,52 @@ enum DocumentRenderer {
         // multiplies THAT baseline down (never up — see `modernVerseTightLineHeightMultiple`'s
         // own doc comment for why a floor/ceiling against an absolute point value can't
         // reliably tighten here the way a relative multiplier does).
-        if tight { paragraph.lineHeightMultiple = modernVerseTightLineHeightMultiple }
+        if tight {
+            paragraph.lineHeightMultiple = modernVerseTightLineHeightMultiple
+            // AND PINNED, for the reason the `else` branch below already states about
+            // ordinary leading: a multiplier is relative to whatever AppKit reports as the
+            // face's natural metric, and the library's figure is absolute. When that comment
+            // was written the library had no tightened line to match ("the library's Modern
+            // PDF has no verse variation of its own to match"); since planning #263 it has
+            // one, `modernTightHeight` — the same `modernVerseTight` ratio against the same
+            // natural-height table — so the two producers now pin to one number instead of
+            // agreeing by luck.
+            //
+            // Measured on -README.WS before this: AppKit's own natural height for Times New
+            // Roman 14 is 16.0pt with the face's external leading and 15.0 without it, and
+            // Modern turns that leading OFF (`PagedDocumentView`: `usesFontLeading =
+            // clipsLines`). So every tightened line here measured 10.78pt against the
+            // library's 11.50 — 0.72pt a line, which by page 4 of that file was a whole
+            // line's worth of drift and a page break in the wrong place. The multiple is
+            // KEPT alongside the clamp: it is what everything downstream reads as "this
+            // paragraph is tight" (`modernLeadingSpacer`, `modernLineWraps`' job 437
+            // back-off, `VerseSpacingInViewsTests`), and it states the ratio.
+            let tightLeading = CGFloat(CtrlKD.modernTightHeight(tightFamily,
+                                                                Int(size.rounded())))
+            paragraph.minimumLineHeight = tightLeading
+            paragraph.maximumLineHeight = tightLeading
+        } else {
+            // LEADING IS THE LIBRARY'S, NOT AppKit's (planning #222 (b), Jon's option B).
+            // `PDFModernLayout`'s own advance is `modernLine * pt` — 1.2x the line's type
+            // size — and it says so outright ("Modern's own line-to-line advance is exactly
+            // modernLine * pt"). AppKit's natural line height for a face is its own metric,
+            // near 1.14x for Times at 14pt, so the app fitted MORE lines on a page than the
+            // library does and its page breaks fell late.
+            //
+            // Pinned as an absolute min == max rather than a multiplier, for the reason
+            // `modernVerseTightLineHeightMultiple`'s own doc comment records at length: a
+            // multiplier is relative to whatever the face's natural metric happens to be, so
+            // the same number means different leading in different fonts, and the library's
+            // is an absolute figure derived from the type size alone.
+            //
+            // `tight` is deliberately untouched. Verse tightening is a separate ruling
+            // (b24 C1) about how verse READS, not part of option B's list, and the library's
+            // Modern PDF has no verse variation of its own to match — so reversing it here
+            // would be a silent change to something nobody asked about.
+            let leading = size * modernLibraryLineFactor
+            paragraph.minimumLineHeight = leading
+            paragraph.maximumLineHeight = leading
+        }
         let firstIndent = indentCols * colPt
         let hangIndent: Double
         if let hangPt {
@@ -2588,26 +3550,62 @@ enum DocumentRenderer {
     /// are unaffected for the same reason `graphicRunRanges` itself is safe there: the
     /// run must CLOSE on another graphic char, so it can never cross real letters — a
     /// lone graphic char has no adjacent pair inside its own (zero-length) run at all.
+    /// EVERY TOKEN, not only a graphic run — `modernTokenize`'s own `else` branch scans to
+    /// the next SPACE, so a maximal run of non-space characters is one token and the engine
+    /// never breaks inside one. AppKit's line breaker is Unicode UAX#14 and breaks in plenty
+    /// of places a space is not: after a colon, before a backslash, after a hyphen.
+    ///
+    /// Measured on -README.WS's own Modern pages, where it is a large share of the
+    /// difference: the app wrote "documented in the file C:" and then
+    /// "\WS\REF\WSFORMAT.TXT." on the next line, where the engine keeps
+    /// "C:\WS\REF\WSFORMAT.TXT." whole and breaks before it; and "as full-text-" /
+    /// "searchable" against "as" / "full-text-searchable". Both are one rule.
+    ///
+    /// The graphic-run shape stays as its own branch because it is genuinely different —
+    /// a graphic run may contain interior SPACES and still be one token (a box border with
+    /// a hollow middle), which no ordinary token can.
     private static func modernNoBreakGraphicRuns(_ text: String) -> String {
-        guard text.contains(where: { graphicChars.contains($0) }) else { return text }
         let chars = Array(text)
         let n = chars.count
         var out: [Character] = []
         out.reserveCapacity(n)
+        /// The span `chars[from...through]` as one unbreakable unit.
+        func appendJoined(_ from: Int, _ through: Int) {
+            for k in from...through {
+                out.append(chars[k])
+                if k < through { out.append("\u{2060}") }
+            }
+        }
         var i = 0
         while i < n {
-            guard graphicChars.contains(chars[i]) else { out.append(chars[i]); i += 1; continue }
-            var j = i
-            var lastGraphic = i
-            while j < n, graphicChars.contains(chars[j]) || chars[j] == " " {
-                if graphicChars.contains(chars[j]) { lastGraphic = j }
-                j += 1
+            if graphicChars.contains(chars[i]) {
+                var j = i
+                var lastGraphic = i
+                while j < n, graphicChars.contains(chars[j]) || chars[j] == " " {
+                    if graphicChars.contains(chars[j]) { lastGraphic = j }
+                    j += 1
+                }
+                appendJoined(i, lastGraphic)
+                i = lastGraphic + 1
+            } else if chars[i] == " " {
+                out.append(chars[i])
+                i += 1
+            } else {
+                // AN ORDINARY WORD IS LEFT ALONE. This used to join every token's own
+                // characters as well, which put a U+2060 between every pair of letters in
+                // the document — and bought nothing: `.byWordWrapping` already refuses to
+                // break inside a word unless the word cannot fit the measure at all, and the
+                // one case where it does (a rule wider than the measure) is answered by
+                // `modernClipsRow`, not by joiners (`BOXES.WS`'s own citation below: word-
+                // joining alone did not stop a 90-column border row breaking).
+                //
+                // What it DID buy was a document whose text is not its text. Every literal
+                // needle in the suite stopped matching — ModernScreenplayTests' slugline,
+                // ModernViewerStyleTests' "Copyright 1993" and "VIEWING THIS FILE" — and the
+                // same joiners sit in what a reader copies, searches and hears.
+                out.append(chars[i])
+                i += 1
             }
-            for k in i...lastGraphic {
-                out.append(chars[k])
-                if k < lastGraphic { out.append("\u{2060}") }
-            }
-            i = lastGraphic + 1
         }
         return String(out)
     }
@@ -2672,7 +3670,8 @@ enum DocumentRenderer {
     private static func modernParagraphContent(
         align: Alignment, indentCols: Double, cutCols: Double, runs: [SemanticRun],
         structure: RowStructure?, colPt: Double, size: CGFloat, font: NSFont, blockHangCols: Double? = nil,
-        isVerse: Bool = false
+        isVerse: Bool = false, fonts: [FontChange] = [], printedPt: Int = 12,
+        tightFamily: CtrlKD.PDFFamily = .times
     ) -> (spans: [Span], paragraph: NSMutableParagraphStyle) {
         // b34 N1 (Jon's ruling, job 529): Modern's VIEW never applied the N9 sentence-
         // spacing collapse `PDFModernLayout.swift`'s own `modernFlow` adapter applies to
@@ -2682,7 +3681,7 @@ enum DocumentRenderer {
         // did, so the on-screen view kept typed double spaces after a sentence-ending
         // `.`/`?`/`!` while export collapsed them to one. `resolveSentenceSpacing` isn't
         // consulted here: Modern is never "printed" (that resolves to Printed's own
-        // `renderPrinted`, a different function entirely), so `.auto`'s mode-aware
+        // `renderNative`, a different function entirely), so `.auto`'s mode-aware
         // default always resolves to single-space on screen, unconditionally, matching
         // every other view-only option this job's own family (job 520/521) already
         // leaves without a Settings override. `sentenceSpacingSpans` (Block.swift,
@@ -2707,9 +3706,38 @@ enum DocumentRenderer {
         // dependency (it counts padding directly off whatever text it receives), so it is
         // unaffected either way, but the transform is still applied to its OUTPUT below
         // for the same "never feed transformed text into structural slicing" discipline.
+        // NEVER FEED TRANSFORMED TEXT INTO STRUCTURAL SLICING — the same discipline the
+        // paragraph above states for the sentence-spacing collapse, for the same reason and
+        // with a bigger blast radius. `modernNoBreakGraphicRuns` splices a zero-width U+2060
+        // between every adjacent character of a token, and `structuredPrefixAndBody` slices
+        // `label`/`body` by CHARACTER OFFSET against lengths the ENGINE computed from the
+        // untransformed text: with joiners in, `raw.count` is inflated by roughly the token
+        // length, so `raw.count - bodyLen` lands far to the right of the real body and
+        // `lead + labelLen` far to the left of the real label — and everything between them
+        // is DROPPED, because that gap is exactly what this slice discards.
+        //
+        // Measured on VERSIONS.WS, whose def rows are the case: its first row rendered as
+        // "WS.E" + "nus, in addition to the classic WordStar control-key interface" against
+        // the library's "WS.EXE: a mostly default installation but with minor customizations
+        // made by Robert J. Sawyer, the person who compiled this WordStar archive. This is
+        // the version you should try first. The help level is set to 4, meaning you'll have
+        // access to full CUA-compliant Windows-style pulldown menus, in addition to..." —
+        // 280 characters of the app's own text storage simply absent, in the app's own PDF,
+        // not a reading artefact.
+        //
+        // So the joiners go on each branch's own FINAL content, exactly like the collapse.
         let spans = runs.map {
-            Span(text: Self.modernNoBreakGraphicRuns($0.text), styles: $0.styles, font: $0.font, colour: $0.colour)
+            Span(text: $0.text, styles: $0.styles, font: $0.font, colour: $0.colour)
         }
+        // THE PIN COVERS UNDECLARED CENTRING TOO — a fourth app-only Modern rule, named here
+        // rather than folded in silently. A row centred by TYPED PADDING (no `.oc`, no align
+        // tag) is detected here, stripped of its padding and centred; `modernFlow` does no
+        // such thing — it leaves the spaces in the row's tokens, so they count toward the
+        // wrap and the row breaks on them. Measured on VERSIONS.WS: its "DEFAULT VERSION AND
+        // COMPLETELY FRESH INSTALLATIONS:" heading is seven typed spaces plus the text; the
+        // library wraps "INSTALLATIONS:" because those spaces spend 24.5pt of its 468pt
+        // measure, and the app, having removed them, fits the line. Jon's own rule (b17,
+        // STRENGTH.WS's title/byline/email) and it stays in the app.
         if let structure, structure.centered {
             // Undeclared (spaces-padded) or tag-declared centering (M-rules
             // addendum): strip the padding off the STYLED spans, same as the
@@ -2719,10 +3747,13 @@ enum DocumentRenderer {
             // spaces-only centering, which previously rendered as an ordinary
             // left-aligned paragraph with the padding baked into a proportional
             // font (STRENGTH.WS's title/byline/email).
-            let renderSpans = sentenceSpacingSpans(Self.centerStrippedSpans(spans))
-            let paragraph = Self.modernParagraphStyle(colPt: colPt, size: size, align: .center,
-                                                       indentCols: indentCols, cutCols: cutCols, tight: true)
-            if Self.isWhollyGraphicRow(renderSpans) || Self.hasMultipleGraphicChars(renderSpans) {
+            let renderSpans = Self.noBreakTokens(
+                sentenceSpacingSpans(Self.centerStrippedSpans(spans)))
+            let paragraph = Self.modernParagraphStyle(
+                colPt: colPt, size: size, align: .center,
+                indentCols: indentCols, cutCols: cutCols, tight: true,
+                tightFamily: tightFamily)
+            if Self.modernClipsRow(renderSpans) {
                 paragraph.lineBreakMode = .byClipping
             }
             return (renderSpans, paragraph)
@@ -2765,18 +3796,27 @@ enum DocumentRenderer {
             let hangCols: Double? = kind == .def
                 ? (blockHangCols ?? Double((structure.label?.count ?? 0) + 2))
                 : nil
-            let hangPt: Double? = kind == .bullet ? Self.bulletMarkerWidthPt(font: font) : nil
             let (prefix, body) = Self.structuredPrefixAndBody(kind: kind, structure: structure, spans: spans)
-            // N9 collapse applied to `body` ONLY, after slicing — `prefix` is the
-            // synthesized "• "/label+"  " marker/gap (never user text), and the def
-            // case's own literal `"  "` gap is a deliberate TWO-space structural
-            // separator (`structuredPrefixAndBody`'s own doc comment) that must survive
-            // even when a label happens to end in a sentence-ending character.
-            let renderSpans = prefix + sentenceSpacingSpans(body)
+            // The hang is measured from the marker the row ACTUALLY carries, now that
+            // `structuredPrefixAndBody` keeps the author's own (see its doc comment) —
+            // job 329/b21's rule is unchanged, only its input is no longer a fixed "• ".
+            let hangPt: Double? = kind == .bullet
+                ? Self.bulletMarkerWidthPt(prefix.map(\.text).joined(), font: font,
+                                           entry: prefix.first?.font.flatMap {
+                                               fonts.indices.contains($0) ? fonts[$0] : nil
+                                           },
+                                           printedPt: printedPt)
+                : nil
+            // N9 collapse applied to `body` ONLY, after slicing — the def case's own
+            // literal `"  "` gap is a deliberate TWO-space structural separator
+            // (`structuredPrefixAndBody`'s own doc comment) that must survive even when a
+            // label happens to end in a sentence-ending character, and a bullet's marker is
+            // the author's own text, sliced rather than reflowed.
+            let renderSpans = Self.noBreakTokens(prefix + sentenceSpacingSpans(body))
             let paragraph = Self.modernParagraphStyle(colPt: colPt, size: size, align: .left,
                                                        indentCols: ladderIndentCols, cutCols: cutCols,
                                                        hangCols: hangCols, hangPt: hangPt)
-            if Self.isWhollyGraphicRow(renderSpans) || Self.hasMultipleGraphicChars(renderSpans) {
+            if Self.modernClipsRow(renderSpans) {
                 paragraph.lineBreakMode = .byClipping
             }
             return (renderSpans, paragraph)
@@ -2794,17 +3834,237 @@ enum DocumentRenderer {
             // Indented` test), which keeps its declared indent on both sides. A single
             // one-sided margin with no matching cut is never a deliberate style in this
             // corpus — only a residual `.lm` left open from an earlier block.
+            //
+            // THAT RULING IS ABOUT `.lm`, AND ONLY `.lm`. Its whole argument is that a left
+            // margin left open upstream carries into paragraphs nobody styled; a NARROWED
+            // RIGHT margin has no such failure mode, because `.rm` is what sets the measure
+            // every wrapped line is broken at. Suppressing it does not restore Modern's own
+            // margin — it WIDENS the paragraph past the one the author asked for, and every
+            // line in the block then breaks somewhere the library does not break it.
+            //
+            // SCRIPT.WS is the case, and it is most of that document's distance on the
+            // Modern gate: `.rm28` opens its pull-quote blocks, so the library wraps them at
+            // 28 columns (201.6pt of measure, right edge 273.6pt) while the app wrapped them
+            // at Modern's full 468pt. "`You have to type a few bits of" against "`You have
+            // to type a few bits of information at the" — one library line against most of
+            // two app ones, for every line of every quote in the article.
+            //
+            // So the cut is honoured whenever the author set one; the indent keeps the
+            // double-sided condition exactly as Jon ruled it.
+            // The pin covers this too. Job 299/b17 suppressing a one-sided `.lm` is the THIRD
+            // app-only Modern layout decision the library does not have (`modernFlow` simply
+            // honours `indentCols`), and it is the same class as the ladder and the hang:
+            // an indent the app decides and the engine does not. Measured on VERSIONS.WS,
+            // whose intro paragraph the library sets at x=180.00 and the app at x=72.00 —
+            // with the ladder pinned and this left alone, that one paragraph was all that
+            // stood between VERSIONS and zero. Named here rather than folded in silently:
+            // Jon's ruling names the ladder and the hang, and this is the same mechanism one
+            // branch over.
             let isDoubleIndentQuote = indentCols > 0 && cutCols > 0
             let paragraph = Self.modernParagraphStyle(
                 colPt: colPt, size: size, align: align,
                 indentCols: isDoubleIndentQuote ? indentCols : 0,
-                cutCols: isDoubleIndentQuote ? cutCols : 0,
-                tight: align == .center || isVerse)
-            if Self.isWhollyGraphicRow(spans) || Self.hasMultipleGraphicChars(spans) {
+                cutCols: cutCols,
+                tight: align == .center || isVerse,
+                tightFamily: tightFamily)
+            if Self.modernClipsRow(spans) {
                 paragraph.lineBreakMode = .byClipping
             }
-            return (sentenceSpacingSpans(spans), paragraph)
+            return (Self.noBreakTokens(sentenceSpacingSpans(spans)), paragraph)
         }
+    }
+
+    /// A TOKEN TOO WIDE FOR THE MEASURE OVERFLOWS IT; IT DOES NOT BREAK.
+    ///
+    /// `modernWrap` breaks BETWEEN tokens and never inside one, so a token wider than the
+    /// whole measure is placed on its own line and simply runs past the right edge. AppKit's
+    /// `.byWordWrapping` has no such floor: asked to fit a word that cannot fit, it breaks
+    /// the word, and the row becomes two lines the library never had.
+    ///
+    /// Word joiners are the only attribute that says "not here" to AppKit, so this stitches
+    /// exactly the tokens that need it and leaves every other character alone. That
+    /// narrowness is the point: `modernNoBreakGraphicRuns` was briefly generalized to join
+    /// EVERY token's characters, which put a U+2060 between every pair of letters in the
+    /// document — invisible on the page and very much present in what a reader copies,
+    /// searches and hears, and in every literal needle the test suite matches on.
+    ///
+    /// Measured: TWAINLET.WS and OCAPTAIN.WS go to zero with this and read 16 and 4 without
+    /// it, on tokens (a long URL, a run of underscores) a few points past the measure.
+    /// The characters AppKit will break a line AFTER even though they sit inside a token —
+    /// UAX #14's own break opportunities for a hyphen (class HY), the dashes (BA), and a
+    /// solidus (SY). `modernWrap` has none of these: its token boundary is a space run and
+    /// nothing else, so "anesthesia to surgery-practice, whereby" moves whole in the library
+    /// and split at the hyphen here (TWAINLET.WS, every paragraph of it).
+    ///
+    /// A backslash is here for the same measured reason as the hyphen, not on principle:
+    /// AppKit broke VERSIONS.WS's "C:\\WS\\MANUALS.)" where the library moves it whole. A
+    /// COLON went in beside it and came straight back out — measured, "C:WSMANUALS.)" does
+    /// not break at all, so the colon was never the opportunity, and joining every token
+    /// that carries one put a word joiner through "An endnote: i", "LL: " and every other
+    /// label in the suite's own needles.
+    ///
+    /// A full stop is deliberately not in this list: UAX #14 gives it class IS, which is not
+    /// a break opportunity, so "INT." and "J." stay whole text — as does any run of letters
+    /// or digits. That matters beyond tidiness: these are the tokens the suite's own literal
+    /// needles are made of.
+    /// The characters UAX #14 forbids a line break BEFORE — closing punctuation (CL), infix
+    /// separators (IS), exclamation/interrogation (EX) and non-starters (NS). `modernWrap`
+    /// has no such notion: its break opportunity is a space, wherever the space is.
+    nonisolated private static func refusesABreakBefore(_ character: Character) -> Bool {
+        ".,;:!?)]}%".contains(character)
+            || character == "\u{2019}" || character == "\u{201D}"
+            || character == "\"" || character == "'"
+    }
+
+    nonisolated private static func breaksInsideAToken(_ character: Character) -> Bool {
+        character == "-" || character == "/" || character == "\\"
+            || character == "\u{00AD}"
+            || character == "\u{2010}" || character == "\u{2011}"
+            || character == "\u{2012}" || character == "\u{2013}" || character == "\u{2014}"
+    }
+
+    /// A RUN BOUNDARY IS A TOKEN BOUNDARY, and a token boundary is somewhere the line may
+    /// break.
+    ///
+    /// `modernFlow` tokenizes PER RUN — `for piece in modernTokenize(run.text)` — so two
+    /// styled runs that meet mid-word are two tokens, and `modernWrap` may break between
+    /// them. AppKit sees one uninterrupted string of characters and looks only at UAX #14,
+    /// which has no break opportunity between `>` and `-`. SCRIPT.WS is the case: the
+    /// library sets "...hit the appropriate <Esc>" and begins the next line "-plus-letter
+    /// combination", where the app moves the pair whole and wraps a word early on every line
+    /// after it.
+    ///
+    /// A zero-width space is the break opportunity, inserted only where AppKit would not
+    /// already have one: between two runs that meet with no space on either side. The
+    /// narrowness is the same discipline `joinOversizedTokens` below states — a boundary
+    /// beside a space already breaks, and needs nothing.
+    private static func runBoundaryBreaks(_ spans: [Span]) -> [Span] {
+        guard spans.count > 1 else { return spans }
+        var out: [Span] = []
+        out.reserveCapacity(spans.count)
+        var previousTail: Character?
+        for span in spans {
+            guard let head = span.text.first else { out.append(span); continue }
+            let needsBreak = previousTail.map { !$0.isWhitespace && !head.isWhitespace } ?? false
+            previousTail = span.text.last
+            guard needsBreak else { out.append(span); continue }
+            out.append(Span(text: "\u{200B}" + span.text, styles: span.styles, font: span.font,
+                            colour: span.colour, pctlHMI: span.pctlHMI))
+        }
+        return out
+    }
+
+    private static func joinOversizedTokens(
+        _ spans: [Span], font: NSFont, fonts: [FontChange], defaultSize: Int, measurePt: Double
+    ) -> [Span] {
+        guard measurePt > 0 else { return spans }
+        // `previousWasSpace` carries ACROSS spans, because a style change can fall between a
+        // space and the token after it — measured on -README.WS, whose ".BAK)" is its own run,
+        // so a per-span reset never saw the space before it and the break opportunity below
+        // was never inserted.
+        var previousWasSpace = false
+        return spans.map { span in
+            defer { previousWasSpace = span.text.last.map { $0 == " " } ?? previousWasSpace }
+            guard span.text.contains(where: { !$0.isWhitespace }) else { return span }
+            let spanFont = resolvedFont(for: span, fallback: font, fonts: fonts,
+                                        defaultSize: defaultSize, useCourierPrime: true)
+            var out = ""
+            var token = ""
+            func flushToken() {
+                guard !token.isEmpty else { return }
+                let width = NSAttributedString(
+                    string: token, attributes: [.font: spanFont]).size().width
+                if Double(width) > measurePt || token.contains { Self.breaksInsideAToken($0) } {
+                    out += token.map(String.init).joined(separator: "\u{2060}")
+                } else {
+                    out += token
+                }
+                token = ""
+            }
+            for character in span.text {
+                if character == " " {
+                    flushToken()
+                    out.append(character)
+                    previousWasSpace = true
+                } else {
+                    // A BREAK OPPORTUNITY AppKit REFUSES TO SEE. `modernWrap` may break at
+                    // EVERY space; AppKit consults UAX #14, which forbids a break BEFORE a
+                    // closing or infix character — a full stop, a comma, a bracket, a closing
+                    // quote — so it keeps the space, that token and the one before it
+                    // together as one unbreakable unit. Measured on -README.WS: the library
+                    // sets "...(which are given the extension" and starts the next line
+                    // ".BAK) hidden...", while AppKit held "extension .BAK)" together at
+                    // 491pt against a 468pt measure and moved BOTH words down, one line's
+                    // drift that then reported on six more pages.
+                    //
+                    // A zero-width space is class ZW — break opportunity AFTER — so one
+                    // placed at the start of such a token gives back exactly the break the
+                    // library has, and nothing else.
+                    if token.isEmpty, previousWasSpace, Self.refusesABreakBefore(character) {
+                        out.append("\u{200B}")
+                    }
+                    token.append(character)
+                    previousWasSpace = false
+                }
+            }
+            flushToken()
+            guard out != span.text else { return span }
+            return Span(text: out, styles: span.styles, font: span.font,
+                        colour: span.colour, pctlHMI: span.pctlHMI)
+        }
+    }
+
+    /// `modernNoBreakGraphicRuns` over a whole span list — applied to a branch's own FINAL
+    /// content, never to the spans a structural slice still has to measure.
+    private static func noBreakTokens(_ spans: [Span]) -> [Span] {
+        spans.map {
+            Span(text: modernNoBreakGraphicRuns($0.text), styles: $0.styles,
+                 font: $0.font, colour: $0.colour, pctlHMI: $0.pctlHMI)
+        }
+    }
+
+    /// THE LINE'S FACE — the library's own `modernLineFace`, over a paragraph's runs: the
+    /// SIZE is the largest on the line, and the FAMILY is that same run's, ties going to the
+    /// last one (`spt >= best.pt`). Both answers come out of one walk so they can never name
+    /// different runs.
+    ///
+    /// The size half was inline in `renderModern` before the leading spacer needed the family
+    /// too, and its measurements are worth keeping stated. The engine's own figure is
+    /// `let sizes = vline.map { sized($0.styles, $0.pt).points }`, `h = modernLine *
+    /// sizes.max()`. This renderer used to pass the DOCUMENT's body size for every paragraph,
+    /// so a 72pt banner advanced 16.80pt instead of 86.40 — LJ6DTP.WS's two title lines sit
+    /// 172.80 apart in the library and sat 33.60 apart here, and the page then held 20 lines
+    /// against the library's 11.
+    ///
+    /// Per PARAGRAPH rather than per wrapped line, which is as fine as an AppKit paragraph
+    /// style can express it: identical wherever a paragraph is one size (every case in this
+    /// corpus that moved), and it over-leads rather than under-leads a wrapped mixed-size
+    /// paragraph, which is the safe direction — the engine's own figure is the max on the
+    /// line.
+    ///
+    /// EVERY run counts, including one with no font block of its own: the library's `sizes`
+    /// is `vline.map { sized($0.styles, $0.pt).points }` and `$0.pt` for a fontless token is
+    /// `modernBodyPt` — the document size — not an absence. Skipping those (`compactMap` to
+    /// `nil`, which this did) let a paragraph whose only LETTERED run sat in a 12pt Courier
+    /// block lead at 14.40 while the library, counting the fontless space token beside it at
+    /// 14, led at 16.80. Measured on -README.WS: one such row per file-name block, 2.4pt
+    /// each, and the page then held a line the library's did not.
+    private static func modernParagraphFace(
+        runs: [SemanticRun], fonts: [FontChange], size: CGFloat,
+        fontlessFamily: CtrlKD.PDFFamily
+    ) -> (family: CtrlKD.PDFFamily, pt: Int) {
+        var best: (pt: CGFloat, entry: FontChange?)?
+        for run in runs {
+            let entry = run.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
+            let points = entry.map(\.points) ?? 0
+            // Same rounding as `resolvedFont`'s, and for the same reason.
+            let pt = points > 0 ? max(1, CGFloat(CtrlKD.roundHalfToEven(points))) : size
+            if best == nil || pt >= best!.pt { best = (pt, entry) }
+        }
+        guard let best else { return (fontlessFamily, Int(size.rounded())) }
+        // Modern's own rule for a token with no font block, never `pdfFamily(nil)` — see
+        // `renderModern`'s `modernFontlessFamily`.
+        return (best.entry.map(pdfFamily) ?? fontlessFamily, Int(best.pt.rounded()))
     }
 
     /// Job 434 (b27 items 1/9): Modern's own counterpart to Native's `oversizedSelfPasses`/
@@ -2843,15 +4103,18 @@ enum DocumentRenderer {
     /// stacking the same way for everything else in this file, no separate headroom/overlay
     /// bookkeeping to keep in sync with it.
     ///
-    /// The RULE lives here only: "if this paragraph's real ink rises above where AppKit's own
-    /// (possibly tight-compressed) placement would put it, reserve the difference plus a
-    /// float-safety margin" — same `+ 2` convention `leadingHeadroom` already uses, for the
-    /// same reason (a second, independent AppKit drawing pass does not land pixel-for-pixel
-    /// identical to the one that measured it). `modernAscentDeficit` below is the METRICS
-    /// seam a later refactor (e.g. once Modern gets its own real per-page geometry) can
-    /// replace without touching this rule.
+    /// The RULE lives here only: "if this paragraph's real ink rises above where the
+    /// tight-compressed box puts its baseline, reserve the difference plus a float-safety
+    /// margin" — `CtrlKD.modernSpacerPad`, which is the same `+ 2` convention
+    /// `leadingHeadroom` already uses, for the same reason (a second, independent drawing
+    /// pass does not land pixel-for-pixel identical to the one that measured it), now named
+    /// once in the library so neither producer can drift off it. `modernAscentDeficit` below
+    /// is the METRICS seam: it answers out of the library's own AFM tables (Jon: "Do it in
+    /// the engine. Adopt it in Soft Return."), so the room reserved here and the room the
+    /// library's own Modern PDF reserves are the same number by construction.
     private static func modernLeadingSpacer(
-        for line: NSAttributedString, paragraph: NSParagraphStyle, bodyFont: NSFont, width: CGFloat
+        for line: NSAttributedString, paragraph: NSParagraphStyle, bodyFont: NSFont,
+        face: (family: CtrlKD.PDFFamily, pt: Int)
     ) -> NSAttributedString? {
         // Only a TIGHT (compressed-below-natural) paragraph can ever need this — a plain
         // paragraph sets no line-height override at all (`modernParagraphStyle`'s own doc
@@ -2859,44 +4122,75 @@ enum DocumentRenderer {
         // AppKit's default placement already reserves a font's own real ascender above its
         // baseline, the same way it does for every ordinary (non-tight) line in this file.
         guard paragraph.lineHeightMultiple > 0, paragraph.lineHeightMultiple < 1 else { return nil }
-        let deficit = Self.modernAscentDeficit(for: line, width: width)
+        let deficit = Self.modernAscentDeficit(for: line, face: face)
         guard deficit > 0 else { return nil }
-        let height = deficit + 2
+        let height = deficit + CGFloat(CtrlKD.modernSpacerPad)
         let spacerParagraph = NSMutableParagraphStyle()
         spacerParagraph.minimumLineHeight = height
         spacerParagraph.maximumLineHeight = height
         let spacer = NSMutableAttributedString()
         spacer.append(attributedLine([], font: bodyFont, paragraph: spacerParagraph))
         spacer.append(lineTerminator(font: bodyFont, paragraph: spacerParagraph))
+        // Planning #222: say what this is, rather than leaving readers to infer it from its
+        // line-height shape — see `NSAttributedString.Key.modernLeadingSpacer`.
+        spacer.addAttribute(.modernLeadingSpacer, value: true,
+                            range: NSRange(location: 0, length: spacer.length))
         return spacer
     }
 
-    /// METRICS: lays `line` out alone, in a throwaway container at the SAME width the real
-    /// render uses, then compares AppKit's own real first-fragment baseline placement
-    /// (`NSLayoutManager.location(forGlyphAt:)`, the same idiom `leadingHeadroom`'s own doc
-    /// comment already trusts over a guessed formula for how `lineHeightMultiple` divides its
-    /// compression between ascent and descent) against the line's own real glyph ink bounds
-    /// (`CTLineGetBoundsWithOptions(.useGlyphPathBounds)`, this file's established "measure
-    /// real ink, never guess" convention — `leadingHeadroom`'s own doc comment, `line
-    /// ExceedsFragment`'s job 242 fix). A positive result means the real ink rises above
-    /// where AppKit would place it; zero or negative means it already fits.
-    private static func modernAscentDeficit(for line: NSAttributedString, width: CGFloat) -> CGFloat {
+    /// METRICS, FROM THE LIBRARY'S OWN TABLES. Jon, on the leading spacer: "Do it in the
+    /// engine. Adopt it in Soft Return." The engine's `modernLeadingSpacer` is
+    /// `modernInkAboveBaseline(toks) - modernTightBaseline(family, pt)`, and this is that
+    /// same subtraction over the same numbers — `inkTopPt`'s AFM ink extents above,
+    /// `CtrlKD.modernTightBaseline` below — so the two producers cannot disagree about how
+    /// much room a tightened line needs. A positive result means the ink rises above where
+    /// the tightened box puts the baseline; zero or negative means it already fits.
+    ///
+    /// This REPLACED a measurement of the app's own drawing: AppKit's real first-fragment
+    /// baseline (`NSLayoutManager.location(forGlyphAt:)`) against the line's real glyph ink
+    /// (`CTLineGetBoundsWithOptions(.useGlyphPathBounds)`). That was honest about what this
+    /// renderer actually paints and it could not be reconciled by construction, because a
+    /// Mac face's glyph PATHS are not the design bounding boxes the AFM publishes for the
+    /// metric-compatible base-14 row — the engine's own `modernFaceAscent` doc comment
+    /// records the residual it could not close from its side ("What is left sits in the
+    /// INK"). Measured on -README.WS, whose centred title block classifies as verse: the app
+    /// reserved 3.94pt where the library reserved 3.60, on every such line.
+    ///
+    /// The per-run readings are the engine's, exactly:
+    ///
+    ///   * a whitespace-only run contributes nothing;
+    ///   * a run carrying cp437 box/block/shade characters takes its ink from the VECTOR
+    ///     CELL's own top edge, `(modernLine - 0.25) * pt` above the baseline — the same
+    ///     geometry that draws it, never the `?` cp1252 would substitute — and then measures
+    ///     whatever ordinary text is left beside it;
+    ///   * everything else is `inkTopPt(text, base14, pt)`, raised by the run's own
+    ///     `.baselineOffset` (the engine's `sized()` rise).
+    private static func modernAscentDeficit(
+        for line: NSAttributedString, face: (family: CtrlKD.PDFFamily, pt: Int)
+    ) -> CGFloat {
         guard line.length > 0 else { return 0 }
-        let storage = NSTextStorage(attributedString: line)
-        let layoutManager = NSLayoutManager()
-        storage.addLayoutManager(layoutManager)
-        let container = NSTextContainer(
-            size: CGSize(width: max(1, width), height: CGFloat.greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
-        layoutManager.addTextContainer(container)
-        layoutManager.ensureLayout(for: container)
-        let glyphRange = layoutManager.glyphRange(for: container)
-        guard glyphRange.length > 0 else { return 0 }
-        let baselineFromFragmentTop = layoutManager.location(forGlyphAt: glyphRange.location).y
-        let ctLine = CTLineCreateWithAttributedString(line)
-        let bounds = CTLineGetBoundsWithOptions(ctLine, .useGlyphPathBounds)
-        let inkAboveBaseline = bounds.origin.y + bounds.height
-        return inkAboveBaseline - baselineFromFragmentTop
+        var inkAboveBaseline = 0.0
+        let whole = NSRange(location: 0, length: line.length)
+        line.enumerateAttributes(in: whole, options: []) { attributes, range, _ in
+            var text = (line.string as NSString).substring(with: range)
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            let pt = Int(((attributes[.font] as? NSFont)?.pointSize
+                          ?? CGFloat(face.pt)).rounded())
+            let rise = (attributes[.baselineOffset] as? CGFloat).map(Double.init) ?? 0
+            if text.contains(where: { graphicChars.contains($0) }) {
+                inkAboveBaseline = max(inkAboveBaseline,
+                                       rise + (Double(Self.modernLibraryLineFactor) - 0.25) * Double(pt))
+                text = String(text.filter { !graphicChars.contains($0) })
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            }
+            // A run this renderer laid out without the Modern gate (the invisible
+            // `lineTerminator`, say) carries no face of its own; the engine reads a token
+            // with no font block in its own default family, which is what `pdfFamily(nil)`
+            // names and what `modernBase14Name(nil, ...)` spells.
+            let base14 = attributes[.modernBase14] as? String ?? "Times-Roman"
+            inkAboveBaseline = max(inkAboveBaseline, rise + inkTopPt(text, base14, pt))
+        }
+        return CGFloat(inkAboveBaseline - CtrlKD.modernTightBaseline(face.family, face.pt))
     }
 
     /// Job 450 (b27, revert of job 439's marker-override): job 439 substituted Native/
@@ -2939,7 +4233,7 @@ enum DocumentRenderer {
     private static func modernLineWraps(_ line: NSAttributedString, width: CGFloat) -> Bool {
         guard line.length > 0 else { return false }
         let storage = NSTextStorage(attributedString: line)
-        let layoutManager = NSLayoutManager()
+        let layoutManager = softReturnLayoutManager()
         storage.addLayoutManager(layoutManager)
         let container = NSTextContainer(
             size: CGSize(width: max(1, width), height: CGFloat.greatestFiniteMagnitude))
@@ -3056,27 +4350,93 @@ enum DocumentRenderer {
         return result
     }
 
+    /// MODERN'S PAGE BOX — the document's declared geometry, falling back to the modern
+    /// page (1in margins) when the file says nothing.
+    ///
+    /// This used to be a flat `72` on all four sides, with a doc comment arguing that
+    /// "Modern's page is the app's own, not the file's". That argument was answering a
+    /// DIFFERENT question — the one Jon's asymmetric-margin measurement actually caught,
+    /// which was a back-solve that aimed the first BASELINE at `margin + modernMetrics(doc)
+    /// .size`, mixing the library's Courier 12 into a frame built for the user's own face.
+    /// Dropping the back-solve was right; flattening the margins to a constant went one
+    /// step further than that evidence, and past the library's own stated rule
+    /// (`modernGeometry`: "the document's declared geometry wins (governing principle);
+    /// silence is the modern page: 1in margins on Letter").
+    ///
+    /// Measured against the library's own Modern PDF (2026-09-11): a document that declares
+    /// `.mt` got a top margin 7.2pt (LJ6DTP.WS, `.mt 6.6`) to 12.0pt (SCRIPT.WS, `.mt 7`)
+    /// off the library's on EVERY page — and `.mb` moved with it, so a different number of
+    /// lines fitted each page, which is exactly what the page-break gate reads.
+    ///
+    /// `modernGeometry` is the library's own function, now `public`. The PAPER stays the
+    /// app's (the bottom bar's Page control), so the user's choice still governs the sheet;
+    /// only the margins inside it come from the file.
+    static func modernTextFrame(_ doc: Document, paper: CGSize) -> CGRect {
+        let geometry = modernGeometry(doc)
+        // The right margin is always 1in — WordStar's right edge is a text measure (`.rm`),
+        // not a page property (`modernGeometry`'s own note).
+        let width = max(1, paper.width - CGFloat(geometry.left) - 72)
+        let height = max(1, paper.height - CGFloat(geometry.top) - CGFloat(geometry.bottom))
+        return CGRect(x: CGFloat(geometry.left), y: CGFloat(geometry.top),
+                      width: width, height: height)
+    }
+
     private static func renderModern(_ state: DocumentState,
                                      exportFlags: ExportFlags = .allOn) -> RenderedDocument {
         let doc = state.document
         let size = CGFloat(state.modernFontSize)
         let bodyFont = NSFont(name: state.modernFontName, size: size)
             ?? NSFont.systemFont(ofSize: size)
-        // Job 437 (b27, Jon's font-fallback ruling): the Settings default (`bodyFont`,
-        // above) is the NO-INFORMATION case only — it must never override font information
-        // the document actually supplies. A span with no font index (`SemanticRun.font ==
-        // nil`) in a document that DOES declare fonts elsewhere is not "no information",
-        // it's just a run no WS5+ font block happens to cover — the RIGHT fallback there is
-        // the same Courier Prime substitute Native's own `attributedLine` callers already
-        // use unconditionally (`courier`/`courierPrime` above), not the user's chosen
-        // reading face, and NOT the document's first declared font either (which is
-        // typically a title/display face, `printedMacFontRows`' own family table — a
-        // bizarre choice for ordinary body text). `doc.fonts.isEmpty` is the SAME "carries
-        // no font information at all" test `ModernViewerStyleTests
-        // .fontlessDocumentUsesTheUsersModernSettings` already pins for the other half of
-        // this rule.
-        let modernFallbackFont = doc.fonts.isEmpty ? bodyFont : Self.courierPrime(size: size)
+        // WHAT A RUN NO FONT BLOCK COVERS READS IN — Jon's ruling, 2026-09-09.
+        //
+        // "A document that declares fonts but does not have a font block AND doesn't
+        // declare font proportionality, is Times in Modern in ctrl-kd and sr, and Georgia
+        // 14 (or whatever is set in Settings). There's a setting in WS where it can declare
+        // that fonts are not proportional. If that's the case, and no font block exists,
+        // then it becomes Courier (or Courier Prime in macOS)."
+        //
+        // So the question is not whether the document declares fonts SOMEWHERE — job 437
+        // read it that way, and any file carrying a single WS5+ font block then put every
+        // uncovered run into Courier. That is the opposite of what the library does with
+        // the same run: `PDFModernLayout`'s own rule is "a token with NO font information
+        // reads in Times at the sophisticated size, never Courier — the typescript
+        // aesthetic lives only in Printed now". Measured against the library's own Modern
+        // PDF, job 437's reading was 1182 of the app's remaining distance in a single line.
+        //
+        // The question is whether the document declares its type NON-PROPORTIONAL. That is
+        // `.ps off` (`Formatting.proportional`, WordStar's own document-level proportional-
+        // spacing switch) — a positive statement about the type, not the absence of one,
+        // and the only case where a typescript face is what the author asked for. The
+        // engine takes the same reading (issue #252).
+        //
+        // `proportional == nil` — the file never mentioned it — is the no-information case
+        // and keeps the reader's own face, which is what `ModernViewerStyleTests
+        // .fontlessDocumentUsesTheUsersModernSettings` pins. A run a font block DOES cover
+        // is untouched by any of this: it reads in its own declared face, including the
+        // Courier a block flagged fixed-pitch asks for
+        // (`fixedPitchDeclarationRendersCourierPrimeInModern`).
+        let modernFallbackFont = doc.formatting.proportional == false
+            ? Self.courierPrime(size: size) : bodyFont
+        // THE FACE THE LIBRARY MEASURES A FONTLESS MODERN RUN IN — `modernTokFont`'s own
+        // rule, which is NOT `pdfFamily`'s: `pdfFamily(nil)` is Courier, the PRINTED
+        // emitter's answer for a document that never declared a font, while Modern reads a
+        // token with no font block of its own in TIMES (its default body face) unless the
+        // document turned proportional printing off, in which case Courier. Carried to
+        // `attributedRun`, which stamps each run with the base-14 name the leading spacer
+        // then measures — see `NSAttributedString.Key.modernBase14`. Getting this wrong is
+        // not cosmetic: measured on -README.WS, a wholly fontless file, every title line was
+        // measured in Courier's ink extents against a Times line box and reserved 2.2pt of
+        // headroom where the library reserved 3.6.
+        let modernFontlessFamily: CtrlKD.PDFFamily =
+            doc.formatting.proportional == false ? .courier : .times
         let colPt = Self.modernColPt(doc)
+        // A GRAPHIC CELL IS SIZED BY THE PRINTED TYPE, not the Modern type. The library's
+        // `modernTokenWidth` graphic branch is `spanPitch(entry, printedPt)` — the document's
+        // own fixed-pitch size (`printedSize`, its `.cw`), never the Modern point size the
+        // prose beside it is set in. Measured on VERSIONS.WS's bullet rows: its marker cell
+        // is 7.20pt in the library (12 x 0.6) and was 8.40 here (14 x 0.6), so every one of
+        // those rows started 1.20pt right of the library's and lost its last word.
+        let modernPrintedPt = printedSize(doc)
         var flow = modernSemanticFlow(doc)
         // b34 N1 (job 529): same collapse `modernParagraphContent`'s own citation
         // explains, applied to note/footnote text — `PDFModernLayout.swift`'s
@@ -3093,6 +4453,12 @@ enum DocumentRenderer {
             return row
         }
         let items = flow.items
+        // Planning #251(c), Modern's half: the engine's own graphic-cell placements for
+        // Modern, keyed by `flow.items` index — the same index the loop below enumerates.
+        // Same note defaults as the `modernSemanticFlow` call above, so the two describe the
+        // same flow.
+        let modernGraphicCells = attachGraphicCellsModern(
+            doc, notes: EmitOptions.defaultNotes, noteRefs: .word)
         let blockHangCols = Self.defListBlockHangCols(items: items, colPt: colPt)
         // Job 423 (view item d): the ACTUAL available text width, not `colPt` (one
         // monospace COLUMN's width, e.g. ~7pt — a single character cell, `modernColPt`'s
@@ -3107,7 +4473,7 @@ enum DocumentRenderer {
         let modernTextWidthPt: Double = {
             let paper = state.pageSize.value?.sizeInPoints
                 ?? CGSize(width: modernMetrics(doc).pageWidth, height: modernMetrics(doc).pageHeight)
-            return max(1, Double(paper.width) - 144)
+            return max(1, Double(Self.modernTextFrame(doc, paper: paper).width))
         }()
         // b27 item 11: computed once, not per-line — `ModernScreenplay.detectBlocks` already
         // walks the whole document itself (same discipline the engine's own `modernFlow`
@@ -3121,6 +4487,22 @@ enum DocumentRenderer {
         var modernFootnoteEvents: [ModernFootnoteEvent] = []
         let blankParagraph = Self.modernParagraphStyle(colPt: colPt, size: size, align: .left,
                                                         indentCols: 0, cutCols: 0)
+        // A BLANK ADVANCES BY THE LINE IT FOLLOWS, not by the document default — the
+        // library's own rule, stated in `PDFModernLayout`'s paginator: `case .blank` takes
+        // `let h = lastH`, where `lastH` is "the most recently placed line's own `h`,
+        // falling back to the 14pt default only when nothing has been placed yet". Its own
+        // comment records the measurement that produced it (PREVIEW.WS, where a blank
+        // between two 24pt lines advanced by the same fixed 16.8pt a blank between a 24pt
+        // and an 8pt line would).
+        //
+        // The app had only the fixed half. Measured on LJ6DTP.WS, whose body is 12pt: every
+        // inter-paragraph gap read 14.40 + 16.80 = 31.20pt against the library's 14.40 +
+        // 14.40 = 28.80 — 2.4pt of extra air per paragraph, accumulating down the page until
+        // a line that fits in the library does not fit here.
+        //
+        // `blankParagraph` above stays as the FALLBACK (nothing placed yet, so the document
+        // default is all there is) and as the annotated view's own; this tracks the rest.
+        var lastParagraphPt: CGFloat = size
         // Job 423 (view item a, intake item 6): shared by the `.noteSeparator`/`.note` case
         // below AND the footnote appendix after the loop — one paragraph of note-appendix
         // text, mirroring the engine's OWN Modern renderer's convention exactly
@@ -3175,7 +4557,15 @@ enum DocumentRenderer {
         // container chain to end just before each offset, so the marker paragraph becomes the
         // FIRST content of a new page instead of merely holding the right margin on whichever
         // page it happened to reflow onto.
+        // Planning #221: the offset of the end-matter appendix's own first character, so
+        // `PagedDocumentView.buildPages` can apply Jon's endnote rule against real pages.
+        // `modernSemanticFlow` emits exactly one `.noteSeparator` per document, always
+        // immediately before the first end-matter note, so this is written at most once —
+        // the same "exactly one" guarantee the engine's own `endNotesStart` flag rests on.
+        var modernEndnoteAppendixStart: Int?
         var modernForcedPageBreakOffsets: [Int] = []
+        var modernBlankLineRanges: [NSRange] = []
+        var modernConditionalBreaks: [ModernConditionalBreak] = []
         for (i, item) in items.enumerated() {
             switch item {
             case .para(let align, let indentCols, let cutCols, let runs, let paraFootnotes, let structure, let isVerse, let bi):
@@ -3208,11 +4598,38 @@ enum DocumentRenderer {
                         isScreenplaySceneNumberLine = true
                     }
                 }
+                // THE LINE'S OWN TYPE SIZE SETS ITS OWN LEADING, which is what the engine
+                // does: `let sizes = vline.map { sized($0.styles, $0.pt).points }` and
+                // `h = modernLine * sizes.max()`. This passed the DOCUMENT's body size for
+                // every paragraph, so a 72pt banner advanced 16.80pt instead of 86.40 —
+                // LJ6DTP.WS's two title lines sit 172.80 apart in the library and sat 33.60
+                // apart here, and the page then held 20 lines against the library's 11.
+                //
+                // Per PARAGRAPH rather than per wrapped line, which is as fine as an AppKit
+                // paragraph style can express it: identical wherever a paragraph is one size
+                // (every case in this corpus that moved), and it over-leads rather than
+                // under-leads a wrapped mixed-size paragraph, which is the safe direction —
+                // the engine's own figure is the max on the line.
+                //
+                // EVERY run counts, including one with no font block of its own: the
+                // library's `sizes` is `vline.map { sized($0.styles, $0.pt).points }` and
+                // `$0.pt` for a fontless token is `modernBodyPt` — the document size — not
+                // an absence. Skipping those (`compactMap` to `nil`, which this did) let a
+                // paragraph whose only LETTERED run sat in a 12pt Courier block lead at
+                // 14.40 while the library, counting the fontless space token beside it at
+                // 14, led at 16.80. Measured on -README.WS: one such row per file-name
+                // block, 2.4pt each, and the page then held a line the library's did not.
+                let paragraphFace = Self.modernParagraphFace(
+                    runs: runs, fonts: doc.fonts, size: size,
+                    fontlessFamily: modernFontlessFamily)
+                let paragraphPt = CGFloat(paragraphFace.pt)
                 let (paragraphSpans, paragraph) = Self.modernParagraphContent(
                     align: effectiveAlign, indentCols: indentCols.value, cutCols: cutCols.value,
                     runs: runs,
-                    structure: structure, colPt: colPt, size: size, font: bodyFont,
-                    blockHangCols: blockHangCols[i], isVerse: isVerse)
+                    structure: structure, colPt: colPt, size: paragraphPt, font: bodyFont,
+                    blockHangCols: blockHangCols[i], isVerse: isVerse,
+                    fonts: doc.fonts, printedPt: modernPrintedPt,
+                    tightFamily: paragraphFace.family)
                 // b28 note 9: a graphic (box-drawing) row immediately followed by ANOTHER
                 // graphic row must sit at its natural line advance, no inter-paragraph gap —
                 // see `modernParagraphStyle`'s own `paragraphSpacing` comment for the bug this
@@ -3229,22 +4646,64 @@ enum DocumentRenderer {
                     paragraph.paragraphSpacing = 0
                 }
                 let measureWidthPt = max(1, modernTextWidthPt - indentCols.value * colPt - cutCols.value * colPt)
-                let renderSpans = isScreenplaySceneNumberLine
-                    ? ModernScreenplay.collapseSceneNumberGap(paragraphSpans)
-                    : paragraphSpans
+                let renderSpans = Self.joinOversizedTokens(
+                    Self.runBoundaryBreaks(
+                        isScreenplaySceneNumberLine
+                            ? ModernScreenplay.collapseSceneNumberGap(paragraphSpans)
+                            : paragraphSpans),
+                    font: modernFallbackFont, fonts: doc.fonts, defaultSize: Int(size),
+                    measurePt: measureWidthPt)
                 if isScreenplaySceneNumberLine {
                     paragraph.tabStops = [NSTextTab(textAlignment: .right, location: CGFloat(measureWidthPt))]
                 }
-                var line = attributedLine(
-                    coalesce(PageLine(renderSpans)).spans,
-                    font: modernFallbackFont,
-                    paragraph: paragraph,
-                    fonts: doc.fonts,
-                    defaultSize: Int(size),
-                    useCourierPrime: true,
-                    pixResults: exportFlags.pictures ? state.pixResults : [],
-                    pixMeasureWidthPt: measureWidthPt
-                )
+                // Planning #251(c)/#254, Modern's half: `attachGraphicCellsModern` states
+                // this item's own cp437 cells with the widths the library gives them, and
+                // pinning each character's advance to its own is what stops the app measuring
+                // a rule in the reading face's advances.
+                //
+                // -README is the case. Its 65-character `═` rule measures 644.73pt in Mac
+                // Times against a 468pt column; on the document's own fixed-pitch cell it is
+                // 65 columns ending flush at the measure, which is where the library draws
+                // it. (The engine had to be fixed first: before #254 Modern advanced a
+                // graphic cell by the READING size, putting that rule's last cell's right
+                // edge at 982.00 on a 612pt sheet — the model was faithful to a writer that
+                // was drawing off the page.)
+                // A PICTURE IS A PAGE-SPACE COST, NOT A LEADING.
+                //
+                // Every other Modern line is clamped to the library's own `modernLine * pt`
+                // (`modernParagraphStyle`), and a picture's line inherited that clamp: the
+                // attachment is 73.90pt tall on -README.WS and its fragment was 16.80, so the
+                // image overflowed its own line and the page gained the difference — page 1
+                // held 17 lines against the library's 14, and `PDFModernLayout` says the rule
+                // outright ("the image's own height is a page-space cost, not a leading").
+                //
+                // The clamp is replaced rather than lifted: an unclamped fragment would take
+                // AppKit's own idea of the attachment's line height, and the figure that has
+                // to match is the library's own `pixDimsPt` height.
+                if exportFlags.pictures,
+                   let pixIndex = Self.modernPixIndex(of: renderSpans, pixResults: state.pixResults) {
+                    let (_, pixHeightPt) = pixDimsPt(state.pixResults[pixIndex],
+                                                     measureWidthPt: measureWidthPt)
+                    if pixHeightPt > 0 {
+                        paragraph.lineHeightMultiple = 0
+                        paragraph.minimumLineHeight = CGFloat(pixHeightPt)
+                        paragraph.maximumLineHeight = CGFloat(pixHeightPt)
+                    }
+                }
+                var line = nativePinGraphicCells(
+                    attributedLine(
+                        coalesce(PageLine(renderSpans)).spans,
+                        font: modernFallbackFont,
+                        paragraph: paragraph,
+                        fonts: doc.fonts,
+                        defaultSize: Int(size),
+                        useCourierPrime: true,
+                        pixResults: exportFlags.pictures ? state.pixResults : [],
+                        pixMeasureWidthPt: measureWidthPt,
+                        modernPitchScale: true, modernPrintedPt: modernPrintedPt,
+                        modernFontlessFamily: modernFontlessFamily
+                    ),
+                    placements: modernGraphicCells[i] ?? [])
                 // Job 437 (b27 item 10): a tight (verse/centered) paragraph that actually
                 // word-wraps must render at NORMAL leading throughout — see
                 // `modernLineWraps`'s own doc comment. `paragraph` still needs to carry the
@@ -3254,7 +4713,19 @@ enum DocumentRenderer {
                 // after `line` already exists would NOT change `line`'s own baked-in style.
                 if paragraph.lineHeightMultiple > 0,
                    Self.modernLineWraps(line, width: CGFloat(measureWidthPt)) {
+                    // Planning #222 (b): backing `tight` off has to RESTORE THE BODY'S
+                    // leading, not merely remove the compression. Clearing the multiple used
+                    // to be enough because the body's own leading was AppKit's natural
+                    // metric, so "no attribute" and "normal body leading" were the same
+                    // thing. They are not any more: the body is pinned to the library's
+                    // 1.2x, and a bare `= 0` left this paragraph at AppKit's natural 16.0
+                    // against a 16.8 body — job 437's ruling read literally as the number it
+                    // happened to produce, instead of as the RELATION it states (a
+                    // soft-wrapped continuation gets the body's leading, whatever that is).
                     paragraph.lineHeightMultiple = 0
+                    let restored = paragraphPt * Self.modernLibraryLineFactor
+                    paragraph.minimumLineHeight = restored
+                    paragraph.maximumLineHeight = restored
                     line = attributedLine(
                         coalesce(PageLine(renderSpans)).spans,
                         font: modernFallbackFont,
@@ -3263,7 +4734,9 @@ enum DocumentRenderer {
                         defaultSize: Int(size),
                         useCourierPrime: true,
                         pixResults: exportFlags.pictures ? state.pixResults : [],
-                        pixMeasureWidthPt: measureWidthPt
+                        pixMeasureWidthPt: measureWidthPt,
+                        modernPitchScale: true, modernPrintedPt: modernPrintedPt,
+                        modernFontlessFamily: modernFontlessFamily
                     )
                 }
                 // b28 note 9 (part 2, found verifying the recon): BOXES.WS's rows are
@@ -3291,15 +4764,51 @@ enum DocumentRenderer {
                 // paragraph's own leading canvas lands on, not on some later page a mid-
                 // paragraph marker glyph happens to wrap onto.
                 let paragraphCharOffset = output.length
-                if isScreenplayPageMarkerLine {
+                if isScreenplayPageMarkerLine,
+                   output.length > 0, modernForcedPageBreakOffsets.last != output.length {
+                    // The SAME guard the `.pageBreak` case below carries, and the same one
+                    // the engine states outright: `if pageMarker, !body.isEmpty { close() }`
+                    // — "a marker that is already the first thing on a fresh page (an
+                    // explicit `.pa` DID precede it, SCRIPT.WS's own shape) costs nothing
+                    // extra; `close()` on an empty page would just insert a spurious blank
+                    // one". Without it SCRIPT.WS's own `.pa`-then-marker pair recorded TWO
+                    // breaks at the same offset: the `.pa` opened the page, the marker broke
+                    // it again, and the marker sat alone on a page of its own — measured, a
+                    // 16th page against the library's 15, with one line on it.
                     modernForcedPageBreakOffsets.append(output.length)
                 }
                 if !precededByGraphicRow, let spacer = Self.modernLeadingSpacer(
-                    for: line, paragraph: paragraph, bodyFont: bodyFont, width: CGFloat(measureWidthPt)) {
+                    for: line, paragraph: paragraph, bodyFont: bodyFont, face: paragraphFace) {
+                    // A SPACER TRAVELS WITH THE LINE IT RESERVES ROOM FOR. The library
+                    // spends it as part of the first visual line's own advance (`h += spacer`
+                    // before the page-fit test), so a paragraph pushed to the next page takes
+                    // its headroom with it. Here it is a paragraph of its own, and AppKit will
+                    // happily end a page on it: measured on -README.WS page 19, whose "FOR
+                    // MORE INFORMATION" heading needs 3.70pt of headroom — the spacer fitted
+                    // at the foot of page 18, the heading did not, and page 19 then opened
+                    // 3.70pt high and held a line the library's page did not.
+                    //
+                    // Expressed as the `.cp` machinery's own conditional break, which is
+                    // exactly the engine's test read at a real page: unless the room left
+                    // below the spacer holds BOTH the spacer and the line, the page breaks
+                    // before the spacer.
+                    let spacerHeight = (spacer.attribute(.paragraphStyle, at: 0,
+                                                         effectiveRange: nil)
+                                        as? NSParagraphStyle)?.maximumLineHeight ?? 0
+                    modernConditionalBreaks.append(
+                        ModernConditionalBreak(
+                            charOffset: output.length,
+                            needPt: Double(spacerHeight + paragraph.maximumLineHeight)))
                     output.append(spacer)
                 }
                 output.append(line)
                 output.append(lineTerminator(font: bodyFont, paragraph: paragraph))
+                // The leading a following `.blank` inherits (see `lastParagraphPt`'s own
+                // comment). Recorded here, where a real text line has actually been placed —
+                // the engine writes its own `lastH` at exactly the same point, and
+                // deliberately NOT in its `.image` case, because an image's height is a
+                // page-space cost and not a leading.
+                lastParagraphPt = paragraphPt
                 // Job 502 (Jon's ruling, 2026-08-25: footnotes sit at the page FOOT, dash-
                 // separated, like Printed — job 490 item 1 got the right PAGE and the wrong
                 // PLACE). This paragraph's own footnote text no longer joins `output` inline —
@@ -3323,9 +4832,19 @@ enum DocumentRenderer {
             case .blank:
                 // The author's own blank line (M4) — `attributedLine([], ...)` supplies the
                 // single invisible space `lineTerminator`'s own doc comment explains blank
-                // lines need to stay on the baseline grid.
-                output.append(attributedLine([], font: bodyFont, paragraph: blankParagraph))
-                output.append(lineTerminator(font: bodyFont, paragraph: blankParagraph))
+                // lines need to stay on the baseline grid. Its height is the last placed
+                // line's own leading (`lastParagraphPt`, above).
+                let thisBlank = lastParagraphPt == size
+                    ? blankParagraph
+                    : Self.modernParagraphStyle(colPt: colPt, size: lastParagraphPt,
+                                                align: .left, indentCols: 0, cutCols: 0)
+                let blankStart = output.length
+                output.append(attributedLine([], font: bodyFont, paragraph: thisBlank))
+                output.append(lineTerminator(font: bodyFont, paragraph: thisBlank))
+                // Where this blank is, so a page that OPENS on it can drop it — see
+                // `RenderedDocument.modernBlankLineRanges`.
+                modernBlankLineRanges.append(
+                    NSRange(location: blankStart, length: output.length - blankStart))
             case .hf(let which, let line, let text):
                 // Job 393 (391 root cause 2): job 371 item 3's own comment here used to argue
                 // Modern couldn't honour per-page replay because "Modern's own reflow has no
@@ -3350,11 +4869,53 @@ enum DocumentRenderer {
                 guard exportFlags.headers else { continue }
                 hfEvents.append(HFEvent(kind: which == .header ? .header : .footer,
                                         line: line, text: text, charOffset: output.length))
-            case .pageBreak, .cond, .tabs:
-                // No rendered consequence on screen: `.pageBreak`/`.cond` are Printed-only
-                // pagination decisions, `.tabs` is editor-time state (same "no rendered
-                // consequence" the engine's own `modernFlow` gives `.tabs`, `PDFModernLayout
-                // .swift:172-173`).
+            case .pageBreak:
+                // `.pa` BREAKS A MODERN PAGE TOO. The engine's own Modern paginator closes
+                // the page on this item outright (`PDFModernLayout`'s flow loop: `case
+                // .pageBreak: close()`), and this used to drop it as "a Printed-only
+                // pagination decision" — true of the on-screen view before Modern was
+                // answerable to the library's own Modern PDF, and false since.
+                //
+                // SCRIPT.WS is the case: its manuscript header block ends with an explicit
+                // `.pa`, so the library's Modern page 1 closes after 21 lines with its last
+                // baseline at 554.40 and a third of the sheet still empty, while the app ran
+                // on to 713.80 and 28 lines — and every page after it then diffed against
+                // the wrong one.
+                //
+                // Recorded the same way the screenplay page marker already is, at the
+                // paragraph's own first character — and NOT recorded when it would open an
+                // empty page. The engine guards its own marker break with `!body.isEmpty`
+                // for exactly this reason: a `.pa` at the very start, or a second `.pa` with
+                // nothing between it and the first, breaks a page that has nothing on it.
+                // LJ6DTP.WS is the case — honouring every one of them took it from 8 pages
+                // to 12 against the library's 11.
+                if output.length > 0, modernForcedPageBreakOffsets.last != output.length {
+                    modernForcedPageBreakOffsets.append(output.length)
+                }
+            case .cond(let lines):
+                // `.cp` BREAKS A MODERN PAGE TOO, when the room left is less than it asks
+                // for. The engine's rule is one line — `let need = Double(n) * modernLine *
+                // Double(modernBodyPt); if !body.isEmpty, y - (margb + noteBlockH()) < need
+                // { close() }` — and the reason this used to say "a measure this list of
+                // fixed offsets cannot express" is that the measure belongs to the VIEW: only
+                // `PagedDocumentView.buildPages`, laying out a real page, knows how much room
+                // is left at a given character. So the offset and the requirement are
+                // recorded here and the test is made there, the same division of labour
+                // `modernFootnoteEvents` already uses.
+                //
+                // Measured on -README.WS: its "Configuration options for vDosPlus are set in
+                // these two files:" paragraph asks for room its page does not have, and the
+                // library moves it whole to page 8 while the app started it at 690.60 on
+                // page 7 — one line's drift that then showed on every page to 21.
+                guard output.length > 0 else { continue }
+                modernConditionalBreaks.append(
+                    ModernConditionalBreak(
+                        charOffset: output.length,
+                        needPt: Double(lines) * Double(Self.modernLibraryLineFactor)
+                            * Double(Self.modernLibraryBodyPt)))
+            case .tabs:
+                // Editor-time state with no rendered consequence on either side — the
+                // engine's own `modernFlow` says so.
                 continue
             case .noteSeparator:
                 // Job 423 (view item a, intake item 6): the endnote/annotation/comment
@@ -3366,6 +4927,11 @@ enum DocumentRenderer {
                 // annotations/comments, which stay a true end-of-document appendix by
                 // WordStar's own convention (`modernSemanticFlow`'s own `endRows` doc
                 // comment: "flowing, not bottom-anchored").
+                // Planning #221: recorded BEFORE appending — this is the appendix's own
+                // first character, the same anchor `modernFootnoteEvents` and
+                // `modernForcedPageBreakOffsets` both use (a paragraph's own first
+                // character, never the offset after it).
+                modernEndnoteAppendixStart = output.length
                 appendNoteLine(String(repeating: "-", count: 20))
             case .note(_, _, let label, let text):
                 // b34 N1 (job 529): unlike the footnote path above, `text` here is
@@ -3411,34 +4977,17 @@ enum DocumentRenderer {
                   output.length, separatorDesc, itemsDesc.isEmpty ? "<no-notes>" : itemsDesc)
         }
 
-        // Modern's page is the app's own, not the file's: the user's chosen paper, 1in
-        // margins. `modernMetrics` supplies the library's fixed figures; the margin is the
-        // spec's, and the paper is whatever the bottom bar's Page control reports.
+        // The PAPER is the app's own — whatever the bottom bar's Page control reports; the
+        // MARGINS inside it are the file's (`modernTextFrame`, which carries the whole
+        // reasoning including the back-solve this replaced). Unlike Printed there is no
+        // independent PDF baseline to check against: Modern's own PDF export
+        // (`ExportEngine.modernPDF`) draws this SAME `textFrame` through the native text
+        // stack, so screen and export can only ever agree or disagree together.
         let paper = state.pageSize.value?.sizeInPoints
             ?? CGSize(width: modernMetrics(doc).pageWidth, height: modernMetrics(doc).pageHeight)
-        // Unlike Printed, there is no independent PDF baseline to back-solve against here:
-        // Modern's own PDF export (`ExportEngine.modernPDF`) draws this SAME `textFrame`
-        // through the native text stack, so screen and export can only ever agree or
-        // disagree together. Placing the container's top EDGE at the margin — exactly as
-        // the left/right edges already are — is therefore both simplest and correct.
-        //
-        // A back-solve like Printed's USED to live here, aiming the first BASELINE at a
-        // fixed `margin + modernMetrics(doc).size`. That size (12) is the library's Courier
-        // figure, unrelated to `bodyFont` — the user's own face and size, which Modern
-        // renders instead by design. Subtracting THAT font's baseline offset from a target
-        // built from a DIFFERENT font's size pulled the container's top edge off 72pt by a
-        // few points, in either direction depending on the chosen font's metrics — top and
-        // bottom margins that silently stopped being 1in and drifted by font choice, the
-        // asymmetry Jon's measurement caught. The margin is the margin; nothing here needs
-        // to know what glyph sits nearest it.
-        let margin: CGFloat = 72
-        let textFrame = CGRect(
-            x: margin, y: margin,
-            width: max(1, paper.width - margin * 2),
-            height: max(1, paper.height - margin * 2)
-        )
+        let textFrame = Self.modernTextFrame(doc, paper: paper)
 
-        return RenderedDocument(
+        var document = RenderedDocument(
             text: output,
             pageSize: paper,
             // Page count is AppKit's to decide once it has flowed the text; the view layer
@@ -3478,7 +5027,7 @@ enum DocumentRenderer {
             // every page beyond this array's single placeholder entry (Modern's real page
             // count isn't known until AppKit lays the flow out).
             perPageTextTop: [Double(textFrame.origin.y)],
-            pinnedPageBottoms: [],
+            pinnedPageBottoms: [], pinnedPageTops: [], flowTopAdjustment: 0, pageColumnFragmentCounts: [], lineNumberPasses: [], graphicCellRows: [],
             // b28 note 11: the ascending list this loop just built above — the sole
             // non-empty producer of this field (see `RenderedDocument
             // .modernForcedPageBreakOffsets`'s own doc comment).
@@ -3487,10 +5036,15 @@ enum DocumentRenderer {
             // `RenderedDocument.modernFootnoteEvents`'s own doc comment.
             modernFootnoteEvents: modernFootnoteEvents,
             modernFootnoteSeparator: modernFootnoteSeparator,
+            modernEndnoteAppendixStart: modernEndnoteAppendixStart,
             // Modern has no `PageLine`/paper-facsimile concept — see `RenderedDocument
             // .pclPrograms`'s own doc comment.
             pclPrograms: []
         )
+        // `var`, so it is assigned rather than passed — see its own doc comment.
+        document.modernBlankLineRanges = modernBlankLineRanges
+        document.modernConditionalBreaks = modernConditionalBreaks
+        return document
     }
 
     // MARK: - Modern, Show Invisibles (job 294, Jon's ruling)
@@ -3502,7 +5056,7 @@ enum DocumentRenderer {
     /// `^B`/`^Y` style tokens shown as literal inline text instead of applying as real
     /// bold/italic, a stray `^Y` at the left margin, different wrap/spacing. The ROOT CAUSE
     /// (job 294's own original design): this function walked `CtrlKD.annotatedLayout(doc)`
-    /// — the RAW per-physical-line stream `renderPrintedAnnotated` uses for Native — instead
+    /// — the RAW per-physical-line stream `renderNativeAnnotated` uses for Native — instead
     /// of `modernSemanticFlow`, so it never ran the centering/def-list/bullet-ladder
     /// classification `renderModern` applies, and it re-inserted every `.styleToggle`
     /// token (`annotatedLayout`'s own caret text, `"^B"`/`"^Y"`/…) as literal characters
@@ -3521,7 +5075,7 @@ enum DocumentRenderer {
     /// - A hard return (the author's own Return — every `.para`/`.blank` item, both are
     ///   hard-return-terminated by `modernSemanticFlow`'s own construction) gets the SAME
     ///   "¶" glyph Native shows, appended as the LAST character inside that paragraph's own
-    ///   attributed line (Native's own placement, `renderPrintedAnnotated`) — it can only
+    ///   attributed line (Native's own placement, `renderNativeAnnotated`) — it can only
     ///   ever add a trailing glyph to a paragraph that already exists, never move, resize,
     ///   or restyle another one.
     /// - No soft-return mark (`↵`) ever appears: `modernSemanticFlow` already reflowed
@@ -3540,7 +5094,7 @@ enum DocumentRenderer {
     ///   SAME `runs`/spans `renderModern` renders), so there is no toggle POSITION left in
     ///   this flow to mark without re-deriving one from adjacent runs' style deltas and
     ///   inserting a character — which is exactly the "extra glyph shifts wrap" mechanism
-    ///   that caused this job. Native's own philosophy (`renderPrintedAnnotated`) inserts
+    ///   that caused this job. Native's own philosophy (`renderNativeAnnotated`) inserts
     ///   the caret token inline and ACCEPTS the reflow it causes (job 257: "real reflow
     ///   pagination" is Printed's own invisibles-on contract); Modern's contract is the
     ///   opposite — layout must not move — so "nothing" is that same philosophy's honest
@@ -3576,8 +5130,28 @@ enum DocumentRenderer {
             ?? NSFont.systemFont(ofSize: size)
         // Job 437 (b27, Jon's font-fallback ruling): same correction `renderModern` applies
         // — see that function's own doc comment for the rule.
-        let modernFallbackFont = doc.fonts.isEmpty ? bodyFont : Self.courierPrime(size: size)
+        let modernFallbackFont = doc.formatting.proportional == false
+            ? Self.courierPrime(size: size) : bodyFont
+        // THE FACE THE LIBRARY MEASURES A FONTLESS MODERN RUN IN — `modernTokFont`'s own
+        // rule, which is NOT `pdfFamily`'s: `pdfFamily(nil)` is Courier, the PRINTED
+        // emitter's answer for a document that never declared a font, while Modern reads a
+        // token with no font block of its own in TIMES (its default body face) unless the
+        // document turned proportional printing off, in which case Courier. Carried to
+        // `attributedRun`, which stamps each run with the base-14 name the leading spacer
+        // then measures — see `NSAttributedString.Key.modernBase14`. Getting this wrong is
+        // not cosmetic: measured on -README.WS, a wholly fontless file, every title line was
+        // measured in Courier's ink extents against a Times line box and reserved 2.2pt of
+        // headroom where the library reserved 3.6.
+        let modernFontlessFamily: CtrlKD.PDFFamily =
+            doc.formatting.proportional == false ? .courier : .times
         let colPt = Self.modernColPt(doc)
+        // A GRAPHIC CELL IS SIZED BY THE PRINTED TYPE, not the Modern type. The library's
+        // `modernTokenWidth` graphic branch is `spanPitch(entry, printedPt)` — the document's
+        // own fixed-pitch size (`printedSize`, its `.cw`), never the Modern point size the
+        // prose beside it is set in. Measured on VERSIONS.WS's bullet rows: its marker cell
+        // is 7.20pt in the library (12 x 0.6) and was 8.40 here (14 x 0.6), so every one of
+        // those rows started 1.20pt right of the library's and lost its last word.
+        let modernPrintedPt = printedSize(doc)
         var flow = modernSemanticFlow(doc, notes: notes)
         // b34 N1 (job 529): same collapse as `renderModern`'s identical citation —
         // Show Invisibles' own note/footnote appendix reads `flow.notes[...].text` too
@@ -3597,7 +5171,7 @@ enum DocumentRenderer {
         let modernTextWidthPt: Double = {
             let paper = state.pageSize.value?.sizeInPoints
                 ?? CGSize(width: modernMetrics(doc).pageWidth, height: modernMetrics(doc).pageHeight)
-            return max(1, Double(paper.width) - 144)
+            return max(1, Double(Self.modernTextFrame(doc, paper: paper).width))
         }()
         let blankParagraph = Self.modernParagraphStyle(colPt: colPt, size: size, align: .left,
                                                         indentCols: 0, cutCols: 0)
@@ -3636,10 +5210,32 @@ enum DocumentRenderer {
         for (i, item) in items.enumerated() {
             switch item {
             case .para(let align, let indentCols, let cutCols, let runs, _, let structure, let isVerse, _):
-                let (renderSpans, paragraph) = Self.modernParagraphContent(
+                // The same line face `renderModern` measures its own leading spacer and
+                // tight leading against — job 300's ruling again: invisibles ON is the OFF
+                // layout with marks added, so the two passes must reserve the identical
+                // headroom and stack at the identical height.
+                let paragraphFace = Self.modernParagraphFace(
+                    runs: runs, fonts: doc.fonts, size: size,
+                    fontlessFamily: modernFontlessFamily)
+                let (paragraphSpans, paragraph) = Self.modernParagraphContent(
                     align: align, indentCols: indentCols.value, cutCols: cutCols.value, runs: runs,
                     structure: structure, colPt: colPt, size: size, font: bodyFont,
-                    blockHangCols: blockHangCols[i], isVerse: isVerse)
+                    blockHangCols: blockHangCols[i], isVerse: isVerse,
+                    fonts: doc.fonts, printedPt: modernPrintedPt,
+                    tightFamily: paragraphFace.family)
+                // THE SAME BREAK MARKS `renderModern` PUTS IN. Job 300's ruling is that
+                // invisibles ON is the OFF layout with marks ADDED — nothing moves — and
+                // these two passes MOVE things: they are what decides where a line breaks.
+                // Leaving them out of this path made ON and OFF two different documents, and
+                // `InvisiblesModernLayoutTests` reported it on OLDTIMES.WS, STRENGTH.WS and
+                // VERSIONS.WS. The measure is the same one this function computes below, so
+                // it is hoisted here the way `renderModern` hoists its own.
+                let annotatedMeasureWidthPt = max(
+                    1, modernTextWidthPt - indentCols.value * colPt - cutCols.value * colPt)
+                let renderSpans = Self.joinOversizedTokens(
+                    Self.runBoundaryBreaks(paragraphSpans),
+                    font: modernFallbackFont, fonts: doc.fonts, defaultSize: Int(size),
+                    measurePt: annotatedMeasureWidthPt)
                 // b28 note 9: same suppression `renderModern` applies — see that call site's
                 // own citation. Show Invisibles must compute the SAME paragraph geometry (job
                 // 300's ruling), so this mirrors it exactly rather than re-deriving it.
@@ -3652,7 +5248,9 @@ enum DocumentRenderer {
                     paragraph: paragraph,
                     fonts: doc.fonts,
                     defaultSize: Int(size),
-                    useCourierPrime: true
+                    useCourierPrime: true,
+                    modernPitchScale: true, modernPrintedPt: modernPrintedPt,
+                    modernFontlessFamily: modernFontlessFamily
                 ))
                 // Job 434: measured from `line` BEFORE any invisible mark is appended below —
                 // the same, unmarked content `renderModern`'s own `modernLeadingSpacer` call
@@ -3665,14 +5263,28 @@ enum DocumentRenderer {
                 // than mutating `paragraph` after the fact.
                 if paragraph.lineHeightMultiple > 0,
                    Self.modernLineWraps(line, width: CGFloat(measureWidthPt)) {
+                    // Planning #222 (b): backing `tight` off has to RESTORE THE BODY'S
+                    // leading, not merely remove the compression. Clearing the multiple used
+                    // to be enough because the body's own leading was AppKit's natural
+                    // metric, so "no attribute" and "normal body leading" were the same
+                    // thing. They are not any more: the body is pinned to the library's
+                    // 1.2x, and a bare `= 0` left this paragraph at AppKit's natural 16.0
+                    // against a 16.8 body — job 437's ruling read literally as the number it
+                    // happened to produce, instead of as the RELATION it states (a
+                    // soft-wrapped continuation gets the body's leading, whatever that is).
                     paragraph.lineHeightMultiple = 0
+                    let restored = CGFloat(size) * Self.modernLibraryLineFactor
+                    paragraph.minimumLineHeight = restored
+                    paragraph.maximumLineHeight = restored
                     line = NSMutableAttributedString(attributedString: attributedLine(
                         coalesce(PageLine(renderSpans)).spans,
                         font: modernFallbackFont,
                         paragraph: paragraph,
                         fonts: doc.fonts,
                         defaultSize: Int(size),
-                        useCourierPrime: true
+                        useCourierPrime: true,
+                        modernPitchScale: true, modernPrintedPt: modernPrintedPt,
+                        modernFontlessFamily: modernFontlessFamily
                     ))
                 }
                 // b28 note 9 (part 2): same suppression `renderModern` applies — see that call
@@ -3681,7 +5293,7 @@ enum DocumentRenderer {
                 let precededByGraphicRow = i > 0
                     && Self.paraContainsGraphicChar(items[i - 1]) && Self.paraContainsGraphicChar(item)
                 if !precededByGraphicRow, let spacer = Self.modernLeadingSpacer(
-                    for: line, paragraph: paragraph, bodyFont: bodyFont, width: CGFloat(measureWidthPt)) {
+                    for: line, paragraph: paragraph, bodyFont: bodyFont, face: paragraphFace) {
                     output.append(spacer)
                 }
                 // b24 completion (C5): a kept comment's zero-width anchor run (`ref != nil`,
@@ -3800,17 +5412,11 @@ enum DocumentRenderer {
         }
         if output.length > 0 { output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1)) }
 
-        // Same paper/margin choice as the plain Modern path (`renderModern`'s own doc
-        // comment covers the reasoning) — Show Invisibles changes what's drawn, never the
-        // page the user picked.
+        // Same paper/margin choice as the plain Modern path (`modernTextFrame` carries the
+        // reasoning) — Show Invisibles changes what's drawn, never the page it is drawn on.
         let paper = state.pageSize.value?.sizeInPoints
             ?? CGSize(width: modernMetrics(doc).pageWidth, height: modernMetrics(doc).pageHeight)
-        let margin: CGFloat = 72
-        let textFrame = CGRect(
-            x: margin, y: margin,
-            width: max(1, paper.width - margin * 2),
-            height: max(1, paper.height - margin * 2)
-        )
+        let textFrame = Self.modernTextFrame(doc, paper: paper)
 
         return RenderedDocument(
             text: output,
@@ -3837,7 +5443,7 @@ enum DocumentRenderer {
             // Job 427: same flat, shared anchor as plain Modern's own construction site —
             // see that call site's own doc comment.
             perPageTextTop: [Double(textFrame.origin.y)],
-            pinnedPageBottoms: [],
+            pinnedPageBottoms: [], pinnedPageTops: [], flowTopAdjustment: 0, pageColumnFragmentCounts: [], lineNumberPasses: [], graphicCellRows: [],
             // b28 note 11: Show Invisibles' Modern path never ported ANY of
             // `ModernScreenplay`'s rules (a pre-existing gap this job did not widen scope
             // to close — see `RenderedDocument.modernForcedPageBreakOffsets`'s own doc
@@ -3851,6 +5457,7 @@ enum DocumentRenderer {
             // scope boundary.
             modernFootnoteEvents: [],
             modernFootnoteSeparator: NSAttributedString(),
+            modernEndnoteAppendixStart: nil,
             pclPrograms: []
         )
     }
@@ -3918,10 +5525,36 @@ enum DocumentRenderer {
     /// glyph geometry — rather than a `NSAttributedString.size()` probe (this file's own
     /// job-240-era doc comment on `.size()` flags it as unreliable against real TextKit
     /// layout).
-    private static func bulletMarkerWidthPt(font: NSFont) -> Double {
-        let line = CTLineCreateWithAttributedString(
-            NSAttributedString(string: "\u{2022} ", attributes: [.font: font]))
-        return CTLineGetTypographicBounds(line, nil, nil, nil)
+    private static func bulletMarkerWidthPt(
+        _ marker: String, font: NSFont, entry: FontChange?, printedPt: Int
+    ) -> Double {
+        guard !marker.isEmpty else { return 0 }
+        // A GRAPHIC MARKER COSTS ITS CELL, because that is what the line will actually
+        // advance by: `modernPinGraphicCells` and `nativePinGraphicCells` both pin a graphic
+        // character to `spanPitch(entry, printedPt)`, so measuring the marker's own NATURAL
+        // glyph advance here put the hang where the glyph would have gone rather than where
+        // it goes. Measured on VERSIONS.WS's Sawyer bullets: the wrapped line sat 1.26pt off
+        // its own first line's text, which is exactly job 329/b21's field report reopened.
+        let cell = nativeSpanPitch(entry, printedPt)
+        var total = 0.0
+        var plain = ""
+        func flushPlain() {
+            guard !plain.isEmpty else { return }
+            let line = CTLineCreateWithAttributedString(
+                NSAttributedString(string: plain, attributes: [.font: font]))
+            total += CTLineGetTypographicBounds(line, nil, nil, nil)
+            plain = ""
+        }
+        for character in marker {
+            if graphicChars.contains(character) {
+                flushPlain()
+                total += cell
+            } else {
+                plain.append(character)
+            }
+        }
+        flushPlain()
+        return total
     }
 
     /// The indent LADDER's one step (job 299, Jon's field report on VERSIONS.WS/
@@ -3954,15 +5587,49 @@ enum DocumentRenderer {
         case .bullet:
             let bodyLen = structure.body?.count ?? 0
             let body = sliceSpans(spans, start: raw.count - bodyLen, end: nil)
-            return ([Span(text: "\u{2022} ")], body)
+            // THE ROW'S OWN MARKER, not a substitute. This returned a plain `"\u{2022} "`,
+            // reasoning from `EmitHTML` — where a real `<li>`'s marker comes from CSS
+            // `list-style` and the document's glyph genuinely has nowhere to go. Modern's
+            // PDF is not that: the library's own `modernLineOps` keeps the marker in the
+            // row's tokens and draws it, as GEOMETRY when it is one of `graphicChars`
+            // (-SCREEN.WS and -README.WS both mark with the cp437 solid square, which the
+            // library emits as a filled rectangle). Substituting a bullet put a glyph on the
+            // line that the document never had and the library never draws, in a face whose
+            // advance is not the marker's, so the row's whole measure moved with it.
+            //
+            // Sliced, never synthesized: everything from the row's first non-space to where
+            // its body begins is the marker and the gap the author actually typed.
+            var lead = 0
+            while lead < raw.count, raw[lead] == " " { lead += 1 }
+            let markerEnd = max(lead, raw.count - bodyLen)
+            let marker = sliceSpans(spans, start: lead, end: markerEnd)
+            return (marker.isEmpty ? [Span(text: "\u{2022} ")] : marker, body)
         case .def:
             var lead = 0
             while lead < raw.count, raw[lead] == " " { lead += 1 }
             let labelLen = structure.label?.count ?? 0
             let bodyLen = structure.body?.count ?? 0
-            let label = sliceSpans(spans, start: lead, end: lead + labelLen)
             let body = sliceSpans(spans, start: raw.count - bodyLen, end: nil)
-            return (label + [Span(text: "  ")], body)
+            // ONE STRUCTURAL SEPARATOR, not the author's own padding. A def row's raw text
+            // carries typewriter column padding between label and body (VERSIONS.WS pads to
+            // column 15 with eight spaces), and Modern re-sets the row as a HANGING LABEL,
+            // where that padding is geometry the new shape has already replaced. Two spaces,
+            // whatever the author typed.
+            //
+            // This carried the typed gap through for a while, on the reading that "the
+            // library synthesizes nothing — its `modernFlow` carries the row's tokens
+            // through". That was true of the library as it then stood and is not true of it
+            // now: planning #263 ported the app's own def-row shape into both engines, and
+            // `modernDefRuns` states the rule outright — "the author's own column padding
+            // [...] is typewriter geometry, not content [...] replaced by one structural
+            // separator", the same slice the HTML export has always made. Measured on
+            // VERSIONS.WS with the typed gap kept: its first def row put the body at
+            // x=158.73 against the library's 137.70, and the first line of every row in the
+            // block then dropped the word the library's line ends with — 20 of the 24 rows
+            // this document and -README were still carrying on the Modern gate.
+            let labelEnd = max(lead + labelLen, lead)
+            let prefix = sliceSpans(spans, start: lead, end: labelEnd)
+            return (prefix + [Span(text: "  ")], body)
         }
     }
 
@@ -4011,7 +5678,7 @@ enum DocumentRenderer {
     /// The dot-command name scan is the engine's: the 1-3 ASCII letters after the dot, no
     /// word boundary required, because a real WS7 file overwhelmingly writes `.pn0`/`.pg`
     /// with no space before a following digit.
-    nonisolated static func printedAutoPageNumberOn(page: Page, doc: Document) -> Bool {
+    nonisolated static func nativeAutoPageNumberOn(page: Page, doc: Document) -> Bool {
         guard let pageMaxBi = page.compactMap(\.bi).max() else { return false }
         var on = true
         for dp in doc.dotPositions {
@@ -4041,7 +5708,7 @@ enum DocumentRenderer {
     /// and both resolve to the fixed measured column 33.5 — the manual's "centered between
     /// the margins" wording does not hold as measured. `8.0` is the WS7 manual's own default
     /// `.po`, matching the engine's own fallback in this function.
-    nonisolated static func printedAutoPageNumberXPt(_ doc: Document) -> Double {
+    nonisolated static func nativeAutoPageNumberXPt(_ doc: Document) -> Double {
         let po = doc.page?.poCols ?? 8.0
         let pcRaw = doc.page?.pcCol
         let pc = (pcRaw != nil && pcRaw != 0) ? Double(pcRaw!) : 33.5
@@ -4074,7 +5741,7 @@ enum DocumentRenderer {
     /// Fixed-pitch only (`entry == nil`), exactly like the engine: a proportional header face
     /// has no single column width to divide the HMI target by, and no oracle in the corpus
     /// combines the two, so that case keeps its baked padding untouched.
-    private static func printedHFRetab(_ text: String, tabRec: HFTabMark?,
+    private static func nativeHFRetab(_ text: String, tabRec: HFTabMark?,
                                        substituting render: (String) -> String) -> String {
         guard let tabRec else { return text }
         let chars = Array(text)
@@ -4087,7 +5754,7 @@ enum DocumentRenderer {
         // `tabHMIPerCol` is 180 (`SymmetricBlocks.swift`) — a WordStar file-format constant,
         // vendored like this function's other spec literals. Banker's rounding matches the
         // engine's own `roundHalfToEven` at the exact .5 cases this division produces.
-        let savedTargetCol = printedRoundHalfToEven(Double(tabRec.absHMI) / 180.0)
+        let savedTargetCol = nativeRoundHalfToEven(Double(tabRec.absHMI) / 180.0)
             + strippedSuffix.count
         let newCols = max(0, savedTargetCol - render(strippedSuffix).count)
         return String(chars[0..<charIdx]) + String(repeating: " ", count: newCols) + suffix
@@ -4095,46 +5762,54 @@ enum DocumentRenderer {
 
     /// `leftAnchor` is the x `PagedDocumentView.drawRunningLines` will actually start from —
     /// `RenderedDocument.textFrame.origin.x`, which is the document's LEFTMOST line, not
-    /// necessarily its default `.po` (see `printedLeftAnchor` in `renderPrinted`). Every
+    /// necessarily its default `.po` (see `printedLeftAnchor` in `renderNative`). Every
     /// offset this function records is measured from it, so a document whose body reaches
     /// left of its own default does not drag its running heads left with it.
     private static func runningLines(
         for page: Page, pageNo: Int, doc: Document, metrics: PrintedPageMetrics,
         leftAnchor: Double
     ) -> [RunningLine] {
-        // A real footer PRE-EMPTS the automatic number (WSFORMAT.WS: it is "active only when
-        // the footers are not in use"), so at most one of the two ever draws on a page.
-        let footerInUse = page.footers.values.contains { !$0.isEmpty }
-        let showAutoNum = !footerInUse && Self.printedAutoPageNumberOn(page: page, doc: doc)
-        // The auto number is a running line in its own right, so a page with NO `.h#`/`.f#`
-        // at all still has something to draw — this guard used to return early on exactly
-        // that case, which is why page numbers never appeared on screen for a document that
-        // never sets `.pn`/`.op`. Mirrors the engine's own
-        // `guard printed, !headers.isEmpty || !footers.isEmpty || showAutoNum`.
-        guard !(page.headers.isEmpty && page.footers.isEmpty && !showAutoNum) else { return [] }
-
-        // MECHANISM O (engine commit 840cf4c / ctrl-kd 55d2b52) — see
-        // `RunningLine.pageLeftOffset`'s own doc comment for the full citation. The engine's
-        // `resolveLeftPt` (`PDFLayout.swift`) is `internal`, so its two-line formula is
-        // vendored here rather than imported: `poCols * 7.2`, clamped into the sheet at
-        // `pageWidth - size * 0.6`. `pdfPtPerCol` (7.2 = 10 cpi) and the 0.6em Courier
-        // advance are WordStar/PCL spec constants, the same class this function's own header
-        // comment already vendors the 66/8/2 line defaults from — not derived engine
-        // arithmetic, so they carry none of the drift risk a computed formula would.
-        // `nil` (every page of every document that never changes `.po` mid-document) leaves
-        // the offset at zero and every such page byte-identical to before this fix.
-        let pageLeftOffset: Double = page.poCols.map { cols in
-            let pageLeft = max(0.0, min(cols * 7.2,
-                                        metrics.pageWidth - Double(metrics.size) * 0.6))
-            return pageLeft - leftAnchor
-        } ?? metrics.left - leftAnchor
+        // THE MODEL SAYS WHAT GOES ON THIS PAGE AND WHERE — planning #251(d).
+        //
+        // `Page.headerLines`/`footerLines`/`autoPageno` arrive from
+        // `attachHeadFootLinesPrinted`, which calls the SAME `resolveHeadFootLines` the PDF
+        // writer calls to render: `#` already substituted, a fontless line's right-tab
+        // realignment already baked, and each line's own x, y and font index attached. So
+        // everything this function used to re-derive goes with it — which side pre-empts
+        // which, `headBase` out of `.mt`/`.hm`/the top header line, `footLine` out of
+        // `.pl`/`.mb`/`.fm`, and the whole `.po`/`.poe`/`.poo` question.
+        //
+        // That last one is worth naming, because it was the subtlest thing in this file. A
+        // page's `.po` snapshot can be a body-only margin excursion that merely happened to
+        // be in force when the page opened, and letting one of those move a running head is
+        // what the engine's own `pageGeomChanged` test exists to prevent; `.poe`/`.poo` are
+        // the exception, since an even/odd page offset IS a page-layout decision. That rule
+        // was ported here field for field and had to be kept in step by hand. It is the
+        // engine's answer alone now — `HeadFootLine.x` already carries it.
+        //
+        // `y` is the engine's own PDF coordinate, measured up from the paper's bottom, so a
+        // baseline from the top is `pageHeight - y`; the writer's own `guard y >= 0` is the
+        // same test as `baseline <= pageHeight`.
+        let headerLines = page.headerLines ?? []
+        let footerLines = page.footerLines ?? []
+        guard !headerLines.isEmpty || !footerLines.isEmpty || page.autoPageno != nil else {
+            return []
+        }
 
         // Job 240 (b13, Part 1): the cp1252 esc-degradation this used to chain
-        // (`printedEscDegrade`) is gone — MAC VIEWING RULING, see that removal's own doc
-        // comment above. `printedStripControlChars` stays: that is a genuine control-byte
+        // (`nativeEscDegrade`) is gone — MAC VIEWING RULING, see that removal's own doc
+        // comment above. `nativeStripControlChars` stays: that is a genuine control-byte
         // display fix (job 226), unrelated to font-encoding floors.
+        // `∙` IS A BULLET HERE TOO — the PRINTED twin of the Modern substitution. The
+        // engine's `runningOps` does it unconditionally on a running head's own text
+        // ("`∙` (U+2219 BULLET OPERATOR) -> `•` (U+2022 BULLET), because cp1252 carries a real
+        // BULLET"), and this path applied `nativeStripControlChars` alone. Measured on
+        // LJ6DTP.WS, whose `.h1` carries the extended character 0xF9: the app drew the
+        // narrower BULLET OPERATOR, so everything after it in the head sat left of the
+        // engine's — a region-diff row on the head band of all eight pages, and the page
+        // number's own cell empty where the engine has ink.
         func rendered(_ text: String) -> String {
-            printedStripControlChars(text.replacingOccurrences(of: "#", with: String(pageNo)))
+            nativeStripControlChars(text)
         }
         let font = courier(size: CGFloat(metrics.size))
         // Job 228: the AppKit-measured distance from a `draw(at:)` origin to that call's
@@ -4147,7 +5822,7 @@ enum DocumentRenderer {
             width: max(1, metrics.pageWidth - metrics.left)))
         // Job 226: `nil` when the SOURCE text was entirely print-control bytes (LJ6DTP.WS's
         // own footer, `"\u{0F}\u{0F}"` — two rule-drawing controls, no visible content at
-        // all) — `printedStripControlChars` degrades that to `""`, and `PagedDocumentView
+        // all) — `nativeStripControlChars` degrades that to `""`, and `PagedDocumentView
         // .drawRunningLines` reads `.attribute(.font, at: 0, ...)` unconditionally, which
         // traps on a zero-length attributed string. A running line with nothing left to
         // show is exactly a running line that should not exist, matching the engine's own
@@ -4167,7 +5842,7 @@ enum DocumentRenderer {
         // whose `.lh` happens to already be 12pt (`PDFMetrics.lead`'s own value), exactly the
         // condition the engine's own citation names as why this bug class hides "until
         // [a fixture] whose own `.lh` is customized" surfaces it. Confirmed against real
-        // `emitPDF` bytes (`EngineTruth.structuralPages`, `PrintedStructuralParityTests.swift`)
+        // `emitPDF` bytes (`EngineTruth.structuralPages`, `NativeStructuralParityTests.swift`)
         // via `NativeVsEngineGeometryTests.marginsMatchTheEngine`: YOURWAY.WS's own header
         // (`.lh 18`, `headBase` 2 lines) sat exactly `2 * (18 - 12) = 12.0pt` too low on every
         // page but the first.
@@ -4178,16 +5853,15 @@ enum DocumentRenderer {
         // in the proportional face, exactly `appendSpan`'s own body-text indent carve-out),
         // and every other run drawn in the resolved face with that run's own bold/italic.
         // Returns `nil` for a line with nothing left to draw once toggles are consumed
-        // (`printedHeadFootRuns`' own empty-runs case).
+        // (`nativeHeadFootRuns`' own empty-runs case).
         func styledLine(_ rawText: String, entry: FontChange) -> (text: NSAttributedString, leadingOffset: Double, drawOriginOffset: Double)? {
-            let substituted = rawText.replacingOccurrences(of: "#", with: String(pageNo))
-            let runs = printedHeadFootRuns(substituted)
+            let runs = nativeHeadFootRuns(rawText)
             guard !runs.isEmpty else { return nil }
             let result = NSMutableAttributedString()
             var leadingOffset: Double = 0
             var stillLeading = true
             for run in runs {
-                let text = printedStripControlChars(run.text)
+                let text = nativeStripControlChars(run.text)
                 guard !text.isEmpty else { continue }
                 if stillLeading, entry.proportional, text.trimmingCharacters(in: .whitespaces).isEmpty {
                     leadingOffset += NSAttributedString(string: text, attributes: [.font: font]).size().width
@@ -4197,8 +5871,9 @@ enum DocumentRenderer {
                 let runFont = resolvedFont(for: entry, styles: run.styles, fallback: font,
                                            defaultSize: metrics.size, useCourierPrime: true)
                 result.append(NSAttributedString(string: text, attributes: [
-                    .font: runFont, .foregroundColor: NSColor.black, .kern: printedNoKerning,
-                    .ligature: printedNoLigatures,
+                    .font: runFont, .foregroundColor: NSColor.black,
+                    .kern: nativeNoKerning,
+                    .ligature: nativeNoLigatures,
                 ]))
             }
             guard result.length > 0 else { return nil }
@@ -4213,13 +5888,13 @@ enum DocumentRenderer {
         // Job 489/490 tried a matching `baseline <= metrics.pageHeight` guard here (mirroring
         // the engine's own `runningOps`, `PDFWriter.swift`, `guard y >= 0 else { continue }` —
         // a running line whose baseline would land past the bottom of the sheet never gets a
-        // `Tj` at all) and reverted it: measured against `PrintedStructuralParityTests`'
+        // `Tj` at all) and reverted it: measured against `NativeStructuralParityTests`'
         // `EngineTruth` at the time, it "fixed 6 of LJ6DTP's own known divergent slots but
         // silently introduced 2 NEW ones (pages 7/8's own footer, previously agreeing, now
         // wrongly suppressed)".
         //
         // Job 491 root-caused THAT measurement itself as corrupted: `EngineTruth
-        // .contentStreams` (`PrintedStructuralParityTests.swift`) assumed only page-content
+        // .contentStreams` (`NativeStructuralParityTests.swift`) assumed only page-content
         // objects carry a `stream`/`endstream` pair, which is false for any LJ6DTP-driver
         // fixture — the driver's own 6 HP1-HP6 tiling patterns (`PDFWriter.swift`'s
         // `patternObjs`, register C3) ALSO carry one, at LOWER object numbers than any page,
@@ -4231,28 +5906,26 @@ enum DocumentRenderer {
         // went from 1 failure to 0 (46/46) from the harness fix ALONE, no production code
         // changed. The guard below is reintroduced NOW, against that corrected baseline, and
         // the full suite (see this job's report) shows it introduces no new divergence.
-        func line(_ text: String, atLine n: Double, lineNo: Int, kind: RunningLine.Kind) -> RunningLine? {
-            let lineLead = kind == .header ? Double(PDFMetrics.lead) : metrics.lead
-            let baseline = n * lineLead + Double(metrics.size)
+        func line(_ resolved: HeadFootLine, kind: RunningLine.Kind) -> RunningLine? {
+            let text = resolved.text
+            let baseline = metrics.pageHeight - resolved.y
             guard baseline <= metrics.pageHeight else { return nil }
-            let fontIdx = kind == .header ? doc.headerFonts[lineNo] : doc.footerFonts[lineNo]
-            let entry = fontIdx.flatMap { doc.fonts.indices.contains($0) ? doc.fonts[$0] : nil }
+            let pageLeftOffset = resolved.x - leftAnchor
+            let entry = resolved.font.flatMap { doc.fonts.indices.contains($0) ? doc.fonts[$0] : nil }
             if let entry, let styled = styledLine(text, entry: entry) {
                 return RunningLine(text: styled.text, baselineFromTop: baseline,
                                    drawOriginOffset: styled.drawOriginOffset, kind: kind,
                                    leadingOffset: styled.leadingOffset,
                                    pageLeftOffset: pageLeftOffset)
             }
-            // Mechanisms Q/X — see `printedHFRetab`. Gated on `entry == nil` to mirror the
+            // Mechanisms Q/X — see `nativeHFRetab`. Gated on `entry == nil` to mirror the
             // engine exactly: a line that HAS a font block keeps its baked padding even when
             // its styled path declined to build (the engine never reaches its retab branch
             // for such a line either).
-            let tabRec = entry == nil
-                ? (kind == .header ? doc.headerTabs[lineNo] : doc.footerTabs[lineNo])
-                : nil
-            let retabbed = Self.printedHFRetab(text, tabRec: tabRec) {
-                $0.replacingOccurrences(of: "#", with: String(pageNo))
-            }
+            // Mechanisms Q/X — `nativeHFRetab`'s own realignment is BAKED INTO
+            // `HeadFootLine.text` by `resolveHeadFootLines`, so there is nothing left to do
+            // here and no second copy of the rule to keep in step.
+            let retabbed = text
             // MECHANISM M (engine commit f79ff29, mirroring ctrl-kd 74acc60): a FONTLESS
             // `.h#`/`.f#` line whose own text carries an inline style toggle (a `^Y` italic,
             // say) must have that toggle INTERPRETED, not dropped. The engine's `hfLineOps`
@@ -4263,7 +5936,7 @@ enum DocumentRenderer {
             // This renderer had the mirrored half of the same bug from the other direction:
             // `styledLine` (job 489) is reached ONLY when the line has a font block, so a
             // fontless toggled line fell through to the plain path below, where
-            // `printedStripControlChars` deleted the toggle byte and nothing ever applied
+            // `nativeStripControlChars` deleted the toggle byte and nothing ever applied
             // the style it announced — the words were right, the italics were missing.
             //
             // Plain Courier with the run's own bold/italic, matching the engine's own
@@ -4271,16 +5944,17 @@ enum DocumentRenderer {
             // no control byte at all stays on the exact prior single-run path, byte for byte.
             if entry == nil, retabbed.unicodeScalars.contains(where: { $0.value < 0x20 }) {
                 let substituted = retabbed.replacingOccurrences(of: "#", with: String(pageNo))
-                let runs = printedHeadFootRuns(substituted)
+                let runs = nativeHeadFootRuns(substituted)
                 let result = NSMutableAttributedString()
                 for run in runs {
-                    let runText = printedStripControlChars(run.text)
+                    let runText = nativeStripControlChars(run.text)
                     guard !runText.isEmpty else { continue }
+                    let runFont = Self.styled(font, with: run.styles)
                     result.append(NSAttributedString(string: runText, attributes: [
-                        .font: Self.styled(font, with: run.styles),
+                        .font: runFont,
                         .foregroundColor: NSColor.black,
-                        .kern: printedNoKerning,
-                        .ligature: printedNoLigatures,
+                        .kern: nativeNoKerning,
+                        .ligature: nativeNoLigatures,
                     ]))
                 }
                 if result.length > 0 {
@@ -4302,81 +5976,39 @@ enum DocumentRenderer {
             let attributed = NSAttributedString(string: degraded, attributes: [
                 .font: font,
                 .foregroundColor: NSColor.black,
-                .kern: printedNoKerning,
-                .ligature: printedNoLigatures,
+                .kern: nativeNoKerning,
+                .ligature: nativeNoLigatures,
             ])
             return RunningLine(text: attributed, baselineFromTop: baseline,
                                drawOriginOffset: drawOriginOffset, kind: kind,
                                pageLeftOffset: pageLeftOffset)
         }
 
-        let mt = doc.page?.mtLines ?? 3.0
-        // MECHANISM W (engine commit 53d3114, mirroring ctrl-kd e989028 — SUPERSEDES job
-        // 425's `mtSource == .file` gate that stood here): `.hm` participates in `headBase`
-        // UNCONDITIONALLY. Every measurement that ever justified gating it on `mtSource`/
-        // `hmSource` (-README, SCRIPT, LJ6DTP, HMFM_PROBE) was captured through Robert J.
-        // Sawyer's own WSCHANGE-customized `WS.EXE` (`ws7-prints/v1`/`v2`) — the same
-        // personalized install mechanisms S (`.po` factory column) and T (auto-leading
-        // factor) already found had been mistaken for stock WordStar 7. `-README` is the
-        // corpus's ONLY header-bearing document with `mtSource`/`hmSource` BOTH `.default`,
-        // and a `PRISTINE.EXE` (factory, no WSCHANGE) recapture of it measures its header at
-        // 12.0pt — `headBase` 0 = mt(3) - hm(2) - topHead(1), hm FULLY SUBTRACTED — not the
-        // 35.7pt/`headBase` 2 every gated formula predicts for that combination.
-        //
-        // This does NOT reopen SCRIPT/LJ6DTP: both are `mtSource == .file` on every oracle
-        // page (LJ6DTP via its own per-page `.mt` swap), so every gate this history tried
-        // already had `hm` participating there. Dropping the gate changes nothing for a
-        // document that ever states `.mt` or `.hm` itself; it only changes the all-default
-        // case, which until the pristine recapture had never been checked against a
-        // non-Sawyer install at all. Mirrors the engine's own `runningOps`
-        // (`PDFWriter.swift`: `let hm = doc.page?.hmLines ?? 2.0`) line for line.
-        let hm = doc.page?.hmLines ?? 2.0
-        let topHead = Double(page.headers.keys.max() ?? 1)
-        let headBase = max(0.0, mt - hm - topHead)
-
-        let pl = doc.page?.plLines ?? 66.0
-        let mb = doc.page?.mbLines ?? 8.0
-        let fm = doc.page?.fmLines ?? 2.0
-        let footLine = pl - mb + fm
-
         var out: [RunningLine] = []
-        for n in page.headers.keys.sorted() {
-            guard let text = page.headers[n], !text.isEmpty else { continue }
-            if let built = line(text, atLine: headBase + Double(n - 1), lineNo: n, kind: .header) { out.append(built) }
+        for resolved in headerLines {
+            if let built = line(resolved, kind: .header) { out.append(built) }
         }
-        for n in page.footers.keys.sorted() {
-            guard let text = page.footers[n], !text.isEmpty else { continue }
-            if let built = line(text, atLine: footLine + Double(n - 1), lineNo: n, kind: .footer) { out.append(built) }
+        for resolved in footerLines {
+            if let built = line(resolved, kind: .footer) { out.append(built) }
         }
-        if showAutoNum {
-            // WordStar's automatic number rides the SAME row a footer line 1 would
-            // (`footLine + 1 - 1 == footLine`) — measured: every probe showing both together
-            // landed at the identical y a real `.fo` line 1 uses. `showAutoNum` already
-            // excludes the case a real footer is in use, so this never collides with the
-            // loop just above.
-            //
-            // Plain Courier, no font lookup — the engine emits it with its own
-            // `FONTS[(False, False)]` fallback face rather than any `.f#` font block.
-            //
-            // Placed by `pageLeftOffset` because the number is anchored ABSOLUTELY from the
-            // paper's left edge (`.po` + `.pc`), not at the text column every other running
-            // line starts from: `drawRunningLines` adds this to `textFrame.origin.x`, which
-            // is `metrics.left`, so the offset carries the difference. This also subsumes
-            // mechanism O for this one line — `printedAutoPageNumberXPt` reads `.po` from the
-            // page-local `doc` this function was handed (`pageDoc` at the call site), the
-            // same document the engine passes its own `autoPageNumberXPt`.
-            let baseline = footLine * metrics.lead + Double(metrics.size)
+        if let auto = page.autoPageno {
+            // Plain Courier, no font lookup — the engine emits the automatic number with its
+            // own `FONTS[(False, False)]` fallback face rather than any `.f#` font block. Its
+            // x is anchored ABSOLUTELY from the paper's left edge (`.po` plus `.pc`), not at
+            // the text column every other running line starts from, which is exactly why the
+            // model carries it per line rather than per page.
+            let baseline = metrics.pageHeight - auto.y
             if baseline <= metrics.pageHeight {
-                let attributed = NSAttributedString(string: String(pageNo), attributes: [
+                let attributed = NSAttributedString(string: auto.text, attributes: [
                     .font: font,
                     .foregroundColor: NSColor.black,
-                    .kern: printedNoKerning,
-                    .ligature: printedNoLigatures,
+                    .kern: nativeNoKerning,
+                    .ligature: nativeNoLigatures,
                 ])
                 out.append(RunningLine(
                     text: attributed, baselineFromTop: baseline,
                     drawOriginOffset: drawOriginOffset, kind: .footer,
-                    pageLeftOffset: Self.printedAutoPageNumberXPt(doc) - leftAnchor))
+                    pageLeftOffset: auto.x - leftAnchor))
             }
         }
         return out
@@ -4415,8 +6047,17 @@ enum DocumentRenderer {
         let drawOriginOffset = Double(firstBaselineOffset(
             font: font, paragraph: NSParagraphStyle(), width: 500))
 
+        // `∙` IS A BULLET IN MODERN. The library's writer substitutes it outright —
+        // `esc(txt.replacingAll("\u{2219}", with: "\u{2022}"))` (`PDFWriter.swift`, Register
+        // C9: "'•' (U+2022 BULLET — WordStar's own cp437 0x07 list marker)"), "because cp1252
+        // carries a real BULLET" where it has no BULLET OPERATOR at all. Measured on
+        // LJ6DTP.WS, whose `.h1` carries the extended character 0xF9: the library's running
+        // head reads "LJ6DTP Desktop-Publishing PDF • 9" and the app's read "… · 9", on all
+        // eleven pages.
         func rendered(_ text: String) -> String {
-            printedStripControlChars(text.replacingOccurrences(of: "#", with: String(pageNo)))
+            nativeStripControlChars(
+                text.replacingOccurrences(of: "#", with: String(pageNo))
+                    .replacingOccurrences(of: "\u{2219}", with: "\u{2022}"))
         }
         func line(_ text: String, baselineFromTop: Double, kind: RunningLine.Kind) -> RunningLine? {
             let degraded = rendered(text)
@@ -4466,7 +6107,7 @@ enum DocumentRenderer {
             // Job 478 audit: same white-paper/dynamic-colour class as the note-entry
             // defect this job fixes. A "\n" control character paints no visible glyph
             // regardless of colour, so this was never the VISIBLE bug — but it shares
-            // every caller (renderPrinted and both Modern renderers) with attributed
+            // every caller (renderNative and both Modern renderers) with attributed
             // runs that DO paint ink, so fixed here too rather than left as a dynamic
             // colour sitting on paper waiting for AppKit to someday give it ink.
             .foregroundColor: NSColor.black,
@@ -4486,7 +6127,7 @@ enum DocumentRenderer {
         let storage = NSTextStorage(string: "X", attributes: [
             .font: font, .paragraphStyle: paragraph,
         ])
-        let manager = NSLayoutManager()
+        let manager = softReturnLayoutManager()
         manager.allowsNonContiguousLayout = false
         let container = NSTextContainer(
             size: CGSize(width: width, height: .greatestFiniteMagnitude))
@@ -4506,7 +6147,7 @@ enum DocumentRenderer {
     /// page's last fragment needs its OWN measured `K`, not a shared/assumed one).
     private static func isolatedFragmentK(_ content: NSAttributedString, width: CGFloat) -> Double {
         let storage = NSTextStorage(attributedString: content)
-        let manager = NSLayoutManager()
+        let manager = softReturnLayoutManager()
         manager.allowsNonContiguousLayout = false
         let container = NSTextContainer(
             size: CGSize(width: max(1, width), height: .greatestFiniteMagnitude))
@@ -4519,7 +6160,7 @@ enum DocumentRenderer {
     }
 
     /// Job 413: how far `Oracle.structuralBodyLines`' own sampled position for this line
-    /// (`PrintedStructuralParityTests.swift` — the FIRST non-whitespace glyph's real
+    /// (`NativeStructuralParityTests.swift` — the FIRST non-whitespace glyph's real
     /// `location(forGlyphAt:)`) will be pulled off this line's own pinned grid target by
     /// that glyph's `.sup`/`.sub` visual raise, and therefore how much needs folding into
     /// `PinnedBaseline.y` (never into `engineY`'s own running per-page accumulator) to
@@ -4552,28 +6193,43 @@ enum DocumentRenderer {
     private static func firstGlyphRaiseCompensation(
         _ line: PageLine, fallback: NSFont, fonts: [FontChange], defaultSize: Int, useCourierPrime: Bool
     ) -> Double {
-        guard let span = line.spans.first(where: {
-            !$0.text.trimmingCharacters(in: .whitespaces).isEmpty
-        }), span.styles.contains(.sup) || span.styles.contains(.sub) else { return 0 }
+        // THE FIRST GLYPH'S OWN SPAN, whitespace included — this compensates for what a
+        // raised or lowered FIRST GLYPH does to AppKit's own fragment placement, so a line
+        // whose first glyph is an ordinary unraised space needs no compensation at all
+        // whatever the run after it does.
+        //
+        // Skipping whitespace was the bug. SUB-SUPE.TST line 4 opens with five plain 12pt
+        // spaces and then a 9pt `.sub` run: the first non-whitespace span is the lowered one,
+        // so the whole fragment was shifted up by its 0.74pt offset, putting the line's own
+        // baseline at 155.26 where the library puts it at 156.00 and its lowered ink at
+        // 156.00 where the library draws it at 156.74. Nothing about that line's first glyph
+        // was raised; only the run after it was.
+        guard let span = line.spans.first(where: { !$0.text.isEmpty }),
+              span.styles.contains(.sup) || span.styles.contains(.sub) else { return 0 }
         let font = resolvedFont(for: span, fallback: fallback, fonts: fonts,
                                 defaultSize: defaultSize, useCourierPrime: useCourierPrime)
-        // Mechanism G: this probe is Printed-only (its one caller is inside `renderPrinted`),
+        // Mechanism G: this probe is Printed-only (its one caller is inside `renderNative`),
         // so it must measure the SAME reduced face the real run gets — otherwise the
         // compensation it folds into the line's own leading is computed off a 2/3 face while
         // the glyph is drawn at WordStar's ratio, and the raise it corrects for is wrong by
         // the difference.
         let entry = span.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
-        let ratio = printedFamilyIsCourier(entry)
-            ? printedSupSubCourierRatio : printedSupSubDefaultRatio
+        let ratio = nativeFamilyIsCourier(entry)
+            ? nativeSupSubCourierRatio : nativeSupSubDefaultRatio
         return Double(scriptMetrics(for: font, raise: span.styles.contains(.sup),
                                     ratio: ratio).offset)
     }
 
     // MARK: - Spans to attributed text
 
+    /// The document's own 10-CPI print column, as a fraction of the type size — WordStar's
+    /// grid and Courier's own advance are the same number, which is why a Courier run is how
+    /// this file spends a column width.
+    static let nativeColumnEM: CGFloat = 0.6
+
     /// One span appended to `line`, threading the leading-indent gate the CALLER's whole
     /// line shares — extracted from `attributedLine`'s own per-span loop (job 256, Show
-    /// Invisibles part 2/4: `renderPrintedAnnotated` needed this same per-span logic
+    /// Invisibles part 2/4: `renderNativeAnnotated` needed this same per-span logic
     /// available to call once per `.visible` `AnnotatedSpan`, interleaved with its own
     /// invisible-mark runs, rather than duplicating it). Pure extraction — every existing
     /// `attributedLine` caller's behavior is unchanged; `showInvisiblesOffStateByteIdentical`
@@ -4583,7 +6239,9 @@ enum DocumentRenderer {
         font: NSFont, paragraph: NSParagraphStyle, fonts: [FontChange], defaultSize: Int,
         colourMap: [Int: Double], disableKerning: Bool, useCourierPrime: Bool = false,
         pixResults: [PixResult] = [], pixMeasureWidthPt: Double = 0,
-        printedSupSub: Bool = false
+        nativeSupSub: Bool = false, nativePMActive: Bool? = nil,
+        nativeKerning: Bool = true, modernPitchScale: Bool = false,
+        modernPrintedPt: Int? = nil, modernFontlessFamily: CtrlKD.PDFFamily = .times
     ) {
         // Job 371 item 1 (PIX IN VIEWS): a resolved `.PIX` tag, INLINE — the shape Modern's
         // own reflow keeps `span.pix` in (unlike Printed, whose `docToPagelines` already
@@ -4679,16 +6337,58 @@ enum DocumentRenderer {
         // same number"), and a fontless span's pitch already IS the document's — both
         // already correct under `resolvedFont`'s plain advance, so neither is split.
         let entry = span.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
-        if leading, let entry, entry.proportional {
+        // MODERN NEVER RE-STAMPS. `splitIndent`'s Courier-grid re-stamp (job 202) and its
+        // generalization to any column filler run (job 490, `appendProportionalRun` below)
+        // are both facsimile rules: Printed and Native have to land on WordStar's own
+        // character grid because the author typed a column position and the paper shows it.
+        // `modernTokenWidth` has no counterpart — a space run is ordinary text there,
+        // measured at the face's own advance and scaled by the same `faceTz` as everything
+        // else around it. Measured on LYING.WS, whose body paragraphs open with five typed
+        // spaces: the library indents its first line 15.70pt (5 x 3.0pt Times at 12pt,
+        // x104.81%) and the app stamped 36.01pt (5 x 7.2pt columns), so every opening line
+        // measured 20pt narrower here and the paragraph rewrapped from its first word on.
+        if leading, !modernPitchScale, let entry, entry.proportional {
             let pad = span.text.prefix(while: { $0 == " " }).count
             if pad > 0 {
+                // AT THE SPAN'S OWN SIZE, not the document's base one. The engine's indent
+                // advance is per-SEGMENT — the size its own font block asks for — while this
+                // passed the document's base Courier throughout. The two agree on any document
+                // whose font block happens to run at the body size, which is every fixture
+                // this was built on; they do not agree on MARKUP.WS, whose Univers block is
+                // far smaller. Its line 2 opens with four spaces and the app re-stamped them
+                // at 7.2pt each, putting the line's first ink at 86.40 where the engine draws
+                // it at 60.30.
+                //
+                // AND AT THE ENGINE'S OWN TWO MEASURES, which is a `.pm` question. `.pm`'s
+                // document-column convention is the 10-CPI grid this comment block opens
+                // with, and it is in force only while the line's own block declares a real
+                // paragraph margin (`PageLine.pmActive`). Every OTHER typed leading run —
+                // hand-typed centring, a table's leading gap — is what real WS7 drew with the
+                // face's own space glyph, and the engine measures those at `typedIndentSpaceEM`
+                // (`PDFLayout.swift`, planning #257: 0.336em, measured against real WS7's own
+                // Univers 10pt space). MARKUP.WS declares no `.pm`, so its four spaces are
+                // 4 x 2 x 0.336 = 2.69pt and the app was charging 4 x 2 x 0.6 = 4.80 — the
+                // 2.10pt this line's first ink was still out by.
+                //
+                // COURIER IS THE WIDTH VEHICLE, not a claim about the face: this run draws no
+                // ink at all, and Courier's own 0.6em advance is how the block above already
+                // spends a width it has computed. Its size is therefore the width WANTED
+                // divided by that 0.6, not the span's own size.
+                let spanPt = resolvedFont(
+                    for: span, fallback: font, fonts: fonts, defaultSize: defaultSize,
+                    useCourierPrime: useCourierPrime).pointSize
+                let perSpacePt = nativePMActive == true
+                    ? CGFloat(defaultSize) * nativeColumnEM
+                    : (nativePMActive == nil ? spanPt * nativeColumnEM
+                                              : spanPt * CGFloat(CtrlKD.typedIndentSpaceEM))
+                let indentFont = courier(size: perSpacePt / nativeColumnEM)
                 var indentAttributes: [NSAttributedString.Key: Any] = [
-                    .font: font,
+                    .font: indentFont,
                     .paragraphStyle: paragraph,
                 ]
                 indentAttributes.merge(driverColourAttributes(span.colour, colourMap)) { _, new in new }
-                if disableKerning { indentAttributes[.kern] = printedNoKerning }
-                if disableKerning { indentAttributes[.ligature] = printedNoLigatures }
+                if disableKerning { indentAttributes[.kern] = nativeNoKerning }
+                if disableKerning { indentAttributes[.ligature] = nativeNoLigatures }
                 line.append(NSAttributedString(
                     string: String(span.text.prefix(pad)), attributes: indentAttributes))
                 if pad == span.text.count {
@@ -4702,7 +6402,9 @@ enum DocumentRenderer {
                 Self.appendProportionalRun(
                     rest, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                     colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                    to: line)
+                    nativeKerning: nativeKerning, modernPitchScale: modernPitchScale,
+                    modernPrintedPt: modernPrintedPt,
+                    modernFontlessFamily: modernFontlessFamily, to: line)
                 leading = false
                 return
             }
@@ -4711,12 +6413,16 @@ enum DocumentRenderer {
             Self.appendProportionalRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                printedSupSub: printedSupSub, to: line)
+                nativeSupSub: nativeSupSub, nativeKerning: nativeKerning,
+                modernPitchScale: modernPitchScale, modernPrintedPt: modernPrintedPt,
+                modernFontlessFamily: modernFontlessFamily, to: line)
         } else {
             line.append(Self.attributedRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                printedSupSub: printedSupSub))
+                nativeSupSub: nativeSupSub, nativeKerning: nativeKerning,
+                modernPitchScale: modernPitchScale, modernPrintedPt: modernPrintedPt,
+                modernFontlessFamily: modernFontlessFamily))
         }
         if span.text.contains(where: { !$0.isWhitespace }) {
             leading = false
@@ -4758,26 +6464,69 @@ enum DocumentRenderer {
     private static func appendProportionalRun(
         _ span: Span, font: NSFont, paragraph: NSParagraphStyle,
         fonts: [FontChange], defaultSize: Int, colourMap: [Int: Double],
-        disableKerning: Bool, useCourierPrime: Bool, printedSupSub: Bool = false,
+        disableKerning: Bool, useCourierPrime: Bool, nativeSupSub: Bool = false,
+        nativeKerning: Bool = true, modernPitchScale: Bool = false,
+        modernPrintedPt: Int? = nil, modernFontlessFamily: CtrlKD.PDFFamily = .times,
         to line: NSMutableAttributedString
     ) {
-        let segments = Self.splitOnColumnSpaceRuns(span.text)
+        // Modern does not re-stamp a filler run either — see `appendSpan`'s own citation.
+        let segments = modernPitchScale ? [] : Self.splitOnColumnSpaceRuns(span.text)
         guard segments.count > 1 || segments.first?.isGrid == true else {
             line.append(Self.attributedRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                printedSupSub: printedSupSub))
+                nativeSupSub: nativeSupSub, nativeKerning: nativeKerning,
+                modernPitchScale: modernPitchScale, modernPrintedPt: modernPrintedPt,
+                modernFontlessFamily: modernFontlessFamily))
             return
         }
+        // THE SPAN'S OWN CELL, not the document's.
+        //
+        // The grid this re-stamp puts a filler run on is `spanPitch`'s, and `spanPitch` reads
+        // the FONT BLOCK's own declared width word (`.cw`, `FontChange.width1800`) when it has
+        // one, falling back to the document's 10-CPI Courier column only when it does not.
+        // Passing the caller's base Courier here was the fallback unconditionally — the same
+        // answer the engine gives for a span with no font block at all, and the wrong one for
+        // every span that has one.
+        //
+        // LJ6DTP.WS is the document it was written for and the document it was wrong on: its
+        // Univers block declares 245/1800in, a 9.80pt cell, and this stamped every filler run
+        // in it at the document's own 7.20pt. 2.6pt per cell, cumulative across a table row —
+        // the column drift Jon reported, closed for the leading run and left open for every
+        // other one.
+        //
+        // Courier is the width vehicle, as it is for the leading indent above: the run draws
+        // no ink of its own, and a Courier face sized so its 0.6em IS the cell spends exactly
+        // that width.
+        //
+        // PRINTED ONLY, gated on `disableKerning` the way every other engine-grid rule in this
+        // file is. Modern is a reflowed reading view with no column grid of its own, and the
+        // engine's Modern layout has no `spanPitch` anywhere in it; measured, giving Modern
+        // the span's cell moved PREVIEW.WS's line breaks and nothing else's, which is drift
+        // rather than fidelity. Modern keeps the document cell it always had.
+        let gridEntry = span.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
+        let gridSpanPt = Int(Self.resolvedFont(
+            for: span, fallback: font, fonts: fonts, defaultSize: defaultSize,
+            useCourierPrime: useCourierPrime).pointSize.rounded())
+        // AND NOT IN NATIVE EITHER. This was `disableKerning ? nativeSpanPitch(gridEntry,
+        // gridSpanPt) : 0` — the span's OWN declared cell for every filler run the two
+        // facsimile modes draw. It cost PREVIEW.WS six words of drift past the Native gate's
+        // own tolerance (three Univers, three CG Times), measured against real WS7 paper, and
+        // the paper is that gate's authority. The document's own cell — the caller's base
+        // Courier, which is what this always used — stands until something measures the span
+        // cell against the PAPER and finds it closer.
+        let gridCellPt = 0.0
+        let gridFont = gridCellPt > 0
+            ? courier(size: CGFloat(gridCellPt) / nativeColumnEM) : font
         for segment in segments where !segment.text.isEmpty {
             if segment.isGrid {
                 var gridAttributes: [NSAttributedString.Key: Any] = [
-                    .font: font,
+                    .font: gridFont,
                     .paragraphStyle: paragraph,
                 ]
                 gridAttributes.merge(driverColourAttributes(span.colour, colourMap)) { _, new in new }
-                if disableKerning { gridAttributes[.kern] = printedNoKerning }
-                if disableKerning { gridAttributes[.ligature] = printedNoLigatures }
+                if disableKerning { gridAttributes[.kern] = nativeNoKerning }
+                if disableKerning { gridAttributes[.ligature] = nativeNoLigatures }
                 line.append(NSAttributedString(string: segment.text, attributes: gridAttributes))
             } else {
                 let piece = Span(text: segment.text, styles: span.styles, font: span.font,
@@ -4785,7 +6534,7 @@ enum DocumentRenderer {
                 line.append(Self.attributedRun(
                     piece, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                     colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                    printedSupSub: printedSupSub))
+                    nativeSupSub: nativeSupSub))
             }
         }
     }
@@ -4853,7 +6602,11 @@ enum DocumentRenderer {
         useCourierPrime: Bool = false,
         pixResults: [PixResult] = [],
         pixMeasureWidthPt: Double = 0,
-        printedSupSub: Bool = false
+        nativeSupSub: Bool = false,
+        nativePMActive: Bool? = nil,
+        nativeKerning: Bool = true,
+        modernPitchScale: Bool = false, modernPrintedPt: Int? = nil,
+        modernFontlessFamily: CtrlKD.PDFFamily = .times
     ) -> NSAttributedString {
         let line = NSMutableAttributedString()
         // Port of `splitIndent` (`PDFWriter.swift:389-421`): still true until the first
@@ -4865,7 +6618,10 @@ enum DocumentRenderer {
                       fonts: fonts, defaultSize: defaultSize, colourMap: colourMap,
                       disableKerning: disableKerning, useCourierPrime: useCourierPrime,
                       pixResults: pixResults, pixMeasureWidthPt: pixMeasureWidthPt,
-                      printedSupSub: printedSupSub)
+                      nativeSupSub: nativeSupSub, nativePMActive: nativePMActive,
+                      nativeKerning: nativeKerning, modernPitchScale: modernPitchScale,
+                      modernPrintedPt: modernPrintedPt,
+                      modernFontlessFamily: modernFontlessFamily)
         }
         // A line with no spans at all (a blank PageLine) would otherwise be represented
         // on screen by nothing but its OWN terminator newline — a control character, which
@@ -4876,7 +6632,7 @@ enum DocumentRenderer {
         // paper, and trimmed away everywhere the text is compared — gives the layout manager
         // a real glyph to place instead of the bare terminator.
         //
-        // CORRECTION (job 408, `PrintedStructuralParityTests.swift`'s own Class 4 comment):
+        // CORRECTION (job 408, `NativeStructuralParityTests.swift`'s own Class 4 comment):
         // "so a blank line's baseline sits on the same grid a line of text would" is WRONG —
         // measured directly (`Oracle.lines`' `location(forGlyphAt:).y` vs `fragment.origin.y`
         // under this same pinned min==max paragraph style), a blank/space-filler line's
@@ -4905,8 +6661,8 @@ enum DocumentRenderer {
     /// `hmiPerPoint = 1800.0 / 72.0`, `PDFFonts.swift:66` — 1800 HMI units per inch, 72pt
     /// per inch).
     /// - Parameter pcl: Register C2 (`span.pcl`) — the index into `Document.pclPrograms` of
-    ///   this control's raw printer payload, or `nil`. Stashed as `.printedPCLProgram` so
-    ///   `PageTextView.drawPCLGraphics` (`PrintedPCLGraphics.swift`) can find this attachment's
+    ///   this control's raw printer payload, or `nil`. Stashed as `.nativePCLProgram` so
+    ///   `PageTextView.drawPCLGraphics` (`NativePCLGraphics.swift`) can find this attachment's
     ///   own glyph position later and execute the program there — see that file's top doc
     ///   comment for why this is a real feature (LJ6DTP's page border/checkerboard), not
     ///   decoration.
@@ -4919,7 +6675,7 @@ enum DocumentRenderer {
         let result = NSMutableAttributedString(attachment: attachment)
         result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
         if let pcl {
-            result.addAttribute(.printedPCLProgram, value: pcl, range: NSRange(location: 0, length: result.length))
+            result.addAttribute(.nativePCLProgram, value: pcl, range: NSRange(location: 0, length: result.length))
         }
         return result
     }
@@ -4957,7 +6713,7 @@ enum DocumentRenderer {
             // spaces or dot-leader periods) rather than a content-free `NSTextAttachment`
             // spacer or a freshly-counted run of leader glyphs — this span's real
             // characters are content other readers of this rendered string depend on:
-            // `PrintedStructuralParityTests.structuralParity`'s own text-content class
+            // `NativeStructuralParityTests.structuralParity`'s own text-content class
             // reads the live `NSAttributedString` back against `EngineTruth`'s own text,
             // itself built from `docToPagelines`'s PRE-tab-expansion `PageLine.text` (the
             // author's ORIGINAL typed run, not `PDFWriter.swift`'s own recomputed
@@ -5024,7 +6780,7 @@ enum DocumentRenderer {
     /// engine's box-drawing cells already use, taken against the document's own default
     /// printed size exactly as `pageStream` does (a pix tag reserves blank PHYSICAL lines at
     /// that size, never a per-line override).
-    static func printedPixDescentPt(_ size: Int) -> Double { 0.25 * Double(size) }
+    static func nativePixDescentPt(_ size: Int) -> Double { 0.25 * Double(size) }
 
     private static func pixAttachmentString(
         _ pixResults: [PixResult], index: Int, widthPt: Double, heightPt: Double,
@@ -5108,8 +6864,27 @@ enum DocumentRenderer {
     /// address recovery when basenames are unique (the confirmed real-corpus shape: one
     /// picture per document), a reasonable same-image degradation on the rarer case two
     /// tags share a bare filename.
+    /// The resolved picture a Modern paragraph's spans refer to, if any — the same lookup
+    /// `appendSpan` makes per span, asked of a whole line so its own paragraph style can
+    /// reserve the picture's height before the line is built.
+    private static func modernPixIndex(of spans: [Span], pixResults: [PixResult]) -> Int? {
+        for span in spans {
+            let index = span.pix
+                ?? inferredPixIndex(fromPlaceholderText: span.text, pixResults: pixResults)
+            if let index, pixResults.indices.contains(index), pixResults[index].ok { return index }
+        }
+        return nil
+    }
+
     private static func inferredPixIndex(fromPlaceholderText text: String, pixResults: [PixResult]) -> Int? {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        // WITHOUT THE ZERO-WIDTH JOINERS. `modernNoBreakGraphicRuns` splices U+2060 between
+        // every adjacent character of a token so AppKit cannot break inside one, and a
+        // placeholder is a token like any other — "[image:" comes back with a joiner between
+        // every letter, and a prefix test against "[image: " then fails. The joiner has no
+        // glyph and no width and is not part of any name; removing it here is reading the
+        // text the author actually wrote.
+        let bare = text.replacingOccurrences(of: "\u{2060}", with: "")
+        let trimmed = bare.trimmingCharacters(in: .whitespaces)
         guard trimmed.hasPrefix("[image: "), trimmed.hasSuffix("]") else { return nil }
         let name = String(trimmed.dropFirst("[image: ".count).dropLast())
         return pixResults.first { $0.ok && pixBasename($0.rawPath) == name }?.index
@@ -5122,7 +6897,9 @@ enum DocumentRenderer {
         _ span: Span, font: NSFont, paragraph: NSParagraphStyle,
         fonts: [FontChange], defaultSize: Int, colourMap: [Int: Double] = [:],
         disableKerning: Bool = false, useCourierPrime: Bool = false,
-        printedSupSub: Bool = false
+        nativeSupSub: Bool = false, nativeKerning: Bool = true,
+        modernPitchScale: Bool = false, modernPrintedPt: Int? = nil,
+        modernFontlessFamily: CtrlKD.PDFFamily = .times
     ) -> NSAttributedString {
         // Job 226: same lookup `resolvedFont` already needs — shared here so the LJ6DTP
         // character substitution below gates on the SAME font entry, not a second lookup.
@@ -5131,15 +6908,34 @@ enum DocumentRenderer {
         // ☻->©/☼->…/etc. reflect the DRIVER's documented semantics (job 226 M7 ruling:
         // "an em dash is an em dash in any century"), document meaning rather than an
         // encoding-floor workaround, and Part 1 explicitly keeps it. The universal cp1252
-        // esc-degradation that used to chain after it is gone — see `printedEscDegrade`'s
+        // esc-degradation that used to chain after it is gone — see `nativeEscDegrade`'s
         // removal doc comment above (MAC VIEWING RULING).
         var text = span.text
         if !colourMap.isEmpty {
-            text = printedLJ6DTPSubstitute(text, entry: entry)
+            text = nativeLJ6DTPSubstitute(text, entry: entry, kerning: nativeKerning)
         }
+        var spanFont = resolvedFont(for: span, fallback: font, fonts: fonts, defaultSize: defaultSize,
+                                    useCourierPrime: useCourierPrime)
+        // THE MEASUREMENT PIN (gate only) — `modernBase14MeasurementPin`'s own doc comment.
+        // Modern only, so Printed and Native are untouched by construction; `modernPitchScale`
+        // is true on exactly the three Modern call sites and nowhere else.
+        // `entry` REQUIRED, never nil: `pdfFamily(nil)` answers `.courier`, which is Printed's
+        // default and the opposite of Modern's own rule ("a token with NO font information
+        // reads in Times at the sophisticated size, never Courier" — `modernTokFont`). A
+        // fontless run keeps the reader's face, which this gate already pins through
+        // `modernFontName`. Measured when this guard was missing: -README.WS's fontless body
+        // went to Courier New and its distance went 204 to 1179.
+        if modernPitchScale, Self.modernBase14MeasurementPin, let entry,
+           let pinned = modernBase14MacFont(entry, size: spanFont.pointSize,
+                                            bold: span.styles.contains(.bold),
+                                            italic: span.styles.contains(.italic)) {
+            spanFont = pinned
+        }
+        // The run's own font block, if it has one — `spanPitch` needs it to honour an
+        // explicit `.cw` character width, which is not an em fraction of any size.
+        let spanEntry = span.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
         var attributes: [NSAttributedString.Key: Any] = [
-            .font: resolvedFont(for: span, fallback: font, fonts: fonts, defaultSize: defaultSize,
-                                useCourierPrime: useCourierPrime),
+            .font: spanFont,
             .paragraphStyle: paragraph,
         ]
         // Ink on paper, so black by default — `textColor` inverts with the system
@@ -5148,8 +6944,33 @@ enum DocumentRenderer {
         // its palette gray, or (job-489, C1) a real tiled HP pattern — see
         // `driverColourAttributes`'s own doc comment.
         attributes.merge(driverColourAttributes(span.colour, colourMap)) { _, new in new }
-        if disableKerning { attributes[.kern] = printedNoKerning }
-        if disableKerning { attributes[.ligature] = printedNoLigatures }
+        // The face the cell arithmetic is asked about: the run's own DECLARED font, before
+        // any sup/sub reduction below, since `spanPitch` is a property of the span's own
+        // declared size.
+        let spanFontForCells = attributes[.font] as? NSFont ?? font
+        var supSubPitched = false
+        // NEITHER SIDE KERNS, AND NEITHER LIGATES.
+        //
+        // The library measures a line by SUMMING AFM WIDTHS — one number per character, no
+        // pair table and no ligature substitution anywhere in it — and this set `.kern` only
+        // on the Printed path, so Modern let AppKit apply Times New Roman's own kern pairs.
+        // That is where Modern's line breaks came from: measured directly, -README.WS's "The
+        // full set of WordStar manuals as Adobe PDF Portable Document Format files is" is
+        // 466.38pt kerned and 468.53 unkerned against a 468.00 column, so the library wraps
+        // that last word and the app kept it. Every early -README and SCRIPT page was one
+        // word at a line end, and it is this.
+        //
+        // NOT the faces disagreeing, which is what it looked like: macOS's own Times New
+        // Roman matches the engine's AFM Times-Roman table to 0.24/1000 em at worst and
+        // 0.08 on average across the printable ASCII range, measured glyph by glyph. The two
+        // fonts agree; the two MEASUREMENTS did not.
+        //
+        // `nativeNoKerning` is 0 and `nativeNoLigatures` is 0 — the same values Modern
+        // needs, so the Printed constants are reused rather than a second pair invented. A
+        // later per-run corrective kern (the coverage split's own pitch match, mechanism G's
+        // cell arithmetic) still overrides this, as it always did.
+        attributes[.kern] = nativeNoKerning
+        attributes[.ligature] = nativeNoLigatures
         if span.styles.contains(.underline) {
             attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
         }
@@ -5183,22 +7004,22 @@ enum DocumentRenderer {
         // `graphicChars` alone — matching `lineOpsPrinted`'s own `seg.text.contains(where:
         // graphicChars.contains)` check exactly (job 404: the ONLY gate `lineOpsPrinted`
         // ever applies to the graphics decision, font block or none — see `graphicCells`'
-        // own doc comment, `PrintedVectorGraphics.swift`).
+        // own doc comment, `NativeVectorGraphics.swift`).
         if span.styles.contains(.sup) || span.styles.contains(.sub) {
             let base = attributes[.font] as? NSFont ?? font
             let isGraphic = text.contains(where: { graphicChars.contains($0) })
             // MECHANISM G (engine commit f79ff29 / ctrl-kd f328838). Printed takes WordStar's
             // own per-family x-height ratio; Native/Modern keep the flat Cocoa 2/3 (`nil`).
-            let isCourier = printedSupSub && printedFamilyIsCourier(entry)
-            let ratio: Double? = printedSupSub
-                ? (isCourier ? printedSupSubCourierRatio : printedSupSubDefaultRatio)
+            let isCourier = nativeSupSub && nativeFamilyIsCourier(entry)
+            let ratio: Double? = nativeSupSub
+                ? (isCourier ? nativeSupSubCourierRatio : nativeSupSubDefaultRatio)
                 : nil
             let (scaled, offset) = scriptMetrics(for: base, raise: span.styles.contains(.sup),
                                                  ratio: ratio)
             attributes[.font] = scaled
             if !isGraphic { attributes[.baselineOffset] = offset }
             // MECHANISM G, the PITCH half. WS7 reselects a NARROWER fixed-pitch cell for the
-            // span itself — the body cell scaled by `printedSupSubCellRatio` — where AppKit
+            // span itself — the body cell scaled by `nativeSupSubCellRatio` — where AppKit
             // would simply advance at the smaller face's own natural 0.6em. The gap is small
             // per character (0.1pt at a 12pt Courier body: WS7's 5.5pt cell against the 9pt
             // reduced face's own 5.4pt) and CUMULATIVE, so every glyph after the span lands
@@ -5218,10 +7039,11 @@ enum DocumentRenderer {
             // the engine's, not an accident of routing.
             if isCourier {
                 let bodyPt = Int(base.pointSize.rounded())
-                let bodyCell = printedSpanPitch(entry, bodyPt)
+                let bodyCell = nativeSpanPitch(entry, bodyPt)
                 if bodyCell != 0 {
-                    let target = bodyCell * printedSupSubCellRatio
+                    let target = bodyCell * nativeSupSubCellRatio
                     attributes[.kern] = Float(target - Double(scaled.pointSize) * 0.6)
+                    supSubPitched = true
                 }
             }
         }
@@ -5231,7 +7053,7 @@ enum DocumentRenderer {
         // all (grep confirms: no `CtrlKD` emitter branches on `.fnref` for colour, only for
         // marker-text substitution — `PDFLayout.swift:709`, `Writer.swift:336`). That made the
         // tint a pure app decoration that broke Printed-mode byte parity with no engine
-        // counterpart (`PrintedStructuralParityTests`' Class 6 caught it on `DARKNESS.WS`: a
+        // counterpart (`NativeStructuralParityTests`' Class 6 caught it on `DARKNESS.WS`: a
         // real `NSColor.foregroundColor` divergence unrelated to the LJ6DTP knockout residual
         // this class actually tracks). The reference is already visually distinct via its own
         // `.sup` styling (WordStar's own mark, not this renderer's addition) — removed rather
@@ -5245,19 +7067,116 @@ enum DocumentRenderer {
         // entirely as trailing kern silently ate the following inter-word space) by removing
         // the corrective-kern mechanism that caused it, not by patching it.
         //
-        // Job 447 (b27 item 7 part 2 — job 445's `printedCoverageAwareResolvedMacFont` wired
+        // Job 447 (b27 item 7 part 2 — job 445's `nativeCoverageAwareResolvedMacFont` wired
         // in): everything above this line is UNCHANGED — `attributes[.font]` is still exactly
         // the font the rest of this function already decided (LJ6DTP substitution, sup/sub
         // scaling, traits, all done). The only new step is the one below: when `text` contains
         // NO `graphicChars`, return exactly as before (zero behaviour change for prose, which
         // is the entire corpus outside vector-graphics fixtures). When it does, hand off to
         // `coverageSplitAttributedString`, which is where the fix actually lives.
-        guard text.contains(where: { graphicChars.contains($0) }) else {
-            return NSAttributedString(string: text, attributes: attributes)
+        // Planning #222 / Athena's ruling 2026-09-09: in Printed/Native every glyph of a
+        // fixed-pitch run occupies exactly one engine cell, whatever face draws it. Applied
+        // as a post-pass so the coverage split's own font decisions are already made.
+        // `supSubPitched` is mechanism G's own cell arithmetic and owns those runs' advances.
+        // MODERN HONOURS THE FILE'S DECLARED CHARACTER WIDTH, by stretching the type.
+        //
+        // The library's `modernTokenWidth` is three rules, not one:
+        //
+        //     if let entry, !entry.proportional { return count * spanPitch(entry, spt) }
+        //     let natural = stringWidthPt(text, basefont, spt)
+        //     if let entry { return natural * faceTz(basefont, spanPitch(entry, spt), spt) / 100 }
+        //     return natural
+        //
+        // The app had only the third: every Modern run laid out at the Mac face's own
+        // natural advance, whatever the file's font block declared. Measured on LJ6DTP.WS,
+        // whose blocks declare a 137/1800in cell: the library stretches its 12pt Times by
+        // 101.12% (`faceTz`, a PDF `Tz`), so its Modern measure of one prose line is ~1.1%
+        // wider than the app's and it wraps a word earlier. Page 3's paragraphs each kept
+        // one extra word here, and the line that fell off the bottom became a page break in
+        // the wrong place. `MAC VIEWING RULING` (job 240, above) is untouched: it removed
+        // PER-WORD corrective kerning from the PRINTED facsimile, where the engine's own x
+        // is authoritative and the app merely draws to it. Modern has no engine x — the app
+        // does its own wrapping — so the same run has to carry the same measure.
+        //
+        // `.expansion` is AppKit's `Tz`: the value is the LOG of the factor (measured
+        // directly — 0.1 yields a 1.10508 ratio, and exp(0.1) = 1.10517).
+        //
+        // The reference average comes from the run's OWN resolved Mac font rather than the
+        // library's base-14 name, for the reason the batch already measured: macOS's Times
+        // New Roman matches the AFM Times-Roman table to 0.24/1000 em, so the two agree
+        // wherever the faces are metric-matched — and where they are NOT, the declared cell
+        // is still what the document asked for, which is the point of the stretch.
+        // The library's own answer for this run's face, carried on the run — see
+        // `NSAttributedString.Key.modernBase14`. Set here, where `attributes[.font]` is
+        // final and `entry` is in hand; a run with no font block of its own reads in the
+        // same default family `pdfFamily(nil)` gives the engine.
+        if modernPitchScale {
+            let bold = span.styles.contains(.bold)
+            let italic = span.styles.contains(.italic)
+            attributes[.modernBase14] = entry == nil
+                ? base14Name(modernFontlessFamily, bold: bold, italic: italic)
+                : modernBase14Name(entry, bold: bold, italic: italic)
         }
-        return coverageSplitAttributedString(
+        if modernPitchScale, let entry {
+            let cellFont = attributes[.font] as? NSFont ?? spanFontForCells
+            let pitch = nativeSpanPitch(entry, Int(cellFont.pointSize.rounded()))
+            if entry.proportional {
+                // THE AVERAGE COMES FROM THE AFM TABLE, not from the Mac face. `faceTz`
+                // rounds to HUNDREDTHS, so a difference far below any visible threshold
+                // still decides which hundredth the stretch lands on — and the stretch then
+                // multiplies a whole line. Measured on LJ6DTP.WS: its 137/1800in cell over
+                // macOS Times New Roman's own mean advance (5.418619) gives 101.13, and over
+                // the engine's AFM Times-Roman mean (5.419111) gives 101.12. One hundredth
+                // of a percent is 0.046pt across that document's 460.80pt measure, and its
+                // page 9 prose sits 0.02pt inside it: the library fits "set:" on the line
+                // and the app did not, three lines of every such paragraph.
+                //
+                // `stringWidthPt` is the library's own AFM lookup (`AFM.swift`, public), so
+                // the two sides now compute the same number from the same table.
+                let average = stringWidthPt(Self.modernTzReference,
+                                            modernBase14Name(entry,
+                                                             bold: span.styles.contains(.bold),
+                                                             italic: span.styles.contains(.italic)),
+                                            Int(cellFont.pointSize.rounded()))
+                    / Double(Self.modernTzReference.count)
+                if average > 0, pitch > 0 {
+                    // `faceTz`'s own rounding and clamp, so a metric-matched face lands on
+                    // the same hundredth the library picked rather than a neighbouring one.
+                    let raw = pitch / average * 100
+                    let percent = min(250, max(40, (raw * 100).rounded(.toNearestOrEven) / 100))
+                    if abs(percent - 100) > 0.001 {
+                        attributes[.expansion] = log(percent / 100)
+                    }
+                }
+            }
+        }
+        // A fixed-pitch Modern run spends one declared cell per character — the library's
+        // FIRST rule above, and exactly what `nativePinToCells` already states for Printed.
+        let modernFixedPitch = modernPitchScale && entry?.proportional == false
+        guard text.contains(where: { graphicChars.contains($0) }) else {
+            let plain = NSAttributedString(string: text, attributes: attributes)
+            guard disableKerning || modernFixedPitch, !supSubPitched else { return plain }
+            return nativePinToCells(plain, font: spanFontForCells, entry: entry)
+        }
+        // The graphic half of the library's own three-rule measure (`modernPinGraphicCells`).
+        // Applied to the coverage split below, after its font decisions are made, and only in
+        // Modern — Printed positions every span at the engine's own x and has its own
+        // machinery for this (`nativePinGraphicCells`, from the model's placements).
+        func modernCells(_ string: NSAttributedString) -> NSAttributedString {
+            guard modernPitchScale, let printedPt = modernPrintedPt else { return string }
+            return modernPinGraphicCells(string, entry: entry, pt: printedPt)
+        }
+        let split = coverageSplitAttributedString(
             text, attributes: attributes, entry: entry, bold: span.styles.contains(.bold),
-            italic: span.styles.contains(.italic), useCourierPrime: useCourierPrime)
+            italic: span.styles.contains(.italic), useCourierPrime: useCourierPrime,
+            modernPitchScale: modernPitchScale)
+        guard disableKerning || modernFixedPitch, !supSubPitched else { return modernCells(split) }
+        // The same cell pin as the plain path. In Printed this SUPERSEDES the split's own
+        // per-run pitch kerns (job 512's space pinning, the graphic-pitch match): those
+        // approximate a uniform column by matching a neighbour's advance, and this states
+        // the engine's own column outright. Modern keeps them — it never sets
+        // `disableKerning` — so that fix stays exactly as it was where it was found.
+        return modernCells(nativePinToCells(split, font: spanFontForCells, entry: entry))
     }
 
     /// Job 447: splits `text` at every boundary between a `graphicChars` run and an ordinary
@@ -5266,7 +7185,7 @@ enum DocumentRenderer {
     /// separately. RUN-BOUNDARY RULE: a run is a maximal contiguous substring of `text` where
     /// every character's `graphicChars` membership agrees — i.e. exactly the same grouping
     /// `graphicCells` itself already walks character-by-character
-    /// (`PrintedVectorGraphics.swift`'s own `guard graphicChars.contains(ch) else { continue
+    /// (`NativeVectorGraphics.swift`'s own `guard graphicChars.contains(ch) else { continue
     /// }` loop). A non-graphic run keeps `attributes` UNTOUCHED — the coverage-aware lookup
     /// never runs on prose, so a mixed span's own text portion can never end up on a
     /// different font than it already had (job 442's "Recommended fix" section explicitly
@@ -5277,7 +7196,7 @@ enum DocumentRenderer {
     /// other run's is still accepted.
     private static func coverageSplitAttributedString(
         _ text: String, attributes: [NSAttributedString.Key: Any], entry: FontChange?,
-        bold: Bool, italic: Bool, useCourierPrime: Bool
+        bold: Bool, italic: Bool, useCourierPrime: Bool, modernPitchScale: Bool = false
     ) -> NSAttributedString {
         guard let baseFont = attributes[.font] as? NSFont else {
             return NSAttributedString(string: text, attributes: attributes)
@@ -5349,7 +7268,7 @@ enum DocumentRenderer {
         var needsFillerKern = false
         var pitches: [CGFloat?] = Array(repeating: nil, count: runs.count)
         // Scoped to a genuinely proportional BASE font — Printed's own callers always pass a
-        // fixed-pitch Courier `font` (`renderPrinted`'s `attributedLine` call sites), under
+        // fixed-pitch Courier `font` (`renderNative`'s `attributedLine` call sites), under
         // which this correction would compute a near-zero kern anyway (Courier's own space
         // already matches its other glyphs' advance, by definition), but Printed's box
         // rendering is additionally the ACTUAL visible ink for these glyphs
@@ -5365,9 +7284,40 @@ enum DocumentRenderer {
             for i in runs.indices where !runs[i].isGraphic {
                 let spaceCount = runs[i].text.lazy.filter { $0 == " " }.count
                 guard spaceCount >= 2 else { continue }
+                // IN MODERN, A FILLER RUN IS NOTHING BUT FILLER. A box row's interior is
+                // spaces and nothing else (plus `modernNoBreakGraphicRuns`' own zero-width
+                // joiners); a bullet row's BODY is prose that merely happens to follow a
+                // graphic marker, and it has as many spaces as it has words. The old test —
+                // "two or more spaces, and a graphic neighbour on either side" — cannot tell
+                // them apart, so a single leading marker pinned every space on the line after
+                // it: measured on VERSIONS.WS's bullet rows, whose marker is the cp437 solid
+                // square, every inter-word space in the sentence following it came out 8.46pt
+                // (the marker's own advance) against the library's 3.50pt Times space, so
+                // each line ran 4.96pt wider per word and lost its last word.
+                //
+                // Requiring a genuine INTERIOR — a graphic run on BOTH sides — was the first
+                // fix and it is wrong: measured, it took BOXES.WS's own interior rows to
+                // x=222.70 against a top border at x=165.60, because a box row reaches this
+                // function one SPAN at a time and an interior's other border is often in the
+                // next span. What separates the two cases is the run's own CONTENT.
+                //
+                // PRINTED AND NATIVE KEEP THE ORIGINAL READING. Job 512 was found and
+                // measured there, and narrowing it for them is not this batch's to do:
+                // measured, it took PREVIEW.WS's Univers and CG Times past the Native gate's
+                // drift tolerance, against real WS7 paper.
+                if modernPitchScale {
+                    // Both zero-width marks this renderer inserts: the word joiners
+                    // `modernNoBreakGraphicRuns` puts inside a graphic run, and the
+                    // zero-width spaces `runBoundaryBreaks` puts where two runs meet.
+                    let bare = runs[i].text
+                        .replacingOccurrences(of: "\u{2060}", with: "")
+                        .replacingOccurrences(of: "\u{200B}", with: "")
+                    guard !bare.isEmpty, bare.allSatisfy({ $0 == " " }) else { continue }
+                }
                 let neighbour = (i > 0 && runs[i - 1].isGraphic) ? runs[i - 1]
                     : (i + 1 < runs.count && runs[i + 1].isGraphic ? runs[i + 1] : nil)
-                guard let neighbour, let pitch = graphicPitch(for: neighbour.font, in: neighbour.text) else { continue }
+                guard let neighbour, let pitch = graphicPitch(for: neighbour.font, in: neighbour.text)
+                else { continue }
                 pitches[i] = pitch
                 needsFillerKern = true
             }
@@ -5403,7 +7353,7 @@ enum DocumentRenderer {
     /// already on a covering face, never gets rerouted). Otherwise tries the SAME alternate
     /// job 442 measured as near-canonical ("Courier New", 0.0012pt/glyph residual vs. the
     /// engine's exact pitch — `outbox/job442/report.md`'s own measurement table): via
-    /// `printedCoverageAwareResolvedMacFont` (job 445) when `entry` is a real WS5+ font
+    /// `nativeCoverageAwareResolvedMacFont` (job 445) when `entry` is a real WS5+ font
     /// block, or directly by name when it is not (`entry == nil`: a WS4/print-stream span,
     /// or a WS5+ span whose index didn't resolve — neither has a `FontChange` to look a
     /// `falt` up FROM, the same gap `courierPrime(size:)`'s own doc comment names). Never
@@ -5415,12 +7365,12 @@ enum DocumentRenderer {
     ) -> NSFont {
         if fontCoversAllCharacters(baseFont, in: text) { return baseFont }
         if let entry {
-            return printedCoverageAwareResolvedMacFont(
+            return nativeCoverageAwareResolvedMacFont(
                 entry, size: size, bold: bold, italic: italic, useCourierPrime: useCourierPrime,
                 coveringCharactersIn: text) ?? baseFont
         }
         guard let alt = NSFont(name: "Courier New", size: size) else { return baseFont }
-        let styledAlt = printedApplyTraits(alt, bold: bold, italic: italic)
+        let styledAlt = nativeApplyTraits(alt, bold: bold, italic: italic)
         return fontCoversAllCharacters(styledAlt, in: text) ? styledAlt : baseFont
     }
 
@@ -5444,7 +7394,7 @@ enum DocumentRenderer {
     static func scriptMetrics(for base: NSFont, raise: Bool,
                               ratio: Double? = nil) -> (font: NSFont, offset: CGFloat) {
         let scaledSize: CGFloat = ratio.map {
-            CGFloat(max(1, printedRoundHalfToEven(Double(base.pointSize) * $0)))
+            CGFloat(max(1, nativeRoundHalfToEven(Double(base.pointSize) * $0)))
         } ?? max(1, (base.pointSize * 2 / 3).rounded())
         let scaled = NSFont(descriptor: base.fontDescriptor, size: scaledSize) ?? base
         let offset = raise
@@ -5453,7 +7403,7 @@ enum DocumentRenderer {
         return (scaled, offset)
     }
 
-    /// The face for one Printed-style span — WS5+'s font runs, faithfully; WS4's and every
+    /// The face for one Native-style span — WS5+'s font runs, faithfully; WS4's and every
     /// print stream's Courier, unconditionally.
     ///
     /// `fonts` is `doc.fonts`: EMPTY for WS4 files and print streams (`PDFWriter.swift`'s own
@@ -5465,7 +7415,7 @@ enum DocumentRenderer {
     /// document on Courier by construction rather than by branching on a format flag.
     ///
     /// Job 240 (b13, Part 1): chooses the engine's `.mac` render-target family
-    /// (`printedMacFontName`/`printedResolvedMacFont`, this file's own top-of-file doc
+    /// (`nativeMacFontName`/`nativeResolvedMacFont`, this file's own top-of-file doc
     /// comments) rather than the base-14 clamp job 186/210/226 built and this job removed —
     /// MAC VIEWING RULING (decision register 2026-08-11; skill registry #25). `FontChange`'s
     /// fields used here (`typestyleName`, `symbolMap`, `family`, `genericStyle`, `points`)
@@ -5477,7 +7427,7 @@ enum DocumentRenderer {
     /// `splitIndent`'s own carve-out — see that call site's doc comment. The REST of a
     /// proportional span (real text after the indent, and any interior run) lays out at
     /// this resolved font's own NATURAL advance (job 229's per-word AFM/Tz corrective-kern
-    /// port, `PrintedWordAnchor.swift`, is REMOVED this job — see `attributedRun`'s own doc
+    /// port, `NativeWordAnchor.swift`, is REMOVED this job — see `attributedRun`'s own doc
     /// comment on that removal).
     private static func resolvedFont(
         for span: Span, fallback: NSFont, fonts: [FontChange], defaultSize: Int, useCourierPrime: Bool = false
@@ -5499,8 +7449,15 @@ enum DocumentRenderer {
     private static func resolvedFont(
         for font: FontChange, styles: Style, fallback: NSFont, defaultSize: Int, useCourierPrime: Bool = false
     ) -> NSFont {
-        let size = font.points > 0 ? max(1, CGFloat(font.points.rounded())) : CGFloat(defaultSize)
-        return printedResolvedMacFont(
+        // ROUND HALF TO EVEN, as the library does: `spanRender` resolves a font block's own
+        // declared height with `roundHalfToEven(points)` (`PDFFonts.swift`), and Swift's
+        // `.rounded()` is half-AWAY-from-zero, so a block declaring 14.5pt would become 15
+        // here and 14 there. No fixture in either gate moves on it — recorded as the
+        // correctness fix it is, not as a measured win.
+        let size = font.points > 0
+            ? max(1, CGFloat(CtrlKD.roundHalfToEven(font.points)))
+            : CGFloat(defaultSize)
+        return nativeResolvedMacFont(
             font, size: size, bold: styles.contains(.bold), italic: styles.contains(.italic),
             useCourierPrime: useCourierPrime
         ) ?? styled(fallback, with: styles)
@@ -5527,7 +7484,7 @@ enum DocumentRenderer {
     /// curly-quote GLYPH's own ink bounding box (`CTFontGetBoundingRectsForGlyphs`) tops
     /// out at 15.6pt, 1.6pt above the fragment's 14pt ceiling. Replacing the ×2 multiplier
     /// with a small FIXED points tolerance (tried: 1.5pt) DOES catch this fixture, but a
-    /// full-gate re-run (`OracleByteParityTests`/`PrintedStructuralParityTests`/
+    /// full-gate re-run (`OracleByteParityTests`/`NativeStructuralParityTests`/
     /// `OverprintCompositingTests`) showed it also reclassifies large amounts of ORDINARY
     /// body text (YOURWAY.WS and others) as oversized — `natural` for a plain 10-12pt
     /// Times/Helvetica run routinely exceeds a tight document `.lh` by more than 1.5pt on
@@ -5558,7 +7515,7 @@ enum DocumentRenderer {
     /// report).
     ///
     /// Internal rather than `private` so `SoftReturnTests` can tell which `PageLine`s
-    /// `renderPrinted` routes through `naturalPass` instead of an ordinary fragment —
+    /// `renderNative` routes through `naturalPass` instead of an ordinary fragment —
     /// `OverprintCompositingTests` needs it to keep its own real-fragment/pass accounting
     /// exact now that a pass can come from an oversized base line as well as an
     /// `.overprint` chain continuation.
@@ -5670,7 +7627,7 @@ enum DocumentRenderer {
     /// real ink — `CTLineGetBoundsWithOptions(.useGlyphPathBounds)` on the self-pass's own
     /// (already fully resolved/styled) `NSAttributedString`, not a font-metrics guess —
     /// against THIS PAGE's own real first-baseline (`firstBaselines[page]`, job 425 — see
-    /// `perPageFirstBaselines`'s own citation in `renderPrinted`: `top + THIS line's own
+    /// `perPageFirstBaselines`'s own citation in `renderNative`: `top + THIS line's own
     /// lead`, not a flat `top + size` shared by every page). A self-pass whose real ink
     /// already fits above that baseline (LJ6DTP.WS's banner may or may not, depending on its
     /// resolved font — not assumed either way, only measured) needs no extra room at all.
@@ -5704,7 +7661,7 @@ enum DocumentRenderer {
 
     /// Job 210: the foreground colour for one span — `colourMap[span.colour]` as a
     /// grayscale `NSColor` when the document's driver colour applies (`colourMap` is
-    /// non-empty only for LJ6DTP, `printedLJ6DTPColourGray`'s own doc comment), else the
+    /// non-empty only for LJ6DTP, `nativeLJ6DTPColourGray`'s own doc comment), else the
     /// ordinary black ink every other document has always used. Port of the SAME gate the
     /// engine's `lineOpsPrinted` applies to its own `g` operator (`PDFWriter.swift:486-492`:
     /// "Emitted only when the value CHANGES... every all-black document... writes not one
@@ -5713,7 +7670,7 @@ enum DocumentRenderer {
     private static func driverColour(_ colour: Int?, _ colourMap: [Int: Double]) -> NSColor {
         guard let colour else { return .black }
         // job-489 (C1): `colourMap` empty means this document isn't LJ6DTP at all
-        // (`renderPrinted`'s own gate) — the SAME condition every other driver-colour branch
+        // (`renderNative`'s own gate) — the SAME condition every other driver-colour branch
         // here already checks, so a pattern index never applies to a non-LJ6DTP document's
         // own `span.colour` (if any) either.
         if !colourMap.isEmpty, lj6dtpHPPatternIndices.contains(colour) {
@@ -5725,7 +7682,7 @@ enum DocumentRenderer {
 
     /// job-489 (C1): `driverColour`'s own `.foregroundColor`, plus — only for an HP pattern
     /// index — the companion `.lj6dtpPatternIndex` attribute `graphicCells`
-    /// (`PrintedVectorGraphics.swift`) needs to recover which of the six hatches a colour-
+    /// (`NativeVectorGraphics.swift`) needs to recover which of the six hatches a colour-
     /// driven glyph FILL (not just plain text) wants. Both call sites that used to write
     /// `.foregroundColor: driverColour(...)` directly now merge this dictionary in instead.
     /// Register b31 (job 506, E2): also tags a colour1-7 run with `.lj6dtpDarkenColour` —
@@ -5746,7 +7703,7 @@ enum DocumentRenderer {
         return attrs
     }
 
-    /// Apply the IR's bold/italic to a base face. Printed style asks for Courier, whose
+    /// Apply the IR's bold/italic to a base face. Native style asks for Courier, whose
     /// bold and oblique members are what the PDF emitter names; Modern asks for the user's
     /// font, whose traits AppKit synthesises where the family lacks them.
     private static func styled(_ font: NSFont, with styles: Style) -> NSFont {
@@ -5768,12 +7725,12 @@ enum DocumentRenderer {
 
     /// Job 437 (b27, Jon's font-fallback ruling): the NO-FONT-INDEX fallback for a span
     /// inside a document that DOES declare fonts elsewhere — the bundled face Native's own
-    /// courier-class rows already resolve to (`printedMacFontName`'s `useCourierPrime`
+    /// courier-class rows already resolve to (`nativeMacFontName`'s `useCourierPrime`
     /// branch, "Courier Prime" primary / "Courier New" `falt`), used here directly rather
     /// than through that WS5+-font-block-keyed lookup: a span with no font index has no
     /// `FontChange` to look a row up FROM in the first place — this is the same terminal
     /// substitute those rows resolve TO, requested unconditionally. "Courier New" is the
-    /// same defensive second choice `printedMacFontName` already names for the identical
+    /// same defensive second choice `nativeMacFontName` already names for the identical
     /// reason (the bundled face failing to register); the system monospaced face is a third
     /// line only `courier(size:)` above has ever needed to reach for.
     private static func courierPrime(size: CGFloat) -> NSFont {

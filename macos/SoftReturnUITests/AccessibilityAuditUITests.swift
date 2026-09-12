@@ -10,7 +10,7 @@ import XCTest
 /// the six findings yet, and fixing them blind in the same pass that discovered them would
 /// have shipped changes nobody evaluated. They have since been evaluated — see
 /// `PagedDocumentView`'s and `BottomBar`'s accessibility setup, `DocumentWindowController`'s
-/// `document-scroll-view` label, and `DocumentRenderer.renderPrinted`'s clipping note — and
+/// `document-scroll-view` label, and `DocumentRenderer.renderNative`'s clipping note — and
 /// `PagedDocumentViewAccessibilityTests` covers the same three defect classes headlessly, in
 /// the target that actually runs on this console. This test's job now is to stay green
 /// because those fixes hold, and to go red the moment something regresses one of them; a

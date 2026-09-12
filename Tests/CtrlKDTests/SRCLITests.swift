@@ -432,13 +432,13 @@ private func noFSEnvironment() -> CLIEnvironment {
     // This repo never carries a dev stamp (DevStamp.swift is nil here; the app's build
     // script injects real values into its own checkout) — so the committed shape is the
     // clean release string, and the dev shape is exercised through the split-out helper.
-    #expect(versionLine(devDate: srDevDate) == "sr v4.0.3")
-    #expect(versionLine(devDate: "2026-08-14") == "sr v4.0.3 (dev 2026-08-14)")
+    #expect(versionLine(devDate: srDevDate) == "sr v4.1.0")
+    #expect(versionLine(devDate: "2026-08-14") == "sr v4.1.0 (dev 2026-08-14)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
     #expect(recorder.out == [versionOutput])
-    #expect(versionOutput.hasSuffix("sr v4.0.3"))
+    #expect(versionOutput.hasSuffix("sr v4.1.0"))
     #expect(versionOutput.contains("_____       ______     ____"))  // the SOFT RETURN Slant banner leads
     #expect(recorder.written.isEmpty)
 
@@ -989,6 +989,13 @@ private func noFSEnvironment() -> CLIEnvironment {
     // Recorded literal (planning #199): captured once from `convertData(makeProse(), to:
     // "pdf", options: EmitOptions(title: "PAPER"))` on 2026-09-06. A future divergence is a
     // reviewed diff to this literal, never a silent pass.
+    //
+    // RE-RECORDED 2026-09-11 (planning #263, the page baseline model ported from ctrl-kd
+    // 9fb1677): a Modern line's baseline now sits one face DESCENT above its own line box's
+    // bottom instead of on it, so this fixture's four drawn y values each rise by Times'
+    // 217/1000 em at 14pt -- 703.2 -> 706.2, 686.4 -> 689.4, 669.6 -> 672.6, 636.0 -> 639.0.
+    // Nothing else in the file moves: same fonts, same x values, same stream length, so the
+    // same xref offsets. Re-captured from `convertData` the same way the original was.
     let expectedPDFBase64 = [
         "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIg",
         "MCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFs4IDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBv",
@@ -1004,14 +1011,14 @@ private func noFSEnvironment() -> CLIEnvironment {
         "aWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSAzIDAgUiAvRjIgNCAw",
         "IFIgL0YzIDUgMCBSIC9GNCA2IDAgUiAvRjUgNyAwIFIgPj4gPj4gL0NvbnRlbnRzIDkgMCBSID4+CmVu",
         "ZG9iago5IDAgb2JqCjw8IC9MZW5ndGggNDc2ID4+CnN0cmVhbQpCVCAvRjUgMTQgVGYgMCBUcyA3Mi4w",
-        "IDcwMy4yIFRkICh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4",
-        "eHh4eHh4KSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA0NjAuNSA3MDMuMiBUZCAod29yZHMpIFRqIEVU",
-        "CkJUIC9GNSAxNCBUZiAwIFRzIDcyLjAgNjg2LjQgVGQgKHl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5",
-        "eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5KSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA0MjUuNSA2ODYu",
-        "NCBUZCAoY29udGludWluZykgVGogRVQKQlQgL0Y1IDE0IFRmIDAgVHMgNDg4LjkgNjg2LjQgVGQgKGVu",
-        "ZHMpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRzIDcyLjAgNjY5LjYgVGQgKGhlcmUuKSBUaiBFVApCVCAv",
-        "RjUgMTQgVGYgMCBUcyA3Mi4wIDYzNi4wIFRkIChTZWNvbmQpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRz",
-        "IDExNi43IDYzNi4wIFRkIChwYXJhZ3JhcGguKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCAx",
+        "IDcwNi4yIFRkICh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4",
+        "eHh4eHh4KSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA0NjAuNSA3MDYuMiBUZCAod29yZHMpIFRqIEVU",
+        "CkJUIC9GNSAxNCBUZiAwIFRzIDcyLjAgNjg5LjQgVGQgKHl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5",
+        "eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5KSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA0MjUuNSA2ODku",
+        "NCBUZCAoY29udGludWluZykgVGogRVQKQlQgL0Y1IDE0IFRmIDAgVHMgNDg4LjkgNjg5LjQgVGQgKGVu",
+        "ZHMpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRzIDcyLjAgNjcyLjYgVGQgKGhlcmUuKSBUaiBFVApCVCAv",
+        "RjUgMTQgVGYgMCBUcyA3Mi4wIDYzOS4wIFRkIChTZWNvbmQpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRz",
+        "IDExNi43IDYzOS4wIFRkIChwYXJhZ3JhcGguKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCAx",
         "MAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBu",
         "IAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyMTAgMDAwMDAgbiAKMDAwMDAwMDMxMCAwMDAwMCBu",
         "IAowMDAwMDAwNDEzIDAwMDAwIG4gCjAwMDAwMDA1MjAgMDAwMDAgbiAKMDAwMDAwMDYxOSAwMDAwMCBu",

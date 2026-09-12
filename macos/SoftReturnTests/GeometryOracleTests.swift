@@ -31,6 +31,54 @@ enum Oracle {
             .appendingPathComponent("Fixtures")
     }
 
+    /// DEGENERATE DOCUMENTS: the file's own dot command is invalid, so there is no defined
+    /// behaviour to compare against — excluded by name, with the reason, never silently.
+    ///
+    /// Jon's ruling, 2026-09-10 (planning #261). `-PATCHES.WS` declares `.pl0` — a page
+    /// length of zero — and what real WS7 does with that is undefined; the engine's own
+    /// answer is to put 134, 137 and 475 lines on single pages, which is not a standard
+    /// anything can be measured against. A new exclusion class beside `postscript`,
+    /// `merge` and `freeze` in the corpus's own `ws7-prints/v4/exclusions.json`, and the
+    /// engine's `PCLFidelityTests` carries the same entry.
+    ///
+    /// Matched on the LAST PATH COMPONENT, like this file's other by-name tables, so every
+    /// copy of the document in the corpus is covered.
+    static let degenerateDocuments: [String: String] = [
+        "-PATCHES.WS": "degenerate: the document declares `.pl 0`, an invalid page length, "
+            + "and WS7's own behaviour with it is undefined (planning #261, Jon 2026-09-10)",
+    ]
+
+    /// FONT-CHART PAGES, which are not pages of lines at all.
+    ///
+    /// Jon's ruling, 2026-09-10: "Those can't be treated like a line of text. It's more like
+    /// a chart... 4 columns... in each column there is a row of a number, then two glyphs."
+    /// Measured, which is what put the question to him: the engine's own PRINTER.PS page 1
+    /// draws at 104 DISTINCT BASELINES and this reader calls it 53 lines. What "a line" means
+    /// on a per-cell grid is the reader's own grouping and not either renderer's, so the two
+    /// sides group it differently and the difference says nothing about pagination.
+    ///
+    /// They leave the LINE comparison and nothing else — the pixel tier judges them, and
+    /// every other oracle here (baseline grid, left margin, page budget) still measures them.
+    ///
+    /// An empty set means the whole document; PSPRINT.TST is a chart on pages 4 and 5 and
+    /// ordinary prose everywhere else, so only those two leave. Pages are 1-based.
+    static let fontChartPages: [String: Set<Int>] = [
+        "PRINTER.PS": [],
+        "FONTCRIB.PS": [],
+        "fontcrib.ws": [],
+        "WINGDING.CHT": [],
+        "SYMBOL.CHT": [],
+        "PSPRINT.TST": [4, 5],
+    ]
+
+    static let fontChartReason = "font-chart: judged by the pixel tier, Jon 2026-09-10"
+
+    /// Is this page a font chart? `page` is 1-based, as the oracles report it.
+    static func isFontChart(_ name: String, page: Int) -> Bool {
+        guard let pages = fontChartPages[name] else { return false }
+        return pages.isEmpty || pages.contains(page)
+    }
+
     static var fixtureURLs: [URL] {
         let names = ["report.ps", "report-no-extension", "boundary.ws4", "narrow.ws4",
                      "no-dot-commands.ws4", "dropped-chapter.ws4"]
@@ -90,14 +138,236 @@ enum Oracle {
                 urls.append(fileURL)
             }
         }
-        return urls
+        // EXCLUDED OUT LOUD. A silent drop is how an oracle quietly stops measuring
+        // something; the names and the reason are printed every run — see
+        // `degenerateDocuments`.
+        let (kept, dropped) = urls.reduce(into: ([URL](), [URL]())) { out, url in
+            if degenerateDocuments[url.lastPathComponent] != nil {
+                out.1.append(url)
+            } else {
+                out.0.append(url)
+            }
+        }
+        for url in dropped {
+            let reason = degenerateDocuments[url.lastPathComponent] ?? ""
+            print("ORACLE-EXCLUDED  \(url.lastPathComponent): \(reason)")
+        }
+        return kept
     }
 
     @MainActor
     static func state(for url: URL) throws -> DocumentState {
         let bytes = [UInt8](try Data(contentsOf: url))
         let defaults = UserDefaults(suiteName: "Oracle.\(UUID().uuidString)")!
-        return try DocumentState(data: bytes, settings: SettingsStore(defaults: defaults))
+        // WITH ITS OWN PATH, so `DocumentState` resolves the document's pictures. Without it
+        // `pixResults` is empty and every `.PIX` tag renders as its literal
+        // "[image: NAME]" placeholder TEXT — -README.WS page 1 opened with one the engine's
+        // own PDF does not have, which is job 441's finding arriving on a second surface.
+        return try DocumentState(data: bytes, settings: SettingsStore(defaults: defaults),
+                                 docPath: url.path)
+    }
+
+    /// The engine's own pagination for a state, BUILT THE WAY THE APP BUILDS IT.
+    ///
+    /// `docToPagelines(state.document, printed: true)` is not the model the app renders: it
+    /// leaves out both of `renderNative`'s own arguments. The Page Settings preset moves
+    /// margins and page length before the model is built at all, and `pixResults` is what
+    /// makes a resolved `.PIX` tag become its own image `PageLine` instead of a line of
+    /// placeholder text.
+    ///
+    /// Handing `Oracle.state(for:)` the document's path (the picture fix, same commit) is
+    /// what made the second of those matter here: the app's render now reserves a picture's
+    /// real band, and a model built without `pixResults` still thinks that band is one line
+    /// of text. -README.WS page 1 read `line 0: fragment top y=123.00 ... says 39.00` — 84pt,
+    /// which is exactly the seven 12pt lines its opening picture occupies. The app was right
+    /// and the model was a different document.
+    ///
+    /// Every oracle in this file compares the app's Native render against the engine's
+    /// model, so every one of them wants THIS model.
+    @MainActor
+    static func pagelines(of state: DocumentState) -> [Page] {
+        var doc = state.document
+        if let preset = state.pageSettingsPreset.value, let page = doc.page {
+            doc.page = effectivePage(page, settings: preset.settings)
+        }
+        return docToPagelines(doc, printed: true, pixResults: state.pixResults, pictures: .embed)
+    }
+
+    /// WHAT THE ENGINE'S OWN PDF STRING CAN CARRY, and the comparison that allows for it.
+    ///
+    /// The engine writes its text as cp1252 (`/WinAnsiEncoding`), with a small table of
+    /// deliberate stand-ins first and `?` for whatever is left over — `PDFWriter.swift`'s
+    /// `esc`/`escFallback`/`cp1252Encode`. The app draws the real character. So a row of this
+    /// oracle can be nothing but the two encodings disagreeing about a mark BOTH renderers
+    /// put on the paper:
+    ///
+    ///   -README.WS  "Clarify∙"           against "Clarify·"        (U+2219 -> U+00B7)
+    ///   -README.WS  "the euro ... ₧"     against "... €"           (U+20A7 -> U+20AC)
+    ///   LSRBOX.WS   "┌00.500\"hx ─00.250\"" against "?00.500\"hx -00.250\""
+    ///
+    /// Every one of those is the ENGINE's own substitution, made on purpose and documented at
+    /// its own call site. Comparing the app's character against it compares the two PDF
+    /// alphabets, not the two pages.
+    ///
+    /// A GRAPHIC CHARACTER IS THE AMBIGUOUS ONE, and it is why this is a walk rather than a
+    /// pair of normalised strings: the engine draws cp437 box drawing as VECTORS in body text
+    /// (no text operator at all) and as one of these ASCII stand-ins in a running head, whose
+    /// own emitter has no graphics branch. Both are right on the page and neither can be read
+    /// from the string. So a graphic character on the app's side matches the engine's stand-in
+    /// OR nothing at all, and everything else must match exactly.
+    enum EngineText {
+        /// `PDFWriter.swift`'s own `escFallback`, which is `private` there. Six entries,
+        /// each a deliberate typographic stand-in rather than an encoding accident.
+        static let escFallback: [Character: Character] = [
+            "\u{2219}": "\u{00B7}",   // ∙ -> ·
+            "\u{203C}": "!",          // ‼ -> !
+            "\u{2502}": "|",          // │ -> |
+            "\u{2500}": "-",          // ─ -> -
+            "\u{2550}": "=",          // ═ -> =
+            "\u{20A7}": "\u{20AC}",   // ₧ -> €
+        ]
+
+        /// ONE LETTER, TWO CODEPOINTS. Quartz draws a Greek small mu through the MacRoman-
+        /// encoded half of its font, where 0xB5 is the MICRO SIGN, so the app's own PDF says
+        /// U+00B5 for the U+03BC the engine's Symbol sheet says. Unicode itself calls them the
+        /// same letter — U+00B5's compatibility decomposition IS U+03BC — and NOVEL.WS's nine
+        /// rows were all and only this ("χομμασ" against "χοµµασ").
+        ///
+        /// Written out rather than taken from `decomposedStringWithCompatibilityMapping`,
+        /// which would also fold a ligature and flatten a superscript digit — and a raised
+        /// digit is exactly what this corpus's sub/superscript documents are about.
+        static let sameLetter: [Character: Character] = ["\u{00B5}": "\u{03BC}"]
+
+        /// The character the engine's PDF string would carry for `character`. cp1252
+        /// membership is asked of Foundation rather than copied from the engine's own table —
+        /// `/WinAnsiEncoding` IS windows-1252, so the question has a real answer here.
+        static func degraded(_ character: Character) -> Character {
+            let mapped = escFallback[character] ?? character
+            return String(mapped).data(using: .windowsCP1252) == nil ? "?" : mapped
+        }
+
+        /// Is this the same mark on both sides?
+        ///
+        /// The letter equivalence is asked FIRST and on its own, because `degraded` models
+        /// what a cp1252 TEXT font can carry and a Symbol run does not go through one — the
+        /// engine writes Symbol's own byte in the Symbol face. Folding µ into μ and then
+        /// asking cp1252 about it answered "?", which is true of the body face and false of
+        /// the face this character is actually set in.
+        static func sameMark(_ app: Character, _ library: Character) -> Bool {
+            if app == library { return true }
+            if (sameLetter[app] ?? app) == library { return true }
+            if degraded(app) == library { return true }
+            // `?` IS THE ENGINE SAYING IT COULD NOT WRITE THE MARK, and `degraded` only
+            // knows the cp1252 half of that. A Symbol or ZapfDingbats run is written in the
+            // FACE's own byte codes, and `untransliterate` answers `?` for anything that
+            // face never carried — NOVEL.WS's "café" inside a Symbol run reads "χαφ?" on the
+            // library's side against the app's "χαφé", and PRINTER.PS's chart columns are
+            // pages of the same thing. Which face a given run is set in cannot be read back
+            // out of the extracted string, so the rule is stated the other way round: a
+            // library `?` accepts any NON-ASCII mark, and a real ASCII `?` still has to be a
+            // real ASCII `?` on both sides.
+            return library == "?" && !app.isASCII
+        }
+
+        /// Does the app's line say what the library's line says?
+        ///
+        /// A REACHABILITY WALK RATHER THAN A GREEDY ONE, because a graphic character is
+        /// locally ambiguous and only the whole line settles it: the engine may have drawn it
+        /// as geometry (no text at all) or degraded it to an ASCII stand-in, and a greedy
+        /// reader that takes the stand-in whenever one is available mis-aligns the rest.
+        /// LJ6DTP.WS page 6's shadowed banner is the case — "██P███R███…H█?" against
+        /// "PRETTY NEAT, HUH?", where the last block matched the library's own final "?" and
+        /// left the app's real "?" with nothing to pair with.
+        ///
+        /// So: each app character either matches the library's next (as itself, or through
+        /// `degraded`) or, if it is a graphic character, may be dropped — and the line matches
+        /// if ANY sequence of those choices consumes both sides exactly. Quadratic in the line
+        /// length, which for a page line is a few thousand steps.
+        /// A FILL RUN — three or more of the same non-alphanumeric mark in a row, which is
+        /// what a dot leader is — is ELASTIC, and it has to be because the two sides fill it
+        /// on purpose in different ways.
+        ///
+        /// The engine recomputes a tab's leader COUNT for the gap (`lineOpsPrinted`'s own
+        /// `count = Int(wGap / charW)`); the app keeps the author's real typed characters and
+        /// kerns them to the same stop, which `appendTabRun`'s own doc comment records as a
+        /// deliberate choice with two named tests depending on it. So MICKEE.WS page 25 reads
+        /// 59 dots against 58 and LJ6DTP.WS page 5 sixteen against forty-one, and neither
+        /// says anything about where a line or a page breaks — which is all this oracle
+        /// measures.
+        ///
+        /// Three, not two, so a real hyphen or an ellipsis is never elastic. Letters and
+        /// digits never are either: a repeated LETTER is a word.
+        static func fillRunFlags(_ characters: [Character]) -> [Bool] {
+            var flags = [Bool](repeating: false, count: characters.count)
+            var start = 0
+            while start < characters.count {
+                var end = start
+                while end + 1 < characters.count, characters[end + 1] == characters[start] { end += 1 }
+                let character = characters[start]
+                if end - start + 1 >= 3, !character.isLetter, !character.isNumber {
+                    for index in start...end { flags[index] = true }
+                }
+                start = end + 1
+            }
+            return flags
+        }
+
+        static func sameLine(app: String, library: String) -> Bool {
+            let a = Array(app.filter { !$0.isWhitespace })
+            let b = Array(library.filter { !$0.isWhitespace })
+            let aFill = fillRunFlags(a)
+            let bFill = fillRunFlags(b)
+            var reachable = [[Bool]](repeating: [Bool](repeating: false, count: b.count + 1),
+                                     count: a.count + 1)
+            reachable[0][0] = true
+            for i in 0...a.count {
+                for j in 0...b.count where reachable[i][j] {
+                    // Either side's fill run may be longer than the other's — see
+                    // `fillRunFlags`. Only a character INSIDE a run already begun is
+                    // skippable, so the run itself still has to be present on both sides.
+                    if j < b.count, j > 0, bFill[j], b[j] == b[j - 1] { reachable[i][j + 1] = true }
+                    if i < a.count, i > 0, aFill[i], a[i] == a[i - 1] { reachable[i + 1][j] = true }
+                    // A mark the app drew as a RASTER, not as text. macOS's own Zapf
+                    // Dingbats face does not carry the dozen codepoints Unicode gave DEFAULT
+                    // EMOJI PRESENTATION (checked directly: U+2705, U+274C, U+2753, U+270A,
+                    // U+2728 and their neighbours return glyph 0), so Core Text substitutes
+                    // Apple Color Emoji and Quartz writes an image XObject — real ink on the
+                    // page, and no text operator anywhere. The engine's own base-14
+                    // `/ZapfDingbats` writes them as text. Neither side is missing the mark;
+                    // one of them cannot express it as a character.
+                    if j < b.count, isRasterMark(b[j]) { reachable[i][j + 1] = true }
+                    guard i < a.count else { continue }
+                    // A mark the engine draws as geometry, or one the READER could not name
+                    // at all (`AppPDFWordsFont`'s `U+FFFD`: an Identity-H glyph id in a
+                    // CJK-fallback subset with no `/ToUnicode`). FONTS.REF page 10's PC-Line
+                    // specimen row is the case — typed in cp437 box drawing, which the engine
+                    // draws as vectors and no Latin face carries, so Core Text falls back and
+                    // Quartz writes glyph ids. The app IS painting something there; what it
+                    // is cannot be read out of the bytes, and a name this reader invented is
+                    // not evidence about pagination.
+                    if CtrlKD.graphicChars.contains(a[i]) || a[i] == "\u{FFFD}" {
+                        reachable[i + 1][j] = true
+                    }
+                    if j < b.count, sameMark(a[i], b[j]) { reachable[i + 1][j + 1] = true }
+                }
+            }
+            return reachable[a.count][b.count]
+        }
+
+        /// Does macOS draw this mark as a colour emoji rather than as a glyph of the face
+        /// the document asked for? See `sameLine`.
+        static func isRasterMark(_ character: Character) -> Bool {
+            guard character.unicodeScalars.count == 1,
+                  let scalar = character.unicodeScalars.first else { return false }
+            return scalar.properties.isEmojiPresentation
+        }
+
+        /// Is this line nothing but marks one side draws as geometry? Such a line is present
+        /// as text on the app's side and absent from the engine's, and belongs to neither.
+        static func isAllGeometry(_ line: String) -> Bool {
+            let bare = line.filter { !$0.isWhitespace }
+            return bare.isEmpty || bare.allSatisfy { CtrlKD.graphicChars.contains($0) }
+        }
     }
 
     struct LaidOutPage {
@@ -107,7 +377,7 @@ enum Oracle {
         let glyphs: NSRange
     }
 
-    /// Render in Printed style through the app's real path and hand back the pages.
+    /// Render in Native style through the app's real path and hand back the pages.
     @MainActor
     static func layOut(_ state: DocumentState) -> (RenderedDocument, PagedDocumentView, [LaidOutPage]) {
         state.style.setManually(.printed)
@@ -120,6 +390,39 @@ enum Oracle {
             return LaidOutPage(textView: tv, manager: m, container: c, glyphs: m.glyphRange(for: c))
         }
         return (rendered, view, pages)
+    }
+
+    /// EVERY line of local page `index`, its newspaper columns included — item 19.
+    ///
+    /// `layOut` returns one `LaidOutPage` per page, built from that page's own (first
+    /// column's) text view, because that is what every reader here wants. A page's later
+    /// columns are their own text containers now, so a reader that wants the page's whole
+    /// content has to walk them too, in column order — which is the order the engine's own
+    /// model states them in.
+    @MainActor
+    static func allLines(ofPage index: Int, in view: PagedDocumentView,
+                         textFrame: CGRect) -> [Line] {
+        var result: [Line] = []
+        var views: [NSTextView] = []
+        if view.pageViews.indices.contains(index) { views.append(view.pageViews[index]) }
+        views.append(contentsOf: view.columnTextViews(atPage: index))
+        for textView in views {
+            guard let manager = textView.layoutManager, let container = textView.textContainer
+            else { continue }
+            manager.ensureLayout(for: container)
+            let page = LaidOutPage(textView: textView, manager: manager, container: container,
+                                   glyphs: manager.glyphRange(for: container))
+            let own = lines(of: page, textFrame: textFrame)
+            // `index` is an ordinal within its own container; renumber so the page reads as
+            // one list.
+            for line in own {
+                result.append(Line(index: result.count, top: line.top, baseline: line.baseline,
+                                   left: line.left, hasText: line.hasText,
+                                   hasTextInk: line.hasTextInk, fragmentLeft: line.fragmentLeft,
+                                   glyphs: line.glyphs))
+            }
+        }
+        return result
     }
 
     /// One laid-out line, as the layout manager reports it.
@@ -271,12 +574,12 @@ enum Oracle {
     /// ## `CtrlKD.graphicChars`, and why NOT the app's set of the same name
     ///
     /// There are TWO sets called `graphicChars`: `SoftReturn.graphicChars`
-    /// (`Rendering/PrintedVectorGraphics.swift`) is what the APP draws as vectors, and
+    /// (`Rendering/NativeVectorGraphics.swift`) is what the APP draws as vectors, and
     /// `CtrlKD.graphicChars` (`PDFDriverLJ6DTP.swift`, made public in sr 506b2e0) is what
     /// the ENGINE does. They are not the same question and this oracle needs the engine's:
     /// the number being compared against is the first ink in the ENGINE'S OWN PDF, so what
     /// matters is which characters are absent from that PDF's text operators. The app's set
-    /// is deliberately the wider of the two — `PrintedStructuralParityTests` records that as
+    /// is deliberately the wider of the two — `NativeStructuralParityTests` records that as
     /// a ruling rather than an oversight — and using it here would skip characters the
     /// engine DID write as text, hiding a real margin difference.
     ///
@@ -376,23 +679,23 @@ enum Oracle {
         return text.substring(with: chars).components(separatedBy: "\n")
     }
 
-    /// The app's own Printed facsimile PDF for a fixture — the AppKit render, i.e. the same
+    /// The app's own Native facsimile PDF for a fixture — the AppKit render, i.e. the same
     /// bytes Cmd-P produces and the same path `AppNativeFidelityTests` measures.
     ///
     /// Used only where the layout flow cannot answer: an oversized line's ink lives in the
     /// self-pass overlay, not in the text storage.
     @MainActor
-    static func appPrintedPDF(for url: URL, state: DocumentState) throws -> [UInt8] {
+    static func appNativePDF(for url: URL, state: DocumentState) throws -> [UInt8] {
         let products = try ExportEngine.render(
             document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-            style: .printed, viewStyle: .native, title: "", docPath: url.path)
+            style: .native, viewStyle: .native, title: "", docPath: url.path)
         return try #require(products.first?.bytes,
                             "the app produced no Printed PDF for \(url.lastPathComponent)")
     }
 
     /// `pageText`, with each OVERSIZED line's real content restored.
     ///
-    /// `renderPrinted` deliberately leaves an oversized line BLANK in the main text flow
+    /// `renderNative` deliberately leaves an oversized line BLANK in the main text flow
     /// (`let content = oversized ? PageLine([], soft: base.soft) : base`) and paints it
     /// through `RenderedDocument.oversizedSelfPasses` instead, so the shared text storage
     /// carries only `attributedLine`'s single-space filler at that ordinal. A reader that
@@ -401,19 +704,50 @@ enum Oracle {
     ///
     /// That is a reader bug, not a renderer one — the app paints those titles correctly —
     /// and it is the THIRD place tonight the same blind spot turned up, after
-    /// `PrintedStructuralParityTests`' own x measurement and its running-line reader. Any
+    /// `NativeStructuralParityTests`' own x measurement and its running-line reader. Any
     /// comparison of the app's text against the library's has to consult both layers.
     @MainActor
     static func pageTextIncludingOversizedPasses(
-        of page: LaidOutPage, pageIndex: Int, rendered: RenderedDocument
+        of page: LaidOutPage, pageIndex: Int, rendered: RenderedDocument,
+        in view: PagedDocumentView? = nil
     ) -> [String] {
         var lines = pageText(of: page)
-        guard rendered.oversizedSelfPasses.indices.contains(pageIndex) else { return lines }
-        for (ordinal, pass) in rendered.oversizedSelfPasses[pageIndex].enumerated() {
-            guard let pass, ordinal < lines.count,
-                  lines[ordinal].trimmingCharacters(in: .whitespaces).isEmpty
-            else { continue }
-            lines[ordinal] = pass.string
+        if rendered.oversizedSelfPasses.indices.contains(pageIndex) {
+            for (ordinal, pass) in rendered.oversizedSelfPasses[pageIndex].enumerated() {
+                guard let pass, ordinal < lines.count,
+                      lines[ordinal].trimmingCharacters(in: .whitespaces).isEmpty
+                else { continue }
+                lines[ordinal] = pass.string
+            }
+        }
+        // Item 19: and the page's SECOND and later newspaper columns, each its own text
+        // container now. The engine's own model states a page's columns in this order —
+        // column 0's lines, then column 1's (`applyColumns`) — so reading them in it
+        // reproduces the model's own line order rather than inventing one.
+        if let view {
+            // Each column contributes exactly the number of fragments the model gives it.
+            // A container's own list can carry one trailing blank past its last real line
+            // (the page's terminator), and appending the next column after that puts every
+            // one of its lines one place late — measured on BOOKLET.WS, whose column 0 comes
+            // back with 27 entries for the 26 lines the model assigns it.
+            let counts = rendered.pageColumnFragmentCounts.indices.contains(pageIndex)
+                ? rendered.pageColumnFragmentCounts[pageIndex] : []
+            func fit(_ list: [String], to count: Int?) -> [String] {
+                guard let count else { return list }
+                if list.count > count { return Array(list.prefix(count)) }
+                return list + Array(repeating: "", count: count - list.count)
+            }
+            lines = fit(lines, to: counts.first)
+            for (offset, textView) in view.columnTextViews(atPage: pageIndex).enumerated() {
+                guard let manager = textView.layoutManager, let container = textView.textContainer
+                else { continue }
+                manager.ensureLayout(for: container)
+                let own = pageText(of: LaidOutPage(
+                    textView: textView, manager: manager, container: container,
+                    glyphs: manager.glyphRange(for: container)))
+                lines.append(contentsOf: fit(own, to: counts.indices.contains(offset + 1)
+                                             ? counts[offset + 1] : nil))
+            }
         }
         return lines
     }
@@ -487,11 +821,11 @@ enum Oracle {
         // SPACING and placement rather than AppKit's internal ascent convention.
         // Job 425 (b26 round 26 wave 3, ctrl-kd's `pageStream`): the first baseline is
         // `top + THIS PAGE's own first line's lead`, not a flat `top + size` — see
-        // `DocumentRenderer.renderPrinted`'s own `perPageFirstBaselines` citation. Re-derived
+        // `DocumentRenderer.renderNative`'s own `perPageFirstBaselines` citation. Re-derived
         // from `docToPagelines` directly, the same source the production fix reads, rather
         // than reused from `rendered` (`RenderedDocument` does not expose the raw per-page
         // `PageLine.lead` this needs).
-        let docPages = docToPagelines(state.document, printed: true)
+        let docPages = Oracle.pagelines(of: state)
         let firstBaseline = CGFloat(metrics.top + (docPages.first?.first?.lead ?? metrics.lead))
         let gridTop = firstBaseline - (lines[0].baseline - lines[0].top)
 
@@ -508,7 +842,28 @@ enum Oracle {
         //
         // Distances are accumulated from the engine's own per-line leads rather than
         // multiplied, so a document with several `.lh` changes is described correctly too.
-        let docLines = docPages.first?.lines ?? []
+        // THE ENGINE'S LINES THAT ACTUALLY BECOME FRAGMENTS, in fragment order — not every
+        // line the model assigns the page.
+        //
+        // This indexes the engine's own per-line leads by the APP's fragment ordinal, which
+        // is only sound if the two lists line up one to one, and two things break that. An
+        // overprint chain is ONE fragment (`anOverprintChainIsOneFragment` owns the rule), so
+        // every line after a chain was reading its neighbour's lead; and a page's second and
+        // later newspaper columns leave the flow entirely to be painted
+        // (`RenderedDocument.columnPasses`), so they have no fragment at all.
+        //
+        // Both were reported as app defects and neither was one. PAGE.RND line 3's baseline
+        // is 62.00 and the engine's own PDF puts that line at 62.00 exactly; the harness
+        // wanted 66.00 because PAGE.RND opens with an overprint line and every ordinal after
+        // it was off by one. FORMFEED.WS line 33 is the same story at 492.00 against a wanted
+        // 480.00, with 48 model lines against 43 fragments.
+        let docLines: [PageLine] = {
+            let all = docPages.first?.lines ?? []
+            return all.enumerated().filter { index, line in
+                if index > 0, all[index - 1].overprint { return false }
+                return true
+            }.map(\.element)
+        }()
         func lead(at index: Int) -> Double {
             (index >= 0 && index < docLines.count ? docLines[index].lead : nil) ?? metrics.lead
         }
@@ -677,7 +1032,7 @@ enum Oracle {
 
         // AN OVERSIZED LINE HAS NO INK IN THE FLOW TO MEASURE.
         //
-        // `renderPrinted` deliberately leaves such a line BLANK in the main text storage and
+        // `renderNative` deliberately leaves such a line BLANK in the main text storage and
         // paints it through `RenderedDocument.oversizedSelfPasses` instead, so the fragment
         // this oracle can reach carries only `attributedLine`'s single-space filler. Reading
         // its x yields the filler's position — one space past the margin — for EVERY
@@ -695,7 +1050,7 @@ enum Oracle {
         let selfPasses = rendered.oversizedSelfPasses.first ?? []
         var appInk: [Double: Double] = [:]
         if selfPasses.contains(where: { $0 != nil }) {
-            let appPDF = try Oracle.appPrintedPDF(for: url, state: state)
+            let appPDF = try Oracle.appNativePDF(for: url, state: state)
             appInk = try AppPDFWords.firstInkByBaseline(from: appPDF, page: 1)
         }
         // Only for failure messages; built once per document rather than per failing row.
@@ -714,7 +1069,21 @@ enum Oracle {
         // lines, so the number is expected to be large for them and zero for prose.
         var skippedAllGeometry = 0
         for line in Oracle.lines(of: first, textFrame: rendered.textFrame) where line.hasText {
-            guard line.hasTextInk else { skippedAllGeometry += 1; continue }
+            // AN OVERSIZED LINE IS BLANK IN THE FLOW BY DESIGN, so it must be recognised
+            // BEFORE the all-geometry guard, not after it.
+            //
+            // `renderNative` leaves such a line's storage holding only a filler and paints
+            // it through `oversizedSelfPasses`; the branch below already knows to read its
+            // real ink from the app's own PDF. But the guard ran first and saw a line with no
+            // text ink in the flow, so it counted the line as all-geometry and skipped it.
+            //
+            // ERROR.WS is a document made entirely of such lines — every one of its
+            // fragments carries nothing but a newline — so all 20 were "skipped as
+            // all-geometry", nothing was compared, and the oracle reported the document
+            // UNCHECKED rather than judging it. Its three engine baselines (96.00, 156.00,
+            // 276.00) were sitting there the whole time.
+            let isOversized = line.index < selfPasses.count && selfPasses[line.index] != nil
+            guard isOversized || line.hasTextInk else { skippedAllGeometry += 1; continue }
             // The app's baseline is ALREADY in the extractor's terms — page-local, measured
             // down from the page's top edge — so it is the key as it stands.
             //
@@ -731,7 +1100,6 @@ enum Oracle {
             compared += 1
             // For an oversized line the flow holds only the filler, so take the app's real
             // ink from its own PDF at this baseline; everything else measures the fragment.
-            let isOversized = line.index < selfPasses.count && selfPasses[line.index] != nil
             let measured = isOversized ? (appInk[key] ?? Double(line.left)) : Double(line.left)
             // A LICENSED row records itself and moves on — but only while it measures what
             // it was licensed at. Drift fails.
@@ -839,7 +1207,7 @@ enum Oracle {
     let metrics = printedMetrics(state.document)
     let (rendered, _, pages) = Oracle.layOut(state)
     let first = try #require(pages.first)
-    let engineLines = docToPagelines(state.document, printed: true).first?.lines ?? []
+    let engineLines = Oracle.pagelines(of: state).first?.lines ?? []
     try #require(engineLines.count > 1, "MARKUP.WS page 1 has fewer than two lines")
 
     let ownLead = engineLines[0].lead ?? metrics.lead
@@ -893,32 +1261,63 @@ enum Oracle {
     let url = try #require(fixture, "\(missing)")
     let state = try Oracle.state(for: url)
     let metrics = printedMetrics(state.document)
-    let expected = docToPagelines(state.document, printed: true)
-    let (rendered, _, pages) = Oracle.layOut(state)
-    try #require(expected.count >= 5 && pages.count >= 5,
-                 "WINGDING.CHT no longer has five pages")
+    let expected = Oracle.pagelines(of: state)
+    let (rendered, view, pages) = Oracle.layOut(state)
+    // EVERY page, not one named page. The original version asserted page 5 specifically,
+    // because that is where the shift this test was written for landed — but a hard-coded
+    // page number is a premise about the DOCUMENT, and today's engine work (the Modern
+    // Symbol fallback, #220) legitimately changed how many pages WINGDING.CHT has, which
+    // failed this test on its premise rather than on its subject. Walking every page the
+    // engine produced tests strictly more and can never go stale that way.
+    try #require(!expected.isEmpty && !pages.isEmpty, "WINGDING.CHT laid out no pages at all")
 
-    // Page 5 is where the shift landed. Its line count must match the engine's.
-    let libraryPage = expected[4]
-    let appLines = Oracle.lines(of: pages[4], textFrame: rendered.textFrame)
-    let countMessage = "page 5 laid out \(appLines.count) lines; the engine puts "
-        + "\(libraryPage.count) on it. A page that holds fewer than the engine assigned it has "
-        + "pushed a line onto the next page, and Native and the export then disagree about "
-        + "where the page ends."
-    #expect(appLines.count == libraryPage.count, "\(countMessage)")
-
-    // And the cause: every fragment is exactly the lead it was assigned.
+    var shortPages: [String] = []
     var wrong: [String] = []
-    for index in 0..<min(appLines.count, libraryPage.count) {
-        let rect = pages[4].manager.lineFragmentRect(
-            forGlyphAt: appLines[index].glyphs.location, effectiveRange: nil)
-        let lead = libraryPage[index].lead ?? metrics.lead
-        if abs(Double(rect.height) - lead) > 0.01 {
-            wrong.append(String(format: "line %d fragment %.2fpt against a lead of %.2fpt",
-                                index, Double(rect.height), lead))
+    for (number, libraryPage) in expected.enumerated() where number < pages.count {
+        let appLines = Oracle.allLines(ofPage: number, in: view, textFrame: rendered.textFrame)
+        // Item 19: every column is in the flow again, each in its own text container, so a
+        // page's fragments are all of its lines once more.
+        let flowLines = Array(libraryPage)
+        // An overprint chain is ONE fragment, so an engine page of N lines legitimately
+        // becomes fewer app fragments — `anOverprintChainIsOneFragment` is the test that
+        // owns that rule and this is its formula. Leaving it out is what made this page
+        // look four lines short: WINGDING.CHT page 1 carries overprint chains, and
+        // comparing a raw line count against a raw fragment count charges the app for
+        // collapsing them, which is exactly what the renderer is supposed to do.
+        let collapsed = flowLines.enumerated()
+            .filter { $0.offset > 0 && flowLines[$0.offset - 1].overprint }
+            .count
+        let wanted = flowLines.count - collapsed
+        if appLines.count != wanted {
+            shortPages.append("page \(number + 1) laid out \(appLines.count) fragments against "
+                              + "the engine's \(flowLines.count) lines less "
+                              + "\(collapsed) overprint-collapsed = \(wanted)")
+        }
+        // Index pairing is only valid BEFORE the page's first overprint chain — after one,
+        // app fragment n and engine line n are different lines (the sibling test's own
+        // finding). Pairing past that point is how a harness invents divergences.
+        let firstChain = flowLines.indices.first { $0 > 0 && flowLines[$0 - 1].overprint }
+            ?? flowLines.count
+        for index in 0..<min(appLines.count, flowLines.count, firstChain) {
+            let rect = pages[number].manager.lineFragmentRect(
+                forGlyphAt: appLines[index].glyphs.location, effectiveRange: nil)
+            let lead = flowLines[index].lead ?? metrics.lead
+            if abs(Double(rect.height) - lead) > 0.01 {
+                wrong.append(String(format: "page %d line %d fragment %.2fpt against a lead of %.2fpt",
+                                    number + 1, index, Double(rect.height), lead))
+            }
         }
     }
-    let heightMessage = "fragments do not equal their leads: \(wrong.prefix(6).joined(separator: "; "))"
+
+    let countMessage = "line counts differ on \(shortPages.count) of \(expected.count) page(s): "
+        + shortPages.prefix(6).joined(separator: "; ")
+        + ". A page holding fewer lines than the engine assigned it has pushed a line onto the "
+        + "next page, and Native and the export then disagree about where the page ends."
+    #expect(shortPages.isEmpty, "\(countMessage)")
+
+    // And the cause: every fragment is exactly the lead it was assigned.
+    let heightMessage = "fragments do not equal their leads on \(wrong.count) line(s): "
+        + wrong.prefix(6).joined(separator: "; ")
     #expect(wrong.isEmpty, "\(heightMessage)")
 }
 
@@ -942,7 +1341,7 @@ enum Oracle {
         + "overprint chain on a page"
     let url = try #require(fixture, "\(missing)")
     let state = try Oracle.state(for: url)
-    let expected = docToPagelines(state.document, printed: true)
+    let expected = Oracle.pagelines(of: state)
     let (rendered, _, pages) = Oracle.layOut(state)
     try #require(expected.count >= 10 && pages.count >= 10, "FONTS.REF no longer has ten pages")
 
@@ -974,7 +1373,7 @@ enum Oracle {
 /// BOTH halves are face advances, which is a correction to an earlier split. `graphicCells`
 /// takes a graphic character's cell width from `graphicAdvance`, which measures the distance
 /// between consecutive AppKit GLYPH positions and falls back to `font.maximumAdvancement`
-/// (`PrintedVectorGraphics.swift`) — the app lays box characters out as real glyphs in a Mac
+/// (`NativeVectorGraphics.swift`) — the app lays box characters out as real glyphs in a Mac
 /// face and draws its vectors at those positions, so the `│` cell has a face just as the dots
 /// do. Whether the app SHOULD derive graphic cells from document pitch instead is planning
 /// #216, deliberately after 4.0.3, and would close both at once.
@@ -1046,7 +1445,7 @@ let noTextInkDocuments: [String: String] = [
         // the document default — the same correction this file's grid oracle already carries
         // for line POSITIONS, applied here to the page's total height. NOVEL.WS's page 1 is
         // 31 lines totalling 612pt where `capacity * lead` says 55 x 12 = 660.
-        let engineLines = docToPagelines(state.document, printed: true).first?.lines ?? []
+        let engineLines = Oracle.pagelines(of: state).first?.lines ?? []
         let budget = engineLines.isEmpty
             ? CGFloat(Double(metrics.capacity) * metrics.lead)
             : CGFloat(engineLines.reduce(0.0) { $0 + ($1.lead ?? metrics.lead) })
@@ -1071,7 +1470,7 @@ let noTextInkDocuments: [String: String] = [
             // CARRY THE DIAGNOSIS. Every residual in this family is 1 to 2pt — DARKNESS 1.00,
             // PS.TST 2.00, LYING 1.70 — and the app has exactly one mechanism that makes a
             // page taller than the sum of its lines' leads: `leadingHeadroom`, the space
-            // `renderPrinted` reserves above a page whose first line is OVERSIZED, so the
+            // `renderNative` reserves above a page whose first line is OVERSIZED, so the
             // glyph's real ascent is not clipped out of print, PDF and QuickLook. A line in
             // that pass is drawn at its own natural height (`naturalParagraphStyle`), not
             // clamped to any lead, so it is not in the engine's per-line lead sum at all.
@@ -1152,6 +1551,11 @@ let noTextInkDocuments: [String: String] = [
 /// So this asserts against the FORMULA, per mode, for every fixture.
 @Test @MainActor func theScreenMatchesWhatThePDFWouldPrint() throws {
     var failures: [String] = []
+    // Counted so a corpus that stopped matching the engine's baselines entirely cannot
+    // let this oracle pass by comparing nothing — the vacuity guard this file already
+    // applies to every other counted comparison.
+    var matched = 0
+    var unmatched = 0
     let fixtures = Oracle.fixtureURLs
     try #require(!fixtures.isEmpty, "no fixtures — this oracle would pass vacuously")
 
@@ -1165,15 +1569,25 @@ let noTextInkDocuments: [String: String] = [
             // independent PDF baseline to check against — its own PDF export
             // (`ExportEngine.modernPDF`) draws this SAME `textFrame` via the native text
             // stack, so screen and export agree by construction. What Modern DOES owe the
-            // façade is the 1in margin itself: the container's top edge, not a baseline
-            // built from the library's Courier size and the app's own font mixed together
-            // (that mismatch was the top/bottom margin bug — see `renderModern`).
+            // library is its MARGIN: the container's top edge, not a baseline built from
+            // the library's Courier size and the app's own font mixed together (that
+            // mismatch was the top/bottom margin bug — see `renderModern`).
+            //
+            // And the margin it owes is `modernGeometry`'s, not `modernMetrics`'s. The two
+            // are the same 72pt for a document that declares no `.mt`/`.po` — which is most
+            // of this corpus, and why a flat 72 stood here — but `modernMetrics` is a FIXED
+            // façade (`PDFMetrics.topModern`) while `modernGeometry` is what the library's
+            // Modern renderer actually lays out against, and it honours the file. Reading
+            // the façade here is what let the app's own flat 72 pass while its pages held a
+            // different number of lines than the library's on every `.mt` document in the
+            // corpus (LJ6DTP.WS, SCRIPT.WS — see `DocumentRenderer.modernTextFrame`).
             let metrics = style == .native
                 ? printedMetrics(state.document)
                 : modernMetrics(state.document)
+            let modernBox = modernGeometry(state.document)
             let expectedBaseline = CGFloat(metrics.top + Double(metrics.size))
-            let expectedLeft = CGFloat(metrics.left)
-            let expectedTopEdge = CGFloat(metrics.top)
+            let expectedLeft = style == .modern ? CGFloat(modernBox.left) : CGFloat(metrics.left)
+            let expectedTopEdge = CGFloat(modernBox.top)
 
             let view = PagedDocumentView()
             view.setContent(rendered, display: .continuousScroll)
@@ -1235,15 +1649,77 @@ let noTextInkDocuments: [String: String] = [
             // here instead of pre-emptively rewritten, since changing a green assertion on
             // no evidence is how the other direction of this mistake gets made.
             let leftOnScreen = style == .modern ? rendered.textFrame.origin.x : left
-            if abs(leftOnScreen - expectedLeft) > 0.5 {
+            // NATIVE'S REFERENCE IS THE ENGINE'S OWN EMITTED PDF, not `printedMetrics.left`.
+            //
+            // This used to compare against that façade, and its own failure message said "the
+            // PDF puts it at" — which was never true. `printedMetrics(doc).left` is the
+            // DOCUMENT DEFAULT `.po`, and the engine documents it as exactly that (a single
+            // value cannot carry per-page parity; `PageLine.left` is the per-page one). For
+            // the 21 label, envelope and list documents in this corpus the two are different
+            // numbers: every one of them declares `.poo`/`.poe`, the engine's PDF honours it,
+            // and the façade reports column 8. The app agreed with the real PDF and this
+            // oracle called it 21 defects.
+            //
+            // So ask the bytes, the way `everyLineStartsAtTheLibrarysLeftMargin` already
+            // does. Restricted to the app's own text band for the same reason that oracle
+            // restricts: the engine's PDF also carries running heads and footers, which the
+            // app draws outside the text storage and this comparison can never see.
+            // NATIVE'S REFERENCE IS THE ENGINE'S OWN EMITTED PDF, not `printedMetrics.left`.
+            //
+            // This used to compare against that façade, and its own message said "the PDF
+            // puts it at" — which was never true. `printedMetrics(doc).left` is the DOCUMENT
+            // DEFAULT `.po`, and the engine documents it as exactly that (one value cannot
+            // carry per-page parity; `PageLine.left` is the per-page one). The 21 label,
+            // envelope and list documents in this corpus all declare `.poo`/`.poe`: the
+            // engine's PDF honours it, the façade reports column 8, the app agreed with the
+            // real PDF, and this oracle called it 21 defects.
+            //
+            // BOTH SIDES MUST BE THE SAME QUANTITY, which is the second half of the fix and
+            // the half I got wrong first. `left` above is the first GLYPH's x, and a leading
+            // space is a glyph — so on every space-centred title the app reported its margin
+            // while the engine reported the first painted mark, and re-pointing the reference
+            // alone took this from 21 rows to 114. `Oracle.Line.left` is first INK, the same
+            // question `firstInkByBaseline` answers, keyed on the app's own baseline so the
+            // two are read off the same line.
+            var expectedLeftHere = expectedLeft
+            var actualLeftHere = leftOnScreen
+            if style == .native {
+                let laidOut = Oracle.LaidOutPage(textView: tv, manager: manager,
+                                                 container: container, glyphs: glyphs)
+                guard let firstInk = Oracle.lines(of: laidOut, textFrame: rendered.textFrame)
+                    .first(where: { $0.hasTextInk }) else { continue }
+                let enginePDF = try AppAnswerKeyParityTests.documentOperationsBytes(
+                    fixture: url, format: "pdf", mode: .printed,
+                    title: "", fontsTarget: .office, pictures: .embed)
+                let ink = try AppPDFWords.firstInkByBaseline(from: enginePDF, page: 1)
+                let key = (Double(firstInk.baseline) * 10).rounded() / 10
+                // The engine may not carry this exact baseline (that is the GRID oracle's
+                // question, not this one), so match the nearest within half a line and skip
+                // the row otherwise — counted, so a corpus that stopped matching entirely
+                // cannot pass this oracle vacuously.
+                let nearest = ink.keys.min { abs($0 - key) < abs($1 - key) }
+                guard let nearest, abs(nearest - key) <= 6.0, let x = ink[nearest] else {
+                    unmatched += 1
+                    continue
+                }
+                matched += 1
+                expectedLeftHere = CGFloat(x)
+                actualLeftHere = firstInk.left
+            }
+            if abs(actualLeftHere - expectedLeftHere) > 0.5 {
                 failures.append(String(
-                    format: "%@ [%@]: left edge %.1fpt on screen, the PDF puts it at %.1fpt",
-                    url.lastPathComponent, style.displayName, leftOnScreen, expectedLeft))
+                    format: "%@ [%@]: first ink %.1fpt on screen, the engine's own PDF puts it at %.1fpt",
+                    url.lastPathComponent, style.displayName, actualLeftHere, expectedLeftHere))
             }
         }
     }
 
-    #expect(failures.isEmpty, "the screen does not match what the PDF would print:\n\(failures.joined(separator: "\n"))")
+    let vacuity = "matched \(matched) of \(matched + unmatched) Native first-ink baselines "
+        + "against the engine's own PDF"
+    #expect(matched > 0, "\(vacuity) — this oracle would be comparing nothing")
+    let report = "the screen does not match what the PDF would print (\(vacuity)):\n"
+        + failures.joined(separator: "\n")
+    #expect(failures.isEmpty, "\(report)")
 }
 
 // MARK: - Oracle 2 — pagination and content
@@ -1260,37 +1736,67 @@ let noTextInkDocuments: [String: String] = [
 
     for url in fixtures {
         let state = try Oracle.state(for: url)
-        let expected = docToPagelines(state.document, printed: true)
-        let (rendered, _, pages) = Oracle.layOut(state)
+        // BOTH SIDES ARE READ THE SAME WAY — Athena's ruling, 2026-09-10.
+        //
+        // This used to compare the app's own laid-out text against the MODEL's raw span
+        // text, and those are two different quantities. Wherever the engine re-stamps a
+        // proportional font block's spaces onto the document's 10-CPI grid, the raw spans
+        // carry more spaces than anything ever draws: -LASERJE.FNT page 1 line 9 is five in
+        // the model against the two the app renders, and the engine's own PDF puts the word
+        // after them at 241.70 against the app's 237.44 — 4.46pt apart, not the 21.6pt three
+        // whole columns would be. The engine does not draw five columns of space there
+        // either. The model's spans are an INPUT to what gets drawn, not an answer about it.
+        //
+        // What the engine DRAWS is the standard, so both sides are now its own PDF and the
+        // app's own PDF, read through the same `AppPDFWords` word segmentation the Modern
+        // gate and the Native gate already use. All three read alike.
+        // EMITTED THE WAY THE APP EMITS, not the way the answer key records. The key's own
+        // option set leaves running heads off, so every page of a header-bearing document
+        // came back one line short on the library's side and the app was charged for drawing
+        // its own head — DARKNESS.WS page 2 read 51 lines against 50, its first being "TO THE
+        // PERSON SITTING IN DARKNESS". Same call the Modern gate makes for the same reason.
+        let enginePDF = emitPDF(state.document, mode: .printed,
+                                options: EmitOptions(pixResults: DocumentPictures.resolve(
+                                    state.document, docPath: url.path)))
+        let appPDF = try Oracle.appNativePDF(for: url, state: state)
+        let engineLines = try AppModernFidelityTests.lines(of: enginePDF)
+        let appLines = try AppModernFidelityTests.lines(of: appPDF)
 
-        if pages.count < expected.count {
-            failures.append("\(url.lastPathComponent): app laid out \(pages.count) pages, library says \(expected.count)")
+        // COMPARED WITHOUT THE READER'S OWN INVENTIONS, and in the ENGINE'S OWN ALPHABET —
+        // see `Oracle.EngineText` for the whole rule and the rows each half of it answers.
+        //
+        // Neither producer draws the spaces between words: the engine positions each word at
+        // its own x and draws no space glyph at all, and this reader joins them back with one
+        // space apiece. So the whitespace in these strings is the READER's, not either
+        // renderer's, and comparing it compares nothing about the page. It is also where a
+        // sub/superscript shows up — SUB-SUPE.TST's "C4H5N3O" reads as "C 4 H 5 N 3 O" on the
+        // app's side, because a raised run is its own text object and the gap before it
+        // segments as a word break.
+        if appLines.count != engineLines.count {
+            failures.append("""
+                \(url.lastPathComponent): the app draws \(appLines.count) page(s), \
+                the library \(engineLines.count)
+                """)
             continue
         }
-        for (index, libraryPage) in expected.enumerated() {
-            // OVERPRINT CHAINS COLLAPSE, so pairing app line n against engine line n is
-            // wrong on any page that has one. `DocumentRenderer` runs a group while each
-            // member is itself `overprint` and gives the GROUP one fragment carrying the base
-            // line's content; the chain's interior members are drawn as overprint passes, not
-            // as lines in the flow. Sharing the base line's baseline is what overprint MEANS.
-            //
-            // Measured on FONTS.REF page 10: the engine assigns 42 lines, 4 of them following
-            // an overprint predecessor, and the app lays out exactly 38. Charging those 4 the
-            // near-zero lead `advanceLead` charges them, the engine's own leads sum to 741.04
-            // against a usedRect of 741.00 — four hundredths of a point. The app was right and
-            // this comparison was misaligned for every line after the first chain on the page,
-            // which is why FONTS.REF was the one chart the fragment-height fix did not close.
-            //
-            // Same rule as `advanceLead`'s own: a line whose PREDECESSOR is overprint is not
-            // a line of its own here either.
-            let libraryText = libraryPage.enumerated()
-                .filter { $0.offset == 0 || !libraryPage[$0.offset - 1].overprint }
-                .map { $0.element.map(\.text).joined() }
-            let appText = Oracle.pageTextIncludingOversizedPasses(
-                of: pages[index], pageIndex: index, rendered: rendered)
-            for (n, wanted) in libraryText.enumerated() where n < appText.count {
-                let got = appText[n]
-                if got.trimmingCharacters(in: .whitespaces) != wanted.trimmingCharacters(in: .whitespaces) {
+        for (index, wantedPageRaw) in engineLines.enumerated() {
+            // A FONT CHART IS NOT A PAGE OF LINES — Jon's ruling, see `Oracle.fontChartPages`.
+            // Named out loud every run, because a silent drop is how an oracle stops
+            // measuring something without anyone noticing.
+            if Oracle.isFontChart(url.lastPathComponent, page: index + 1) {
+                print("ORACLE-EXCLUDED  \(url.lastPathComponent) page \(index + 1): "
+                      + Oracle.fontChartReason)
+                continue
+            }
+            // A line that is nothing BUT the reader's inventions is not a line either side
+            // drew: an all-graphic row reaches here as text on the app's side and as vectors
+            // on the engine's, and dropping it from both is the same rule `lines(of:)`
+            // already applies one level up.
+            let wantedPage = wantedPageRaw.filter { !Oracle.EngineText.isAllGeometry($0) }
+            let gotPage = appLines[index].filter { !Oracle.EngineText.isAllGeometry($0) }
+            for (n, wanted) in wantedPage.enumerated() where n < gotPage.count {
+                let got = gotPage[n]
+                if !Oracle.EngineText.sameLine(app: got, library: wanted) {
                     failures.append("""
                         \(url.lastPathComponent) page \(index + 1) line \(n): \
                         app has \(got.prefix(40).debugDescription), library has \(wanted.prefix(40).debugDescription)
@@ -1298,11 +1804,18 @@ let noTextInkDocuments: [String: String] = [
                     break
                 }
             }
+            if gotPage.count != wantedPage.count {
+                failures.append("""
+                    \(url.lastPathComponent) page \(index + 1): the app draws \(gotPage.count) \
+                    line(s), the library \(wantedPage.count)
+                    """)
+            }
         }
     }
 
     #expect(failures.isEmpty, "pagination differs from the library: \(Oracle.summarize(failures))\(failures.joined(separator: "\n"))")
 }
+
 
 }
 
@@ -1333,7 +1846,7 @@ struct PaginationShiftProbe {
         for url in Oracle.fixtureURLs where wanted.contains(url.lastPathComponent) {
             let state = try Oracle.state(for: url)
             let metrics = printedMetrics(state.document)
-            let expected = docToPagelines(state.document, printed: true)
+            let expected = Oracle.pagelines(of: state)
             let (rendered, _, pages) = Oracle.layOut(state)
 
             for (index, libraryPage) in expected.enumerated() where index < pages.count {
@@ -1498,7 +2011,7 @@ struct GraphicRunSpaceProbe {
             guard let url = Oracle.fixtureURLs.first(where: { $0.lastPathComponent == name })
             else { continue }
             let state = try Oracle.state(for: url)
-            let expected = docToPagelines(state.document, printed: true)
+            let expected = Oracle.pagelines(of: state)
             let (rendered, _, pages) = Oracle.layOut(state)
 
             for (pageIndex, libraryPage) in expected.enumerated() where pageIndex < pages.count {

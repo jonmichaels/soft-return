@@ -17,7 +17,7 @@ import Testing
 ///   `{\qc \s7 {\i \f2\fs24 Winner of the Aurora Award}...}`                — citation
 ///   `{\ql \s5 {\i \f4\fs24      The transference went smoothly...}`        — body copy
 /// `\f2` = Univers -> Helvetica Neue, `\f3` = Aachen -> Rockwell, `\f4` = Courier ->
-/// Courier New (the MAC target table, `printedMacFontRows` in `DocumentRenderer.swift`,
+/// Courier New (the MAC target table, `nativeMacFontRows` in `DocumentRenderer.swift`,
 /// mistake-registry #24) — this RTF reference is EMITTED output and stays Courier New
 /// forever (`OutputParityTests`, the boundary job 306/312's Courier Prime ruling never
 /// crosses). The on-screen Modern VIEW is a separate consumer of the same font-block data
@@ -148,23 +148,37 @@ struct ModernViewerStyleTests {
         #expect(found, "no fontless ws7 fixture found to prove the user-settings fallback")
     }
 
-    /// Job 437 (b27, Jon's font-fallback ruling): the Settings default is the NO-INFORMATION
-    /// case only — `fontlessDocumentUsesTheUsersModernSettings` above proves that half. This
-    /// is the OTHER half: a span with no font index, in a document that DOES declare fonts
-    /// elsewhere, must fall back to Courier Prime (the same substitute Native's own
-    /// `attributedLine` callers already use), never the Settings font, and never the
-    /// document's own first declared font. `-README.WS` carries real WS5+ font blocks
-    /// (`doc.fonts` non-empty, confirmed by direct inspection) that only cover specific
-    /// spans — "VIEWING THIS FILE" is real body-prose text OUTSIDE any of them
-    /// (`SemanticRun.font == nil` there), so before this job's fix it rendered in the
-    /// Settings font (Georgia) exactly like a genuinely fontless document would.
-    @Test @MainActor func nilFontIndexSpanRendersCourierPrimeWhenDocumentDeclaresFontsElsewhere() throws {
+    /// Jon's ruling, 2026-09-09: a run no font block covers keeps the READER'S face,
+    /// unless the document declared its type non-proportional.
+    ///
+    /// In his words: "A document that declares fonts but does not have a font block AND
+    /// doesn't declare font proportionality, is Times in Modern in ctrl-kd and sr, and
+    /// Georgia 14 (or whatever is set in Settings). There's a setting in WS where it can
+    /// declare that fonts are not proportional. If that's the case, and no font block
+    /// exists, then it becomes Courier (or Courier Prime in macOS)."
+    ///
+    /// This replaces job 437's reading, which asked whether the document declared fonts
+    /// ANYWHERE and put every uncovered run into Courier if it did. Measured against the
+    /// library's own Modern PDF that was 1182 of the app's remaining distance across the
+    /// twelve gate documents — `PDFModernLayout`'s own rule for the same run is "a token
+    /// with NO font information reads in Times at the sophisticated size, never Courier".
+    ///
+    /// Both halves are asserted here, because the rule is a pair. `-README.WS` carries real
+    /// WS5+ font blocks that cover only specific spans — "VIEWING THIS FILE" is body prose
+    /// outside all of them — and says nothing about proportionality, so it reads in the
+    /// reader's own face. A document that says `.ps off` reads in Courier Prime whether or
+    /// not it declares fonts, which is what the second half builds directly rather than
+    /// borrowing a corpus file for: twelve of the 512 fixtures declare `.ps` and every one
+    /// of them turns it off, so a real file cannot show the two halves apart.
+    @Test @MainActor func nilFontIndexSpanKeepsTheReadingFaceUnlessTheTypeIsDeclaredFixedPitch() throws {
         // Job 535: routes through `PrivateCorpusSupport` — see that file's own doc comment.
         let dir = PrivateCorpusSupport.ws7Directory
         let url = dir.appendingPathComponent("-README.WS")
         let bytes = [UInt8](try Data(contentsOf: url))
         let doc = parseWS(bytes)
         try #require(!doc.fonts.isEmpty, "test fixture assumption changed: -README.WS no longer declares any WS5+ font blocks")
+        try #require(doc.formatting.proportional == nil,
+                     "test fixture assumption changed: -README.WS now declares .ps, which is the other half of this rule")
 
         let defaults = UserDefaults(suiteName: "ModernViewerStyle.\(UUID().uuidString)")!
         let settings = SettingsStore(defaults: defaults)
@@ -174,11 +188,44 @@ struct ModernViewerStyleTests {
         state.style.setManually(.modern)
         let text = DocumentRenderer.render(state).text
 
+        // `#require`, not `#expect`: reading an attribute at `NSNotFound` throws an
+        // NSRangeException, which takes the whole test HOST down rather than failing one
+        // test — measured, 2026-09-11, when this needle stopped matching and the run died
+        // mid-suite with no result file at all.
         let range = (text.string as NSString).range(of: "VIEWING THIS FILE")
-        #expect(range.location != NSNotFound, "expected \"VIEWING THIS FILE\" in -README.WS's Modern render")
+        try #require(range.location != NSNotFound,
+                     "expected \"VIEWING THIS FILE\" in -README.WS's Modern render")
         let font = try #require(text.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
-        #expect(font.familyName == "Courier Prime",
-                "a font-index-less span in a document that DOES declare fonts elsewhere must fall back to Courier Prime, got \(font.familyName ?? "nil") (the Settings font is \(settings.modernFontName))")
+        #expect(font.familyName == "Palatino",
+                "a run no font block covers, in a document that says nothing about proportionality, must read in the reader's own face, got \(font.familyName ?? "nil")")
+
+        // The other half: `.ps off` and nothing else.
+        // Ordinary body prose, not one short line — a document whose only content is a
+        // single line reads as a TITLE, and a title takes its face from a different rule.
+        let source = Array((".ps off\r\n"
+            + "The quick brown fox jumps over the lazy dog, and keeps right on going.\r\n"
+            + "A second ordinary line, so this reads as a paragraph rather than a title.\r\n").utf8)
+        let fixedDefaults = UserDefaults(suiteName: "ModernViewerStyle.\(UUID().uuidString)")!
+        let fixedSettings = SettingsStore(defaults: fixedDefaults)
+        fixedSettings.modernFontName = "Palatino"
+        fixedSettings.modernFontSize = 16
+        let fixedDocument = parseWS(source)
+        try #require(fixedDocument.formatting.proportional == false,
+                     "the synthetic fixture no longer parses as a non-proportional declaration")
+        // The document-taking initializer, not the byte one: `detect` reads a hand-built
+        // ASCII stream as a print stream rather than a WordStar document, and a print
+        // stream has no dot commands to declare anything. The bytes above are still the
+        // subject — `parseWS` is the same parse a real file gets — this only skips the
+        // format sniffing that a two-line fixture cannot satisfy.
+        let fixedState = DocumentState(document: fixedDocument, settings: fixedSettings)
+        fixedState.style.setManually(.modern)
+        let fixedText = DocumentRenderer.render(fixedState).text
+        let fixedRange = (fixedText.string as NSString).range(of: "quick brown fox")
+        #expect(fixedRange.location != NSNotFound, "expected the synthetic document's own prose in its Modern render")
+        let fixedFont = try #require(
+            fixedText.attribute(.font, at: fixedRange.location, effectiveRange: nil) as? NSFont)
+        #expect(fixedFont.familyName == "Courier Prime",
+                "a document that declares its type non-proportional must read in Courier Prime, got \(fixedFont.familyName ?? "nil")")
     }
 
     /// Job 437: the other rule half — a fixed-pitch DECLARATION (`.ps` off / a font block
@@ -186,7 +233,7 @@ struct ModernViewerStyleTests {
     /// Modern exactly as it already does in Native/Printed. `FontsInViewsTests
     /// .script103104TypestylesRenderMonospaceInRealRenderPath` already proves the general
     /// `isFixedPitch` verdict for both styles through the shared `resolveFont`/
-    /// `printedMacIsMonospace` short-circuit (job 394); this pins the exact Modern-side
+    /// `nativeMacIsMonospace` short-circuit (job 394); this pins the exact Modern-side
     /// FAMILY name this job's ruling names explicitly, so a future regression that swapped
     /// in some other monospace face (still "fixed pitch", but not the ruled substitute)
     /// would be caught here.

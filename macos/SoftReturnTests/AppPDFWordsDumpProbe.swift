@@ -48,8 +48,8 @@ struct AppPDFWordsDumpProbe {
         let directory = Self.dumpDirectory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        // The app's own Printed facsimile — the exact bytes the tier measures.
-        let appPDF = try AppNativeFidelityTests.appPrintedPDF(forDocumentNamed: doc)
+        // The app's own Native facsimile — the exact bytes the tier measures.
+        let appPDF = try AppNativeFidelityTests.appNativePDF(forDocumentNamed: doc)
         try Data(appPDF).write(to: directory.appendingPathComponent("\(doc)-app.pdf"))
         let appWords = try AppPDFWords.payload(from: appPDF)
         try AppPDFWords.json(from: appPDF)

@@ -1477,6 +1477,11 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
     }
 
     let refNotes = inlineReferenceNotes(doc)
+    // planning #266: this document's own driver-keyed cp437-158 rule, resolved once. The
+    // rule is on the SHARED block walk in ctrl-kd's `_doc_to_pagelines`, which serves both
+    // its printed and its (legacy) Modern branch; this port splits that walk in two, so
+    // both halves carry it -- see `resolvePlainBody`'s own copy.
+    let euro = pesetaMeansEuro(doc)
     var items: [LayoutItem] = []
     for block in doc.blocks {
         if block.kind == .pagebreak {
@@ -1501,8 +1506,9 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
                 .map { sp -> Span in
                     let styles = effectiveSpanStyles(sp, block: block, headingBold: true)
                     let colour = effectiveSpanColour(sp, block: block)       // register C5
-                    return styles == sp.styles && colour == sp.colour ? sp
-                        : Span(text: sp.text, styles: styles, font: sp.font, colour: colour)
+                    let text = euroText(sp.text, euro)                       // planning #266
+                    return styles == sp.styles && colour == sp.colour && text == sp.text ? sp
+                        : Span(text: text, styles: styles, font: sp.font, colour: colour)
                 }
             items.append(contentsOf: wrapLine(spans, width: PDFMetrics.maxCols)
                 .map { LayoutItem.line(PageLine($0.spans, soft: line.soft)) })
@@ -1888,7 +1894,10 @@ private func footerEntryLines(_ note: Note, doc: Document, index: Int,
     // N9 (b33 field notes): applied to the note's own text before the marker is
     // prepended -- the marker itself (a bare number/tag) carries no sentence-ending
     // punctuation of its own to interact with.
-    let noteText = sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text
+    // planning #266: the driver-keyed cp437-158 rule (`pesetaMeansEuro`) -- a note is part
+    // of the document, and this path reads `note.text` straight off it.
+    let noteText = euroText(sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text,
+                            pesetaMeansEuro(doc))
     let marker: String
     switch note.kind {
     case .footnote:
@@ -1913,7 +1922,9 @@ private func endnoteEntryLines(_ note: Note, doc: Document, index: Int,
                                sentenceSpacing: Bool = false,
                                separateSpans: Bool = true) -> [PageLine] {
     let marker = padMarker("(\(noteMarker(note, doc: doc, index: index)))", padCols: padCols)
-    let noteText = sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text
+    // planning #266: see `footerEntryLines`.
+    let noteText = euroText(sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text,
+                            pesetaMeansEuro(doc))
     if separateSpans {
         return wrapLine([Span(text: marker), Span(text: noteText)], width: width)
     }
@@ -1944,6 +1955,8 @@ private func resolvePrintedBody(
     // included), so the cursor walks all of `doc.notes`; a comment consumes its
     // position and renders NOTHING — never printed: no ink, no ref.
     let referenced = inlineReferenceNotes(doc)
+    // planning #266: this document's own driver-keyed cp437-158 rule, resolved once.
+    let euro = pesetaMeansEuro(doc)
     let embedImages = pictures != .off && !pixResults.isEmpty
     let pixMap: [Int: PixResult] = embedImages
         ? Dictionary(uniqueKeysWithValues: pixResults.map { ($0.index, $0) }) : [:]
@@ -2054,7 +2067,12 @@ private func resolvePrintedBody(
             var due: [(note: Note, index: Int)] = []
             for span in baseSpans {
                 guard span.styles.contains(.fnref), cursor < referenced.count else {
-                    outSpans.append(span)
+                    // planning #266: the driver-keyed cp437-158 rule (`pesetaMeansEuro`).
+                    // This path reads the document's own spans directly and never passes
+                    // through `modernSemanticFlow`, so it applies the rule itself.
+                    var converted = span
+                    converted.text = euroText(span.text, euro)
+                    outSpans.append(converted)
                     continue
                 }
                 let noteIndex = cursor
@@ -2207,7 +2225,7 @@ private let footnoteFloor = 3
 ///
 /// Not `private`: `PDFWriter.swift`'s `pageStream` needs the same banker's-rounding (ctrl-kd
 /// 2.0.0's `supSize = round(size * 2 / 3)`, mirroring Python's `round()` exactly).
-func roundHalfToEven(_ x: Double) -> Int {
+public func roundHalfToEven(_ x: Double) -> Int {
     let whole = Int(x)
     let fraction = x - Double(whole)
     if fraction < 0.5 { return whole }
@@ -3104,7 +3122,12 @@ let pdfPtPerCol = 7.2
 /// a Helv/Univers substitution — no other proportional face types a literal indent
 /// with no `.pm` anywhere in the current corpus. Port of ctrl-kd's
 /// `_TYPED_INDENT_SPACE_EM`.
-let typedIndentSpaceEM = 0.336
+///
+/// `public` so a consumer that must reproduce this measure — Soft Return.app's own Printed
+/// facsimile, whose leading-indent run has to land where this puts it — reads the number
+/// rather than keeping a second copy of it, the same reason `graphicChars` and
+/// `symbolReverse` are public.
+public let typedIndentSpaceEM = 0.336
 
 /// First-line indent in points from `.pm` — b24 round 17 (RULINGS-LEDGER row 5/7), mirrors
 /// `rtfPMFiTwips` (round 6), relative to li=0: Printed PDF has no per-block `.lm`/`.rm`
@@ -3158,7 +3181,7 @@ func printedDocSpacingPt(_ doc: Document) -> (sb: Double?, sa: Double?) {
 /// (the `Tf` operator is written as an integer, as it always has been), floored at 1.
 /// Print streams keep the fixed `SIZE`. Port of Python's `_printed_size` (pdf.py, ctrl-kd
 /// 2.0.0).
-func printedSize(_ doc: Document) -> Int {
+public func printedSize(_ doc: Document) -> Int {
     guard let page = doc.page else { return PDFMetrics.size }
     let cw = page.cw120
     return cw > 0 ? max(1, roundHalfToEven(cw)) : PDFMetrics.size
@@ -3913,6 +3936,8 @@ private func resolvePlainBody(
     sentenceSpacing: Bool = false
 ) -> [PlainBodyItem] {
     let refNotes = inlineReferenceNotes(doc)
+    // planning #266: this document's own driver-keyed cp437-158 rule, resolved once.
+    let euro = pesetaMeansEuro(doc)
     var hfByBlock: [Int: [(HFKind, Int, String, HFParity?)]] = [:]
     // planning #250: `doc.hfEventsParity` is index-aligned with `doc.hfEvents` itself
     // — see `Document.hfEventsParity`'s own doc comment.
@@ -4067,8 +4092,12 @@ private func resolvePlainBody(
                     // attribute change at all -- the styles-unchanged fast path has to
                     // ask about it too.
                     let colour = effectiveSpanColour(sp, block: block)
-                    return styles == sp.styles && colour == sp.colour ? sp
-                        : Span(text: sp.text, styles: styles, font: sp.font,
+                    // planning #266: the driver-keyed cp437-158 rule (`pesetaMeansEuro`).
+                    // This path reads the document's own spans directly and never passes
+                    // through `modernSemanticFlow`, so it applies the rule itself.
+                    let text = euroText(sp.text, euro)
+                    return styles == sp.styles && colour == sp.colour && text == sp.text ? sp
+                        : Span(text: text, styles: styles, font: sp.font,
                                colour: colour, pctlHMI: sp.pctlHMI, pix: sp.pix,
                                pcl: sp.pcl, tabHMI: sp.tabHMI, tabLeader: sp.tabLeader)
                 }

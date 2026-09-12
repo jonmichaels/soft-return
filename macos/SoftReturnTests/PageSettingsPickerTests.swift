@@ -91,11 +91,11 @@ import Testing
 
     // MARK: - DocumentRenderer: the footer's own selection reaches the same numbers
 
-    /// `DocumentRenderer.renderPrinted`'s `RunningLine.baselineFromTop` is in the app's own
+    /// `DocumentRenderer.renderNative`'s `RunningLine.baselineFromTop` is in the app's own
     /// top-down convention (distance from the paper's TOP edge); `emitPDF`'s `Td` is PDF's
     /// bottom-up convention. `pageHeight - baselineFromTop` converts one into the other — the
     /// two must agree, because both are built from the SAME `effectivePage`-adjusted `doc.page`
-    /// (see `renderPrinted`'s own doc comment on why job 203 threads it through that way).
+    /// (see `renderNative`'s own doc comment on why job 203 threads it through that way).
     @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
     func footerPageSettingsSelectionMovesTheOnScreenRunningHeadToMatchEmitPDF() throws {
         let state = try Oracle.state(for: Self.oldTimesURL)

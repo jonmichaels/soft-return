@@ -10,7 +10,7 @@ import Testing
 /// code repo (`docs/KNOWN-ISSUES-REGISTER.md`'s standing rule, quoted verbatim by several test
 /// files: "TestDocs never leave this private repo"). Planning #192 (2026-09-06, Test-Tier-Map
 /// step 3) finished that separation for real: the documents themselves moved OUT of this repo
-/// entirely, into the private `private-corpus` data repo
+/// entirely, into the private `soft-return-corpus` data repo
 /// (`jon-floppies/` = Jon's WS4 papers, `ws7-private/` = Jon-authored WS7 fixtures, `sawyer/` =
 /// the vendored Sawyer WS7 archive, documents only). `TestDocs/` in THIS repo now holds only
 /// `oracle/` — recorded byte-parity answers, not documents, and safe to commit.
@@ -56,7 +56,7 @@ import Testing
 /// the same materialization for shape simplicity (one flat directory, one gate), not because
 /// they need protecting.
 enum PrivateCorpusSupport {
-    /// Tier 3: the private corpus clone root (`private-corpus`'s own README is the shape
+    /// Tier 3: the private corpus clone root (`soft-return-corpus`'s own README is the shape
     /// contract) — `jon-floppies/`, `ws7-private/`, `sawyer/`, `fixtures-ws5/`, `pd-samples/`.
     static var privateCorpusRoot: URL? {
         guard let env = ProcessInfo.processInfo.environment["CTRLKD_PRIVATE_CORPUS"], !env.isEmpty
@@ -416,7 +416,7 @@ enum PrivateCorpusSupport {
 /// Job 534/535 restored minimal `PixelOracleAppEngine`/`MultipageMargins` shims here for the
 /// PUBLIC birth-candidate tree, where the private-material strip had deleted
 /// `PixelOracleAppEngineTests.swift`/`MultipageMarginTests.swift` outright but left surviving
-/// callers (`TitleAscenderTests`, `PrintedStructuralParityTests`, six Apple-Event/export/
+/// callers (`TitleAscenderTests`, `NativeStructuralParityTests`, six Apple-Event/export/
 /// page-settings files) still reaching for their types.
 ///
 /// Job 536: this repo is the PRIVATE canonical tree (CLAUDE.md), where that strip never

@@ -71,10 +71,10 @@ import Testing
         #expect(!text.contains("  "), "Modern + auto must collapse the typewriter double space to one")
     }
 
-    @Test @MainActor func autoKeepsTheDoubleSpaceOnPrinted() throws {
+    @Test @MainActor func autoKeepsTheDoubleSpaceOnNative() throws {
         let state = try Self.doubleSpaceFixtureState()
         let products = try ExportEngine.render(document: state.document, state: state, formats: [.text],
-                                               notes: NoteSelection(), style: .printed, sentenceSpacing: .auto)
+                                               notes: NoteSelection(), style: .native, sentenceSpacing: .auto)
         let text = try Self.text(products)
         #expect(text.contains("  "), "Printed + auto must keep the document exactly as authored")
     }
@@ -89,10 +89,10 @@ import Testing
         #expect(text.contains("  "), "an explicit keep override must preserve spacing even on Modern")
     }
 
-    @Test @MainActor func singleForcesTheCollapseEvenOnPrinted() throws {
+    @Test @MainActor func singleForcesTheCollapseEvenOnNative() throws {
         let state = try Self.doubleSpaceFixtureState()
         let products = try ExportEngine.render(document: state.document, state: state, formats: [.text],
-                                               notes: NoteSelection(), style: .printed, sentenceSpacing: .single)
+                                               notes: NoteSelection(), style: .native, sentenceSpacing: .single)
         let text = try Self.text(products)
         #expect(!text.contains("  "), "an explicit single override must collapse spacing even on Printed")
     }

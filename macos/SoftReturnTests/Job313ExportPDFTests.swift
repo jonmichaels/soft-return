@@ -154,7 +154,7 @@ private enum ExportPDFOrientationEvidence {
     state.style.setManually(.native)
     let products = try ExportEngine.render(
         document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: .printed, viewStyle: .native)
+        style: .native, viewStyle: .native)
     let bytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
     let page = try #require(PDFDocument(data: bytes)?.page(at: 0))
 
@@ -189,7 +189,7 @@ func nativeViewPDFExportIsNoLongerTheLiteralEngineBytes() throws {
 
     let products = try ExportEngine.render(
         document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: .printed, viewStyle: .native)
+        style: .native, viewStyle: .native)
     let exported = try #require(products.first { $0.format == .pdf }).bytes
     #expect(Array(exported.prefix(4)) == Array("%PDF".utf8), "native-view export is not a PDF")
 
@@ -205,7 +205,7 @@ func nativeViewPDFExportMatchesARealPrintOperationsPageCountTextSizeAndOrientati
 
     let products = try ExportEngine.render(
         document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: .printed, viewStyle: .native)
+        style: .native, viewStyle: .native)
     let exportedBytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
     let exportedDoc = try #require(PDFDocument(data: exportedBytes))
 
@@ -299,7 +299,7 @@ func printedViewPDFExportStaysTheLiteralEngineBytes() throws {
 
     let products = try ExportEngine.render(
         document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: .printed, viewStyle: .printed)
+        style: .native, viewStyle: .printed)
     let exported = try #require(products.first { $0.format == .pdf }).bytes
 
     let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
@@ -316,7 +316,7 @@ func omittingViewStyleLeavesPDFExportUnchanged() throws {
     // never pass `viewStyle` to `render` — the pre-313 call shape every caller this job does
     // not touch (`ConvertCommand`, `DocumentOperations.convert`) still uses.
     let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .printed)
+        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .native)
     let exported = try #require(products.first { $0.format == .pdf }).bytes
 
     let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
@@ -402,7 +402,7 @@ func accessoryExplicitPrintedSelectionExportsEngineBytesEvenWhenTheAccessoryWasH
 @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
 func accessoryExplicitNativeSelectionExportsThePrintPathPDFEvenWhenTheAccessoryWasHandedPrinted() throws {
     let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    let accessory = ExportAccessoryView(formats: [.pdf], notes: NoteSelection(), style: .printed)
+    let accessory = ExportAccessoryView(formats: [.pdf], notes: NoteSelection(), style: .native)
     let popup = try #require(stylePopUpButton(in: accessory))
     popup.selectItem(withTitle: ViewStyle.native.displayName)
     #expect(accessory.selectedStyle == .native, "precondition: the pulldown now reports Native")

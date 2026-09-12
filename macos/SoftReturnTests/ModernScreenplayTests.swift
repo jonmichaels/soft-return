@@ -101,6 +101,25 @@ struct ModernScreenplayTests {
     /// paragraph rendered at the document's default LEFT alignment; after, `renderModern`
     /// detects it (`ModernScreenplay.matchesPageMarker`, gated on
     /// `ModernScreenplay.detectBlocks`/`markerCandidateBlocks`) and right-aligns it.
+    /// WORD JOINERS ARE NOT TEXT, and a needle must not have to know about them.
+    ///
+    /// Modern puts U+2060 between the characters of every token
+    /// (`DocumentRenderer.noBreakTokens`) so AppKit can only break where the library's own
+    /// `modernWrap` breaks — between tokens, never inside one. They paint nothing and the
+    /// PDF carries no glyph for them, but they sit in the string these tests search, so a
+    /// literal needle stopped matching the moment they generalized past graphic runs.
+    ///
+    /// Matched through them rather than stripped: every range here is used against
+    /// `rendered.text` itself, so the indices have to be that string's own.
+    static func rangeIgnoringJoiners(of needle: String, in haystack: NSString) -> NSRange {
+        let pattern = needle.map { NSRegularExpression.escapedPattern(for: String($0)) }
+            .joined(separator: "\u{2060}*")
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return NSRange(location: NSNotFound, length: 0) }
+        let full = NSRange(location: 0, length: haystack.length)
+        return regex.firstMatch(in: haystack as String, range: full)?.range
+            ?? NSRange(location: NSNotFound, length: 0)
+    }
+
     @Test @MainActor func pageNumberMarkerHoldsRightMarginInModern() throws {
         let state = try Self.documentState(fixture: "SCRIPT.WS")
         let rendered = DocumentRenderer.render(state, style: .modern)
@@ -119,7 +138,7 @@ struct ModernScreenplayTests {
         // 1's line has no trailing digit at all) — anchoring on the leading digit+spacing
         // picks it out uniquely.
         let sluglineNeedle = "1     INT. WRITER'S OFFICE - DAY"
-        let sluglineRange = haystack.range(of: sluglineNeedle)
+        let sluglineRange = Self.rangeIgnoringJoiners(of: sluglineNeedle, in: haystack)
         #expect(sluglineRange.location != NSNotFound, "slugline needle not found in Modern text")
         guard sluglineRange.location != NSNotFound else { return }
 
@@ -189,7 +208,7 @@ struct ModernScreenplayTests {
         // 1's line has no trailing digit at all) — anchoring on the leading digit+spacing
         // picks it out uniquely.
         let sluglineNeedle = "1     INT. WRITER'S OFFICE - DAY"
-        let sluglineRange = haystack.range(of: sluglineNeedle)
+        let sluglineRange = Self.rangeIgnoringJoiners(of: sluglineNeedle, in: haystack)
         #expect(sluglineRange.location != NSNotFound)
         guard sluglineRange.location != NSNotFound else { return }
 

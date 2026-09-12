@@ -6,15 +6,15 @@ import Testing
 
 /// NOTE (2026-09-07): `graphicChars` must now be QUALIFIED in any test file that imports
 /// both modules. There are two sets with that name — `SoftReturn.graphicChars`
-/// (`Rendering/PrintedVectorGraphics.swift`, the characters the APP draws as vectors) and
+/// (`Rendering/NativeVectorGraphics.swift`, the characters the APP draws as vectors) and
 /// `CtrlKD.graphicChars` (`PDFDriverLJ6DTP.swift`, the ones the ENGINE draws as vectors) —
 /// and the engine's became public in sr 506b2e0, so a bare name that used to resolve to the
 /// app's is ambiguous. Every bare use in this file meant the APP's set and is qualified as
 /// such; nothing about what these tests assert has changed.
 
 /// Job 445 (b27 item 7 part 1 — job 442's diagnosis, `outbox/job442/report.md`):
-/// `printedCoverageAwareResolvedMacFont` (`DocumentRenderer.swift`) is the new coverage-aware
-/// sibling of `printedResolvedMacFont`, built but NOT YET WIRED into any render path (wiring
+/// `nativeCoverageAwareResolvedMacFont` (`DocumentRenderer.swift`) is the new coverage-aware
+/// sibling of `nativeResolvedMacFont`, built but NOT YET WIRED into any render path (wiring
 /// is part 2, a separate job — `graphicCells`/`resolvedFont` still call the old function).
 /// These tests exercise the new function directly and prove it does what job 442's diagnosis
 /// asked for: advance past a font that CONSTRUCTS but doesn't COVER the glyphs actually being
@@ -50,7 +50,7 @@ struct Job445CoverageAwareFontResolutionTests {
     }
 
     /// job 442's own proving character: U+250C, a box-drawing top-left corner — real member
-    /// of `graphicChars` (`PrintedVectorGraphics.swift`), the exact set `graphicCells` gates
+    /// of `graphicChars` (`NativeVectorGraphics.swift`), the exact set `graphicCells` gates
     /// vector-fill eligibility on, not an arbitrary pick.
     private static let boxCorner: Character = "\u{250C}"
 
@@ -78,7 +78,7 @@ struct Job445CoverageAwareFontResolutionTests {
                      "test assumption changed: Courier Prime now covers cp437 box-drawing on this machine")
 
         let text = "\u{250C}\u{2500}\u{2500}\u{2510}"
-        let resolved = try #require(printedCoverageAwareResolvedMacFont(
+        let resolved = try #require(nativeCoverageAwareResolvedMacFont(
             entry, size: 12, bold: false, italic: false, useCourierPrime: true,
             coveringCharactersIn: text))
 
@@ -93,7 +93,7 @@ struct Job445CoverageAwareFontResolutionTests {
     @Test func ordinaryAsciiStillResolvesToCourierPrime() throws {
         let entry = try Self.firstCourierClassFontChange()
         let text = "MONOSPACE"
-        let resolved = try #require(printedCoverageAwareResolvedMacFont(
+        let resolved = try #require(nativeCoverageAwareResolvedMacFont(
             entry, size: 12, bold: false, italic: false, useCourierPrime: true,
             coveringCharactersIn: text))
 
@@ -111,7 +111,7 @@ struct Job445CoverageAwareFontResolutionTests {
 
     /// Two adjacent box-drawing glyphs' real, AppKit-measured horizontal advance under `font`
     /// — same technique job 442's own diagnosis and `graphicAdvance`
-    /// (`PrintedVectorGraphics.swift:405-412`) use: lay the text out for real
+    /// (`NativeVectorGraphics.swift:405-412`) use: lay the text out for real
     /// (`isolatedLineLayout`) and read the delta between consecutive glyph locations, rather
     /// than trusting any font's own advertised metrics (which is exactly what's unreliable
     /// once AppKit has silently substituted a different face for these characters).
@@ -128,7 +128,7 @@ struct Job445CoverageAwareFontResolutionTests {
         let entry = try Self.firstCourierClassFontChange()
         let text = String(repeating: Self.boxCorner, count: 2)
 
-        // CURRENT resolution: what `printedResolvedMacFont` picks today for this run is
+        // CURRENT resolution: what `nativeResolvedMacFont` picks today for this run is
         // "Courier Prime" (constructs fine; job 442's diagnosis is that it never checks
         // coverage) — AppKit substitutes an unmanaged fallback under the hood when this gets
         // laid out for real, which is the defect this job's part 2 will fix.
@@ -136,7 +136,7 @@ struct Job445CoverageAwareFontResolutionTests {
         let currentAdvance = try Self.measuredAdvance(font: currentFont, text: text)
 
         // NEW coverage-aware resolution.
-        let newFont = try #require(printedCoverageAwareResolvedMacFont(
+        let newFont = try #require(nativeCoverageAwareResolvedMacFont(
             entry, size: 12, bold: false, italic: false, useCourierPrime: true,
             coveringCharactersIn: text))
         let newAdvance = try Self.measuredAdvance(font: newFont, text: text)

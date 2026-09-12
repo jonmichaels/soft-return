@@ -96,7 +96,7 @@ private func scratchBundle(files: [String: String]) throws -> Bundle {
             #expect(state.variant.value != .binary,
                     "\(item.title) detected as binary, not a real WordStar variant")
 
-            let native = DocumentRenderer.render(state, style: .printed)
+            let native = DocumentRenderer.render(state, style: .native)
             #expect(native.text.length > 0, "\(item.title) rendered empty Native content")
 
             let modern = DocumentRenderer.render(state, style: .modern)
@@ -119,7 +119,7 @@ private func scratchBundle(files: [String: String]) throws -> Bundle {
     /// .render(_:style:.printed)`, the same call `DocumentWindowController`'s Printed PDFKit
     /// path and `emitPDF` both build pagination from — `docToPagelines` defaults to
     /// `EmitOptions.defaultNotes`, which includes `.footnote`).
-    @Test @MainActor func lyingWSBundledFootnoteReachesDocumentInfoAndThePrintedPage() throws {
+    @Test @MainActor func lyingWSBundledFootnoteReachesDocumentInfoAndTheNativePage() throws {
         let item = try #require(SampleDocuments.items(bundle: .main).first { $0.title == "LYING" },
                                  "LYING.WS must be bundled")
         let document = WSDocument()
@@ -137,7 +137,7 @@ private func scratchBundle(files: [String: String]) throws -> Bundle {
         }
         #expect(footnoteCount == 1, "DocumentOperations.diagnose must report the same footnote count")
 
-        let printed = DocumentRenderer.render(state, style: .printed)
+        let printed = DocumentRenderer.render(state, style: .native)
         #expect(printed.text.string.contains("Did not take the prize"),
                 "the footnote's own text must paint as visible ink in the Printed render's note area")
 

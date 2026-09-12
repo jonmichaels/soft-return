@@ -38,28 +38,29 @@ func pdfFont(bold: Bool, italic: Bool) -> String {
 /// middle dot from a header triple or a box glyph in a fontless span degrades to its
 /// nearest visible relative, not to `?`. Port of Python's `_ESC_FALLBACK`.
 ///
-/// Finding 2 (b26 visual pass, a real WS7 paper capture): cp437 code 158 decodes to
-/// PESETA SIGN (U+20A7) — cp1252/WinAnsi has no glyph for it either (base-14 has no
-/// euro glyph and no peseta glyph — Symbol has neither), so it fell to `?` here same
-/// as any other unrepresentable character. The reference document's OWN text explains
-/// the honest reading for a post-1999 WordStar install: WordStar was last updated in
-/// 1992, seven years before the euro currency symbol was adopted in 1999 — the
-/// capture's own dosbox-x setup patches its printer driver files to show the euro at
-/// this exact code instead of the standard peseta (`euro=158` in the `[render]`
-/// section), and its own worked example inserts code 158 to PROVE the euro renders.
-/// Substituting the one glyph cp1252 actually has at this position (EURO SIGN,
-/// U+20AC, cp1252 0x80) turns a guaranteed `?` into what a real modern WS7 install of
-/// this exact document shows.
+/// Finding 2 (b26 visual pass) was a BLANKET `₧` -> `€` entry in this table: cp437
+/// code 158 decodes to PESETA SIGN (U+20A7), cp1252/WinAnsi has no glyph for it, so it
+/// fell to `?` — and every document carrying code 158 got the euro instead, whatever it
+/// meant by it. Planning #266 (Jon's ruling, 2026-09-11) replaces that with a DRIVER-KEYED
+/// rule, and the blanket entry is gone from the table below:
 ///
-/// KNOWN LIMIT, recorded rather than hidden: a private-corpus WordStar document (a
-/// bare cp437 code-to-glyph reference chart, no euro context at all) also carries one
-/// code-158 triple — real cp437 code 158 IS the peseta sign, not the euro, so this
-/// substitution is specifically right for the -README document's own documented
-/// intent and arguably wrong for that chart's literal entry. Both currently show `?`
-/// at that position either way (no font in this pipeline can draw a real peseta
-/// glyph), so this is not a working document regressing — it is one broken cell
-/// resolved the same way in both, and that private document is outside the
-/// checked-in/gated corpus, so nothing here is verified against its own WS7 capture.
+///   "driver keyed ... So anyone using Sawyer's trick gets the Euro. Any other old docs
+///    which actually use a Peseta in them, see it as intended."
+///
+/// The rule itself lives one layer up, in `Layout.swift` beside the semantic flow
+/// (`euroPatchedDrivers`/`pesetaMeansEuro`/`euroText`) — read its comment there for what
+/// the three patched printer drivers are and why a driver name decides this. It is CONTENT,
+/// the same class of thing as the LJ6DTP character substitutions (ruling 2026-08-06 M7), so
+/// it is applied on the paths that read the document's own spans — the printed page-lines
+/// model, the printed body and notes paginators, the endnote listing and the running
+/// heads/feet — never here, where a per-renderer encoding fallback would apply it to every
+/// document alike, which is exactly the bug.
+///
+/// The peseta itself is no longer a fallback case at all: it is drawn as VECTOR GEOMETRY in
+/// its own cell (`symbolShapes`, Jon's 2026-08-11 cp437 ruling — a cp437 glyph with no
+/// encoding slot is geometry, not a question mark), on both the Printed and the Modern PDF
+/// path, so the non-patched-driver document gets a real peseta rather than the `?` it used
+/// to get.
 // Register C9: '•' (U+2022 BULLET -- WordStar's own cp437 0x07 list marker,
 // `cp437Graphics`'s own mapping) is NOT a fallback case at all: cp1252 has a real bullet
 // glyph for it (0x95), same as every base-14 face's own /WinAnsiEncoding. It used to
@@ -73,7 +74,6 @@ private let escFallback: [Unicode.Scalar: Unicode.Scalar] = [
     "\u{2502}": "|",          // │ -> |
     "\u{2500}": "-",          // ─ -> -
     "\u{2550}": "=",          // ═ -> =
-    "\u{20A7}": "\u{20AC}",   // ₧ -> €
 ]
 
 /// Encode text for a PDF string literal: cp1252 (the declared `/WinAnsiEncoding`) with `?`
@@ -760,12 +760,25 @@ func runningOps(
         return ops
     }
 
+    // planning #266: a running head/foot is part of the document, so the driver-keyed
+    // cp437-158 rule applies to it -- at RENDER time here, never in `resolveHeadFootLines`
+    // above, which is the shared head/foot MODEL (the `layout` JSON's own header/footer
+    // lines) and must keep carrying the document's own unconverted text, same discipline as
+    // every other PDF-only text option.
+    //
+    // ctrl-kd's `_running_ops` binds the same table at the same point with the same
+    // comment, but its `_hf_line_ops` never consumes it -- a latent gap there, not a
+    // deliberate exclusion. Applying it here is byte-identical across the corpus anyway: no
+    // document's running head carries cp437 code 158.
+    let euro = pesetaMeansEuro(doc)
     var ops: [[UInt8]] = []
     for (_, text, y, fontIdx, x0, styleAttrs) in resolved.headers {
-        ops += hfLineOps(text, y: y, fontIdx: fontIdx, x0: x0, styleAttrs: styleAttrs)
+        ops += hfLineOps(euroText(text, euro), y: y, fontIdx: fontIdx, x0: x0,
+                         styleAttrs: styleAttrs)
     }
     for (_, text, y, fontIdx, x0, styleAttrs) in resolved.footers {
-        ops += hfLineOps(text, y: y, fontIdx: fontIdx, x0: x0, styleAttrs: styleAttrs)
+        ops += hfLineOps(euroText(text, euro), y: y, fontIdx: fontIdx, x0: x0,
+                         styleAttrs: styleAttrs)
     }
     if let auto = resolved.auto {
         var op = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)

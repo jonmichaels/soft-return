@@ -1,5 +1,418 @@
 # Known-Issues Register
 
+## 2026-09-11 (v4.1.0 release run): the Swift PCL-fidelity tier, enumerated
+
+The release checklist's step 5(b) names "13 PCL-fidelity font-substitution
+divergences" as the one non-blocking exception. That sentence was written on
+2026-08-28 and is now **out of date** — the capture set has grown and the
+suppression shape has changed. This is what `swift test` actually reports on
+the v4.1.0 cut, enumerated by name and by cause before any count is quoted.
+
+`swift test`, armed (`CTRLKD_SAWYER_ARCHIVE` + `CTRLKD_PRIVATE_CORPUS` +
+`CTRLKD_SRC`), 2026-09-11: **908 of 911 passed**. Every suite green
+(`AnswerKeyParityTests`, `AnswerKeyParityPrivateTests`, `CorpusParityTests`,
+`PesetaEuroDriverTests`, `LJ6DTPCharSubstitutionTests`,
+`HeadFootModelPDFParityTests`) **except** `PCLFidelityTests`, which reports 96
+issues over 194 documents: 95 known-issue-wrapped and **1 hard failure**.
+
+### The 1 hard failure
+
+`pclFidelity(doc:)` → **LJ6DTP** — `PCLFidelityTests.swift:823`. This is the
+document Jon PARKED (planning #202, and the exact-drift row under planning
+#210): its capture is Sawyer's and its printer hacks are out of scope. It is
+one of the 13 documents the checklist already names as the non-blocking
+exception, so it does not block. The Python tier agrees — ctrl-kd's own
+`tools/run-full-suite.sh` armed the same way fails the same single document
+and nothing else (`LJ6DTP: 10 accepted font-substitution divergence(s)`).
+
+### The 95 known-issue-wrapped, split by cause
+
+| n | cause | ruled |
+|---|---|---|
+| 74 | **v4 expansion, UNTRIAGED** — `withKnownIssue` softening of "check 1" (agreement with the real WS7 capture) for every document in the 2026-09-08 v4 capture expansion (`inventoryModeDocs`, `PCLFidelityTests.swift:803-826`), mirroring ctrl-kd's own `pcl_tolerance.INVENTORY_MODE_DOCS`. Every divergence is still printed by name; the tier just does not fail on it. | planning #180 phase 2, 2026-09-08 — "pending Jon's per-cause ruling". NOT yet triaged into font-substitution vs real defect. |
+| 12 | **duplicate** — byte-identical second copy of another corpus document, excluded so the same content is not judged twice | Jon, 2026-09-08 (planning #226) |
+| 4 | **postscript** — PostScript-targeted documents, outside a PCL tier | Jon, 2026-09-08 06:13 (planning #224) |
+| 2 | **formfeed-off** — `.xl 00` documents; real WS7 overprints several pages onto one physical sheet, which has no PDF-page representation | Jon, 2026-09-08 (standing planning #15) |
+| 1 | **freeze** — WordStar 7 itself freezes printing this document | Jon, 2026-09-08 (planning #224) |
+| 1 | **degenerate** — the document declares `.pl0`, a zero-length page, so WS7's own behaviour is undefined | Jon, 2026-09-10 (planning #261) |
+| 1 | **parked** — unexplained extra page, graphics overflow suspected | Jon, 2026-09-08 |
+
+### What is NOT softened
+
+**"Check 2" — cross-engine identity, sr's printed PDF against ctrl-kd's own
+recorded manifest — is never wrapped, for any document, v4 included.** It
+passed on all 194. That is the gate the two engines exist to hold, and it is
+fully green on this cut. The softening above is only about how far either
+engine is from a real 1990s printout on documents nobody has classified yet.
+
+### The honest statement for the release
+
+74 documents in the expanded capture set produce printed output that differs
+from the real WordStar 7 printout in ways **not yet classified** as either
+font substitution or a genuine placement defect. That is a real, user-facing
+limitation and it is named in the v4.1.0 release notes' Known issues in plain
+English. It is not new breakage — it is newly *measured* ground that the
+v4 expansion opened on 2026-09-08 and that Jon deferred triaging.
+
+## Planning #216: the app already draws vectors; what it lacks is the engine's cell (2026-09-09)
+
+Item 10 was "make the Native view draw box-drawing characters as vectors on the
+engine's cell, and retire the app's own wider graphicChars copy". Measured, two
+thirds of that premise is not the state of the code, and the remaining third
+needs geometry the engine does not export. Nothing landed.
+
+### The app already draws them as vectors
+
+`PrintedVectorGraphics.swift` is a port of the engine's own tables — `boxArms`,
+`shadeGray`, `partBlocks`, `symbolShapes`, `fullBlockChar` — and `graphicCells()`
+is called from FOUR sites in `PagedDocumentView` (the base pass, the overprint
+chain, the page draw and the oversized self-pass). Box drawing is not rendered as
+text glyphs.
+
+### The app's set is NARROWER than the engine's, not wider
+
+    engine: fullBlock ∪ boxArms ∪ shadeGray ∪ partBlocks ∪ symbolShapes ∪ arcCorners
+    app:    fullBlock ∪ boxArms ∪ shadeGray ∪ partBlocks ∪ symbolShapes
+
+`arcCorners` is absent from the app entirely (grep count 0), so arc-corner
+characters are the one class still drawn as text. The app cannot add them: the
+engine's `arcCorners` table, like `boxArms`/`shadeGray`/`partBlocks`/
+`symbolShapes`/`SymbolSubShape` and `graphicOps` itself, is INTERNAL to
+`PDFDriverLJ6DTP.swift`. Only `graphicChars` is public. Exporting the geometry —
+or a public function returning a character's rects in unit-cell space — is an
+ENGINE change and is what this half waits on.
+
+### The cell is where the divergence lives, and it is NOT the document column
+
+`graphicAdvance` sizes each vector cell from AppKit's own laid-out advance,
+"exact for the monospace faces cp437 box art always uses" per its own comment.
+That assumption is false on every document that fails the left-margin oracle on
+a box row. Measured, all three declare `proportional = true` and resolve their
+box runs to proportional substitutes:
+
+    ROUNDED.BRD    entry 0 proportional, points 14.5, width1800 187
+                   box runs in ArialMT 15 and HelveticaNeue 15
+    -LASERJE.FNT   40 entries, all proportional; box run in Symbol 18
+    PAGE.RND       entry 0 proportional, points 13, width1800 168
+                   box runs in HelveticaNeue 13 and ArialMT 13
+
+So planning #222's fixed-pitch pin correctly skips them (its guard is
+`entry?.proportional != true`) and correctly leaves their box art advancing at a
+substituted face's widths. The run is proportional and the CELLS inside it are
+not — which is #216 stated exactly.
+
+TRIED AND REVERTED: pinning graphic characters to the document print column
+(`spanPitch(nil, defaultSize)` = 7.2pt) regardless of the run's proportional
+flag. It made all three rows WORSE, which rules the hypothesis out:
+
+    -LASERJE.FNT l9   app 237.24 -> 201.60   against the engine's 241.70
+    ROUNDED.BRD       Δ1.00      -> Δ6.80    (and moved to line 1)
+    PAGE.RND          moved to line 1, Δ5.82
+
+The engine's own numbers say the same: ROUNDED.BRD's `│` occupies 14.00pt and
+its middle dots advance 4.32pt, neither of which is the 7.2pt column nor the
+7.48pt its `width1800` of 187 implies. What the engine's graphic pitch actually
+is for a proportional document is not derivable from what is public, and
+guessing it a second time is not worth a run.
+
+
+## everyLineStartsAtTheLibrarysLeftMargin: all ten rows, by cause (2026-09-09)
+
+Ten distinct rows, three causes, and no app-side fix among them. Each row's app
+and engine first-ink x is below; the engine's own PDF is the reference.
+
+### Six rows: the bare-tab expansion is not in the page-lines model
+
+    RNFOREST.TXT l0, RNFOREST.WS4 l0, RECYCLE.WS4 l4,
+    RECYLE.TXT l4, WETLAND.TXT l4, WETLAND.WS4 l4
+    app 79.20   engine 129.60   on every one
+
+Identical cause and identical numbers. `docToPagelines` hands the app a RAW tab:
+RNFOREST.TXT line 0's only span is `"\tThe Emerald Canopy..."` with `tabHMI`
+nil. The engine's PDF for that line carries eight expanded spaces (72.00 through
+122.41) and puts the "T" at 129.60; the app advances its literal tab by one
+column and puts the "T" at 79.20.
+
+The expansion is `expandBareTabsForPrintedLayout`, which is PRIVATE to
+`PDFWriter.swift` — it happens at PDF emit time and nothing surfaces it on the
+model the app consumes. That is the SAME shape as the column placement (planning
+#227): the PDF writer knows something `PageLine` does not carry. The app cannot
+reproduce it without a second copy of the rule, which is the thing this codebase
+forbids. ENGINE side.
+
+### Three rows: box drawing is graphics in the engine and text in the app
+
+    -LASERJE.FNT l9   app 237.24  engine 241.70   (delta 4.46)
+    PAGE.RND l56      app 199.22  engine 279.50   (delta 80.28)
+    ROUNDED.BRD l2    app 19.50   engine 18.50    (delta 1.00)
+
+On each of these the engine's text operators contain ONLY the run after the box
+prefix — `-LASERJE.FNT` l9's engine text is `"Scalable"` alone, `PAGE.RND` l56's
+is a single middle dot — because the engine draws box drawing as rectangles.
+The app draws the same characters as text glyphs in a substituted Mac face at
+that face's own advances (`ROUNDED.BRD`'s `│` measures 15.00pt in the app
+against the engine's 14.00; its middle dots 4.17 against 4.32), so everything
+after the prefix lands elsewhere.
+
+These advances are NOT full cells, so planning #222's fixed-pitch cell pin does
+not reach them: the pin puts a glyph on `spanPitch`, and these are sub-cell
+graphic widths. That is planning #216 exactly — graphic cells from document
+pitch — which is deferred by ruling. ROUNDED.BRD is already licensed in this
+register for line 1 with these same numbers; the failing row is now line 2, so
+the licence needs its line number generalised rather than a new finding.
+
+### One row: different content on the baseline
+
+    REFORM.DOT l18    app 64.80   engine 273.60
+
+Not a margin question. The app's line is `" .pf on"` beginning at 64.80; the
+engine's text on that same baseline reads `.pf` at 273.60 and `on` at 511.20 —
+two runs, far right, with a 223pt gap between them. The two sides do not have
+the same content in the same place on that line at all, so comparing their first
+ink measures nothing about margins. Needs its own diagnosis.
+
+### Not a row
+
+`ERROR.WS` reports "every line was skipped as all-geometry (20 of them) or had
+no engine baseline" — the counted-comparison guard doing its job on a document
+with no text ink, not a margin divergence.
+
+
+## Planning #227: the engine does NOT reset Y at a column boundary (2026-09-09)
+
+Item 7 was to land the Native column reset. Measured against the engine's own
+emitted PDF, the reset is wrong and the app is already right, so nothing landed.
+
+THE ENGINE'S OWN BYTES. FORMFEED.WS is the one columned document small enough
+for its engine output to be read directly, and its page 7 is entirely columnar
+(3 lines in column 0, 3 in column 1, 6 lines on the page). `sr -t pdf --mode
+printed` places them:
+
+    x=36.0    y=722, 710, 698      (column 0)
+    x=266.4   y=686, 674, 662      (column 1)
+
+Column 1 changes X and CONTINUES Y DOWNWARD. It does not restart at the page
+top. The same is true of the big columned documents: WINGDING.CHT's engine PDF
+descends monotonically to y=-2447 on a 792pt sheet, which is why it overflows at
+all -- the engine stacks every column's lines in one descending run.
+
+THE APP ALREADY MATCHES IT. Without any change, the app's page 7 reads x=36.0 at
+baselines 84/96/108 and x=266.4 at 120/132/144 -- uniform 12pt steps, x changing
+at the column, Y continuing. Same structure as the engine, differing only by the
+container-local origin. The per-line left edge already comes from
+`PageLine.left`, so the horizontal half needs nothing.
+
+WITH the reset, the app put column 1 back at the page top and diverged from the
+engine by exactly 36pt (three lines), which is what `structuralParity`,
+`regionDiffEnumeration`, `lineHeightHistogramAcrossCorpus` and
+`provingCasesLineHeightsAgreeWithTheEngine` all reported -- four oracles, one
+root cause, all of them correct to fail.
+
+SO THE COLUMNED OVERFLOW IS THE ENGINE'S, not the app's rendering of it. The app
+reproduces what the engine emits, including where the engine runs past the
+sheet. A page-budget measurement that sums per column (tried, and reverted with
+the rest) would have asserted those pages fit while the engine says they do not.
+
+Also reverted with it: the `BreakingTextContainer.forcedBreakOffset` page
+boundary, which only existed to let a columned page's container be tall enough
+to stack fragments the reset had repositioned. With no reset there is nothing to
+reposition and the container height remains the correct boundary, as its own
+comment in `buildExplicitPages` already argues.
+
+The patch is preserved at /tmp/claude-501/item6-columns.patch if the ruling
+changes -- i.e. if the ENGINE starts resetting Y per column, at which point the
+app should follow it.
+
+
+## LJ6DTP.WS p6 (372,144): the two renderers agree on everything they control (2026-09-09)
+
+The item was "find which renderer is wrong against the engine's PDF for that
+rule, fix it". Measured, there is no such renderer and no such rule. Both halves
+of the premise fail, and the evidence for each is here so it is not asked again.
+
+THE ENGINE CANNOT ARBITRATE THIS DOCUMENT. LJ6DTP is the one fixture LICENSED
+for font-class divergence (`native-font-class-lj6dtp`, the CG Times / Univers
+substitutes against the engine's base-14 equivalents), so its app layout and its
+engine layout legitimately differ and a fixed rectangle means different content
+on each side. Measured in the stripe itself: engine ink 0.0276 against the app's
+0.3805 and QuickLook's 0.2950 -- not because either renderer is wrong, but
+because the engine's own text on that line sits elsewhere. Comparing the two
+renderers to the engine positionally on THIS document has no authority.
+
+THE TWO RENDERERS PRODUCE BYTE-IDENTICAL GEOMETRY. `QuickLookNativeRenderer`
+calls the same `DocumentRenderer.render(state, style: .printed)` the app does,
+with its own ephemeral `SettingsStore` and its own `CourierPrimeFontRegistration
+.registerIfNeeded()`. Compared directly:
+
+    page count        ql 8            app 8
+    text length       ql 17123        app 17123
+    strings equal     true
+    attribute runs    1745 checked, 0 mismatches (font name, point size, kern)
+
+So there is no position, font or advance difference to fix. What differs is only
+the CAPTURE: the app rasterises a live view through `cacheDisplay`, QuickLook
+walks a from-scratch `dataWithPDF` into a PDFKit thumbnail.
+
+WHAT THE MARK IS. A 2pt x 8pt VERTICAL mark, bounded to x=372.0..373.9,
+y=148.0..155.9, with every other pixel in the surrounding cell identical between
+the two (1920 of 36864 pixels differ by more than 40/255, all inside that
+stripe). At that position the line reads "t I find th" -- a 2x8pt vertical mark
+is a glyph STEM, one letter's upright rendered at a different weight by the two
+capture paths.
+
+That is the class `qlMatchesAppNativeRendering` already documents for WARPRAYR.WS
+p1: "per-glyph hinting/rasterization variance in how AppKit bakes outlines into a
+generated PDF depending on windowed-vs-windowless graphics context, not a
+position bug." This is the same thing on a different fixture, now with the
+geometry proved identical rather than inferred.
+
+NOT an exclusion and not licensed. The two options are (a) accept it as the
+disclosed capture-path class, as WARPRAYR's own comment does, or (b) make both
+sides capture the same way so the comparison is apples to apples -- which changes
+what the test measures and is a ruling, not a fix. Neither is mine to choose.
+
+
+## The two single-region pixel findings, measured (2026-09-09)
+
+Both localised from the pixels rather than inferred. Neither is fixed, and
+neither is licensed: they are named here with their numbers so a ruling can be
+made on evidence.
+
+### -SCREEN.WS page 1, `rect=(276,312 12x12)pt`, extraInActual 0.147 / 0.000
+
+FONT SUBSTITUTION ON A GREEK RUN, and the same class this file's own sibling
+test already tolerates. The cell sits on -SCREEN's cp437 demo line
+(`Î±ÃŸÎ“Ï€Î£ÏƒÂµÏ„Î¦Î˜Î©Î´Ï†Îµ / ...`). Cropped from both renders at 6x, the app draws that run in a
+visibly WIDER, heavier face than the engine's: the app's per-glyph advances read
+Ï†@266.9 Îµ@274.1 /@288.5 against the engine's Ï†@268.0 Îµ@273.8 /@288.0, so the
+app's `Îµ` reaches into the cell the engine leaves empty. Both sides draw the same
+characters in the same order at the same baseline.
+
+Courier Prime carries no Greek, so the app falls back and the fallback is wider.
+That is the 2026-08-11 MAC VIEWING RULING's own territory (Native is Mac fonts;
+a placement difference arising from a substituted face is permanent), and
+`previewCaptionAndLogoSectionMatchesEngine` in the same file already restricts
+itself to y >= 468 for exactly this reason on PREVIEW's font-sample block --
+"ordinary glyph-shape substitution noise (non-bundled faces)".
+
+Neither side is wrong. What is owed is a ruling on whether this line gets the
+same narrow, named exclusion PREVIEW's font-sample block has.
+
+### LJ6DTP.WS page 6, `rect=(372,144 12x12)pt`, contentDiffers 0.247 / 0.372
+
+A 2pt x 8pt VERTICAL MARK the app draws and QuickLook draws lighter. Both sides
+are app renderers, so one of the two is wrong and it is not a font question.
+
+Localised numerically: rendering both sides and differencing the cell at 16
+pixels per point, 1920 of 36864 pixels differ by more than 40/255, in a bounding
+box of x=372.0..373.9, y=148.0..155.9. Sign matches the test (app has more ink
+than QuickLook). Outside that stripe the two crops are pixel-identical, so this
+is neither a shift nor a font difference.
+
+The shape -- a thin vertical rule on the one fixture whose pages carry PCL
+border and rule programs -- points at `PrintedPCLGraphics`, and specifically at
+the class job 495 already documented at length: the app captures live through
+`cacheDisplay` while QuickLook walks `dataWithPDF` from scratch, and the two
+composite a PCL overlay differently. Job 495 fixed the page-4 checkerboard case
+by moving relative programs onto `OversizedPassOverlayView`. This is NOT
+confirmed to be the same mechanism -- it is where the evidence points, and it is
+the next thing to measure rather than a diagnosis.
+
+LJ6DTP's parking (Jon's #202) does not cover this: that ruling is about its
+capture and its printing hacks, and this comparison is QuickLook against the
+app's own Native, with no capture and no engine involved.
+
+
+## Planning #222: the three invisibles failures are NOT explained by any measured input (2026-09-09)
+
+Blocked, with the evidence recorded so the next round does not repeat it.
+
+Removing the Modern view's app-only paragraph air and pinning its leading to the
+library's 1.2x (planning #222 items (a) and (b), Jon's option B) improves the
+Modern gate — edit distance 3322 to 3243, total page-count error 15 to 10 — but
+breaks `invisiblesModernLayoutIdenticalOnOldtimes`, `...OnStrength` and
+`...OnVersions`. Those changes are therefore NOT landed; they are saved as a
+patch, not committed.
+
+The verse half of the same work IS understood and does land cleanly (see below),
+so what remains is only these three.
+
+WHAT WAS MEASURED, on VERSIONS.WS, with and without the change on otherwise
+identical trees:
+
+  paragraph counts     OFF 104, ON 104  -- identical both ways
+                       (OLDTIMES 230/235, STRENGTH 34/35, also identical)
+  oracle verdict       0 divergences without, 91 with
+  `stripMarks` triple  IDENTICAL both ways, byte for byte, across the region
+                       where the oracle first diverges (paragraphs 25-38,
+                       anchored on the "@TYPE C:\WS\FIRSTRUN.TXT" line the
+                       oracle's own first divergence names)
+
+So no paragraph is gained or lost, and the content/marks verdict the oracle
+pairs on is unchanged. The applied patch touches `paragraphSpacing` and the
+line-height branch of `modernParagraphStyle` and NOTHING ELSE -- verified by
+reading the diff, no alignment or indent is touched -- yet the oracle's frame
+comparison reports alignments diverging (OFF 1 vs ON 4, then OFF 4 vs ON 1) and
+both STRENGTH and VERSIONS reach "ran out of paragraphs".
+
+THAT IS A CONTRADICTION, and it is the finding: every input to
+`InvisiblesModernLayoutOracle.compareLayout` that was measured is identical
+between the passing and failing trees. Either the oracle consumes something
+not yet measured, or one of these measurements is not measuring what the oracle
+actually renders. Ruled out with evidence rather than reasoning: a paragraph
+count drift; a `modernLeadingSpacer` appearing or vanishing (its guard is
+`lineHeightMultiple > 0 && < 1`, untouched, and the counts confirm it); one
+render path being pinned and the other not (both call `modernParagraphStyle`,
+both back-off sites got the same edit with the same `size` in scope); and the
+blank-filler content hypothesis above.
+
+NEXT STEP for whoever picks this up: instrument `compareLayout` itself to print
+its own walk -- item index, which paragraph it consumed for it, and why it
+skipped any it skipped -- on VERSIONS with and without the patch. Every input
+has now been checked from the outside; the walk is the only thing left, and it
+has to be read from the inside.
+
+### The verse half, which IS understood
+
+Job 437's ruling ("a soft-wrapped continuation line renders at normal body
+leading") was encoded as a NUMBER by accident: the code backs `tight` off with
+`lineHeightMultiple = 0` and nothing else, which meant "the body's leading" only
+because the body's leading was AppKit's own natural metric. Pinning the body to
+1.2x separates the two, and the caption then sits at AppKit's 16.0 against a
+16.8 body. Restoring the body's leading explicitly at both back-off sites closes
+it: `VerseSpacingInViewsTests` 8/8, both laws holding at once. That fix is in
+the same saved patch and should land with (a)+(b) once the three above are
+understood.
+
+
+## Native gate: fixed-pitch advance, and why box-drawing rows are not corrected (2026-09-09)
+
+The Native view substitutes the bundled Courier Prime for the document's
+Courier, and that face advances 1228/2048 em = 0.599609375, not the 0.6 em the
+library's column grid is built on. At a 12pt type size it is 0.0046875pt short
+per character, which ACCUMULATES: about 0.23pt by column 50 and 0.33pt by
+column 70 — exactly where `-README`, `-SCREEN` and `BOXES` were reporting their
+named rows. Runs are now corrected to the library's own pitch, taken from the
+engine's `spanPitch` (public for this) rather than a constant re-derived here,
+so the `.cw` case is covered too. All three documents pass; the licence ceiling
+of 20 was never a font-substitution constant — it counted how many words on a
+page happened to sit far enough right for the accumulation to cross the 0.2pt
+tolerance, which is why anything pushing words rightward moved it.
+
+**A run is corrected only when the declared face has a glyph for every
+character in it, asked of CoreText.** A kern is a per-RUN attribute, but AppKit
+draws any character the face does not cover in a SUBSTITUTE face, at that
+face's own advance, with the run's kern still added on top — the correction
+computed against one face and applied to another. Box-drawing characters are
+not in Courier Prime, so they fall back to a face advancing 7.2012pt, and
+adding Courier Prime's 0.0047pt deficit to it overshoots by 0.0059pt a glyph:
+0.234pt across a 41-column rule, which
+`Job447GraphicCellsCoverageWiringTests.realBoxesWSNativeHighColumnRowsMatchCanonicalGrid`
+measured directly, and 49 new `exact-drift` rows on LJ6DTP. Where the face does
+not cover the run, the advance is left exactly as it was: no claim is made
+about a face this code did not choose.
+
+
 ## RELEASE GATE — 4.0.3, 2026-09-07
 
 Jon's ruling: **4.0.3 ships now; every remaining Soft Return fix defers to

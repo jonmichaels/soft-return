@@ -22,8 +22,13 @@ struct PDFFont {
     let baseFont: String?
     /// The Symbol face specifically — NOT `font_class == "symbol"`, which also covers
     /// Dingbats, whose encoding is a different map entirely (`dingbat`, not
-    /// `symbolEncoding`).
+    /// `symbolEncoding`) and has its own flag below.
     private let isSymbolFace: Bool
+    /// The ZapfDingbats face. Its bytes are Zapf's own sheet positions, exactly as Symbol's
+    /// are Adobe's — and until this existed the extractor read the engine's own
+    /// `/ZapfDingbats` runs as the ASCII they literally are, so PS.TST's last line came back
+    /// as "Zpf Dingbats: ABCDE abcde 12345 !@#$%" against the app's "✺❐❆ ✤❉ ...".
+    private let isDingbatFace: Bool
     private let isTwoByte: Bool
     private let firstChar: Int
     private let widths: [Double]
@@ -46,6 +51,7 @@ struct PDFFont {
         let bareName = (base ?? "").contains("+")
             ? String((base ?? "").split(separator: "+", maxSplits: 1).last!) : (base ?? "")
         self.isSymbolFace = bareName.lowercased().hasPrefix("symbol")
+        self.isDingbatFace = bareName.lowercased().contains("dingbat")
 
         var subtype: UnsafePointer<Int8>?
         var subtypeName = ""
@@ -251,12 +257,58 @@ struct PDFFont {
         return out
     }()
 
+    /// The ZapfDingbats face's own byte -> real Unicode, built by inverting the ENGINE's
+    /// public `untransliterate` rather than by copying `dingbat(_:)`'s formula — the same
+    /// construction, and the same reason, as `symbolForward` above.
+    ///
+    /// The candidates are exactly what that face carries: Zapf's own sheet at U+2701-U+275E,
+    /// plus the four card suits Unicode had already housed at U+2660 before it absorbed the
+    /// rest. `untransliterate` answers `?` for anything else, which is how a non-member is
+    /// recognised here.
+    private static let dingbatForward: [Int: Character] = {
+        var out: [Int: Character] = [:]
+        var candidates = (0x2701...0x275E).compactMap { Unicode.Scalar($0) }
+        candidates += [0x2660, 0x2663, 0x2665, 0x2666].compactMap { Unicode.Scalar($0) }
+        for scalar in candidates {
+            let coded = untransliterate(String(Character(scalar)), .symbols)
+            guard coded.unicodeScalars.count == 1, let byte = coded.unicodeScalars.first,
+                  byte.value != 0x3F
+            else { continue }
+            out[Int(byte.value)] = Character(scalar)
+        }
+        return out
+    }()
+
     func character(for code: Int) -> Character {
-        // A Symbol-encoded run's bytes are Symbol's own codepoints, not Latin text — the
-        // font is the encoding. Resolve those first, before /ToUnicode or cp1252, both of
-        // which would happily return the ASCII letter the byte looks like.
-        if isSymbolFace, let greek = PDFFont.symbolForward[code] { return greek }
+        // `/ToUnicode` FIRST, because it is the producer's own statement of what this code
+        // means and nothing else here can outrank it.
+        //
+        // The Symbol table used to run ahead of it, on the reasoning that a Symbol run's
+        // bytes are Symbol's own codepoints and cp1252 would happily return the ASCII letter
+        // the byte looks like. That is true of cp1252 and false of `/ToUnicode`, and putting
+        // the table first broke every SUBSET Symbol font: Quartz writes the app's Symbol runs
+        // as `AAAAAC+Symbol` with codes numbered from 33 in subset order and a `/ToUnicode`
+        // CMap to say what they are, so reading code 34 through Adobe's own sheet answered
+        // "∀" for a ψ. PS.TST page 1 read "Σ∀µβ∃λ" where the engine's own PDF — base-14
+        // `/Symbol`, no `/ToUnicode`, real Adobe codes — read "Σψμβολ".
         if let mapped = toUnicode[code] { return mapped }
+        // A Symbol- or Dingbats-encoded run with no `/ToUnicode` of its own: the font IS the
+        // encoding, and these must come before cp1252 for the reason above.
+        if isSymbolFace, let greek = PDFFont.symbolForward[code] { return greek }
+        if isDingbatFace, let mark = PDFFont.dingbatForward[code] { return mark }
+        // AN IDENTITY-H CODE IS A GLYPH ID, NOT A CHARACTER, and without a `/ToUnicode` there
+        // is nothing here that can turn one into the other. Quartz writes exactly that shape
+        // whenever Core Text falls back to a CJK face: FONTS.REF page 10's PC-Line specimen
+        // row is typed in cp437 box drawing, no Latin face carries it, and the app's own PDF
+        // draws it through `AAAADE+AppleSDGothicNeo-Regular` / `HiraginoSansGB-W3` as
+        // Identity-H with no CMap at all. Reading those codes as scalars answered 䡢 for a
+        // glyph id of 0x4862 — a fabricated character, and the reason that row looked like
+        // ink the engine was missing.
+        //
+        // U+FFFD is the honest answer: a mark this reader cannot name. It is also a real
+        // defect in the PDF itself, and a separate one — text drawn that way is not
+        // searchable or selectable in any viewer.
+        if isTwoByte { return "\u{FFFD}" }
         if let byteEncoding, code >= 0, code <= 0xFF,
            let decoded = String(bytes: [UInt8(code)], encoding: byteEncoding),
            let first = decoded.first {

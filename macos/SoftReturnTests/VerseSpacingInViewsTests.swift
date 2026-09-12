@@ -245,18 +245,31 @@ import Testing
         }
     }
 
-    /// Regression guard, same fixture: TTO #1's caption ("`WordStar 4 has the annoying
-    /// habit of spliting equations over two lines.`") is short enough that it does NOT
-    /// wrap — a genuine hard-returned-only verse paragraph — and job 437's fix must leave
-    /// THAT case exactly as job 395 left it: still tightened below the body baseline.
+    /// Regression guard, same fixture: a verse-classified paragraph that does NOT wrap
+    /// must stay exactly as job 395 left it — tightened below the body baseline — however
+    /// job 437's continuation-line rule treats the ones that do.
+    ///
+    /// THE SUBJECT MOVED, AND THE REASON IS THE POINT. This used to measure TTO #1's
+    /// caption ("`WordStar 4 has the annoying habit of spliting equations over two
+    /// lines.`"), chosen because it fit on one line. It no longer fits: Modern now honours
+    /// a paragraph's own right margin, and POWERUSE.WS's ruler line puts that margin four
+    /// columns in, so the caption is measured at 439.2pt rather than the full 468pt. In
+    /// the reading face this test uses it is 451.81pt wide, so it wraps — and a wrapped
+    /// verse paragraph is the OTHER test above, not this one.
+    ///
+    /// Nothing about job 395's rule changed; the fixture simply stopped supplying a
+    /// non-wrapping example at that spot, which the count guard below caught and said so.
+    /// The label line is a verse paragraph in the same block and is short enough that no
+    /// reading face will wrap it, so the case stays measurable on real geometry rather
+    /// than being demoted to a synthetic one.
     @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
     func nonWrappingVerseParagraphStaysTight() throws {
         let text = try Self.modernRender(fixture: "POWERUSE.WS")
         let ns = text.string as NSString
 
-        let captionFound = ns.range(of: "WordStar 4 has the")
+        let captionFound = ns.range(of: "TTO #1")
         #expect(captionFound.location != NSNotFound,
-                "expected TTO #1's caption text in POWERUSE.WS's Modern render")
+                "expected TTO #1's label line in POWERUSE.WS's Modern render")
         let bodyFound = ns.range(of: "With the release of updated versions")
         #expect(bodyFound.location != NSNotFound,
                 "expected the article's own opening body-prose paragraph in POWERUSE.WS's Modern render")
@@ -267,7 +280,7 @@ import Testing
         let bodyHeights = Self.lineFragmentHeights(in: text, range: bodyRange, width: 468)
 
         #expect(captionHeights.count == 1,
-                "expected TTO #1's caption to stay on ONE line fragment in Modern -- otherwise this isn't testing the non-wrapping case")
+                "expected TTO #1's label line to stay on ONE line fragment in Modern -- otherwise this isn't testing the non-wrapping case")
         let captionAvg = Self.average(captionHeights)
         let bodyAvg = Self.average(bodyHeights)
         #expect(captionAvg < bodyAvg,
@@ -290,6 +303,42 @@ import Testing
             stop.pointee = true
         }
         #expect(foundLeft, "the synthetic poem should render as a left-aligned Modern paragraph")
+    }
+
+    /// AND THE MULTIPLE IS ALSO PINNED, to the library's own `modernTightHeight` — the
+    /// same option-B doctrine (planning #222, Jon) that already pins Modern's ORDINARY
+    /// leading to `modernLine * pt` rather than to whatever AppKit reports for the face.
+    ///
+    /// What made the clamp necessary: `lineHeightMultiple` is relative to AppKit's natural
+    /// line height, and AppKit's natural height is not the number the library's table
+    /// carries. For Times New Roman 14 `NSLayoutManager.defaultLineHeight` is 16.0pt WITH
+    /// the face's external leading and 15.0 without it — and Modern turns that leading off
+    /// (`PagedDocumentView`: `usesFontLeading = clipsLines`). So the view set a tightened
+    /// line at 10.78pt against the library's 11.50, 0.72pt every such line, and -README.WS
+    /// had drifted a whole line by page 4. The multiple is kept beside the clamp because it
+    /// is what everything downstream reads as "this paragraph is tight".
+    @Test @MainActor func aTightParagraphIsPinnedToTheLibrarysOwnTightHeight() throws {
+        let soft: [UInt8] = [0x8D, 0x0A]
+        let hard: [UInt8] = [0x0D, 0x0A]
+        let poem = Array("     line one --".utf8) + soft + Array("     line two --".utf8) + hard
+        let text = try Self.modernRender(synthetic: poem)
+        // A fontless synthetic document reads in Modern's own default body face
+        // (`modernTokFont`: Times unless the file turned proportional printing off).
+        let expected = CGFloat(CtrlKD.modernTightHeight(.times, Int(DocumentRenderer.modernLibraryBodyPt)))
+        var found = false
+        text.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: text.length)) { value, _, stop in
+            guard let style = value as? NSParagraphStyle,
+                  style.lineHeightMultiple == DocumentRenderer.modernVerseTightLineHeightMultiple
+            else { return }
+            found = true
+            #expect(style.minimumLineHeight == expected && style.maximumLineHeight == expected,
+                    """
+                    a tight Modern paragraph must be pinned to the library's own tight height \
+                    \(expected)pt, got min \(style.minimumLineHeight) max \(style.maximumLineHeight)
+                    """)
+            stop.pointee = true
+        }
+        #expect(found, "the synthetic poem should render at least one tight Modern paragraph")
     }
 
     /// STRENGTH.WS's own title/byline/email block — `modernParagraphContent`'s own doc

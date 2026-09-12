@@ -249,7 +249,7 @@ final class DocumentWindowController: NSWindowController {
     private func loadPagedContent() {
         let renderStyle = documentState.style.value.renderStyle
         // Job 294: Modern shows invisibles too now, not just Native — `renderWithInvisibles`
-        // itself picks the right annotated pass per style (`renderPrintedAnnotated` vs
+        // itself picks the right annotated pass per style (`renderNativeAnnotated` vs
         // `renderModernAnnotated`); Printed never reaches here (`reloadContent` routes it to
         // `pdfView` instead).
         let rendered = (documentState.style.value != .printed && documentState.showInvisibles)
@@ -262,7 +262,7 @@ final class DocumentWindowController: NSWindowController {
     /// is literally what `sr --mode printed` writes, so this view is byte-identical to the
     /// CLI by construction, never a second AppKit approximation of it. Page settings flow
     /// through the SAME `EmitOptions.pageSettings` channel `ExportEngine`'s Printed-mode PDF
-    /// export and `DocumentRenderer.renderPrinted`'s screen path both already use — a preset
+    /// export and `DocumentRenderer.renderNative`'s screen path both already use — a preset
     /// chosen in the footer can never disagree with what this view shows.
     private func loadPrintedPDFContent() {
         // Job 371 item 1 (PIX IN VIEWS): `documentState.pixResults` was already resolved once

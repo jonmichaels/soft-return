@@ -86,10 +86,13 @@ private func paraStructures(_ doc: Document) -> [RowStructure] {
         + bytes("* Third bullet, back at the outer level.") + HARD
     let doc = modernDoc(data)
     let html = emitHTML(doc, mode: .modern)
-    #expect(html.contains("<ul><li>First bullet item.</li>"
-        + "<li>Second bullet, introduces a sub-list:"
-        + "<dl><dt>LABEL:</dt><dd>nested description.</dd></dl></li>"
-        + "<li>Third bullet, back at the outer level.</li></ul>"))
+    // `+=` statements, never a chained `+` expression (macOS CI type-checker
+    // times out on it -- see this repo's own CLAUDE.md).
+    var expected = "<ul><li>First bullet item.</li>"
+    expected += "<li>Second bullet, introduces a sub-list:"
+    expected += "<dl><dt>LABEL:</dt><dd>nested description.</dd></dl></li>"
+    expected += "<li>Third bullet, back at the outer level.</li></ul>"
+    #expect(html.contains(expected))
 }
 
 @Test func threeLevelNesting() {
@@ -106,11 +109,14 @@ private func paraStructures(_ doc: Document) -> [RowStructure] {
     let structures = paraStructures(doc)
     #expect(structures.map { $0.level } == [1, 1, 2, 2, 3])
     let html = emitHTML(doc, mode: .modern)
-    #expect(html.contains("<ul><li>Outer bullet one.</li>"
-        + "<li>Outer bullet two, introduces inner list:"
-        + "<ul><li>Inner one</li>"
-        + "<li>Inner two, introduces a def-list:"
-        + "<dl><dt>LABEL:</dt><dd>deepest.</dd></dl></li></ul></li></ul>"))
+    // `+=` statements, never a chained `+` expression (macOS CI type-checker
+    // times out on it -- see this repo's own CLAUDE.md).
+    var expected = "<ul><li>Outer bullet one.</li>"
+    expected += "<li>Outer bullet two, introduces inner list:"
+    expected += "<ul><li>Inner one</li>"
+    expected += "<li>Inner two, introduces a def-list:"
+    expected += "<dl><dt>LABEL:</dt><dd>deepest.</dd></dl></li></ul></li></ul>"
+    #expect(html.contains(expected))
 }
 
 @Test func centeredBySpacesDetectedAndRendered() {

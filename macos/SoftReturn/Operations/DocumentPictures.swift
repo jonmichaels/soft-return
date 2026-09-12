@@ -93,7 +93,22 @@ enum DocumentPictures {
 
         var isDir: ObjCBool = false
         let docExists = fileManager.fileExists(atPath: docPath, isDirectory: &isDir)
-        let docDir = (docExists && !isDir.boolValue) ? dirname(docPath) : docPath
+        // `""` MEANS THE CURRENT DIRECTORY, NOT "NOWHERE" — sr 0a082bd, ported here because
+        // this resolver is kept in lockstep with `PixResolve.swift` on purpose (see this
+        // type's own header).
+        //
+        // A RELATIVE document path with no directory component at all — `DOC.WS`, which is
+        // what opening a document from its own directory produces — has `dirname() == ""`,
+        // and `""` is not a directory anything can list (`contentsOfDirectory(atPath: "")`
+        // finds nothing, same as POSIX `opendir("")`). So a relative path could never find a
+        // sibling `.PIX` file, while the SAME document opened by its absolute path worked,
+        // because an absolute path's dirname is never empty. Python's `pathlib` was never
+        // affected: `Path("DOC.WS").parent` is already `Path(".")`.
+        //
+        // The fix is this substitution, NOT a change to `dirname()` itself — its other
+        // callers want the `os.path` answer it faithfully mirrors.
+        let rawDocDir = (docExists && !isDir.boolValue) ? dirname(docPath) : docPath
+        let docDir = rawDocDir.isEmpty ? "." : rawDocDir
         let ancs = ancestors(docDir, maxUp: maxAncestors)
 
         for anc in ancs {
@@ -134,8 +149,14 @@ enum DocumentPictures {
         var out = [start]
         var cur = start
         for _ in 0..<maxUp {
-            let parent = dirname(cur)
-            if parent == cur || parent.isEmpty { break }
+            // Same substitution as `resolvePix`'s own doc-directory step, needed again for
+            // every level ABOVE it: a relative path with exactly one directory component
+            // (`subdir/DOC.WS`) otherwise stops one level short and silently skips the
+            // process's own working directory as a probe location. Ported from sr's
+            // `ancestors`, which walks `pathlib.Path.parent`'s contract, not `os.path`'s.
+            let raw = dirname(cur)
+            let parent = raw.isEmpty ? "." : raw
+            if parent == cur { break }
             out.append(parent)
             cur = parent
         }

@@ -5,13 +5,13 @@ import Foundation
 ///
 /// ## Why this exists
 ///
-/// `AppNativeFidelityTests` measures the app's Printed facsimile against the real WordStar
+/// `AppNativeFidelityTests` measures the app's Native facsimile against the real WordStar
 /// captures using ctrl-kd's own tolerance model. Handing that gate a PDF does not work, and
 /// the first armed run proved it: every word on all 18 documents came back `pdf=None`, "no
 /// corresponding word anywhere". ctrl-kd's `tools/fidelity_gate.py` extracts words with a
 /// regex over ITS OWN emitter's op shape — its docstring says so outright, "Every
 /// text-drawing operation `pdf.py` writes has one shape: `BT /Fn SIZE Tf [SCALE Tz ]RISE Ts
-/// X Y Td (TEXT) Tj ET`". The app's Printed view is Quartz, which positions with `Tm` and
+/// X Y Td (TEXT) Tj ET`". The app's Native view is Quartz, which positions with `Tm` and
 /// draws with `TJ` arrays, so that regex matches zero ops against it.
 ///
 /// ctrl-kd 3292630 added the fix: `--engine-words FILE`, a pre-extracted substitute for the
@@ -131,6 +131,131 @@ enum AppPDFWords {
         }
     }
 
+
+    /// RISE SNAPPING — a raised marker belongs to the line it was raised FROM.
+    ///
+    /// Ported from ctrl-kd's own reader (2026-09-07), which solved the identical problem for
+    /// the identical reason. The two producers disagree about a superscript's baseline: the
+    /// engine's own schema states the rise is NOT applied to `y`, so its footnote marker sits
+    /// on its line's baseline, while a Quartz PDF bakes the rise into the text matrix and the
+    /// marker's baseline sits a couple of points above. Read by exact baseline, the app's
+    /// marker becomes a LINE OF ITS OWN: a footnoted paper from the private corpus came back
+    /// with page 1 at 30 lines against the engine's 26, one extra per footnote reference, and
+    /// its pages ran 30/32/33/32/36/33 against 26/28/29/28/29/28 in the same shape.
+    ///
+    /// So a MINORITY baseline within `riseWindow` of a line's own majority baseline is
+    /// snapped to it. Minority by count, because a line is its ordinary text: a marker is one
+    /// or two characters against a line's dozens, and the rule must never let a raised RUN
+    /// pull a real line onto its neighbour. The window is ctrl-kd's own 8pt — comfortably
+    /// more than any rise this corpus uses and comfortably less than any lead.
+    ///
+    /// The schema is deliberately NOT widened with a rise field. Every consumer of these
+    /// payloads asks which LINE a character is on; none asks how far it was raised, and the
+    /// engine's own side could only ever answer zero, since its `y` never carried a rise to
+    /// begin with. A field that one producer can never populate is not parity, it is a
+    /// second way to be wrong.
+    static let riseWindow = 6.0
+
+    /// A RAISED RUN IS A FRAGMENT OF ITS LINE, so it is markedly lighter than the lines this
+    /// page is made of — and that, not a fixed ratio against its own neighbour, is what tells
+    /// the two apart.
+    ///
+    /// Three rules have been tried here. "Several times lighter than the neighbour it snaps
+    /// onto" is false of this corpus's own sub/superscript documents, where whole runs are
+    /// raised: SUB-SUPE.TST's "proline: CCA, CCC, CCG, and CCT. For" came apart into
+    /// "proline: . For" and a 22-character line of its own, because 22 against 40 is not a
+    /// several-fold minority. Dropping the weight test altogether and leaving the WINDOW to do
+    /// the work assumes two real lines are always a lead apart and a lead is always more than
+    /// 6pt — true of the 12pt default and false of MARKUP.WS, whose whole page is set at a 2pt
+    /// lead, so every line on it was strictly heavier than the one above and every one of them
+    /// was swallowed. Its page 1 read as a single 300-character line of interleaved words.
+    ///
+    /// What holds in both is the PAGE's own scale: a raised run is a piece of a line, so it
+    /// weighs a fraction of what this page's typical line weighs, whatever the lead happens to
+    /// be. A page whose lines are all of a size — MARKUP.WS's, or any ordinary page — has no
+    /// such fraction on it and nothing snaps.
+    static let raisedRunShare = 0.5
+
+    /// AND TWO PIECES THAT TOGETHER MAKE ABOUT ONE LINE ARE ONE LINE. The share above asks
+    /// only about the lighter piece, and a run can be half a line and still be a run:
+    /// SUB-SUPE.TST page 2's "smallest possible bit of time." is 29 characters against a page
+    /// whose typical line is nearer 56 — outside the share by one character, and plainly a
+    /// piece of the 60-character line the engine draws it on.
+    ///
+    /// Asking what the two make TOGETHER settles that without a finer fraction: a raised run
+    /// and its line add up to one line, and two REAL lines add up to two. MARKUP.WS's 2pt-lead
+    /// page is 50 against 50 and adds up to twice its own typical line, so nothing on it
+    /// merges however close it sits.
+    static let mergedLineAllowance = 1.25
+
+    /// The page's typical line weight: the median of every baseline's own weight. Median
+    /// rather than mean, so one 300-character run-on or one lone marker cannot move it.
+    static func typicalWeight(_ weights: [Double: Int]) -> Double {
+        let sorted = weights.values.sorted()
+        guard !sorted.isEmpty else { return 0 }
+        let middle = sorted.count / 2
+        return sorted.count.isMultiple(of: 2)
+            ? Double(sorted[middle - 1] + sorted[middle]) / 2.0
+            : Double(sorted[middle])
+    }
+
+    /// The snapped baseline for every distinct baseline on one page, keyed by the original.
+    ///
+    /// `weights` is how many characters sit on each baseline. `sizes` is the type SIZE on
+    /// each — and where it is known it outranks every weight rule below, because it is the
+    /// thing a raised run actually IS.
+    ///
+    /// WordStar sets a sup/sub run SMALLER (the engine's own `sized`, two-thirds, and
+    /// Mechanism G's per-family ratio), so a reduced run beside a full-size one is a piece of
+    /// that line and not a line of its own, whatever either of them weighs. That matters
+    /// because weight against the page's typical line has a blind spot this corpus really
+    /// contains: -README.WS's tag page is forty rows of "CLARIFY [Clarify]", so its TYPICAL
+    /// line is nine characters long and the 12pt half of every row is heavy against it. Seven
+    /// characters against nine says nothing; 12pt against 9pt says everything.
+    ///
+    /// Weight still decides where the sizes are equal or unknown — MARKUP.WS's whole 2pt-lead
+    /// page is one size, and the engine's own side carries no sup/sub reduction at all.
+    static func snappedBaselines(_ weights: [Double: Int],
+                                 sizes: [Double: Double] = [:]) -> [Double: Double] {
+        var mapping: [Double: Double] = [:]
+        let sorted = weights.keys.sorted()
+        let typical = typicalWeight(weights)
+        let ceiling = typical * raisedRunShare
+        for baseline in sorted {
+            let own = weights[baseline] ?? 0
+            // ONLY A FRAGMENT SNAPS, and there are two ways to be one: light against this
+            // page's own typical line, or light ENOUGH that the pair adds up to a single one.
+            // See `raisedRunShare` and `mergedLineAllowance`.
+            let candidates = sorted.filter {
+                guard $0 != baseline, abs($0 - baseline) <= riseWindow else { return false }
+                let other = weights[$0] ?? 0
+                // SIZE FIRST, where both baselines have one: smaller type is a reduced run
+                // and joins the full-size line beside it; full-size type never joins smaller.
+                let ownSize = sizes[baseline] ?? 0
+                let otherSize = sizes[$0] ?? 0
+                if ownSize > 0, otherSize > 0, abs(ownSize - otherSize) > 0.01 {
+                    return ownSize < otherSize
+                }
+                // STRICTLY HEAVIER, or equal and EARLIER on the page — because a mutual snap
+                // is not a merge. SUB-SUPE.TST page 2's line is drawn as a 9pt lowered run
+                // and a 12pt one 0.74pt apart, 26 characters each: under a plain "heavier or
+                // equal" each chose the other and the pair came back as two lines in swapped
+                // order. Breaking the tie toward the earlier baseline sends both to the same
+                // place, which is what merging means.
+                guard other > own || ($0 < baseline && other == own) else { return false }
+                return Double(own) < ceiling
+                    || Double(own + other) <= typical * mergedLineAllowance
+            }
+            let best = candidates.min {
+                let left = (weights[$0] ?? 0, -abs($0 - baseline))
+                let right = (weights[$1] ?? 0, -abs($1 - baseline))
+                return left.0 != right.0 ? left.0 > right.0 : left.1 > right.1
+            }
+            mapping[baseline] = best ?? baseline
+        }
+        return mapping
+    }
+
     static func payload(from pdf: [UInt8]) throws -> Payload {
         let data = Data(pdf) as CFData
         guard let provider = CGDataProvider(data: data),
@@ -147,7 +272,50 @@ enum AppPDFWords {
             state.run(page: page)
             // Segmentation happens once, after every character on the page is known — see
             // `PageScan.segmentedWords()`, which is a port of ctrl-kd's own rule.
-            words += state.segmentedWords()
+            var pageWords = state.segmentedWords()
+            var weights: [Double: Int] = [:]
+            // The LARGEST type on each baseline: a line's own size, since a line that carries
+            // both its body face and something smaller is a line at its body face.
+            var sizes: [Double: Double] = [:]
+            for word in pageWords {
+                weights[word.y_top_pt, default: 0] += word.text.count
+                sizes[word.y_top_pt] = max(sizes[word.y_top_pt] ?? 0, word.size_pt)
+            }
+            let snapped = snappedBaselines(weights, sizes: sizes)
+            // A WORD THAT STAYS PUT KEEPS ITS PLACE IN THE DRAWING ORDER; A WORD THAT MOVES
+            // TAKES ITS PLACE BY X.
+            //
+            // Those are the two different things a shared baseline can mean, and each needs
+            // the other's rule. An OVERPRINT pass is drawn at the baseline it already has —
+            // nothing snaps — and it is a whole run from the margin, so reading it in drawing
+            // order keeps it whole where sorting by x would zip it through the line beneath
+            // (MICKEE.WS page 12). A raised MARKER is drawn at its own higher baseline and
+            // snapped down onto the line, and it belongs where it SITS on that line, not at
+            // the front of it — LYING.WS, NOTES.TST, SUB-SUPE.TST and eight pages of a
+            // footnoted paper from the private corpus all read "1 the sentence." for "the
+            // sentence.1" when a snapped word simply kept the order its own original baseline
+            // was visited in.
+            var placed: [Word] = []
+            var moved: [Word] = []
+            for word in pageWords {
+                let target = snapped[word.y_top_pt] ?? word.y_top_pt
+                guard target != word.y_top_pt else {
+                    placed.append(word)
+                    continue
+                }
+                moved.append(Word(text: word.text, x_pt: word.x_pt, y_top_pt: target,
+                                  size_pt: word.size_pt, font: word.font,
+                                  font_class: word.font_class, page: word.page))
+            }
+            for word in moved {
+                let index = placed.firstIndex {
+                    $0.y_top_pt == word.y_top_pt && $0.x_pt > word.x_pt
+                } ?? placed.lastIndex { $0.y_top_pt == word.y_top_pt }.map { $0 + 1 }
+                    ?? placed.count
+                placed.insert(word, at: index)
+            }
+            pageWords = placed
+            words += pageWords
             rasters += state.rasters
         }
         return Payload(schema_version: 1, n_pages: document.numberOfPages,
@@ -235,7 +403,18 @@ enum AppPDFWords {
             let state = PageScan(pageNumber: number, pageHeight: Double(box.height),
                                  pageOrigin: (Double(box.origin.x), Double(box.origin.y)))
             state.run(page: page)
-            chars += state.emittedChars()
+            var pageChars = state.emittedChars()
+            var weights: [Double: Int] = [:]
+            for char in pageChars { weights[char.y_top_pt, default: 0] += 1 }
+            let snapped = snappedBaselines(weights)
+            pageChars = pageChars.map { char in
+                let target = snapped[char.y_top_pt] ?? char.y_top_pt
+                guard target != char.y_top_pt else { return char }
+                return Char(text: char.text, x_pt: char.x_pt, x_end_pt: char.x_end_pt,
+                            y_top_pt: target, size_pt: char.size_pt, font: char.font,
+                            font_class: char.font_class, page: char.page)
+            }
+            chars += pageChars
             rasters += state.rasters
         }
         return CharsPayload(schema_version: 2, n_pages: document.numberOfPages,

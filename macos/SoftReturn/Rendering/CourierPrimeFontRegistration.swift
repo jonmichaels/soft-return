@@ -3,7 +3,7 @@ import CoreText
 
 /// Job 306 (b18): registers the four vendored Courier Prime faces
 /// (`Vendor/CourierPrime/*.ttf`, SIL OFL 1.1, `Vendor/CourierPrime/VENDORED.md`) — Native's
-/// courier-class face (`DocumentRenderer.swift`'s `printedMacFontRows`), bundled because
+/// courier-class face (`DocumentRenderer.swift`'s `nativeMacFontRows`), bundled because
 /// Courier New is too pale beside Printed's PDF-rendered Courier (Jon's ruling 2026-08-14).
 ///
 /// `.process` scope ONLY (`CTFontManagerRegisterFontsForURL`'s own distinction from
@@ -13,7 +13,7 @@ import CoreText
 /// "Courier Prime", ...)` resolves the Regular face and `NSFontManager.convert(_:toHaveTrait:)`
 /// selects the REAL bundled Bold/Italic/BoldItalic members (distinct `fontName` each,
 /// `CourierPrime-Bold`/`-Italic`/`-BoldItalic`) rather than synthesizing — the same
-/// `printedApplyTraits` mechanism `printedResolvedMacFont` already used for every other Mac
+/// `nativeApplyTraits` mechanism `nativeResolvedMacFont` already used for every other Mac
 /// font row needs no changes for this one.
 ///
 /// One file, mirrored VERBATIM into `SoftReturn`/`SoftReturnQuickLook`/`SoftReturnThumbnail`
@@ -41,7 +41,7 @@ enum CourierPrimeFontRegistration {
             var error: Unmanaged<CFError>?
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
             // No error handling beyond this: a face that fails to register simply never
-            // resolves via `NSFont(name: "Courier Prime", ...)`, and `printedResolvedMacFont`'s
+            // resolves via `NSFont(name: "Courier Prime", ...)`, and `nativeResolvedMacFont`'s
             // existing `primary`/`falt` fallback to Courier New already covers that case —
             // see `DocumentRenderer.swift`'s courier-class row.
         }

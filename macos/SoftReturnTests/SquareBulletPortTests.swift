@@ -5,7 +5,7 @@ import Testing
 
 /// b27 item 3 — the cp437 0xFE square bullet (■, U+25A0, Sawyer's `-README.WS` list
 /// markers) rendered visibly RECTANGULAR in Native while Printed (the real engine PDF)
-/// was already correct. Root cause: `PrintedVectorGraphics.swift`'s `partBlocks`/
+/// was already correct. Root cause: `NativeVectorGraphics.swift`'s `partBlocks`/
 /// `graphicCells` — the app's OWN AppKit port of the engine's vector-graphics geometry —
 /// never received half of engine commit 9a4dff2 (b24 round 20, slate item 8): the
 /// re-derived TRUE-square ■ fractions (0.175, 0.175, 0.65, 0.65) landed, but the
@@ -16,8 +16,8 @@ import Testing
 ///
 /// Two views, two independent proofs (per this round's evidence law — a fix claim covering
 /// more than one view needs a test PER view, not "should also cover"):
-/// - NATIVE: `PrintedVectorGraphics.swift`'s own port, exercised via `graphicCells` exactly
-///   like `PrintedStructuralParityTests`' existing `symbolShapesProduceRealGeometryNotAPlaceholder`.
+/// - NATIVE: `NativeVectorGraphics.swift`'s own port, exercised via `graphicCells` exactly
+///   like `NativeStructuralParityTests`' existing `symbolShapesProduceRealGeometryNotAPlaceholder`.
 /// - PRINTED: the real engine (`CtrlKD.graphicOps`) — a SEPARATE code path this job never
 ///   touches. Already correct as of the currently-vendored engine pin (commit 9a4dff2 is an
 ///   ancestor of the app's pinned `45b972663b2bae763e0d4751f93b1ae7e734c668`, confirmed via
@@ -73,7 +73,7 @@ import Testing
 
     /// Same law, real fixture: `-README.WS` (Sawyer's list markers, WP0's `TestDocs/ws7`
     /// fixture) is where Jon actually saw this. Renders the Native (`.native` view style —
-    /// `DocumentRenderer.renderPrinted`) layout for the document's own text and finds at
+    /// `DocumentRenderer.renderNative`) layout for the document's own text and finds at
     /// least one real ■ fill, asserting it too is square — proof the law above isn't an
     /// artifact of the synthetic single-character isolation.
     @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
@@ -117,7 +117,7 @@ import Testing
     /// engine's real PDF operator emitter) — this job never touches it. Confirms it already
     /// produces a square ■ fill, on a deliberately asymmetric pitch/pt pair (pitch 7.2 !=
     /// cellHeight 1.1*12=13.2) so a non-square result could not hide behind pitch == height.
-    @Test func printedSquareBulletFillIsSquareInRealEngineOps() throws {
+    @Test func nativeSquareBulletFillIsSquareInRealEngineOps() throws {
         let pitch = 7.2
         let pt = 12
         let ops = CtrlKD.graphicOps("\u{25A0}", x: 0, y: 100, pitch: pitch, pt: pt)

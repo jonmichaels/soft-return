@@ -31,7 +31,7 @@ let sawyerArchiveArmed = !sawyerArchivePath.isEmpty
 let sawyerArchiveSkipReason: Comment =
     "sawyer-archive-gated: CTRLKD_SAWYER_ARCHIVE unset — see docs/TESTING.md"
 
-/// Planning #192 (2026-09-05): the vendored `private-corpus` this repo's own
+/// Planning #192 (2026-09-05): the vendored `soft-return-corpus` this repo's own
 /// `CTRLKD_SAWYER_ARCHIVE` is documented to point at (that repo's README) is DOCUMENTS ONLY
 /// by Jon's ruling ("CAN ONLY be documents. Nothing else.") — `.PAT` files (WSCHANGE's own
 /// patch-point interpreter tables, not WordStar documents) are one of the named excluded

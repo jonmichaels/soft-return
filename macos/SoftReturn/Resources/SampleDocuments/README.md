@@ -38,4 +38,4 @@ of Lying" (1882), Jon-authored in WS7. Four files ship again (`LYING.WS`, `OCAPT
 `TWAINLET.WS`, `WARPRAYR.WS`) — again no code change, `SampleDocuments.items()` picks it up
 automatically. `LYING.WS` also carries a real WordStar footnote ("Did not take the prize."),
 restoring the footnote-feature coverage `DARKNESS.WS` carried before job 400
-(`SampleDocumentsTests.lyingWSBundledFootnoteReachesDocumentInfoAndThePrintedPage`).
+(`SampleDocumentsTests.lyingWSBundledFootnoteReachesDocumentInfoAndTheNativePage`).

@@ -320,7 +320,7 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
 // (`sawyerArchivePath`, the ONE place the private path lives — `CTRLKD_SAWYER_ARCHIVE`).
 //
 // `LSRBOX/LSRBOXES.MRG` (mailmerge + wrapped NULs) dropped from this list, planning #192
-// (2026-09-05): the vendored `private-corpus` this repo's `CTRLKD_SAWYER_ARCHIVE` is
+// (2026-09-05): the vendored `soft-return-corpus` this repo's `CTRLKD_SAWYER_ARCHIVE` is
 // documented to point at is documents-only by Jon's ruling, and a `.MRG` mail-merge
 // template is one of the named excluded categories — the file is gone permanently, not
 // incompletely, so keeping it here would fail loud against the archive shape the repo

@@ -55,7 +55,7 @@ private func boxFlow(_ doc: Document) -> [ModernFlowItem] {
 
 private func paraItems(_ flow: [ModernFlowItem]) -> [[ModernToken]] {
     flow.compactMap {
-        if case .para(let toks, _, _, _, _, _, _, _) = $0 { return toks }
+        if case .para(let toks, _, _, _, _, _, _, _, _, _) = $0 { return toks }
         return nil
     }
 }

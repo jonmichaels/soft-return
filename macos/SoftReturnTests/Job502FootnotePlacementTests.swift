@@ -54,12 +54,13 @@ import Testing
             softLineFlags: [], overprintPasses: [], oversizedSelfPasses: [], baselineOffset: 0,
             leadingHeadroom: [], runningLines: [], hfEvents: [], pageNumberStart: 1,
             realPageIndexByPage: [0], pinnedBaselines: [:], perPageTextTop: [Double(textFrame.origin.y)],
-            pinnedPageBottoms: [], modernForcedPageBreakOffsets: [],
+            pinnedPageBottoms: [], pinnedPageTops: [], flowTopAdjustment: 0, pageColumnFragmentCounts: [], lineNumberPasses: [], graphicCellRows: [], modernForcedPageBreakOffsets: [],
             // charOffset 0: this synthetic page's one paragraph is the whole document, so its
             // own first character is offset 0 — the SAME "paragraph's own first character"
             // anchor `renderModern` uses for real (`ModernFootnoteEvent`'s own doc comment).
             modernFootnoteEvents: [ModernFootnoteEvent(charOffset: 0, entries: entries)],
-            modernFootnoteSeparator: separator, pclPrograms: []
+            modernFootnoteSeparator: separator, modernEndnoteAppendixStart: nil,
+            pclPrograms: []
         )
     }
 

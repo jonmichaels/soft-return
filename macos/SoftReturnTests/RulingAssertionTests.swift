@@ -182,10 +182,10 @@ private func rulingState(_ fixture: String = "dropped-chapter.ws4") throws -> Do
             "Fit produced the same magnification at two different window sizes — the page is stuck at one scale")
 }
 
-/// A manual Page Size choice must visibly change the page, even in Printed style — the
+/// A manual Page Size choice must visibly change the page, even in Native style — the
 /// concrete case of "selections don't visibly take effect": the popup's label used to
 /// change while `DocumentRenderer` went on ignoring `state.pageSize` entirely.
-@Test @MainActor func manualPageSizeVisiblyChangesThePrintedPage() throws {
+@Test @MainActor func manualPageSizeVisiblyChangesTheNativePage() throws {
     let state = try rulingState()
     let before = DocumentRenderer.render(state).pageSize
     state.setPageSize(.usLegal)

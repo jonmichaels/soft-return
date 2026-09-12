@@ -1,124 +1,145 @@
 {
- "schema_version": 1,
- "what_this_is": "The COMPLETE list of ways the Native view is allowed to differ from the engine's Printed output. NativeVsEngineGeometryTests reads this file; any Native-vs-engine divergence it measures that is not named here FAILS. Adding a row is a deliberate act that needs a ruling behind it, not a way to quiet a red test.",
- "why_a_file": "Jon's rule is that the Printed view IS the engines' output, and that Native diverges from Printed ONLY by fonts. That is a claim about a closed set, so the set has to be written down somewhere a test can read it. Before this file the allowances lived as numeric tolerances inside individual assertions, where a new divergence of an already-tolerated shape could slip in without anyone naming it.",
- "scope_fields": "document/page/line each accept \"*\" for \"every one\". A row with document \"*\" is a CLASS ruling and needs its class field set; a row naming a real document, page and line is a specific accepted defect and should carry the issue that tracks it. A row may also carry `gate_reasons` and `count_ceiling`: the reason vocabulary ctrl-kd's PCL gate uses, and the most rows of those reasons this document may produce before the divergence stops being the licensed one and becomes a regression.",
- "divergences": [
-  {
-   "id": "native-cocoa-sup-sub",
-   "class": "font-class",
-   "document": "*",
-   "page": "*",
-   "line": "*",
-   "applies_to": "native",
-   "reason": "Native sets a superscript/subscript run with Cocoa's own arithmetic - two thirds of the base font's size, with the baseline offset measured from that smaller font's own ascender/descender - where the Printed view now uses WordStar's measured per-family x-height ratio (Courier 9.25/12, banker's-rounded to a whole point size) and WordStar's own narrowed fixed-pitch cell (5.5/7.2, applied as kerning). See DocumentRenderer.scriptMetrics's `ratio` parameter and the `printedSupSub` flag threaded to it.",
-   "why_permanent": "Mechanism G's ratio is measured off Courier's x-height from real WS7 PCL. Native substitutes the user's own chosen face for WordStar's, so there is no Courier x-height for that ratio to be true about - applying it there would be extrapolating a Courier measurement onto an arbitrary font. This is exactly the 'Native diverges from Printed only by fonts' rule, so it is permanent by ruling rather than pending a fix.",
-   "ruled": "2026-09-07, JOB 1 mechanism-G port",
-   "engine_commit": "f79ff29"
-  },
-  {
-   "id": "native-proportional-font-placement",
-   "class": "font-class",
-   "document": "*",
-   "page": "*",
-   "line": "*",
-   "applies_to": "native",
-   "reason": "A proportional WS5+ run lays out at the resolved Mac font's own natural advance rather than on WordStar's column grid. The engine reaches the grid with a Tz horizontal scale computed from AFM metrics; the app deliberately does not, because the Mac face it substitutes is not the face the AFM describes.",
-   "why_permanent": "The MAC VIEWING RULING (decision register 2026-08-11). Job 240 removed the per-word corrective kerning that used to chase the grid - line breaks and page breaks stay engine-authoritative, which is the part that is structure; within-line placement follows the substituted font.",
-   "ruled": "2026-08-11",
-   "engine_commit": null
-  },
-  {
-   "id": "native-font-class-lying",
-   "class": "font-class",
-   "document": "LYING",
-   "page": "*",
-   "line": "*",
-   "applies_to": "native",
-   "substituted_face": "Hoefler Text (Garamond row) / Times New Roman, against the engine's base-14 Times-Bold and Times-Italic",
-   "gate_reasons": [
-    "word-unmatched",
-    "extra-word-in-engine",
-    "line-start-shift",
-    "cgtimes-drift-exceeds-tolerance",
-    "baseline-shift"
-   ],
-   "count_ceiling": 1800,
-   "reason": "Measured through the PCL coordinate tier over the app's own Cmd-P-from-Native bytes: 1475 word-unmatched and 154 extra-word-in-engine. The document's font block is Garamond, which printedMacFontRows maps to Hoefler Text; the engine's PDF renders the same block as base-14 Times at AFM x Tz advances. Every character lands in a different place from the first proportional glyph onward, so the gate cannot pair the words at all.",
-   "why_permanent": "The same MAC VIEWING RULING class as native-proportional-font-placement, observed per document rather than as a class. Recorded separately so the COUNT is pinned: a licensed divergence with no ceiling cannot tell a font substitution from a new defect hiding behind one.",
-   "ruled": "2026-08-11 (MAC VIEWING RULING), applied to this document 2026-09-07",
-   "engine_commit": null
-  },
-  {
-   "id": "native-font-class-warprayr",
-   "class": "font-class",
-   "document": "WARPRAYR",
-   "page": "*",
-   "line": "*",
-   "applies_to": "native",
-   "substituted_face": "Hoefler Text / Times New Roman, against the engine's base-14 Times",
-   "gate_reasons": [
-    "word-unmatched",
-    "extra-word-in-engine",
-    "line-start-shift",
-    "cgtimes-drift-exceeds-tolerance"
-   ],
-   "count_ceiling": 1200,
-   "reason": "1057 word-unmatched and 34 extra-word-in-engine through the same tier, same cause as LYING. sr's own recorded manifest for this document is extra-word-in-engine 4 and line-start-shift 2, so the engine's PDF is nearly clean against the capture and the gap is entirely the substituted face.",
-   "why_permanent": "MAC VIEWING RULING, as above.",
-   "ruled": "2026-08-11 (MAC VIEWING RULING), applied to this document 2026-09-07",
-   "engine_commit": null
-  },
-  {
-   "id": "native-font-class-lj6dtp",
-   "class": "font-class",
-   "document": "LJ6DTP",
-   "page": "*",
-   "line": "*",
-   "applies_to": "native",
-   "substituted_face": "the CG Times / Univers substitutes, against the engine's base-14 equivalents",
-   "gate_reasons": [
-    "cgtimes-drift-exceeds-tolerance",
-    "univers-drift-exceeds-tolerance",
-    "line-start-shift",
-    "word-unmatched",
-    "extra-word-in-engine",
-    "baseline-shift"
-   ],
-   "count_ceiling": 1500,
-   "reason": "The heaviest proportional user in the corpus. NOTE that this document is ALSO parked for a separate reason: its capture set is v2 (Sawyer's WSCHANGE-customised install), not the v3 PRISTINE.EXE set, so it is measured against a non-pristine oracle whatever the renderer does.",
-   "why_permanent": "MAC VIEWING RULING for the font half; the capture-set half is Jon's 2026-08-24 v1/v2 deprecation.",
-   "ruled": "2026-08-11 (MAC VIEWING RULING), applied to this document 2026-09-07",
-   "engine_commit": null
-  },
-  {
-   "id": "native-courier-prime-advance",
-   "class": "font-class",
-   "document": "*",
-   "page": "*",
-   "line": "*",
-   "applies_to": "native",
-   "substituted_face": "Courier Prime (1228/2048 em = 0.599609) against the engine's exact 10 CPI (0.6)",
-   "gate_reasons": [
-    "exact-drift"
-   ],
-   "count_ceiling": 20,
-   "reason": "Measured from the bundled font's own head/hhea/hmtx tables: Courier Prime advances 7.195312pt at 12pt where the engine's grid is exactly 7.200000pt. The shortfall is 0.004687pt per character and accumulates to at most ~0.3pt across an 80-column line. Predicts -README's observed 0.21-0.25pt residuals at columns 47-56 exactly.",
-   "why_permanent": "A per-glyph corrective kern was designed and approved, then DROPPED for 4.0.3 once it was established that this surface is Native, where font metrics are licensed. It is not implemented and is recorded here rather than left as an unexplained sub-point residual. NOTE the renderer's own comment at DocumentRenderer.swift:4589 still asserts Courier 'already advances at exactly that grid' - that claim is false by 0.0047pt/char and is the reason this row exists.",
-   "ruled": "2026-09-07",
-   "engine_commit": null
-  },
-  {
-   "id": "native-absent-face-two-substitutions",
-   "class": "font-class",
-   "document": "*",
-   "page": "*",
-   "line": "*",
-   "applies_to": "native",
-   "reason": "A run whose declared face is installed on NEITHER side is substituted TWICE, differently: the app falls through printedMacFontName to its generic primary, and the engine falls back to its own base-14 AFM metrics, which describe a different face again. The two substitutions have different advances, so the run's width differs and its ink can land in different 12pt cells. Measured 2026-09-07 on PREVIEW.WS p1's Albertus row via PixelOracleAppEngineTests: the app's line runs about 59pt wider than the engine's, producing engine-only ink at x~290 and x~363 and app-only ink at x~395-445 -- one cause appearing as BOTH missingInActual and extraInActual. Albertus is installed in none of /Library/Fonts, /System/Library/Fonts, /System/Library/Fonts/Supplemental or ~/Library/Fonts on this machine, and the app carries no explicit mapping for it.",
-   "why_permanent": "The MAC VIEWING RULING (decision register 2026-08-11). This is DISTINCT from native-proportional-font-placement, which reads 'the engine reaches the grid with a Tz horizontal scale computed from AFM metrics' -- that row assumes the engine HAS the face's own metrics and only the app substitutes. When the face is absent from base-14 too, neither side has them and the divergence is between two substitutions rather than between a substitution and the truth. Naming it separately keeps that distinction visible; folding it into the other row would assert an AFM the engine does not have.",
-   "ruled": "2026-09-07",
-   "engine_commit": null
-  }
- ]
+  "schema_version": 1,
+  "what_this_is": "The COMPLETE list of ways the Native view is allowed to differ from the engine's Printed output. NativeVsEngineGeometryTests reads this file; any Native-vs-engine divergence it measures that is not named here FAILS. Adding a row is a deliberate act that needs a ruling behind it, not a way to quiet a red test.",
+  "why_a_file": "Jon's rule is that the Printed view IS the engines' output, and that Native diverges from Printed ONLY by fonts. That is a claim about a closed set, so the set has to be written down somewhere a test can read it. Before this file the allowances lived as numeric tolerances inside individual assertions, where a new divergence of an already-tolerated shape could slip in without anyone naming it.",
+  "scope_fields": "document/page/line each accept \"*\" for \"every one\". A row with document \"*\" is a CLASS ruling and needs its class field set; a row naming a real document, page and line is a specific accepted defect and should carry the issue that tracks it. A row may also carry `gate_reasons` and `count_ceiling`: the reason vocabulary ctrl-kd's PCL gate uses, and the most rows of those reasons this document may produce before the divergence stops being the licensed one and becomes a regression.",
+  "divergences": [
+    {
+      "id": "native-cocoa-sup-sub",
+      "class": "font-class",
+      "document": "*",
+      "page": "*",
+      "line": "*",
+      "applies_to": "native",
+      "reason": "Native sets a superscript/subscript run with Cocoa's own arithmetic - two thirds of the base font's size, with the baseline offset measured from that smaller font's own ascender/descender - where the Printed view now uses WordStar's measured per-family x-height ratio (Courier 9.25/12, banker's-rounded to a whole point size) and WordStar's own narrowed fixed-pitch cell (5.5/7.2, applied as kerning). See DocumentRenderer.scriptMetrics's `ratio` parameter and the `nativeSupSub` flag threaded to it.",
+      "why_permanent": "Mechanism G's ratio is measured off Courier's x-height from real WS7 PCL. Native substitutes the user's own chosen face for WordStar's, so there is no Courier x-height for that ratio to be true about - applying it there would be extrapolating a Courier measurement onto an arbitrary font. This is exactly the 'Native diverges from Printed only by fonts' rule, so it is permanent by ruling rather than pending a fix.",
+      "ruled": "2026-09-07, JOB 1 mechanism-G port",
+      "engine_commit": "f79ff29"
+    },
+    {
+      "id": "native-proportional-font-placement",
+      "class": "font-class",
+      "document": "*",
+      "page": "*",
+      "line": "*",
+      "applies_to": "native",
+      "reason": "A proportional WS5+ run lays out at the resolved Mac font's own natural advance rather than on WordStar's column grid. The engine reaches the grid with a Tz horizontal scale computed from AFM metrics; the app deliberately does not, because the Mac face it substitutes is not the face the AFM describes.",
+      "why_permanent": "The MAC VIEWING RULING (decision register 2026-08-11). Job 240 removed the per-word corrective kerning that used to chase the grid - line breaks and page breaks stay engine-authoritative, which is the part that is structure; within-line placement follows the substituted font.",
+      "ruled": "2026-08-11",
+      "engine_commit": null
+    },
+    {
+      "id": "native-font-class-lying",
+      "class": "font-class",
+      "document": "LYING",
+      "page": "*",
+      "line": "*",
+      "applies_to": "native",
+      "substituted_face": "Hoefler Text (Garamond row) / Times New Roman, against the engine's base-14 Times-Bold and Times-Italic",
+      "gate_reasons": [
+        "word-unmatched",
+        "extra-word-in-engine",
+        "line-start-shift",
+        "cgtimes-drift-exceeds-tolerance",
+        "baseline-shift"
+      ],
+      "count_ceiling": 1800,
+      "reason": "Measured through the PCL coordinate tier over the app's own Cmd-P-from-Native bytes: 1475 word-unmatched and 154 extra-word-in-engine. The document's font block is Garamond, which nativeMacFontRows maps to Hoefler Text; the engine's PDF renders the same block as base-14 Times at AFM x Tz advances. Every character lands in a different place from the first proportional glyph onward, so the gate cannot pair the words at all.",
+      "why_permanent": "The same MAC VIEWING RULING class as native-proportional-font-placement, observed per document rather than as a class. Recorded separately so the COUNT is pinned: a licensed divergence with no ceiling cannot tell a font substitution from a new defect hiding behind one.",
+      "ruled": "2026-08-11 (MAC VIEWING RULING), applied to this document 2026-09-07",
+      "engine_commit": null
+    },
+    {
+      "id": "native-font-class-warprayr",
+      "class": "font-class",
+      "document": "WARPRAYR",
+      "page": "*",
+      "line": "*",
+      "applies_to": "native",
+      "substituted_face": "Hoefler Text / Times New Roman, against the engine's base-14 Times",
+      "gate_reasons": [
+        "word-unmatched",
+        "extra-word-in-engine",
+        "line-start-shift",
+        "cgtimes-drift-exceeds-tolerance"
+      ],
+      "count_ceiling": 1200,
+      "reason": "1057 word-unmatched and 34 extra-word-in-engine through the same tier, same cause as LYING. sr's own recorded manifest for this document is extra-word-in-engine 4 and line-start-shift 2, so the engine's PDF is nearly clean against the capture and the gap is entirely the substituted face.",
+      "why_permanent": "MAC VIEWING RULING, as above.",
+      "ruled": "2026-08-11 (MAC VIEWING RULING), applied to this document 2026-09-07",
+      "engine_commit": null
+    },
+    {
+      "id": "native-font-class-lj6dtp",
+      "class": "font-class",
+      "document": "LJ6DTP",
+      "page": "*",
+      "line": "*",
+      "applies_to": "native",
+      "substituted_face": "the CG Times / Univers substitutes, against the engine's base-14 equivalents",
+      "gate_reasons": [
+        "cgtimes-drift-exceeds-tolerance",
+        "univers-drift-exceeds-tolerance",
+        "line-start-shift",
+        "word-unmatched",
+        "extra-word-in-engine",
+        "baseline-shift"
+      ],
+      "count_ceiling": 1500,
+      "reason": "The heaviest proportional user in the corpus. NOTE that this document is ALSO parked for a separate reason: its capture set is v2 (Sawyer's WSCHANGE-customised install), not the v3 PRISTINE.EXE set, so it is measured against a non-pristine oracle whatever the renderer does.",
+      "why_permanent": "MAC VIEWING RULING for the font half; the capture-set half is Jon's 2026-08-24 v1/v2 deprecation.",
+      "ruled": "2026-08-11 (MAC VIEWING RULING), applied to this document 2026-09-07",
+      "engine_commit": null
+    },
+    {
+      "id": "native-courier-prime-advance",
+      "class": "font-class",
+      "document": "*",
+      "page": "*",
+      "line": "*",
+      "applies_to": "native",
+      "substituted_face": "Courier Prime (1228/2048 em = 0.599609) against the engine's exact 10 CPI (0.6)",
+      "gate_reasons": [
+        "exact-drift"
+      ],
+      "count_ceiling": 20,
+      "reason": "Measured from the bundled font's own head/hhea/hmtx tables: Courier Prime advances 7.195312pt at 12pt where the engine's grid is exactly 7.200000pt. The shortfall is 0.004687pt per character and accumulates to at most ~0.3pt across an 80-column line. Predicts -README's observed 0.21-0.25pt residuals at columns 47-56 exactly.",
+      "why_permanent": "A per-glyph corrective kern was designed and approved, then DROPPED for 4.0.3 once it was established that this surface is Native, where font metrics are licensed. It is not implemented and is recorded here rather than left as an unexplained sub-point residual. NOTE the renderer's own comment at DocumentRenderer.swift:4589 still asserts Courier 'already advances at exactly that grid' - that claim is false by 0.0047pt/char and is the reason this row exists.",
+      "ruled": "2026-09-07",
+      "engine_commit": null
+    },
+    {
+      "id": "native-absent-face-two-substitutions",
+      "class": "font-class",
+      "document": "*",
+      "page": "*",
+      "line": "*",
+      "applies_to": "native",
+      "reason": "A run whose declared face is installed on NEITHER side is substituted TWICE, differently: the app falls through nativeMacFontName to its generic primary, and the engine falls back to its own base-14 AFM metrics, which describe a different face again. The two substitutions have different advances, so the run's width differs and its ink can land in different 12pt cells. Measured 2026-09-07 on PREVIEW.WS p1's Albertus row via PixelOracleAppEngineTests: the app's line runs about 59pt wider than the engine's, producing engine-only ink at x~290 and x~363 and app-only ink at x~395-445 -- one cause appearing as BOTH missingInActual and extraInActual. Albertus is installed in none of /Library/Fonts, /System/Library/Fonts, /System/Library/Fonts/Supplemental or ~/Library/Fonts on this machine, and the app carries no explicit mapping for it.",
+      "why_permanent": "The MAC VIEWING RULING (decision register 2026-08-11). This is DISTINCT from native-proportional-font-placement, which reads 'the engine reaches the grid with a Tz horizontal scale computed from AFM metrics' -- that row assumes the engine HAS the face's own metrics and only the app substitutes. When the face is absent from base-14 too, neither side has them and the divergence is between two substitutions rather than between a substitution and the truth. Naming it separately keeps that distinction visible; folding it into the other row would assert an AFM the engine does not have.",
+      "ruled": "2026-09-07",
+      "engine_commit": null
+    },
+    {
+      "id": "native-pixels-proportional-font-placement",
+      "class": "font-class",
+      "document": "*",
+      "page": "*",
+      "line": "*",
+      "applies_to": "native",
+      "substituted_face": "whatever Mac face a document's own declared typeface resolves to, against the engine's base-14 equivalent",
+      "gate_reasons": [
+        "contentDiffers",
+        "missingInActual",
+        "extraInActual"
+      ],
+      "region_ceiling_per_row": 70,
+      "reason": "THE NATIVE VIEW, NEVER PRINTED (Jon's naming ruling, 2026-09-11): Printed is the engine's own PDF bytes and never gets a licence to differ from itself; this row licenses the AppKit facsimile pass, which is Native. Job 240's MAC VIEWING RULING removed the per-word corrective kern to an AFM x Tz target, so a proportional WS5+ run lays out at the resolved Mac font's own natural advance instead of on WordStar's column grid. The engine stretches such a run to its declared cell and the app does not, so the two disagree by an amount that GROWS along a line - measured 2026-09-11, every differing region on the affected pages sits at high x and none at the margin. The same ruling keeps a declared typeface in its nearest Mac face where the engine can only set base-14. Both are deliberate and neither is a defect.",
+      "why_permanent": "Both halves are Jon's standing rulings, not defects awaiting a fix. The MAC VIEWING RULING is the decision that Native lays a proportional run out at the resolved Mac face's own natural advance instead of on WordStar's column grid, and that a declared typeface keeps its nearest Mac face where the engine can only set base-14. Neither can be closed from the app's side without reversing the ruling that produced it, and neither is a difference the engine could meet either: it has no Mac faces to set. The gate that ADJUDICATES the facsimile against paper is AppNativeFidelityTests against the WS7 captures; this one measures Native against the engine's PDF, where a font difference is expected by construction.",
+      "ruled": "2026-09-11, planning #265 (Jon: the pixel gate is a Native-vs-engine gate and reads Native's own licence; Printed is the engine's bytes and never gets one)",
+      "why_a_class_row_and_not_one_per_document": "One of the affected fixtures is a private paper whose name may never appear in a file that ships. A per-document ceiling would have to name it, so the licence is stated once as a class with a per-ROW ceiling instead: a single (fixture, page, region class) row may carry up to region_ceiling_per_row regions. The largest row measured on 2026-09-11 was 68, so a row above 70 is new and fails loudly. A page whose structural gate reports a vertical divergence over 1.0pt is NOT covered here at all - job 410's own rule already makes those hard, and this licence must not soften them back.",
+      "measured": "2026-09-11: 47 rows, 847 regions across 6 fixtures. Largest single row 68 (LYING.WS p1 contentDiffers).",
+      "proved": "The guard bites: with the ceiling temporarily at 10, 19 rows failed loudly with their own 'NOT covered by' message and the gate returned 65. Restored to 70."
+    }
+  ]
 }

@@ -23,7 +23,7 @@ import Testing
     /// Documents to prove against. BOXES is the canonical clean fixed-pitch case; LYING and
     /// -README add a proportional face (Tz-scaled runs) and a picture-bearing page, so the
     /// width arithmetic and the raster path are both exercised rather than assumed.
-    /// -SCREEN earns its place: its cp437 Greek run is where the app's Printed view appears
+    /// -SCREEN earns its place: its cp437 Greek run is where the app's Native view appears
     /// to DROP characters (α, ß, µ, Ω), and before that can be called an app bug this
     /// extractor has to be cleared of it — a character this scanner discards looks identical
     /// downstream to a character the app never drew. That is exactly the mistake the Form
@@ -159,7 +159,7 @@ import Testing
     /// THE SECOND HALF OF THE PROOF: the Quartz path.
     ///
     /// The test above runs over the ENGINE's PDF, whose fonts are simple base-14 faces with
-    /// a `/Widths` array and single-byte codes. The app's Printed facsimile is Quartz, which
+    /// a `/Widths` array and single-byte codes. The app's Native facsimile is Quartz, which
     /// embeds SUBSET TrueType fonts with `Identity-H` two-byte codes, `/W` widths and a
     /// `/ToUnicode` CMap — a completely different path through `PDFFont` that the first proof
     /// never touches. ctrl-kd cannot extract from those bytes at all, which is the entire
@@ -180,7 +180,7 @@ import Testing
     /// words.
     @Test(.enabled(if: isArmed, skipReason), arguments: documents)
     @MainActor func ourExtractorAgreesWithPDFKitOnTheAppsOwnQuartzPDF(doc: String) throws {
-        let pdf = try AppNativeFidelityTests.appPrintedPDF(forDocumentNamed: doc)
+        let pdf = try AppNativeFidelityTests.appNativePDF(forDocumentNamed: doc)
         let ours = try AppPDFWords.payload(from: pdf)
         let document = try #require(PDFDocument(data: Data(pdf)),
                                     "\(doc): PDFKit could not open the app's own Printed PDF")

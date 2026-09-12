@@ -1,4 +1,5 @@
 import AppKit
+import CtrlKD
 
 /// job-489 (C1): the `Int` LJ6DTP HP1-HP6 pattern-colour index (9-14) a span's
 /// `.foregroundColor` resolved to, set alongside it by `DocumentRenderer.attributedRun` so
@@ -23,19 +24,19 @@ extension NSAttributedString.Key {
 ///
 /// Port of `graphicOps`'s GEOMETRY (`PDFDriverLJ6DTP.swift:120-165`), not its PDF byte
 /// emission — same "parallel port, not a call" discipline as `DocumentRenderer`'s
-/// `printedLJ6DTPColourGray`/`resolvedFont` (both `internal` to `CtrlKD`, so this app target
+/// `nativeLJ6DTPColourGray`/`resolvedFont` (both `internal` to `CtrlKD`, so this app target
 /// cannot call them directly).
 ///
 /// Positioned against THIS PAGE'S REAL AppKit line-fragment/glyph geometry
 /// (`NSLayoutManager.location(forGlyphAt:)` — the SAME technique
-/// `PrintedStructuralParityTests`' own `Oracle.structuralBodyLines` already uses and proves
+/// `NativeStructuralParityTests`' own `Oracle.structuralBodyLines` already uses and proves
 /// accurate to 0.5pt against the engine) rather than a `DocumentRenderer`-side precomputed Y.
 /// Job 210's own scoping note on why: a precomputed Y would re-derive the isolated-vs-
 /// embedded measurement disagreement job 202 documented (`DocumentRenderer.swift`'s
 /// `measuredHeight` doc comment). `PageTextView.draw(_:)` calls `graphicCells` to paint; the
 /// structural-parity harness calls the SAME function (via `Oracle`'s real laid-out pages) to
 /// count — one derivation, not two that can silently drift apart, exactly the failure mode
-/// `PrintedStructuralParityTests.swift`'s own top doc comment warns against.
+/// `NativeStructuralParityTests.swift`'s own top doc comment warns against.
 ///
 /// No horizontal pitch/HMI math is ported at all: `spanPitch`/`hmiPerPoint` are both
 /// `internal` to `CtrlKD`, and the app already has something better than a second guess at
@@ -55,6 +56,12 @@ enum GraphicShape {
     case rect(CGRect)
     case disc(center: CGPoint, radius: CGFloat)
     case poly([CGPoint])
+    /// A STROKED open path, not a filled silhouette — the rounded box corners
+    /// (`arcCorners`), which the engine draws as one continuous `m l c l S` and which no
+    /// filled shape can stand in for. Planning #251 follow-up: the segments arrive from the
+    /// engine's own `graphicCellOps` and are mapped into this space by `graphicCell`; the
+    /// path is left OPEN and stroked at `lineWidth`, exactly as `graphicOps` does.
+    case strokePath(segments: [PathSegment], lineWidth: CGFloat)
 
     /// The smallest rect enclosing this shape — every caller that only needs "where did this
     /// land," not "what shape" (erase framing, the harness's own vector-op bounding boxes),
@@ -72,6 +79,26 @@ enum GraphicShape {
                 minY = min(minY, p.y); maxY = max(maxY, p.y)
             }
             return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        case .strokePath(let segments, let lineWidth):
+            var points: [CGPoint] = []
+            for segment in segments {
+                switch segment {
+                case .moveTo(let x, let y), .lineTo(let x, let y):
+                    points.append(CGPoint(x: x, y: y))
+                case .curveTo(let c1x, let c1y, let c2x, let c2y, let x, let y):
+                    points.append(CGPoint(x: c1x, y: c1y))
+                    points.append(CGPoint(x: c2x, y: c2y))
+                    points.append(CGPoint(x: x, y: y))
+                }
+            }
+            guard let first = points.first else { return .zero }
+            var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
+            for p in points.dropFirst() {
+                minX = min(minX, p.x); maxX = max(maxX, p.x)
+                minY = min(minY, p.y); maxY = max(maxY, p.y)
+            }
+            return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+                .insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
         }
     }
 
@@ -82,6 +109,19 @@ enum GraphicShape {
             return .disc(center: CGPoint(x: center.x + dx, y: center.y + dy), radius: radius)
         case .poly(let points):
             return .poly(points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) })
+        case .strokePath(let segments, let lineWidth):
+            return .strokePath(segments: segments.map { segment in
+                switch segment {
+                case .moveTo(let x, let y):
+                    return .moveTo(x: x + Double(dx), y: y + Double(dy))
+                case .lineTo(let x, let y):
+                    return .lineTo(x: x + Double(dx), y: y + Double(dy))
+                case .curveTo(let c1x, let c1y, let c2x, let c2y, let x, let y):
+                    return .curveTo(c1x: c1x + Double(dx), c1y: c1y + Double(dy),
+                                    c2x: c2x + Double(dx), c2y: c2y + Double(dy),
+                                    x: x + Double(dx), y: y + Double(dy))
+                }
+            }, lineWidth: lineWidth)
         }
     }
 
@@ -100,6 +140,22 @@ enum GraphicShape {
             for p in points.dropFirst() { path.line(to: p) }
             path.close()
             path.fill()
+        case .strokePath(let segments, let lineWidth):
+            let path = NSBezierPath()
+            path.lineWidth = lineWidth
+            for segment in segments {
+                switch segment {
+                case .moveTo(let x, let y):
+                    path.move(to: CGPoint(x: x, y: y))
+                case .lineTo(let x, let y):
+                    path.line(to: CGPoint(x: x, y: y))
+                case .curveTo(let c1x, let c1y, let c2x, let c2y, let x, let y):
+                    path.curve(to: CGPoint(x: x, y: y),
+                               controlPoint1: CGPoint(x: c1x, y: c1y),
+                               controlPoint2: CGPoint(x: c2x, y: c2y))
+                }
+            }
+            path.stroke()
         }
     }
 }
@@ -137,12 +193,16 @@ struct GraphicRect {
         } else {
             NSColor(white: gray, alpha: 1).setFill()
         }
+        // A stroked path takes its colour from the STROKE, not the fill — `GraphicShape
+        // .strokePath` (the rounded corners) is the only case that does, and it is cheaper
+        // to set both here than to branch.
+        NSColor(white: gray, alpha: 1).setStroke()
         shape.fill()
     }
 }
 
 /// job-489 (C1 — "Pattern fills are FLATTENED TO GREY"): the LJ6DTP driver's HP1-HP6 tiling
-/// patterns, rendered as real hatch geometry instead of `printedLJ6DTPColourGray`'s flat
+/// patterns, rendered as real hatch geometry instead of `nativeLJ6DTPColourGray`'s flat
 /// approximation. Port of the engine's `lj6dtpHPPatterns`
 /// (`CtrlKD/PDFDriverLJ6DTP.swift:43-50`) — same six directional strokes (horizontal,
 /// vertical, two diagonals, crosshatch, dense X), hand-transcribed rather than run through a
@@ -214,7 +274,7 @@ struct GraphicCell {
     let fills: [GraphicRect]
 }
 
-// Job 211 (b11 leg 3b) shipped a `.printedGraphicsEligible` `NSAttributedString.Key`
+// Job 211 (b11 leg 3b) shipped a `.nativeGraphicsEligible` `NSAttributedString.Key`
 // here, gating `graphicCells` below on whether a run's underlying `Span` carried a WS5+
 // font block (`span.font` resolves against `doc.fonts`) — believing that was the SAME
 // gate the engine's own `splitGraphics` applies (`PDFDriverLJ6DTP.swift`'s own `guard
@@ -292,7 +352,7 @@ private let fullBlockChar: Character = "\u{2588}"
 /// PDF convention, matching the engine's own authoring). `.white` wraps a sub-shape drawn
 /// paper-white (knockout). Job 211 (b11 leg 3b, job 402 follow-up): this table was the ONE
 /// `graphicChars` set the app never ported — see this file's top doc comment and
-/// `PrintedStructuralParityTests.swift`'s Class 7 citation for the field evidence
+/// `NativeStructuralParityTests.swift`'s Class 7 citation for the field evidence
 /// (LJ6DTP.WS pages 3/6/7's own symbol-substitution tables).
 indirect enum SymbolSubShape: Sendable {
     case poly([(x: Double, y: Double)])
@@ -327,7 +387,7 @@ let symbolShapes: [Character: [SymbolSubShape]] = [
 ]
 
 /// Port of `graphicChars` (`PDFDriverLJ6DTP.swift:117-118`/`:175-177`). Was `internal` rather
-/// than `private` so job 229's now-removed `printedWordAnchoredRun` (job 240, b13 Part 2: AFM
+/// than `private` so job 229's now-removed `nativeWordAnchoredRun` (job 240, b13 Part 2: AFM
 /// word-anchoring is gone — MAC VIEWING RULING) could exclude these cp437 graphic glyphs
 /// from its corrective-kern pass; left at its current access level rather than narrowed,
 /// since narrowing it is unrelated cleanup outside this job's scope.
@@ -335,22 +395,264 @@ let graphicChars: Set<Character> =
     Set([fullBlockChar]).union(boxArms.keys).union(shadeGray.keys).union(partBlocks.keys)
         .union(symbolShapes.keys)
 
+/// WHAT THIS RENDERER DRAWS AS GEOMETRY: the ENGINE's `graphicChars`, which is wider than
+/// the set above (`arcCorners` was never ported here and has no table to be in), LESS the
+/// characters a real Mac face draws better than a vector cell can.
+///
+/// The engine's set is an answer to a question Native does not have. A cp437 glyph goes on
+/// that table when no base-14 face carries it and cp1252 has no slot for it, so the text
+/// path could only ever degrade it to `?` — the 2026-08-11 ruling, and geometry is the
+/// honest answer THERE. Native sets real Mac faces (job 240's MAC VIEWING RULING: "we don't
+/// have to fool around with making sure we only use native-to-PDF fonts"), so where a Mac
+/// face has the real glyph, the real glyph is what Native draws.
+///
+/// One member so far: U+20A7 PESETA SIGN, cp437 code 158, which planning #266 put on the
+/// engine's `symbolShapes` as a drawn "Pt" ligature. Jon's ruling for Native (2026-09-11):
+/// the peseta shows as a real glyph here, the vector cell is the engine's own business.
+/// Every other member of the engine's set still has nothing to draw it with and still draws
+/// as geometry.
+///
+/// This also closes a real split. The three walks that matched placements against text used
+/// the ENGINE's set while the cell builder used this file's, and `graphicCell`'s own
+/// fall-through ("a character this file has no table for") then drew the peseta from
+/// `graphicCellOps` — so a document with no patched driver got a vector peseta in Native
+/// while the same character was ordinary text everywhere else in the same render.
+let nativeGeometryChars: Set<Character> = CtrlKD.graphicChars.subtracting(["\u{20A7}"])
+
+/// ONE GRAPHIC CHARACTER'S OWN CELL, given where it goes.
+///
+/// Planning #251(c) split this out of the walk below so the same geometry can be driven by
+/// the ENGINE'S own placement (`PageLine.graphicCells`, which states each cell's absolute x
+/// and its width) as well as by AppKit's glyph positions. The arithmetic is unchanged; only
+/// where `x0` and `pitch` come from is now the caller's decision.
+///
+/// WHAT THIS DELIBERATELY DOES NOT USE, so nobody adopts it later thinking it is an upgrade:
+/// the engine's own `graphicCellRects` accessor. Its rects are PLACEMENT-GRADE, NOT
+/// DRAWING-GRADE, and its own doc comment says so — a curve comes back as its bounding rect,
+/// a symbol as one box per positive sub-shape with the white knockouts dropped, a shade as a
+/// flat rect with no fill colour. Every category below is drawn properly here instead: real
+/// discs, polys, knockouts and the six driver hatches.
+///
+/// It was tried for the one category this file has no table for at all — `arcCorners`, the
+/// rounded box corners, which was never ported — and measured against the engine's own PDF
+/// it draws too much: LJ6DTP.WS page 3 went to 51 vector ops against the engine's 35, since
+/// a curve the engine emits as one op becomes several rects here (`NativeStructuralParity
+/// Tests.structuralParity`). Those characters keep the missing-glyph box they have always
+/// had until either the engine exports drawing-grade geometry for them or that oracle is
+/// ruled on.
+func graphicCell(
+    _ ch: Character, x0: Double, baselineY: Double, pt: Double, pitch: Double,
+    color: Double, patternIndex: Int?
+) -> GraphicCell {
+    // The cp437 cell, in this view's top-down (flipped) local coordinates. `graphicOps`
+    // builds its cell in PDF bottom-up coordinates from the glyph's baseline `y`:
+    // `yb = y - 0.25*pt` (cell bottom, BELOW baseline), `h = 1.1*pt` (cell height),
+    // `my = yb + h/2` (vertical center). Flipping to top-down negates every offset
+    // FROM the baseline (above-baseline becomes smaller y, not larger), so the cell's
+    // top sits `0.85*pt` ABOVE `baselineY` (`h - 0.25*pt`, i.e. `-yb-h` flipped), its
+    // bottom `0.25*pt` BELOW it (`-yb` flipped), and its center `0.3*pt` above it
+    // (`-my` flipped, i.e. `h/2 - 0.25*pt`).
+    let cellTop = baselineY - 0.85 * pt
+    let cellMidY = baselineY - 0.3 * pt
+    let cellBottom = baselineY + 0.25 * pt
+    let cellHeight = 1.1 * pt
+    let t = max(0.5, pt / 12)                   // line weight, port of graphicOps' `t`
+    let d = pt / 10                              // double-line half-gap, port of `d`
+
+    var fills: [GraphicRect] = []
+    func addRect(_ x: Double, _ y: Double, _ w: Double, _ h: Double, gray: Double, pattern: Int? = nil) {
+        fills.append(GraphicRect(
+            shape: .rect(CGRect(x: x, y: y, width: w, height: h)), gray: CGFloat(gray), pattern: pattern))
+    }
+    // job-489 (C1): `color`-driven fills (the driver-colour foreground, not the
+    // char-intrinsic `shadeGray`/knockout-white values) carry `patternIndex` through;
+    // `pattern` stays nil for those so this closure is a drop-in default everywhere else.
+    let colorPattern = patternIndex
+
+    if let shapes = symbolShapes[ch] {
+        // `sq`: the SAME single square scale `graphicOps`' own `symbolShape` uses for
+        // every sub-shape kind (`PDFDriverLJ6DTP.swift:219`'s `sq = min(pitch, h)`, b24
+        // round 20/slate item 8) — a symbol glyph is authored to look REGULAR (a round
+        // dot, a true diamond, a circular sun), not squashed to the cell's own pitch/height
+        // aspect the way a box-drawing arm or half-block legitimately is.
+        let sq = min(pitch, cellHeight)
+        let cx = x0 + pitch / 2
+        // Fraction (fx, fy) is PDF-convention (`fy` up from the cell's own bottom, same as
+        // `graphicOps`' authoring) around the cell CENTER — `cellMidY` is this view's own
+        // flipped-coordinate stand-in for `graphicOps`' `my`/`cy` (both `yb + h/2`, this
+        // file's own top-of-loop doc comment on why `cellMidY` already equals that,
+        // flipped). Mapping a fraction the flipped way SUBTRACTS its center-relative
+        // offset instead of adding it (this view's y grows DOWN the page; PDF's grows UP),
+        // matching the existing `boxArms` branch's own up/down cellTop/cellBottom split
+        // just below.
+        func addSymbolShape(_ shape: SymbolSubShape, gray: Double, pattern: Int? = nil) {
+            switch shape {
+            case .white(let sub):
+                addSymbolShape(sub, gray: 1.0)
+            case .poly(let points):
+                let mapped = points.map {
+                    CGPoint(x: cx + ($0.x - 0.5) * sq, y: cellMidY - ($0.y - 0.5) * sq)
+                }
+                fills.append(GraphicRect(shape: .poly(mapped), gray: CGFloat(gray), pattern: pattern))
+            case .disc(let fx, let fy, let fr):
+                let center = CGPoint(x: cx + (fx - 0.5) * sq, y: cellMidY - (fy - 0.5) * sq)
+                fills.append(GraphicRect(
+                    shape: .disc(center: center, radius: fr * sq), gray: CGFloat(gray), pattern: pattern))
+            case .rect(let fx, let fy, let fw, let fh):
+                // `(fx, fy)` is the sub-rect's own bottom-left corner in PDF convention
+                // (`graphicOps`' `rect` draws upward from `ry`), so its TOP (this view's
+                // smaller-y edge) sits at `fy + fh`, not `fy` alone.
+                let origin = CGPoint(x: cx + (fx - 0.5) * sq, y: cellMidY - (fy + fh - 0.5) * sq)
+                let size = CGSize(width: fw * sq, height: fh * sq)
+                fills.append(GraphicRect(
+                    shape: .rect(CGRect(origin: origin, size: size)), gray: CGFloat(gray), pattern: pattern))
+            }
+        }
+        for shape in shapes { addSymbolShape(shape, gray: color, pattern: colorPattern) }
+    } else if ch == fullBlockChar {
+        addRect(x0, cellTop, pitch, cellHeight, gray: color, pattern: colorPattern)
+    } else if let gray = shadeGray[ch] {
+        addRect(x0, cellTop, pitch, cellHeight, gray: gray)
+    } else if let frac = partBlocks[ch] {
+        if squarePartBlocks.contains(ch) {
+            // Same cell-center-relative, single-scale mapping as the `symbolShapes` rect
+            // case above (`sq = min(pitch, cellHeight)`), so ■ is a true square instead of
+            // being stretched independently to the cell's pitch (x) and height (y).
+            let sq = min(pitch, cellHeight)
+            let cx = x0 + pitch / 2
+            let originX = cx + (frac.x - 0.5) * sq
+            let originY = cellMidY - (frac.y + frac.h - 0.5) * sq
+            addRect(originX, originY, frac.w * sq, frac.h * sq, gray: color, pattern: colorPattern)
+        } else {
+            let originY = baselineY + 0.25 * pt - (frac.y + frac.h) * 1.1 * pt
+            addRect(x0 + frac.x * pitch, originY, frac.w * pitch, frac.h * 1.1 * pt, gray: color, pattern: colorPattern)
+        }
+    } else if !graphicChars.contains(ch) {
+        // A CHARACTER THIS FILE HAS NO TABLE FOR — in practice `arcCorners`, the rounded box
+        // corners, which was never ported here.
+        //
+        // Planning #251 follow-up: `graphicCellOps` is the engine's own DRAWING-GRADE
+        // export, not `graphicCellRects`' bounding boxes. The distinction is the whole
+        // reason it exists: a rounded corner is ONE continuous `m l c l S` in the real PDF,
+        // and reconstructing it from two bounding rects drew LJ6DTP.WS page 3 at 51 vector
+        // ops against the engine's own 35. The path arrives here with the engine's own
+        // Bezier control points and is stroked, open, exactly as `graphicOps` strokes it.
+        //
+        // Every category ABOVE stays on this file's own port. That is not an oversight
+        // either: those branches carry the six driver hatches, the white knockouts and the
+        // real discs and polygons, and `graphicCellOps` deliberately carries no colour.
+        //
+        // Fractions are unit-cell, PDF convention: x left to right, y up from the cell's own
+        // floor (`graphicOps`' `baseline - 0.25pt`). Flipped the same way every other branch
+        // flips, and stretched to the cell's real pitch and height.
+        func mapX(_ fx: Double) -> Double { x0 + fx * pitch }
+        func mapY(_ fy: Double) -> Double { cellBottom - fy * cellHeight }
+        for op in graphicCellOps(ch) {
+            switch op {
+            case .fillRect(let fx, let fy, let fw, let fh, let opGray):
+                addRect(mapX(fx), mapY(fy + fh), fw * pitch, fh * cellHeight,
+                        gray: opGray ?? color, pattern: opGray == nil ? colorPattern : nil)
+            case .fillDisc(let cx, let cy, let r):
+                let sq = min(pitch, cellHeight)
+                fills.append(GraphicRect(
+                    shape: .disc(center: CGPoint(x: mapX(cx), y: mapY(cy)), radius: CGFloat(r * sq)),
+                    gray: CGFloat(color), pattern: colorPattern))
+            case .fillPolygon(let points):
+                fills.append(GraphicRect(
+                    shape: .poly(points.map { CGPoint(x: mapX($0.x), y: mapY($0.y)) }),
+                    gray: CGFloat(color), pattern: colorPattern))
+            case .strokePath(let segments, let lineWidthFrac):
+                // `graphicCellLineFrac` is a fraction of the TYPE SIZE — `graphicOps`' own
+                // weight is `max(0.5, pt / 12)`, and 0.08 * 12 is 0.96 — so the cell's
+                // pitch and height, which are not the type size, are not what scales it.
+                let mapped: [PathSegment] = segments.map { segment in
+                    switch segment {
+                    case .moveTo(let fx, let fy):
+                        return .moveTo(x: mapX(fx), y: mapY(fy))
+                    case .lineTo(let fx, let fy):
+                        return .lineTo(x: mapX(fx), y: mapY(fy))
+                    case .curveTo(let c1x, let c1y, let c2x, let c2y, let fx, let fy):
+                        return .curveTo(c1x: mapX(c1x), c1y: mapY(c1y),
+                                        c2x: mapX(c2x), c2y: mapY(c2y),
+                                        x: mapX(fx), y: mapY(fy))
+                    }
+                }
+                fills.append(GraphicRect(
+                    shape: .strokePath(segments: mapped,
+                                       lineWidth: CGFloat(max(0.5, lineWidthFrac * pt))),
+                    gray: CGFloat(color), pattern: colorPattern))
+            }
+        }
+    } else if let arms = boxArms[ch] {
+        let mx = x0 + pitch / 2
+        for (weight, xa, xb) in [(arms.left, x0, mx), (arms.right, mx, x0 + pitch)] {
+            if weight == 1 {
+                addRect(xa, cellMidY - t / 2, xb - xa, t, gray: color, pattern: colorPattern)
+            } else if weight == 2 {
+                addRect(xa, cellMidY - d - t / 2, xb - xa, t, gray: color, pattern: colorPattern)
+                addRect(xa, cellMidY + d - t / 2, xb - xa, t, gray: color, pattern: colorPattern)
+            }
+        }
+        for (weight, ya, yc) in [(arms.up, cellTop, cellMidY), (arms.down, cellMidY, cellBottom)] {
+            if weight == 1 {
+                addRect(mx - t / 2, ya, t, yc - ya, gray: color, pattern: colorPattern)
+            } else if weight == 2 {
+                addRect(mx - d - t / 2, ya, t, yc - ya, gray: color, pattern: colorPattern)
+                addRect(mx + d - t / 2, ya, t, yc - ya, gray: color, pattern: colorPattern)
+            }
+        }
+    }
+
+    // Job 269 (p6-punchout): THIS GLYPH's own `cellTop`/`cellHeight`, not the caller's
+    // `fragment.origin.y`/`fragment.height` — the fragment figure is the WHOLE line
+    // fragment's height, which on a uniform-font line happens to be close to one
+    // glyph's own cell (why this shipped fine for years), but on a MIXED-size line —
+    // LJ6DTP.WS's "PRETTY NEAT, HUH?" `.overprint` pass chains an unshrunk 12pt leading-
+    // space span against its own `.sup`-flagged block-char span shrunk to 8pt
+    // (`DocumentRenderer.attributedRun`'s job 246 fix: a graphic `.sup` run shrinks in
+    // place, on the shared baseline, never rises) — `fragment.height` there is the
+    // UNSHRUNK sibling's 14pt natural line height, erasing a taller white rectangle than
+    // the shrunk glyph's own ~8.8pt fill re-covers and carving a white gap straight
+    // through whatever solid fill an EARLIER-drawn layer (the chain's own base bar)
+    // already painted at that same X. `cellTop`/`cellHeight` are this glyph's own
+    // baseline-relative box — already sized generously enough to cover AppKit's missing-
+    // glyph placeholder for a font of this exact size (every other cp437 fill on this
+    // page uses the identical figure), so erase and fill now always agree by
+    // construction, for every char kind, not just the ones this fixture exercises.
+    let eraseFrame = CGRect(x: x0, y: cellTop, width: pitch, height: cellHeight)
+    return GraphicCell(eraseFrame: eraseFrame, fills: fills)
+}
+
 /// Vector fills for every eligible cp437 glyph in `glyphRange`, one line fragment's worth.
 ///
 /// `fragment` is that fragment's own `CGRect` (`NSLayoutManager.lineFragmentRect(forGlyphAt
 /// :effectiveRange:)`, or the first parameter `enumerateLineFragments` already hands its
 /// block) — NOT `usedRect`. This matches the established, harness-proven convention
-/// `PrintedStructuralParityTests`' own `Oracle.structuralBodyLines`/`EngineTruth` extraction
+/// `NativeStructuralParityTests`' own `Oracle.structuralBodyLines`/`EngineTruth` extraction
 /// already uses for body-line X/baseline (`fragment.origin.x/.y` + `location(forGlyphAt:)`),
 /// which that harness independently confirms lands within 0.5pt of the engine's real PDF
 /// bytes — reusing it here means this geometry inherits that same proof instead of needing
 /// its own.
 @MainActor
 func graphicCells(
-    manager: NSLayoutManager, storage: NSTextStorage, glyphRange: NSRange, fragment: CGRect
+    manager: NSLayoutManager, storage: NSTextStorage, glyphRange: NSRange, fragment: CGRect,
+    placements: [PageLine.GraphicCellPlacement] = [], leftAnchor: Double = 0
 ) -> [GraphicCell] {
     guard glyphRange.length > 0 else { return [] }
     var cells: [GraphicCell] = []
+    // Planning #251(c): the ENGINE'S own answer for where this line's graphic cells sit and
+    // how wide they are (`PageLine.graphicCells`, recorded from a real call to the writer's
+    // own `lineOpsPrinted`, so it IS what the library draws rather than a re-derivation).
+    //
+    // Everything else about a cell still comes from the run itself — its size, its colour,
+    // its driver hatch — because the model does not carry those and this file already reads
+    // them correctly. Only x and width move, and they are the two that drifted: they were
+    // AppKit's glyph positions, which are the Mac face's advances, not the library's cells.
+    //
+    // Matched by ORDER and confirmed by character, so a line the model and this walk
+    // disagree about (a substitution either side made that the other did not) falls back to
+    // the glyph geometry for that cell instead of borrowing a neighbour's place.
+    var placementIndex = 0
     let text = storage.string as NSString
     let lineEnd = glyphRange.location + glyphRange.length
     var g = glyphRange.location
@@ -360,17 +662,44 @@ func graphicCells(
         guard charIndex < text.length else { continue }
         guard let scalar = Unicode.Scalar(text.character(at: charIndex)) else { continue }
         let ch = Character(scalar)
-        guard graphicChars.contains(ch) else { continue }
+        // The ENGINE'S set, which is wider than this file's own: `arcCorners` was never
+        // ported here and has no table to be in. Those characters draw from
+        // `graphicCellOps` inside `graphicCell`.
+        guard nativeGeometryChars.contains(ch) else { continue }
 
         let attrs = storage.attributes(at: charIndex, effectiveRange: nil)
 
         let font = (attrs[.font] as? NSFont) ?? NSFont.systemFont(ofSize: 12)
         let pt = Double(font.pointSize)
         let loc = manager.location(forGlyphAt: g)
-        let x0 = fragment.origin.x + loc.x
+        let fragmentX0 = fragment.origin.x + loc.x
         let baselineY = fragment.origin.y + loc.y
-        let pitch = Double(graphicAdvance(manager: manager, glyphIndex: g, lineEnd: lineEnd,
+        var pitch = Double(graphicAdvance(manager: manager, glyphIndex: g, lineEnd: lineEnd,
                                           fallback: font.maximumAdvancement.width))
+        var x0 = fragmentX0
+        // THE MODEL RECORDS A GRAPHIC RUN'S INTERIOR SPACES AS CELLS; this walk paints only
+        // the graphic characters. Matching the two lists position for position therefore goes
+        // out of step at the first interior space, and every cell after it takes a
+        // NEIGHBOUR's entry — or, when the characters then disagree, falls back to the
+        // glyph's own geometry, which is not the engine's cell.
+        //
+        // Measured on -README.WS page 5, whose break row is `■ ■ ■`: the engine records five
+        // cells (■, space, ■, space, ■) and draws three 9x9 squares, and the app drew two 9x9
+        // squares and one 15x15 — 224 dark pixels against 81, a region-diff row of its own.
+        // So a non-graphic placement is skipped rather than consumed: the lists are aligned
+        // on the entries this walk actually paints.
+        while placementIndex < placements.count,
+              !nativeGeometryChars.contains(placements[placementIndex].char) {
+            placementIndex += 1
+        }
+        if placementIndex < placements.count {
+            let placement = placements[placementIndex]
+            placementIndex += 1
+            if placement.char == ch, placement.width > 0 {
+                x0 = placement.x - leftAnchor
+                pitch = placement.width
+            }
+        }
         // job-489 (C1): the driver-colour index this run's `.foregroundColor` resolved to,
         // when it's one of the HP1-HP6 pattern indices (`DocumentRenderer.driverColour`'s own
         // doc comment) — `.foregroundColor` alone can't be decoded back into which of the six
@@ -381,134 +710,15 @@ func graphicCells(
         // returns nil for it), so `color` falls back to a nominal 0.5 for one of these runs —
         // this is ONLY the `GraphicRect.gray` fallback `.fill()` would use if `pattern` were
         // ever nil (never true for one of these fills; `pattern` always drives the real paint),
-        // kept meaningful anyway because other harnesses (`PrintedStructuralParityTests`'
+        // kept meaningful anyway because other harnesses (`NativeStructuralParityTests`'
         // `knockoutTextPaintsVisibleInkOverItsFill`, job 399) probe `GraphicRect.gray` directly
-        // as a "is this a driver-fill box" signal — the SAME flat value `printedLJ6DTPColourGray`
+        // as a "is this a driver-fill box" signal — the SAME flat value `nativeLJ6DTPColourGray`
         // used for these indices before this job, so that probe's own range check is unaffected.
         let color = patternIndex != nil ? 0.5 : ((attrs[.foregroundColor] as? NSColor)?
             .usingColorSpace(.deviceGray)?.whiteComponent ?? 0)
 
-        // The cp437 cell, in this view's top-down (flipped) local coordinates. `graphicOps`
-        // builds its cell in PDF bottom-up coordinates from the glyph's baseline `y`:
-        // `yb = y - 0.25*pt` (cell bottom, BELOW baseline), `h = 1.1*pt` (cell height),
-        // `my = yb + h/2` (vertical center). Flipping to top-down negates every offset
-        // FROM the baseline (above-baseline becomes smaller y, not larger), so the cell's
-        // top sits `0.85*pt` ABOVE `baselineY` (`h - 0.25*pt`, i.e. `-yb-h` flipped), its
-        // bottom `0.25*pt` BELOW it (`-yb` flipped), and its center `0.3*pt` above it
-        // (`-my` flipped, i.e. `h/2 - 0.25*pt`).
-        let cellTop = baselineY - 0.85 * pt
-        let cellMidY = baselineY - 0.3 * pt
-        let cellBottom = baselineY + 0.25 * pt
-        let cellHeight = 1.1 * pt
-        let t = max(0.5, pt / 12)                   // line weight, port of graphicOps' `t`
-        let d = pt / 10                              // double-line half-gap, port of `d`
-
-        var fills: [GraphicRect] = []
-        func addRect(_ x: Double, _ y: Double, _ w: Double, _ h: Double, gray: Double, pattern: Int? = nil) {
-            fills.append(GraphicRect(
-                shape: .rect(CGRect(x: x, y: y, width: w, height: h)), gray: CGFloat(gray), pattern: pattern))
-        }
-        // job-489 (C1): `color`-driven fills (the driver-colour foreground, not the
-        // char-intrinsic `shadeGray`/knockout-white values) carry `patternIndex` through;
-        // `pattern` stays nil for those so this closure is a drop-in default everywhere else.
-        let colorPattern = patternIndex
-
-        if let shapes = symbolShapes[ch] {
-            // `sq`: the SAME single square scale `graphicOps`' own `symbolShape` uses for
-            // every sub-shape kind (`PDFDriverLJ6DTP.swift:219`'s `sq = min(pitch, h)`, b24
-            // round 20/slate item 8) — a symbol glyph is authored to look REGULAR (a round
-            // dot, a true diamond, a circular sun), not squashed to the cell's own pitch/height
-            // aspect the way a box-drawing arm or half-block legitimately is.
-            let sq = min(pitch, cellHeight)
-            let cx = x0 + pitch / 2
-            // Fraction (fx, fy) is PDF-convention (`fy` up from the cell's own bottom, same as
-            // `graphicOps`' authoring) around the cell CENTER — `cellMidY` is this view's own
-            // flipped-coordinate stand-in for `graphicOps`' `my`/`cy` (both `yb + h/2`, this
-            // file's own top-of-loop doc comment on why `cellMidY` already equals that,
-            // flipped). Mapping a fraction the flipped way SUBTRACTS its center-relative
-            // offset instead of adding it (this view's y grows DOWN the page; PDF's grows UP),
-            // matching the existing `boxArms` branch's own up/down cellTop/cellBottom split
-            // just below.
-            func addSymbolShape(_ shape: SymbolSubShape, gray: Double, pattern: Int? = nil) {
-                switch shape {
-                case .white(let sub):
-                    addSymbolShape(sub, gray: 1.0)
-                case .poly(let points):
-                    let mapped = points.map {
-                        CGPoint(x: cx + ($0.x - 0.5) * sq, y: cellMidY - ($0.y - 0.5) * sq)
-                    }
-                    fills.append(GraphicRect(shape: .poly(mapped), gray: CGFloat(gray), pattern: pattern))
-                case .disc(let fx, let fy, let fr):
-                    let center = CGPoint(x: cx + (fx - 0.5) * sq, y: cellMidY - (fy - 0.5) * sq)
-                    fills.append(GraphicRect(
-                        shape: .disc(center: center, radius: fr * sq), gray: CGFloat(gray), pattern: pattern))
-                case .rect(let fx, let fy, let fw, let fh):
-                    // `(fx, fy)` is the sub-rect's own bottom-left corner in PDF convention
-                    // (`graphicOps`' `rect` draws upward from `ry`), so its TOP (this view's
-                    // smaller-y edge) sits at `fy + fh`, not `fy` alone.
-                    let origin = CGPoint(x: cx + (fx - 0.5) * sq, y: cellMidY - (fy + fh - 0.5) * sq)
-                    let size = CGSize(width: fw * sq, height: fh * sq)
-                    fills.append(GraphicRect(
-                        shape: .rect(CGRect(origin: origin, size: size)), gray: CGFloat(gray), pattern: pattern))
-                }
-            }
-            for shape in shapes { addSymbolShape(shape, gray: color, pattern: colorPattern) }
-        } else if ch == fullBlockChar {
-            addRect(x0, cellTop, pitch, cellHeight, gray: color, pattern: colorPattern)
-        } else if let gray = shadeGray[ch] {
-            addRect(x0, cellTop, pitch, cellHeight, gray: gray)
-        } else if let frac = partBlocks[ch] {
-            if squarePartBlocks.contains(ch) {
-                // Same cell-center-relative, single-scale mapping as the `symbolShapes` rect
-                // case above (`sq = min(pitch, cellHeight)`), so ■ is a true square instead of
-                // being stretched independently to the cell's pitch (x) and height (y).
-                let sq = min(pitch, cellHeight)
-                let cx = x0 + pitch / 2
-                let originX = cx + (frac.x - 0.5) * sq
-                let originY = cellMidY - (frac.y + frac.h - 0.5) * sq
-                addRect(originX, originY, frac.w * sq, frac.h * sq, gray: color, pattern: colorPattern)
-            } else {
-                let originY = baselineY + 0.25 * pt - (frac.y + frac.h) * 1.1 * pt
-                addRect(x0 + frac.x * pitch, originY, frac.w * pitch, frac.h * 1.1 * pt, gray: color, pattern: colorPattern)
-            }
-        } else if let arms = boxArms[ch] {
-            let mx = x0 + pitch / 2
-            for (weight, xa, xb) in [(arms.left, x0, mx), (arms.right, mx, x0 + pitch)] {
-                if weight == 1 {
-                    addRect(xa, cellMidY - t / 2, xb - xa, t, gray: color, pattern: colorPattern)
-                } else if weight == 2 {
-                    addRect(xa, cellMidY - d - t / 2, xb - xa, t, gray: color, pattern: colorPattern)
-                    addRect(xa, cellMidY + d - t / 2, xb - xa, t, gray: color, pattern: colorPattern)
-                }
-            }
-            for (weight, ya, yc) in [(arms.up, cellTop, cellMidY), (arms.down, cellMidY, cellBottom)] {
-                if weight == 1 {
-                    addRect(mx - t / 2, ya, t, yc - ya, gray: color, pattern: colorPattern)
-                } else if weight == 2 {
-                    addRect(mx - d - t / 2, ya, t, yc - ya, gray: color, pattern: colorPattern)
-                    addRect(mx + d - t / 2, ya, t, yc - ya, gray: color, pattern: colorPattern)
-                }
-            }
-        }
-
-        // Job 269 (p6-punchout): THIS GLYPH's own `cellTop`/`cellHeight`, not the caller's
-        // `fragment.origin.y`/`fragment.height` — the fragment figure is the WHOLE line
-        // fragment's height, which on a uniform-font line happens to be close to one
-        // glyph's own cell (why this shipped fine for years), but on a MIXED-size line —
-        // LJ6DTP.WS's "PRETTY NEAT, HUH?" `.overprint` pass chains an unshrunk 12pt leading-
-        // space span against its own `.sup`-flagged block-char span shrunk to 8pt
-        // (`DocumentRenderer.attributedRun`'s job 246 fix: a graphic `.sup` run shrinks in
-        // place, on the shared baseline, never rises) — `fragment.height` there is the
-        // UNSHRUNK sibling's 14pt natural line height, erasing a taller white rectangle than
-        // the shrunk glyph's own ~8.8pt fill re-covers and carving a white gap straight
-        // through whatever solid fill an EARLIER-drawn layer (the chain's own base bar)
-        // already painted at that same X. `cellTop`/`cellHeight` are this glyph's own
-        // baseline-relative box — already sized generously enough to cover AppKit's missing-
-        // glyph placeholder for a font of this exact size (every other cp437 fill on this
-        // page uses the identical figure), so erase and fill now always agree by
-        // construction, for every char kind, not just the ones this fixture exercises.
-        let eraseFrame = CGRect(x: x0, y: cellTop, width: pitch, height: cellHeight)
-        cells.append(GraphicCell(eraseFrame: eraseFrame, fills: fills))
+        cells.append(graphicCell(ch, x0: x0, baselineY: baselineY, pt: pt, pitch: pitch,
+                                 color: color, patternIndex: patternIndex))
     }
     return cells
 }
@@ -518,7 +728,7 @@ func graphicCells(
 /// terminator every `DocumentRenderer` line ends with — whose own location is not a real
 /// character cell and would under-measure the last visible glyph's width). Falls back to
 /// `NSFont.maximumAdvancement`, exact for the monospace faces cp437 box art always uses
-/// (`printedFontFamily`'s `printedMonoFamilies` gate, `DocumentRenderer.swift`).
+/// (`nativeFontFamily`'s `nativeMonoFamilies` gate, `DocumentRenderer.swift`).
 private func graphicAdvance(
     manager: NSLayoutManager, glyphIndex: Int, lineEnd: Int, fallback: CGFloat
 ) -> CGFloat {
@@ -529,6 +739,24 @@ private func graphicAdvance(
 }
 
 // MARK: - Isolated single-line layout (job 224: overprint compositing)
+
+/// EVERY LAYOUT MANAGER THIS APP BUILDS, WITH HYPHENATION OFF.
+///
+/// Planning #222 (c): the engine breaks a Modern line only at a space. AppKit will also
+/// break at a hyphen, and whether it does is not this app's decision by default —
+/// `NSLayoutManager.usesDefaultHyphenation` follows the SYSTEM preference unless it is set,
+/// so the same document could wrap differently on two machines and this target never said a
+/// word about it either way: neither `hyphenationFactor` nor `usesDefaultHyphenation`
+/// appeared anywhere in it before this.
+///
+/// Off, explicitly, everywhere. A hyphen break the library does not make is a line the
+/// library does not have, and it moves every line after it. Stated once here rather than at
+/// each of the eight construction sites, so a ninth cannot quietly reintroduce it.
+func softReturnLayoutManager() -> NSLayoutManager {
+    let manager = NSLayoutManager()
+    manager.usesDefaultHyphenation = false
+    return manager
+}
 
 /// One line, laid out on its own — same technique `DocumentRenderer.measuredHeight` already
 /// uses (an unbounded, freshly-built `NSLayoutManager`), reused here so an `.overprint` pass
@@ -550,7 +778,7 @@ struct IsolatedLineLayout {
 /// `nil` for an empty line — nothing to lay out, and nothing for a caller to draw.
 func isolatedLineLayout(_ text: NSAttributedString, width: CGFloat) -> IsolatedLineLayout? {
     let storage = NSTextStorage(attributedString: text)
-    let manager = NSLayoutManager()
+    let manager = softReturnLayoutManager()
     manager.allowsNonContiguousLayout = false
     let container = NSTextContainer(size: CGSize(width: max(1, width), height: .greatestFiniteMagnitude))
     container.lineFragmentPadding = 0

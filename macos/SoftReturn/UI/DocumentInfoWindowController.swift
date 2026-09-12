@@ -306,10 +306,10 @@ final class DocumentInfoWindowController: NSWindowController {
             + "Annotations \(count(.annotation)) · Comments \(count(.comment))"
     }
 
-    /// Top/left from `printedMetrics`, the SAME façade `DocumentRenderer.renderPrinted`
+    /// Top/left from `printedMetrics`, the SAME façade `DocumentRenderer.renderNative`
     /// (screen) and `ExportEngine.render`'s Printed-mode PDF export already use — resolved
     /// through `effectivePage` against the Margins control's current preset first, exactly
-    /// as `renderPrinted` does, so this can never disagree with what the page actually shows.
+    /// as `renderNative` does, so this can never disagree with what the page actually shows.
     /// Bottom comes from the same resolved geometry's `mbLines` (a line count) converted with
     /// `lh48` (WordStar's own 1/48-inch leading unit) — no re-derivation of `printedMetrics`'
     /// internal arithmetic, which the library keeps deliberately private. WordStar has no

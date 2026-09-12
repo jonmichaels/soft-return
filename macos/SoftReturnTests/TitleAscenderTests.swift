@@ -35,7 +35,7 @@ import Testing
 /// Job 400 (F11, sample bundle refresh): `DARKNESS.WS` left the shipping sample bundle
 /// (`SoftReturn/Resources/SampleDocuments/`), so its two dedicated tests below are gone too
 /// — `TestDocs/ws7/DARKNESS.WS` itself stayed on as a fixture for other `ws7Fixtures`-driven
-/// suites (e.g. `PrintedStructuralParityTests`) even though this file stopped naming it
+/// suites (e.g. `NativeStructuralParityTests`) even though this file stopped naming it
 /// specifically. Job 498 (Jon's ruling, content bar) removed the fixture itself too, so that
 /// is now moot. The tall-title class this file exists to catch stays live via
 /// `warprayrTitleFullyVisible`/`warprayrTitleTopAgreesWithEngine`.
@@ -88,7 +88,7 @@ struct TitleAscenderTests {
     ///
     /// A page's own first line takes one of two shapes: an OVERSIZED title
     /// (`RenderedDocument.oversizedSelfPasses[0].first`, non-nil — its real content lives
-    /// there, since `renderPrinted` leaves the inline fragment BLANK for these, see that
+    /// there, since `renderNative` leaves the inline fragment BLANK for these, see that
     /// field's own doc comment), or ordinary text, where the FIRST physical line is often
     /// blank filler (a title vertically centred a few lines down the page — OLDTIMES.WS's
     /// own shape) rather than the real ink. For the ordinary case this walks
@@ -106,28 +106,28 @@ struct TitleAscenderTests {
         let bytes = [UInt8](try Data(contentsOf: url))
         let defaults = UserDefaults(suiteName: "TitleAscenderTests.expected.\(UUID().uuidString)")!
         let state = try DocumentState(data: bytes, settings: SettingsStore(defaults: defaults), docPath: url.path)
-        let rendered = DocumentRenderer.render(state, style: .printed)
+        let rendered = DocumentRenderer.render(state, style: .native)
         let metrics = printedMetrics(state.document)
         // Job 425 (b26 round 26 wave 3, ctrl-kd's `pageStream`, PDFWriter.swift): the page's
         // first line takes its baseline from `top` and ITS OWN lead, not a flat `metrics.
-        // size` — the SAME fix `DocumentRenderer.renderPrinted`'s own `perPageFirstBaselines`
+        // size` — the SAME fix `DocumentRenderer.renderNative`'s own `perPageFirstBaselines`
         // now applies in production (see that citation). Re-derived here from
-        // `docToPagelines` directly (the same call `renderPrinted` itself makes) rather than
+        // `docToPagelines` directly (the same call `renderNative` itself makes) rather than
         // reused from `rendered`, since `RenderedDocument` does not expose the raw
         // per-page `PageLine.lead` this needs.
-        let pages = docToPagelines(state.document, printed: true)
+        let pages = Oracle.pagelines(of: state)
         let firstBaseline = metrics.top + (pages.first?.first?.lead ?? metrics.lead)
 
         // Job 490 (item 1): a page-1 `.pctl` span whose control survived parsing with a real
         // PCL payload (`Span.pcl`, register C2) can draw REAL ink above wherever the text
         // itself starts — LJ6DTP.WS's own page border, drawn entirely this way
-        // (`PrintedPCLGraphics.swift`'s top doc comment). This law's own "expected" value was
+        // (`NativePCLGraphics.swift`'s top doc comment). This law's own "expected" value was
         // blind to that before this job (font-metrics only), so a fixture whose border now
         // legitimately draws the page's topmost ink needs it folded in here too, or a
         // CORRECT render (border ink genuinely higher than the title) reads as a false
         // clipping regression against a stale, text-only expectation. Anchor (0, 0): every
         // `.pcl` program this corpus's page 1 carries addresses the page ABSOLUTELY (LJ6DTP's
-        // border — `PrintedPCLGraphics.swift`'s own citation against the raw fixture bytes),
+        // border — `NativePCLGraphics.swift`'s own citation against the raw fixture bytes),
         // so the anchor a relative op would need never arises here; a fixture whose page 1
         // carried a RELATIVE-only program would need its own real anchor, not exercised by
         // this corpus today.
@@ -155,7 +155,7 @@ struct TitleAscenderTests {
 
         // One fragment (`softLineFlags[0]`/`oversizedSelfPasses[0]`'s own indexing) per
         // physical line of `rendered.text` — an oversized fragment's own inline line is
-        // BLANK there (`renderPrinted`'s own call site: `oversized ? PageLine([], ...) :
+        // BLANK there (`renderNative`'s own call site: `oversized ? PageLine([], ...) :
         // base`), so walking `rendered.text`'s physical lines in lockstep with
         // `oversizedSelfPasses[0]` visits every fragment exactly once, oversized or not.
         // OLDTIMES.WS's own title is fragment 4, not 0 (a byline/copyright block/award
@@ -176,7 +176,7 @@ struct TitleAscenderTests {
             if let ink = inkTop(of: content) {
                 return min(pclTopInkPt, baseline - ink)
             }
-            // Job 425: `advanceLead(page, at: i)` (`DocumentRenderer.renderPrinted`) — the
+            // Job 425: `advanceLead(page, at: i)` (`DocumentRenderer.renderNative`) — the
             // arithmetic this loop re-derives — advances the baseline INTO row i by row i's
             // OWN lead, never the row BEFORE it (`PrintedPageMetrics.lead`'s own citation:
             // "A LEAD IS THE SPACE ABOVE ITS LINE, not below it"). This loop used to read the
@@ -275,7 +275,7 @@ struct TitleAscenderTests {
         let bytes = [UInt8](try Data(contentsOf: url))
         let defaults = UserDefaults(suiteName: "TitleAscenderTests.oversized.\(UUID().uuidString)")!
         let state = try DocumentState(data: bytes, settings: SettingsStore(defaults: defaults), docPath: url.path)
-        let rendered = DocumentRenderer.render(state, style: .printed)
+        let rendered = DocumentRenderer.render(state, style: .native)
         let firstPageSelfPasses = rendered.oversizedSelfPasses.first ?? []
         #expect(firstPageSelfPasses.contains(where: { $0 != nil }), """
             \(fixture) page 1 should route its title line through the oversized self-pass \

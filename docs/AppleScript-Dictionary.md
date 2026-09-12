@@ -33,7 +33,7 @@ offered — we are a viewer; `open` is how documents come to exist).
 
 **`export`** — one document, one output (the CLI's single-file conversion).
 ```applescript
-export document 1 to file "Macintosh HD:Users:yourname:Out:SAMPLE.rtf" ¬
+export document 1 to file "Macintosh HD:Users:yourname:Out:INDIAN.rtf" ¬
     as RTF using style modern ¬
     with footnotes and endnotes without comments ¬
     note references word style

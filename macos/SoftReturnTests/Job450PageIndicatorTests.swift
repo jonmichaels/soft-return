@@ -47,12 +47,30 @@ struct Job450PageIndicatorTests {
     /// Job 535: routes through `PrivateCorpusSupport` — see that file's own doc comment.
     static var ws7Directory: URL { PrivateCorpusSupport.ws7Directory }
 
+    /// A controller over a document this test WROTE, rather than one it found. Planning #221
+    /// is why: the one-page control below used to name a corpus fixture, and a legitimate
+    /// change to the note-pagination rules turned that fixture into two pages — twice, for
+    /// two different fixtures. A document whose only content is two short lines is one page
+    /// for a reason no layout rule can revoke.
+    @MainActor
+    private static func controller(writing source: String, named name: String,
+                                   into directory: URL) throws -> DocumentWindowController {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(name)
+        try Data(Array(source.utf8)).write(to: url)
+        return try Self.controller(at: url)
+    }
+
+    @MainActor
+    private static func controller(fixture: String) throws -> DocumentWindowController {
+        try Self.controller(at: Self.ws7Directory.appendingPathComponent(fixture))
+    }
+
     /// Modern, the style `-SCREEN.WS` needs to reproduce the 2-page overflow
     /// (`Job439ModernAppendixLiveTests.swift`'s own finding) — set manually before the window
     /// controller's `init` reads `documentState.style.value` during its own `buildContent()`.
     @MainActor
-    private static func controller(fixture: String) throws -> DocumentWindowController {
-        let url = Self.ws7Directory.appendingPathComponent(fixture)
+    private static func controller(at url: URL) throws -> DocumentWindowController {
         let bytes = [UInt8](try Data(contentsOf: url))
         let defaults = UserDefaults(suiteName: "Job450PageIndicator.\(UUID().uuidString)")!
         let state = try DocumentState(data: bytes, settings: SettingsStore(defaults: defaults), docPath: url.path)
@@ -104,11 +122,23 @@ struct Job450PageIndicatorTests {
     /// Job 454: Jon ruled the coming-and-going itself confusing — "Always on" — so a one-page
     /// document now reads "Page 1 of 1" rather than showing nothing.
     @Test @MainActor func singlePageModeShowsIndicatorForOnePageDocumentToo() throws {
-        let controller = try Self.controller(fixture: "BOTHNOTE.WS")
+        // Planning #221 (Jon's ruling 2026-09-07): the control used to be BOTHNOTE.WS, on the
+        // reasoning that it carries no image and so fits one Modern page. It carries a
+        // footnote AND an endnote, which is now exactly the shape that hands the endnote
+        // appendix a page of its own, so it is two pages today. OCAPTAIN.WS, tried next, is
+        // two Modern pages as well. What this test actually needs is not a corpus document at
+        // all — it needs A one-page document — so it writes one.
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("job450-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = try Self.controller(
+            writing: "A One-Page Document\r\n\r\nTwo short lines, no notes of any kind.\r\n",
+            named: "ONEPAGE.WS", into: directory)
         try #require(controller.documentState.display.value == .singlePage,
                      "test assumes the factory-default display mode")
-        try #require(controller.pageTotal == 1,
-                     "control fixture (no image, unlike -SCREEN.WS) must fit on exactly one Modern page")
+        let premise = "control fixture must fit on exactly one Modern page — it laid out to "
+            + "\(controller.pageTotal)"
+        try #require(controller.pageTotal == 1, "\(premise)")
 
         let label = try Self.pageIndicatorLabel(in: controller.bottomBar)
         #expect(label.isHidden == false,

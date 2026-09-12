@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
 # Refuse to let personal-machine material sit in this repo's tracked set.
 #
-# This is a PRIVATE repo (real corpus paths, private-corpus manifests, and
-# personal WS4 papers legitimately live here under `CTRLKD_PRIVATE_CORPUS`
-# labels) -- the rule this guard enforces is narrower than "nothing
-# personal": it is "no real path to anybody's machine, in any encoding".
-# The private-corpus category labels themselves (e.g. the corpus group
-# names used throughout TestDocs/ and the private test suites) are an
-# accepted, already-public convention and are deliberately NOT patterns
-# here -- see tools/private_patterns.sh's own comment on why.
+# The rule this guard enforces is not "nothing personal" -- it is "no real
+# path to anybody's machine, in any encoding". Corpus category labels are an
+# accepted, already-public naming convention and are deliberately NOT patterns
+# here; see tools/private_patterns.sh's own comment on why.
 #
-# Scope: only the part of the tracked tree that can ever reach the public
-# soft-return repo. tools/private_patterns.sh's PAT_NEVER_CROSS_DIRS/FILES
-# (outbox/, evidence/, archive/, .claude/, ctrlkd-private-tests/, TestDocs/,
-# this repo's own CLAUDE.md and operational docs/) are skipped entirely --
-# scanning them would only block ordinary private-repo work over content
-# that can never leak, since nothing there is ever part of a public
-# snapshot (confirmed 2026-09-07 by diffing against the live public repo).
+# Scanning scope is the whole tracked tree (see PAT_NEVER_CROSS_DIRS/FILES in
+# tools/private_patterns.sh, empty in this repo), plus a base64 pass, because
+# a real path once survived a plain-text scan by being base64-encoded inside a
+# recorded event fixture.
 #
 #   tools/audit_private.sh          # working tree (tracked files)
 #   tools/audit_private.sh --log R  # also every commit message in range R

@@ -689,7 +689,7 @@ private struct BatchPreview: View {
     /// Native and Printed render IDENTICAL pixels for this thumbnail purpose — the on-screen
     /// difference between them is only in how a PDF EXPORT's bytes get produced
     /// (`ExportEngine`'s print-path carve-out), never in `PagePreviewRenderer`'s own facsimile
-    /// layout, so both map to `RenderStyle.printed` here exactly as `ViewStyle.renderStyle`
+    /// layout, so both map to `RenderStyle.native` here exactly as `ViewStyle.renderStyle`
     /// already documents for "export what you see" (job 265/323).
     private var previewStyle: RenderStyle { style.renderStyle }
 

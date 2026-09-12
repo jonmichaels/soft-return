@@ -63,8 +63,17 @@ import Testing
     // `makeProse()`) — confirmed directly against Python, not merely copied: Modern PDF
     // parity is byte-for-byte here, though the cross-check contract only requires
     // equivalence, not identity (see this test's own header comment).
+    //
+    // Re-pinned a FIFTH time 2026-09-11 (MODERN hash only -- the Printed hashes here are
+    // untouched): planning #263's page baseline model. A Modern line's baseline now sits one
+    // face DESCENT above its own line box's bottom instead of on it (`modernDescent`), which
+    // moves every Modern baseline on every document by that line's own descent -- here
+    // 1.884pt, Courier at the 12pt this fixture sets. A deliberate, global, ruled change to
+    // Modern geometry; the box ladder, the page breaks and every x are unchanged, which is
+    // why only one of these four hashes moves. Again the identical digest ctrl-kd's own
+    // re-pinned fixture carries (9fb1677).
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .modern))
-        == "eb8bc918916d3bbb0b274e203c1c3f03b9008e6f6755cc67c6100a2f30705950")
+        == "cd3760328da8b4ffadd366e6d253a8e9cf3adbe1981fa68f7f1c5a8bc472c87b")
     #expect(sha256Hex(emitPDF(parseWS(styled), mode: .printed))
         == "a2d067710cee2ebd9f4b86274f2e787d3bf1d304a582dd9d02103956334fe183")
     #expect(sha256Hex(emitPDF(parsePrintstream(stream), mode: .printed))

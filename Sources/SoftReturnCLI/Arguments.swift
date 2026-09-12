@@ -10,7 +10,16 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 4.0.3 is the v4.0.3 patch release: sr carries the engine
+/// CLI's user-visible contract. 4.1.0 is the v4.1.0 minor release: sr carries ctrl-kd
+/// 4.6.0's layout model — newspaper columns (`.co`), full justification (`.oj on`),
+/// even/odd conditional running heads and feet plus the even/odd page offset, positional
+/// line numbering, landscape page sizes, the driver-keyed euro/peseta at code 158, the
+/// Modern verse/centred tightening and hanging definition rows, the top-margin-flush page
+/// baseline, font-metric-derived line height, fixed-pitch box/rule advance, and the tab and
+/// indent corrections — plus the app-side pagination, real-text column layout and
+/// cross-page ink fixes. No CLI flag or default surface was removed; the layout model
+/// gained public fields, which is why the minor component moves. 4.0.3 is the v4.0.3 patch
+/// release: sr carries the engine
 /// fidelity fixes ported from ctrl-kd since 4.0.2 (superscript/subscript sizing, header/
 /// footer inline-style handling, per-page running-head/footer right-tab padding, footnote
 /// marker spacing, page numbering on by default, automatic leading, top margin/footnote
@@ -70,7 +79,7 @@ import CtrlKD
 /// capacity/top/lead from `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose);
 /// 1.1.0 added the note-selection flags and the expanded --diagnose fields; 1.0.0 was the
 /// first CLI release.
-public let srVersion = "4.0.3"
+public let srVersion = "4.1.0"
 
 
 /// `sr v2.0.0`.

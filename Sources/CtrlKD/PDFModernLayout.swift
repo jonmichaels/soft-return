@@ -21,6 +21,89 @@ let modernNotePt = 11
 /// Single-spacing: baseline advance = 1.2 x the line's own type size.
 let modernLine = 1.2
 
+// ------------------------------------------- verse/centre tightening (#263)
+//
+/// Poetry and centred material set SINGLE-spaced internally regardless of the surrounding
+/// prose's own spacing — the cross-format law Modern RTF (`EmitRTF`'s verse-tight `\sl`) and
+/// Modern HTML (`line-height:1.15` against the page's own 1.6 ambient) already follow. Modern
+/// PDF did not, and Modern PDF is what Soft Return.app's Modern VIEW is answerable to, so the
+/// two disagreed on where every centred/verse line fell. Backported from the app's own
+/// shipped, measured implementation (Jon's ruling 2026-09-11, "Yes. I want it. Backport it.")
+/// by way of ctrl-kd's `MODERN_VERSE_TIGHT` (fe87b41).
+///
+/// THE FACTOR is the app's `modernVerseTightLineHeightMultiple` — itself the ratio of the two
+/// literals Modern HTML already states (verse 1.15 against the page ambient 1.6). It is a
+/// RELATIVE multiplier on the FACE's own natural line height, never on `modernLine * pt`: an
+/// absolute floor or ceiling cannot tighten reliably across faces (it is inert the moment a
+/// face's natural height already sits under it), and the same relative number means different
+/// leading in different faces, which is the point.
+public let modernVerseTight = 0.71875
+
+/// NATURAL LINE HEIGHT, per face, as a multiple of type size.
+///
+/// "Natural" means what the app's text stack reports for the real face it sets Modern in
+/// (`NSLayoutManager.defaultLineHeight`) — the number `modernVerseTight` is relative TO. This
+/// engine has no such stack and no such faces (base-14 only, nothing embedded, by design), so
+/// the two faces that matter are carried as MEASURED CONSTANTS, taken from the app and
+/// recorded with the measurement that produced them:
+///
+///   Times New Roman 14pt -> 16.0pt natural   (16.0 / 14 = 8/7)
+///   Courier Prime   12pt -> 14.0pt natural   (14.0 / 12 = 7/6)
+///
+/// So a tightened Times line at the 14pt body size is 11.50pt against the untightened 16.80,
+/// and a tightened Courier line at 12pt is 10.06 against 14.40. The two ratios against
+/// `modernLine * pt` are 0.685 and 0.699 — NOT the same number, which is why a single
+/// face-independent constant cannot reproduce the app and this is a table rather than a scalar.
+///
+/// The faces with no measurement of their own (Helvetica, Symbol, ZapfDingbats) take the Times
+/// row, not an invented one: Times is Modern's own default body face (`modernTokFont`: a token
+/// with no font information reads in Times), the only other PROPORTIONAL measurement in hand,
+/// and the conservative choice — Courier's row is the odd one out precisely because it is the
+/// monospace face. An unmeasured face is named as unmeasured here rather than silently
+/// interpolated.
+public func modernNaturalLine(_ family: PDFFamily) -> Double {
+    family == .courier ? 7.0 / 6.0 : 8.0 / 7.0
+}
+
+/// WHERE THE BASELINE LANDS inside a tightened box, as a multiple of type size: the face's own
+/// ASCENT, from which the whole of the compression is taken. The line's descent and leading
+/// keep their full, untightened size below the baseline, and the box loses its height off the
+/// TOP — which is exactly why tightening can clip a tall glyph's ascender at all, and what
+/// `modernLeadingSpacer` exists to reserve room for.
+///
+/// Times New Roman's ascent is 1825/2048 em (its own `hhea` ascender); Courier Prime's is
+/// 11/12 em, leaving the classic 1/4-em monospace descent under its measured 7/6 natural box.
+/// Same unmeasured-face fallback rule as `modernNaturalLine`.
+///
+/// MEASURED against the app, so the residual is on the record rather than implied: the app's
+/// own -README spacers are 3.70/3.71/3.94pt, this engine's on the same document 3.59-3.74.
+/// What is left sits in the INK, not in this constant — the app measures a real Mac face's
+/// glyph PATH bounds, which do not match the design bounding boxes the AFM publishes for the
+/// metric-compatible base-14 face this engine sets in, and no base-14 number can close that by
+/// construction.
+public func modernFaceAscent(_ family: PDFFamily) -> Double {
+    family == .courier ? 11.0 / 12.0 : 1825.0 / 2048.0
+}
+
+/// The app's own fixed pad on a leading spacer's height: a second, independent drawing pass
+/// does not land pixel-for-pixel on the one that measured it.
+public let modernSpacerPad = 2.0
+
+/// The indent LADDER's one step, in WordStar print columns: how far each nesting level of a
+/// def/bullet row sits past the one above it. Level 1 sits AT the margin (the row's own
+/// declared column is deliberately never used — one file opens level-1 blocks at `.lm 15`,
+/// `.lm 2` and `.lm 0`, and rendering the raw column put level-1 labels at three different
+/// distances). Jon's b17 ruling.
+public let modernLevelStepCols = 4
+
+/// A def row's HANG — where a wrapped continuation lands, past the margin. One FIXED figure
+/// for every def row, never the longest label's width and never the row's own: a per-row hang
+/// made every row in the same block wrap at its own column ("each line wrap seems to have its
+/// own place"), and a block-wide longest-label hang landed the column far enough right to read
+/// as a second column of body text (job 322). 72pt past the margin puts it 2in from the page
+/// edge on Modern's own 1in margins.
+public let modernDefHangPt = 72.0
+
 /// One token in Modern PDF's flow: written text, its resolved face/size/font-block entry,
 /// and its measured advance in points. Python's 6-tuple `(text, styles, family, pt, entry,
 /// width)`, as a named type — the tuple shape is what made `_modern_line_ops`'s recursive
@@ -61,10 +144,16 @@ enum ModernFlowItem {
     /// end-matter appendix (endnotes/annotations/comments, M1) — `false` for every other
     /// paragraph, including the end-matter's own note entries. The paginator
     /// (`modernStreams`) uses it to decide whether the appendix needs a fresh page.
+    /// `tight`/`hang` (planning #263, ported from ctrl-kd fe87b41): the two figures the
+    /// verse/centre and def/bullet rules hand the paginator — `tight` says this paragraph
+    /// sets at the face's COMPRESSED line height (`modernTightHeight`) rather than at
+    /// `modernLine * pt`, `hang` is a structured row's own continuation indent in points,
+    /// which moves every visual line after the first to the right and narrows what those
+    /// lines wrap at. Both are 0/false for every ordinary paragraph.
     case para(toks: [ModernToken], align: Alignment,
               notes: [(index: Int, label: String, text: String)],
               indent: Double, cut: Double, noWrap: Bool, pageMarker: Bool,
-              endNotesStart: Bool)
+              endNotesStart: Bool, tight: Bool, hang: Double)
     /// An embedded pix image standing alone on its own paragraph — b24 round 22, closing
     /// round 19's documented Modern scope cut. Python's `('image', idx, w, h)` tuple.
     case image(pixIndex: Int, widthPt: Double, heightPt: Double)
@@ -74,7 +163,7 @@ enum ModernFlowItem {
 /// geometry wins (governing principle); silence is the modern page: 1in margins on
 /// Letter. The right margin is always 1in — WordStar's right edge is a text measure
 /// (`.rm`), not a page property. Port of `_modern_geometry`.
-func modernGeometry(_ doc: Document) -> (left: Double, top: Double, bottom: Double, width: Double) {
+public func modernGeometry(_ doc: Document) -> (left: Double, top: Double, bottom: Double, width: Double) {
     let page = doc.page
     let mtDeclared = (page?.mtSource ?? .default) != .default
     let mbDeclared = (page?.mbSource ?? .default) != .default
@@ -235,6 +324,258 @@ func modernTokenize(_ text: String) -> [String] {
     return pieces
 }
 
+/// `(family, point size)` of the token that SETS a visual line's height — the largest one, the
+/// same token the untightened `modernLine * max(size)` advance is measured from. Port of
+/// `_modern_line_face`.
+///
+/// The family comes off the TOKEN, never re-derived here: `modernTokFont` has already applied
+/// Modern's own face rule (planning #252) — a run no font block covers reads in Times at the
+/// body size, unless the document declares fonts AND declares its type non-proportional
+/// (`.ps off`), which puts an uncovered run in Courier. Those two faces have different natural
+/// line heights and very different marker advances, so every measurement in this file's
+/// tightening/hang rules inherits that one answer rather than Printed's unconditional
+/// fixed-pitch default. The `(.times, modernBodyPt)` fallback is reached only by a line with NO
+/// tokens at all — a paragraph whose runs were all zero-width note anchors, which draws no ink
+/// either way.
+func modernLineFace(_ vline: [ModernToken]) -> (family: PDFFamily, pt: Int) {
+    var best: (pt: Int, family: PDFFamily)?
+    for t in vline {
+        let spt = sized(t.styles, t.pt).points
+        if best == nil || spt >= best!.pt { best = (spt, t.family) }
+    }
+    guard let best else { return (.times, modernBodyPt) }
+    return (best.family, best.pt)
+}
+
+/// A tightened (verse/centred) line's own height in points: the face's natural line height,
+/// compressed by `modernVerseTight`. Port of `_modern_tight_h`.
+///
+/// `public` because Soft Return's Modern VIEW pins its own tightened line boxes to this
+/// figure rather than letting AppKit multiply the face's natural metric — the same option-B
+/// doctrine (planning #222, Jon) already applied to Modern's ordinary leading, extended to
+/// the tightened line now that the library has a tightened line of its own to match. See
+/// `DocumentRenderer.modernParagraphStyle`.
+public func modernTightHeight(_ family: PDFFamily, _ pt: Int) -> Double {
+    Double(pt) * modernNaturalLine(family) * modernVerseTight
+}
+
+/// How far BELOW a tightened line's own top edge its baseline sits. The compression comes off
+/// the ascent and nothing else (see `modernFaceAscent`), so this is the face's full natural
+/// ascent minus everything the tightening removed from the box. Port of
+/// `_modern_tight_baseline`.
+///
+/// `public` because Soft Return's own Modern view computes its leading spacer from THIS
+/// number and `inkTopPt`, rather than from AppKit's own placement and glyph-path bounds
+/// (Jon, on the leading spacer: "Do it in the engine. Adopt it in Soft Return.") — see
+/// `DocumentRenderer.modernAscentDeficit`.
+public func modernTightBaseline(_ family: PDFFamily, _ pt: Int) -> Double {
+    let natural = Double(pt) * modernNaturalLine(family)
+    let ascent = Double(pt) * modernFaceAscent(family)
+    return ascent - natural * (1.0 - modernVerseTight)
+}
+
+/// How far below a Modern line's own BASELINE the face descends, in points and POSITIVE — the
+/// face's AFM `Descender`, negated. Port of `_modern_descent`.
+///
+/// This is the whole of the page baseline model backported in planning #263 (Jon's standing
+/// principle, "the engine needs to work the way Soft Return does"; ledger 2026-09-11): Modern
+/// stacks LINE BOXES down from the text frame's top edge, and a box's baseline sits
+/// `h - descent` below its own top, not at its bottom. See `modernStreams`' own "THE PAGE
+/// BASELINE MODEL" note for what that does and does not change.
+///
+/// An unmeasured face takes the TIMES row — the same rule, for the same two faces (Symbol,
+/// ZapfDingbats), that `modernNaturalLine` and `modernFaceAscent` already state: Modern's own
+/// default body face, named as a fallback rather than invented from a bounding box
+/// (`afmDescenders` carries no entry for either, deliberately).
+///
+/// The face's bold/italic variant is not consulted: every Times variant publishes -217, every
+/// Helvetica variant -207 and every Courier variant -157, so the roman's row IS the family's
+/// row in the base-14.
+func modernDescent(_ family: PDFFamily, _ pt: Int) -> Double {
+    let roman = base14(family, bold: false, italic: false)
+    return -(descenderPt(roman, pt) ?? descenderPt("Times-Roman", pt)!)
+}
+
+/// The highest point any glyph of these tokens actually PAINTS above the baseline, in points —
+/// real outline extent (`inkTopPt`), never a nominal ascender, because a line of x-height
+/// letters and a line carrying one parenthesis must not measure the same. Port of
+/// `_modern_ink_above_baseline`.
+///
+/// A cp437 box/block/shade character is not a base-14 glyph at all: Modern draws it as a vector
+/// cell, and `graphicOps` puts that cell's own top edge `(leadFactor - 0.25) * pt` above the
+/// baseline — so its ink is taken from that geometry, the same place the drawing does, rather
+/// than from the '?' cp1252 would substitute for it.
+func modernInkAboveBaseline(_ toks: [ModernToken]) -> Double {
+    var top = 0.0
+    for tok in toks {
+        if tok.text.trimmed().isEmpty { continue }
+        let (spt, rise) = sized(tok.styles, tok.pt)
+        var text = tok.text
+        if text.contains(where: { graphicChars.contains($0) }) {
+            top = max(top, Double(rise) + (modernLine - 0.25) * Double(spt))
+            let plain = String(text.filter { !graphicChars.contains($0) })
+            if plain.trimmed().isEmpty { continue }
+            text = plain
+        }
+        let basefont = base14(tok.family, bold: tok.styles.contains(.bold),
+                              italic: tok.styles.contains(.italic))
+        top = max(top, Double(rise) + inkTopPt(text, basefont, spt))
+    }
+    return top
+}
+
+/// Job 434's leading spacer, in points — 0.0 for a line that needs none. Port of
+/// `_modern_leading_spacer`.
+///
+/// A tightened line box is shorter than the face's natural one, and the whole of that
+/// compression comes off the ascent, so a line whose real ink rises above where the baseline
+/// now lands inside that shorter box would either clip against the top of the text frame (the
+/// flow's very first line) or crowd the line above it. The room is reserved as an invisible
+/// blank advance immediately BEFORE the line, never as space-after on its predecessor: only
+/// the former survives being the first thing on a page, and only the former moves to the new
+/// page WITH the line when one breaks.
+///
+/// Fires only on a TIGHTENED line (an untightened one is at the face's own natural height,
+/// which already reserves its own ascender) and only when the deficit is genuinely positive;
+/// `modernSpacerPad` is a fixed pad on top, not a derived figure.
+func modernLeadingSpacer(_ toks: [ModernToken], _ family: PDFFamily, _ pt: Int) -> Double {
+    let deficit = modernInkAboveBaseline(toks) - modernTightBaseline(family, pt)
+    return deficit > 0 ? deficit + modernSpacerPad : 0.0
+}
+
+/// Is this flow entry a paragraph that draws at least one cp437 box/block/shade character?
+/// (`modernStreams`' own suppression test — a box's vertical rule must read as one continuous
+/// stroke, not a dashed one, so two graphic rows in a row get no spacer between them.) Port of
+/// `_modern_para_is_graphic`.
+func modernParaIsGraphic(_ item: ModernFlowItem) -> Bool {
+    guard case .para(let toks, _, _, _, _, _, _, _, _, _) = item else { return false }
+    return toks.contains { $0.text.contains(where: { graphicChars.contains($0) }) }
+}
+
+/// WHICH MODERN ROWS REFUSE TO WRAP (job 456, and the app's own b28 follow-up on it — ported
+/// here, the app is the reference). Port of `_modern_clips_row`.
+///
+/// A row of box-drawing or block characters is a picture, not a sentence: broken across two
+/// visual lines it stops being the thing it draws. Three shapes qualify, read off the row's own
+/// final rendered text:
+///
+///   wholly graphic    at least one graphic character, and nothing else on the row but graphic
+///                     characters and spaces (a box border, a rule).
+///   2+ graphic chars  job 456's own rule and the field report behind it ("I don't understand
+///                     what happened in Modern. They have line returns in the middle"). A MIXED
+///                     row — a real prose label plus its glyphs — is the case: a legend row
+///                     ("LL: └ LR: ┘ … Joins: … Mixed: …") or a substitution-table row, which
+///                     ordinary word wrapping folds at the perfectly legal space between label
+///                     and glyph. The threshold is TWO, not one, so an ordinary paragraph
+///                     carrying a single incidental symbol (a list marker) still wraps like the
+///                     prose it is.
+///   nowhere to break  a row with no space in it at all. This engine's greedy wrap never breaks
+///                     inside a token, so such a row already sets as one line; stated anyway,
+///                     because it is part of the rule being ported and a renderer that CAN break
+///                     a word must not.
+///
+/// A clipped row is set as ONE line and runs past the measure rather than reflowing
+/// (`modernStreams` gives it an unbounded wrap width) — the app's `.byClipping`. Read the row's
+/// FINAL tokens, after a centred row's padding has come off and a def row's label/gap prefix has
+/// gone on.
+func modernClipsRow(_ toks: [ModernToken]) -> Bool {
+    let text = toks.map(\.text).joined()
+    let graphicCount = text.reduce(0) { $0 + (graphicChars.contains($1) ? 1 : 0) }
+    if graphicCount > 0,
+       text.allSatisfy({ graphicChars.contains($0) || $0 == " " || $0 == "\u{00a0}" || $0 == "\u{2060}" }) {
+        return true
+    }
+    if graphicCount > 1 { return true }
+    return !text.isEmpty && !text.contains(" ")
+}
+
+/// The sub-list of `runs` covering characters `[start, end)` of their own concatenated text,
+/// each run's styles (and note reference) carried onto whatever piece of it survives. Port of
+/// `_slice_runs`.
+func sliceRuns(_ runs: [SemanticRun], _ start: Int, _ end: Int) -> [SemanticRun] {
+    var out: [SemanticRun] = []
+    var pos = 0
+    for r in runs {
+        let chars = Array(r.text)
+        let n = chars.count
+        let a = max(start, pos), b = min(end, pos + n)
+        if b > a {
+            let piece = String(chars[(a - pos)..<(b - pos)])
+            if piece == r.text {
+                out.append(r)
+            } else {
+                var copy = r
+                copy.text = piece
+                out.append(copy)
+            }
+        }
+        pos += n
+    }
+    return out
+}
+
+/// `(prefix runs, body runs)` for one def-list row — its LABEL followed by a two-space gap,
+/// then its body — or `nil` for a row whose recorded label/body no longer line up with its own
+/// text. Port of `_modern_def_runs`.
+///
+/// A def row's raw text carries the author's own column padding between label and body (one
+/// file pads to column 15 with eight spaces), which is typewriter geometry, not content:
+/// Modern re-sets the row as a hanging label, so the padding is replaced by one structural
+/// separator and the body's real start decides where the first line's text runs to. The
+/// engine's HTML export makes the identical slice for the identical reason; this is the same
+/// rule reaching the PDF.
+///
+/// Sliced by CHARACTER OFFSET against `structure`'s own recorded `label`/`body` lengths — the
+/// counts the classifier took from this exact text — so styled spans crossing the boundary keep
+/// their styles.
+func modernDefRuns(_ runs: [SemanticRun], _ structure: RowStructure)
+    -> (prefix: [SemanticRun], body: [SemanticRun])?
+{
+    let labelLen = (structure.label ?? "").count
+    let bodyLen = (structure.body ?? "").count
+    let raw = Array(runs.map(\.text).joined())
+    let lead = raw.count - raw.drop(while: { $0 == " " }).count
+    guard labelLen != 0, bodyLen != 0, lead + labelLen <= raw.count - bodyLen else { return nil }
+    return (sliceRuns(runs, lead, lead + labelLen) + [SemanticRun(text: "  ")],
+            sliceRuns(runs, raw.count - bodyLen, raw.count))
+}
+
+/// `(row start indent, continuation hang)`, both in points, for one structured def/bullet row.
+/// The caller has already decided this IS one (a row with a `kind`, not centred — the centred
+/// reading wins). Port of `_modern_structure_indent_hang`.
+///
+/// THE LADDER, where a row starts: `max(level - 1, 0)` steps of `modernLevelStepCols` past the
+/// margin. Level 1 sits AT the margin. The row's own declared column (`structure.col`, the
+/// block's `.lm` plus its residual indent) is deliberately not used — see `modernLevelStepCols`.
+///
+/// THE HANG, where a wrapped continuation lands, is per kind:
+///   def     a fixed `modernDefHangPt` past the margin, shared by every row of the list.
+///   bullet  the real measured advance of THIS row's own marker text in the face that draws it.
+///           A points hang, not a column count, precisely because it has to line up with a
+///           glyph: a marker and its gap never land on a whole number of monospace cells in a
+///           proportional face, and a column-count hang put every wrapped line slightly past
+///           its own first line's text start (Jon's b21 field note).
+func modernStructureIndentHang(_ structure: RowStructure, colPt: Double, toks: [ModernToken],
+                               printedPt: Int) -> (indent: Double, hang: Double) {
+    let indent = Double(max(structure.level - 1, 0) * modernLevelStepCols) * colPt
+    if structure.kind == .def { return (indent, modernDefHangPt) }
+    // the marker text is the row's own first two characters (the glyph and the single space
+    // after it — `classifyRows` only ever calls a glyph a marker when exactly that shape
+    // holds), which the tokenizer may have split across several tokens
+    var hang = 0.0
+    var need = 2
+    for tok in toks {
+        let take = String(Array(tok.text).prefix(need))
+        hang += take == tok.text
+            ? tok.width
+            : modernTokenWidth(take, styles: tok.styles, family: tok.family, pt: tok.pt,
+                               entry: tok.entry, printedPt: printedPt)
+        need -= take.count
+        if need <= 0 { break }
+    }
+    return (indent, hang)
+}
+
 /// The MEASURED Modern flow: `modernSemanticFlow`'s semantic items (the single
 /// implementation of the M-rules — see `Layout.swift`'s contract) converted to this
 /// emitter's tokens. This adapter adds exactly what a PDF needs — font resolution, AFM
@@ -334,16 +675,19 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
             flow.append(.para(toks: [ModernToken(text: separator, styles: [], family: .times,
                                                  pt: modernNotePt, entry: nil, width: sepW)],
                               align: .left, notes: [], indent: 0.0, cut: 0.0,
-                              noWrap: false, pageMarker: false, endNotesStart: true))
+                              noWrap: false, pageMarker: false, endNotesStart: true,
+                              tight: false, hang: 0.0))
             semIndexOfItem?.append(semI)
         case .note(let ni, _, let label, let text):
             let noteText = sentenceSpacing ? sentenceSpacingTexts([text])[0] : text
             flow.append(.para(toks: modernNoteToks(label: label, text: noteText,
                                                     kind: sem.notes[ni].kind),
                               align: .left, notes: [], indent: 0.0, cut: 0.0,
-                              noWrap: false, pageMarker: false, endNotesStart: false))
+                              noWrap: false, pageMarker: false, endNotesStart: false,
+                              tight: false, hang: 0.0))
             semIndexOfItem?.append(semI)
-        case .para(let align, let indentCols, let cutCols, var runs, let footnotes, _, _, let bi):
+        case .para(let align, let indentCols, let cutCols, let runs, let footnotes,
+                  let structure, let isVerse, let bi):
             if embedImages, !runs.contains(where: { $0.ref != nil }),
                let sub = spansPixSubstitution(runs.map { (text: $0.text, pix: $0.pix) },
                                               pixMap: pixMap, maxWPt: textWidthPt) {
@@ -352,12 +696,28 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 semIndexOfItem?.append(semI)
                 continue
             }
+            // planning #263: a def row renders as LABEL + a two-space gap + body, not as
+            // the author's own raw column padding -- see `modernDefRuns`. Done here,
+            // BEFORE the N9 collapse below, because the slice offsets are character
+            // counts the structure classifier took from the untransformed text;
+            // collapsing a space first shortens the text without shortening the counts
+            // and drags the gap into the body.
+            var paraRuns = runs
+            var fixedRuns: [SemanticRun] = []
+            if let structure, !structure.centered, structure.kind == .def,
+               let split = modernDefRuns(paraRuns, structure) {
+                fixedRuns = split.prefix
+                paraRuns = split.body
+            }
             // N9: applied to the run texts, in order, same cross-piece state-carrying as
             // every other emitter's own choke point -- the pix-substitution check above
             // already ran on the RAW runs (a structural placeholder match, not prose).
-            if sentenceSpacing { runs = sentenceSpacingRuns(runs) }
+            // The label/gap prefix above is exempt: it is structure, not prose, and its
+            // two-space gap is a deliberate separator that must survive a label ending in
+            // a sentence-ending character.
+            if sentenceSpacing { paraRuns = sentenceSpacingRuns(paraRuns) }
             var toks: [ModernToken] = []
-            for run in runs {
+            for run in fixedRuns + paraRuns {
                 var styles = run.styles
                 if run.ref != nil {
                     if run.text.isEmpty {
@@ -434,9 +794,83 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 return (index: fn.index, label: fn.label,
                        text: sentenceSpacing ? sentenceSpacingTexts([noteText])[0] : noteText)
             }
+            // planning #263. THREE mutually exclusive readings of one row, in the app's
+            // own order -- a centred structured row first, a def/bullet row next, an
+            // ordinary paragraph last:
+            //
+            //   centred structured row  tightens, unconditionally. This is a separate
+            //       path from the plain-paragraph one below and fires on rows that one
+            //       never sees (an undeclared, spaces-padded centred line keeps
+            //       `align == .left`).
+            //   def/bullet row          takes the indent LADDER and its own HANG, and is
+            //       never tightened.
+            //   plain paragraph         tightens when it is centred or when it is part of
+            //       a verse/stanza unit -- the SAME condition Modern RTF and Modern HTML
+            //       already apply.
+            var indent = indentCols.value * colPt
+            let cut = cutCols.value * colPt
+            var hang = 0.0
+            var tight = false
+            if structure?.centered == true {
+                tight = true
+                // UNDECLARED CENTRING IS STILL CENTRING (the app's b17 rule, ported here):
+                // a line the author centred by TYPING leading spaces carries no `.oc` and
+                // no align tag at all, so it arrives `align == .left` with its padding
+                // still in the text. Rendered as-is in a proportional face the padding
+                // became an arbitrary indent AND spent measure, so the row both sat
+                // off-centre and wrapped early. The classifier has already decided this row
+                // reads as centred (`classifyRows`: symmetric padding, at least 2 leading
+                // columns, not the document's own routine paragraph indent, at least 4
+                // columns of slack, at most one wide internal gap, no internal tab run) --
+                // so the padding comes off and the row is centred on its own measure.
+                //
+                // A tag-declared centred row (`centerVia == .tag`) reaches this same branch
+                // and is unaffected: `modernSemanticFlow` stripped that padding upstream
+                // (M3) and its align is already `.center`, so both steps below are no-ops.
+                // The whole effect is on undeclared, spaces-padded rows.
+                lineAlign = .center
+                while let first = toks.first, first.text.trimmed().isEmpty { toks.removeFirst() }
+                while let last = toks.last, last.text.trimmed().isEmpty { toks.removeLast() }
+            } else if let structure, structure.kind != nil {
+                // the ladder REPLACES the block's own `.lm` indent (that is the whole
+                // point of it), so the row's residual leading spaces go with it -- left
+                // in, they would push a level-1 row off the margin the ladder just put it
+                // on. Dropped BEFORE the hang is measured: a bullet's hang is the advance
+                // of the row's own first two characters, which are its marker and gap only
+                // once the padding is gone.
+                while let first = toks.first, first.text.trimmed().isEmpty { toks.removeFirst() }
+                (indent, hang) = modernStructureIndentHang(structure, colPt: colPt, toks: toks,
+                                                          printedPt: printedPt)
+            } else {
+                tight = lineAlign == .center || isVerse
+                // A ONE-SIDED `.lm` IS NOT A STYLE (Jon's b17 ruling, the same family as
+                // the ladder above, one level up: there the trap was a ROW's own declared
+                // column, here it is a whole PARAGRAPH's declared margin). WordStar leaves
+                // a `.lm` open until something closes it, so an ordinary paragraph
+                // downstream of one inherits an indent nobody styled -- the document whose
+                // intro paragraph sits at its own residual `.lm 15` with no `.rm` anywhere
+                // near it. An ordinary paragraph starts at Modern's own margin, period,
+                // UNLESS it is a genuine two-sided block quote: BOTH margins narrowing the
+                // measure is a deliberate style, and keeps its declared indent.
+                //
+                // `.rm` IS ALWAYS HONOURED, and the asymmetry is the point: the ruling's
+                // whole argument is that a left margin left open upstream reaches
+                // paragraphs nobody styled. A narrowed RIGHT margin has no such failure
+                // mode -- it is what sets the measure every line is broken at -- so
+                // dropping it would not restore Modern's own margin, it would WIDEN the
+                // paragraph past the one the author asked for and move every wrap in the
+                // block.
+                if !(indent > 0 && cut > 0) { indent = 0.0 }
+            }
+            // A GRAPHIC ROW DOES NOT WRAP (job 456 -- `modernClipsRow`). Decided last, on
+            // this row's own FINAL tokens: a centred row has shed its padding and a def row
+            // has gained its label/gap prefix by now, and the rule reads the text the page
+            // will actually carry. Never clears a `noWrap` an earlier rule set.
+            noWrap = noWrap || modernClipsRow(toks)
             flow.append(.para(toks: toks, align: lineAlign, notes: notes,
-                              indent: indentCols.value * colPt, cut: cutCols.value * colPt,
-                              noWrap: noWrap, pageMarker: pageMarker, endNotesStart: false))
+                              indent: indent, cut: cut,
+                              noWrap: noWrap, pageMarker: pageMarker, endNotesStart: false,
+                              tight: tight, hang: hang))
             semIndexOfItem?.append(semI)
         }
     }
@@ -462,13 +896,19 @@ private func sentenceSpacingRuns(_ runs: [SemanticRun]) -> [SemanticRun] {
 /// Greedy wrap of one logical line's tokens -> visual lines. Leading whitespace stays
 /// (paragraph indent); a space token at a wrap point is swallowed, exactly as any renderer
 /// would. Port of `_modern_wrap`.
-func modernWrap(_ toks: [ModernToken], width: Double) -> [[ModernToken]] {
+///
+/// `hang` (planning #263): a structured row's own continuation indent. A hang moves every line
+/// after the first to the right WITHOUT moving the right edge, so those lines wrap at a measure
+/// narrower by exactly that much — the same thing a head-indent does in any real text stack,
+/// and the reason a hang changes a row's line COUNT as well as its look.
+func modernWrap(_ toks: [ModernToken], width: Double, hang: Double = 0.0) -> [[ModernToken]] {
     var lines: [[ModernToken]] = []
     var cur: [ModernToken] = []
     var curw = 0.0
     for tok in toks {
         let hasInk = !tok.text.trimmed().isEmpty
-        if !cur.isEmpty, curw + tok.width > width, hasInk {
+        let limit = lines.isEmpty ? width : max(36.0, width - hang)
+        if !cur.isEmpty, curw + tok.width > limit, hasInk {
             lines.append(cur)
             cur = []
             curw = 0.0
@@ -575,7 +1015,16 @@ func modernLineOps(
     recordGraphicCells: inout [PageLine.GraphicCellPlacement]?
 ) -> [[UInt8]] {
     var toks = toksIn
-    var lineWidth = toks.reduce(0.0) { $0 + $1.width }
+    // `neumaierSum`, not a plain `reduce(+)`: the reference is Python's `sum()`, which on
+    // CPython 3.12+ compensates float error exactly the way this helper does, and a naive
+    // left-to-right total differs from it in the last bits. That used to be invisible --
+    // a left-aligned line never spends `lineWidth` on a drawn coordinate -- but a CENTRED
+    // line's own start is `left + (width - lineWidth) / 2`, so one ULP here can move a
+    // later token across a `%.1f` rounding boundary and print an x 0.1pt away from the
+    // reference's. Measured: a 21-token row summing to 327.768 naively and to
+    // 327.76800000000003 compensated, which moved three drawn x values on one archive
+    // document. Same reason `PDFWriter.swift`'s own justification total already uses it.
+    var lineWidth = neumaierSum(toks.map(\.width))
     while let last = toks.last, last.text.trimmed().isEmpty {
         lineWidth -= last.width
         toks.removeLast()
@@ -718,6 +1167,13 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     // planning #254: threaded to every `modernLineOps`/`modernHFOps` call below -- see
     // `modernTokenWidth`'s own doc comment.
     let printedPt = printedSize(doc)
+    // planning #266 follow-up 2: the driver-keyed euro rule (`pesetaMeansEuro`/
+    // `euroText`), resolved once. Applied below, at each header/footer line's own call
+    // into `modernHFOps` -- the same point `PDFWriter.swift`'s `runningOps` calls into
+    // `hfLineOps` were patched at (00b85ae/planning #266): a running head/foot carrying
+    // cp437 code 158 kept showing the pre-driver-rule degradation under Modern too, the
+    // latent twin of that gap. Port of ctrlkd.pdf's `_modern_streams` fix.
+    let euro = pesetaMeansEuro(doc)
     // N9 (b33 field notes): this function only ever runs the Modern path (printed=false
     // by construction -- `emitPDF`'s own `else` branch), so 'auto' always resolves to
     // single here.
@@ -748,6 +1204,32 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     // Dedup by the note's index in `inlineReferenceNotes` — the stable identity Python's
     // `id(note)` provides (`Note` is a value type here).
     var seenNotes: Set<Int> = []
+    // THE PAGE BASELINE MODEL (planning #263, ledger 2026-09-11; Jon's standing
+    // principle, "the engine needs to work the way Soft Return does"). `y` is a LINE BOX
+    // cursor, not a baseline: it starts at the text frame's own top edge and each line
+    // spends its own height `h` off it, so after `y -= h` the value is that line's BOX
+    // BOTTOM, which is also the next line's box top. Line boxes stack from the top of the
+    // frame -- what AppKit does with line fragments, and what the app's Modern view is
+    // therefore answerable to.
+    //
+    // WHERE THE BASELINE GOES inside that box: `h - descent` below its own top, i.e. one
+    // face DESCENT above the box bottom (`modernDescent`). This engine used to draw the
+    // baseline ON the box bottom, which put every Modern line one descent lower than the
+    // app drew the same line and left each line's descenders hanging below its own box.
+    //
+    // WHAT THIS DOES NOT CHANGE: the fit test, and therefore which lines land on which
+    // page. A line fits while its box BOTTOM is inside the frame (`y - h >= margb`,
+    // unchanged below) -- the app's rule stated as "fragment bottom <= top + H", the
+    // identical arithmetic on a Letter page where `margb == pageHeight - (margt + H)`.
+    // Page composition, page counts, every x and the whole Printed path are untouched by
+    // this; what moves is the y every Modern line draws at, by its OWN line's descent (so
+    // a mixed-size page does not shift rigidly).
+    //
+    // NOT ported with it: the tightened line's own headroom figure (`modernTightBaseline`,
+    // job 434's spacer). That is the app's own separately-measured number -- glyph-path
+    // bounds through NSLayoutManager -- and the app itself has not yet adopted the AFM
+    // form of it (it is waiting on `afmInkTops`). Changing it here would move the engine's
+    // spacers AWAY from the app's measured 3.70/3.71/3.94 on the archive's README.
     var y = Double(PDFMetrics.pageHeight) - margt
     var curH: [Int: String] = [:]          // running-head state as events replay
     var curF: [Int: String] = [:]
@@ -837,7 +1319,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
             body.append((y, [], .left, 0.0, 0.0,
                          PageLine.ImageRef(pixIndex: pixIndex, widthPt: wPt, heightPt: hPt), semI))
         case .para(let toks, let align, let notes, let indent, let cut, let noWrap, let pageMarker,
-                  let endNotesStart):
+                  let endNotesStart, let paraTight, let hang):
             if pageMarker, !body.isEmpty {
                 // b26-modern item 3, rule (a): a real screenplay page-number marker
                 // starts a new real page -- if this Modern page already has content on
@@ -871,14 +1353,48 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
             // regardless of its natural width, exactly as real screenplay software
             // keeps a slugline unbroken.
             let lineW = noWrap ? Double.infinity : max(36.0, width - indent - cut)
-            let vis = modernWrap(toks, width: lineW)
+            let vis = modernWrap(toks, width: lineW, hang: hang)
+            // planning #263, job 437: a tightened paragraph that actually WRAPS renders at
+            // the body's ordinary leading throughout instead. The tightening is about how a
+            // verse or centred LINE reads against its neighbours; a paragraph long enough
+            // to need a second visual line is prose that merely got classified, and
+            // compressing its own internal wrap crowds it. Resolved once, here, because
+            // everything downstream (the line height, the leading spacer, which is the same
+            // paragraph's own headroom) has to agree on the answer.
+            let tight = paraTight && vis.count == 1
+            // The leading spacer (job 434) is this paragraph's own headroom, so it is spent
+            // as part of the FIRST visual line's advance: that way the page-fit test below
+            // already accounts for it, and a paragraph pushed to the next page takes its
+            // spacer with it rather than leaving it stranded as blank canvas on the page
+            // before.
+            var spacer = 0.0
+            if tight, !(fi > 0 && modernParaIsGraphic(flow[fi - 1]) && modernParaIsGraphic(item)) {
+                let face = modernLineFace(toks)
+                spacer = modernLeadingSpacer(toks, face.family, face.pt)
+            }
             var newNoteLines: [[ModernToken]] = []
             for entry in notes where !seenNotes.contains(entry.index) {
                 newNoteLines += modernNoteLines(label: entry.label, text: entry.text, width: width)
             }
             for (vi, vline) in vis.enumerated() {
-                let sizes = vline.map { sized($0.styles, $0.pt).points }
-                let h = modernLine * Double(sizes.max() ?? modernBodyPt)
+                let face = modernLineFace(vline)
+                var h = tight ? modernTightHeight(face.family, face.pt)
+                              : modernLine * Double(face.pt)
+                // A BLANK NEVER INHERITS A TIGHTENED HEIGHT (planning #263, measured on
+                // -README.WS). `lastH` is the leading a following `.blank` advances by, and
+                // the app -- the reference for every Modern rule Jon ruled on, his standing
+                // principle "the engine needs to work the way Soft Return does" -- records
+                // the placed line's own point SIZE there (`DocumentRenderer`'s
+                // `lastParagraphPt`) and builds the blank at that size's ordinary
+                // `modernLine` leading, tight or not. `lastH` predates verse tightening,
+                // when every text line WAS `modernLine * pt` and the two readings could not
+                // differ; tightening split them. Measured on -README.WS page 1, whose
+                // centred title block classifies as verse: its three internal blanks
+                // advanced 11.50pt each here against the app's 16.80, 15.90pt of the page
+                // recovered, which is what let the library fit sixteen lines on page 1 where
+                // the app fits fourteen -- and every page after it inherited the drift.
+                let lead = modernLine * Double(face.pt)
+                if vi == 0 { h += spacer }
                 let extra: Double
                 if vi == 0, !newNoteLines.isEmpty {
                     extra = (notesLines.isEmpty ? sepH : 0.0) + noteLead * Double(newNoteLines.count)
@@ -890,8 +1406,15 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                 }
                 openPage()
                 y -= h
-                lastH = h
-                body.append((y, vline, align, indent, cut, nil, semI))
+                // `lastH` is a LEADING memory (what the next blank item should advance by),
+                // so it records the line's own height, never the one-off headroom spent
+                // above it.
+                lastH = lead
+                // THE PAGE BASELINE MODEL (planning #263): `y` is this line BOX's own
+                // bottom edge -- the next box's top -- and the baseline sits one face
+                // DESCENT above it, never on it. See the note at the head of this function.
+                body.append((y + modernDescent(face.family, face.pt), vline, align,
+                             indent + (vi > 0 ? hang : 0.0), cut, nil, semI))
                 if vi == 0, !newNoteLines.isEmpty {
                     notesLines.append(contentsOf: newNoteLines)
                     for entry in notes { seenNotes.insert(entry.index) }
@@ -917,14 +1440,14 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
         for lno in page.headers.keys.sorted() {
             guard let txt = page.headers[lno], !txt.isEmpty else { continue }
             let hy = Double(PDFMetrics.pageHeight) - 44.0 - Double(lno - 1) * noteLead
-            ops += modernHFOps(txt, pageNo: pageNo, left: margl, y: hy, width: width,
-                               res: res, tzState: &tzState, printedPt: printedPt)
+            ops += modernHFOps(euroText(txt, euro), pageNo: pageNo, left: margl, y: hy,
+                               width: width, res: res, tzState: &tzState, printedPt: printedPt)
         }
         for lno in page.footers.keys.sorted() {
             guard let txt = page.footers[lno], !txt.isEmpty else { continue }
             let fy = max(8.0, 44.0 - Double(lno - 1) * noteLead)
-            ops += modernHFOps(txt, pageNo: pageNo, left: margl, y: fy, width: width,
-                               res: res, tzState: &tzState, printedPt: printedPt)
+            ops += modernHFOps(euroText(txt, euro), pageNo: pageNo, left: margl, y: fy,
+                               width: width, res: res, tzState: &tzState, printedPt: printedPt)
         }
         for line in page.body {
             if let img = line.image {

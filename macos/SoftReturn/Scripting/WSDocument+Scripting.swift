@@ -183,7 +183,7 @@ extension WSDocument {
             if args.format == ExportFormat.pdf.libraryFormatName, args.viewStyle == .native {
                 let products = try ExportEngine.render(
                     document: state.document, state: state, formats: [.pdf],
-                    notes: NoteSelection(), style: .printed, viewStyle: .native, title: basename,
+                    notes: NoteSelection(), style: .native, viewStyle: .native, title: basename,
                     docPath: fileURL?.path ?? "",
                     headers: args.headers, toc: args.toc, inlineStyling: args.inlineStyling,
                     pictures: args.pictures, pageNumbers: args.pageNumbers,

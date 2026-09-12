@@ -67,9 +67,9 @@ import Testing
     @Test @MainActor func printedPDFPageNumbersAutoMatchesOnForADocumentWithNoDotCommand() throws {
         let state = try Self.noDotCommandState()
         let on = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
-                                         notes: NoteSelection(), style: .printed, pageNumbers: .on)
+                                         notes: NoteSelection(), style: .native, pageNumbers: .on)
         let auto = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
-                                           notes: NoteSelection(), style: .printed, pageNumbers: .auto)
+                                           notes: NoteSelection(), style: .native, pageNumbers: .auto)
         let message = "stock WordStar 7 numbers a document that never touches .pn/.pg/.op, so auto "
             + "must behave identically to an explicit on here (ws7-prints/v3 finding #2)"
         #expect(try #require(on.first).bytes == (try #require(auto.first).bytes), "\(message)")
@@ -78,9 +78,9 @@ import Testing
     @Test @MainActor func printedPDFPageNumbersOffDiffersFromAutoOnADocumentWithNoDotCommand() throws {
         let state = try Self.noDotCommandState()
         let off = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
-                                          notes: NoteSelection(), style: .printed, pageNumbers: .off)
+                                          notes: NoteSelection(), style: .native, pageNumbers: .off)
         let auto = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
-                                           notes: NoteSelection(), style: .printed, pageNumbers: .auto)
+                                           notes: NoteSelection(), style: .native, pageNumbers: .auto)
         let message = "forcing page numbers OFF must change the printed PDF's own bytes against auto, "
             + "which now numbers this document (ws7-prints/v3 finding #2)"
         #expect(try #require(off.first).bytes != (try #require(auto.first).bytes), "\(message)")
@@ -96,9 +96,9 @@ import Testing
     @Test @MainActor func omittingPageNumbersMatchesWhateverSettingsCurrentlyReports() throws {
         let state = try Self.noDotCommandState()
         let implicit = try ExportEngine.render(document: state.document, state: state, formats: [.pdf],
-                                               notes: NoteSelection(), style: .printed)
+                                               notes: NoteSelection(), style: .native)
         let explicitFromSettings = try ExportEngine.render(
-            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .printed,
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .native,
             pageNumbers: SettingsStore.shared.defaultPageNumbers)
         #expect(try #require(implicit.first).bytes == (try #require(explicitFromSettings.first).bytes),
                 "an export with pageNumbers omitted must match SettingsStore.shared's own current value")

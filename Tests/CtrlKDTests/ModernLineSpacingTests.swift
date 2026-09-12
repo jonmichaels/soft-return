@@ -41,13 +41,27 @@ private func lineYs(_ pdf: [UInt8]) -> [Double] {
 @Test func blankBetweenUnequalSizesAdvancesAtThePrecedingLinesLeading() throws {
     // A 24pt line, a blank, then an 8pt line: the blank must cost the 24pt line's OWN
     // leading (1.2 x 24 = 28.8pt), not a fixed 14pt-default amount -- combined with the
-    // 8pt line's own entering leading (1.2 x 8 = 9.6pt), the total gap is 38.4pt.
+    // 8pt line's own entering leading (1.2 x 8 = 9.6pt), the total BOX advance is 38.4pt.
+    //
+    // That advance is what this test is about, and it is measured on the box ladder rather
+    // than on the baselines: since the page baseline model landed (planning #263, ported
+    // from ctrl-kd 9fb1677) a Modern baseline sits one FACE DESCENT above its own box's
+    // bottom, and these two lines are different sizes, so their descents differ too
+    // (Courier's 157/1000 at 24pt against the same at 8pt). Adding each line's own descent
+    // back puts both boxes back on the ladder the blank's arithmetic actually governs.
     var data = fontBlock(0, points: 24.0) + bytes("Big line.") + HARD + HARD
     data += fontBlock(0, points: 8.0) + bytes("Small line.") + HARD
     let doc = parseWS(data)
     let pdf = emitPDF(doc, mode: .modern)
     let ys = lineYs(pdf)
-    #expect(tenth(ys[0] - ys[ys.count - 1]) == 38.4)
+    let big = modernDescent(.courier, 24)
+    let small = modernDescent(.courier, 8)
+    #expect(abs(((ys[0] - big) - (ys[ys.count - 1] - small)) - 38.4) < 0.05)
+    // the baselines themselves are 2.512pt further apart than the boxes -- exactly the
+    // difference between the two lines' own descents, since the big line is lifted further
+    // off its box bottom than the small one (the tolerance is the writer's own `%.1f` on a
+    // drawn position)
+    #expect(abs((ys[0] - ys[ys.count - 1]) - (38.4 + (big - small))) < 0.05)
 }
 
 @Test func blankBetweenEqualLargeSizesIsProportionallyLargerThanDefault() throws {

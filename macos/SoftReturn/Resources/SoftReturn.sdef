@@ -474,10 +474,10 @@
             <property name="page size" code="SRDg" type="page size" description="The printed sheet override.">
                 <cocoa key="scriptingPageSize"/>
             </property>
-            <property name="modern font" code="SRDf" type="text" description="Modern style's typeface. Printed style ignores this — it is always Courier.">
+            <property name="modern font" code="SRDf" type="text" description="Modern style's typeface. Native and Printed styles ignore this — both are always Courier.">
                 <cocoa key="scriptingModernFont"/>
             </property>
-            <property name="modern size" code="SRDe" type="real" description="Modern style's point size. Printed style ignores this.">
+            <property name="modern size" code="SRDe" type="real" description="Modern style's point size. Native and Printed styles ignore this.">
                 <cocoa key="scriptingModernSize"/>
             </property>
             <property name="show invisibles" code="SRDi" type="boolean" description="View ▸ Show Invisibles.">

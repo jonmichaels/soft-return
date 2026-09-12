@@ -71,32 +71,40 @@ struct Job454PageIndicatorTests {
 
     // MARK: - PART B: multi-page Printed document, present and tracking navigation
 
-    /// FORMFEED.WS lays out to 8 Printed pages (`PrintedStructuralParityTests.swift`'s own
-    /// "FORMFEED.WS's all-8-pages residual" note) — a real multi-page Printed document, not a
-    /// synthetic one.
+    /// FORMFEED.WS is a real multi-page Printed document, not a synthetic one.
+    ///
+    /// The page COUNT is read from the controller rather than written down. It used to be
+    /// asserted as 8, which is what the document laid out to when this test was written; the
+    /// trailing-`.pa` rule (#228) legitimately made it 7, and the test then failed on its own
+    /// premise while the behaviour it exists to check — that the indicator tracks navigation
+    /// — was never in question. What matters here is that the document has more than one
+    /// page, and that every label matches whatever the real total is.
     @Test @MainActor func printedStyleShowsIndicatorForMultiPageDocumentAndTracksNavigation() throws {
         let controller = try Self.printedController(fixture: "FORMFEED.WS")
         try #require(controller.documentState.display.value == .singlePage,
                      "test assumes the factory-default display mode")
-        try #require(controller.pageTotal == 8,
-                     "fixture must lay out to 8 Printed pages for this test to mean anything")
+        let total = controller.pageTotal
+        let premise = "fixture must lay out to more than one Printed page for this test to "
+            + "mean anything — it laid out to \(total)"
+        try #require(total >= 2, "\(premise)")
 
         let label = try Self.pageIndicatorLabel(in: controller.bottomBar)
         #expect(label.isHidden == false, "Printed style must show the page indicator")
-        #expect(label.stringValue == "Page 1 of 8")
+        #expect(label.stringValue == "Page 1 of \(total)")
 
         // The Go menu's own "Down" — the same command `Job450PageIndicatorTests` proves moves
         // the indicator for the pagedView surface — must move it for Printed too.
         controller.goDown(nil)
         #expect(controller.currentPage == 1)
-        #expect(label.stringValue == "Page 2 of 8",
+        #expect(label.stringValue == "Page 2 of \(total)",
                 "the indicator must track Go-menu navigation in Printed style, not only the page laid out at open")
 
         controller.goLastPage(nil)
-        #expect(label.stringValue == "Page 8 of 8", "the indicator must track navigating to the last page too")
+        #expect(label.stringValue == "Page \(total) of \(total)",
+                "the indicator must track navigating to the last page too")
 
         controller.goFirstPage(nil)
-        #expect(label.stringValue == "Page 1 of 8", "the indicator must track navigating back too")
+        #expect(label.stringValue == "Page 1 of \(total)", "the indicator must track navigating back too")
     }
 
     /// PDFKit's own page-change notification (`.PDFViewPageChanged`) is the mechanism, not just
@@ -107,15 +115,21 @@ struct Job454PageIndicatorTests {
     /// label.
     @Test @MainActor func printedIndicatorTracksDirectPDFViewNavigation() throws {
         let controller = try Self.printedController(fixture: "FORMFEED.WS")
-        try #require(controller.pageTotal == 8)
+        // Read, not written down — same reason as the test above: this document's page count
+        // is the engine's to decide and #228 changed it. Page 4 is the navigation target, so
+        // four pages is the real requirement.
+        let total = controller.pageTotal
+        let premise = "fixture must lay out to at least 4 Printed pages to navigate to page 4 "
+            + "— it laid out to \(total)"
+        try #require(total >= 4, "\(premise)")
         let label = try Self.pageIndicatorLabel(in: controller.bottomBar)
-        #expect(label.stringValue == "Page 1 of 8")
+        #expect(label.stringValue == "Page 1 of \(total)")
 
         let targetPage = try #require(controller.pdfView.document?.page(at: 3))
         controller.pdfView.go(to: targetPage)
 
         let message = "the .PDFViewPageChanged observer must update the indicator even when navigation "
             + "bypasses DocumentWindowController's own goToPage(index:) entirely"
-        #expect(label.stringValue == "Page 4 of 8", "\(message)")
+        #expect(label.stringValue == "Page 4 of \(total)", "\(message)")
     }
 }

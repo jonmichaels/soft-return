@@ -71,17 +71,17 @@ private func fixtureState(_ name: String = "dropped-chapter.ws4") throws -> Docu
 
 // MARK: - Potentially inaccessible text (2 findings)
 
-/// Printed style clips lines wider than the column (`.byClipping` — see
-/// `DocumentRenderer.renderPrinted`, required so a wrapped line never shifts pagination off
+/// Native style clips lines wider than the column (`.byClipping` — see
+/// `DocumentRenderer.renderNative`, required so a wrapped line never shifts pagination off
 /// the library's own page breaks). The audit is right to ask whether that also hides text
 /// from assistive technology. It does not: a text view's accessible value is its
 /// `NSTextStorage` content, which is never truncated, regardless of what the glyphs painted.
 /// Checked against two fixtures — two of the audit's findings — so this is not a
 /// single-document coincidence.
-@Test @MainActor func printedPageTextIsFullyPresentDespiteVisualClipping() throws {
+@Test @MainActor func nativePageTextIsFullyPresentDespiteVisualClipping() throws {
     for name in ["boundary.ws4", "narrow.ws4"] {
         let state = try fixtureState(name)
-        let expected = docToPagelines(state.document, printed: true)
+        let expected = Oracle.pagelines(of: state)
         let (_, _, pages) = Oracle.layOut(state)
         try #require(!expected.isEmpty, "\(name): library produced no pages")
         try #require(!pages.isEmpty, "\(name): app laid out no pages")
@@ -109,7 +109,7 @@ private func fixtureState(_ name: String = "dropped-chapter.ws4") throws -> Docu
     let (_, _, pages) = Oracle.layOut(state)
     let page = try #require(pages.first)
     let stored = page.textView.string
-    let expected = docToPagelines(state.document, printed: true).first?
+    let expected = Oracle.pagelines(of: state).first?
         .map { $0.map(\.text).joined() }.joined(separator: "\n") ?? ""
     for line in expected.split(separator: "\n") {
         #expect(stored.contains(line.trimmingCharacters(in: .whitespaces)) || line.isEmpty,

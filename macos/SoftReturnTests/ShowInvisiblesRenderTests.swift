@@ -4,7 +4,7 @@ import Testing
 @testable import SoftReturn
 
 /// Job 256 (Show Invisibles, part 2/4): `DocumentRenderer.renderWithInvisibles`/
-/// `renderPrintedAnnotated` — the screen-only inline rendering of `CtrlKD.annotatedLayout`'s
+/// `renderNativeAnnotated` — the screen-only inline rendering of `CtrlKD.annotatedLayout`'s
 /// five invisible-ink classes. `RenderProbeTests.oldtimesInvisiblesOnOffPage1` is this job's
 /// visual evidence; this file is the byte/structural proof underneath it.
 @MainActor
@@ -38,7 +38,7 @@ private func markAnnotations(in text: NSAttributedString) -> [(label: String, fa
 /// the document window shares. This is the OFF-state structural-digest pin job 256's brief
 /// asked for: toggling `showInvisibles` back and forth must leave `render(state)`'s own output
 /// byte-identical, every time. Job 257 (part 3/4) extends it CORPUS-WIDE — the pagination
-/// rewrite this job makes to `renderPrintedAnnotated` is exactly the kind of change that
+/// rewrite this job makes to `renderNativeAnnotated` is exactly the kind of change that
 /// could leak into the plain path through some shared helper by accident, and only OLDTIMES.WS
 /// exercising it would miss a fixture-specific regression (an LJ6DTP-only leak, say).
 @Test(arguments: OracleByteParityTests.ws7Fixtures) @MainActor
@@ -116,7 +116,7 @@ func oldtimesInvisiblesOnSurfacesDotCommandsFaint() throws {
 /// `NSAttributedString` run occupies zero characters, so it cannot be found by walking
 /// `rendered.text`'s attribute runs the way `oldtimesInvisiblesOnSurfacesDotCommandsFaint`
 /// finds dot commands — this test instead confirms the mark COUNT at the annotated-layout
-/// level, the same layer `renderPrintedAnnotated` consumes. Flagged for the report/LESSONS:
+/// level, the same layer `renderNativeAnnotated` consumes. Flagged for the report/LESSONS:
 /// a future job may want a placeholder glyph for a genuinely empty comment so its presence
 /// is not entirely invisible to a reader.
 @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
@@ -150,7 +150,7 @@ func plainRenderCarriesNoInvisibleMarksEvenWithTheFlagOn() throws {
 
 /// Job 257 (Show Invisibles part 3/4, the reflow ruling), UPDATED by job 267 (field bug 2):
 /// an INDEPENDENT re-derivation of the SAME points budget `layoutPrintedPagesPlain`/
-/// `renderPrintedAnnotated` walk — first unit on a page free, a unit right after a real
+/// `renderNativeAnnotated` walk — first unit on a page free, a unit right after a real
 /// overprint line free, everything else its own lead (a real line's `.lh`-aware lead, or the
 /// document default for a fabricated dot-command line) — built directly from
 /// `printedMetrics`/`docToPagelines`/`annotatedLayout`, the same three engine entry points
@@ -160,7 +160,7 @@ func plainRenderCarriesNoInvisibleMarksEvenWithTheFlagOn() throws {
 ///
 /// Job 267: a `.cp2`/`.cp4` `pageBreakBefore` reason is now CONDITIONAL — re-evaluated against
 /// this walk's own remaining budget, not trusted as an unconditional force — see
-/// `renderPrintedAnnotated`'s own `shouldForceBreak` doc comment for the full ruling this
+/// `renderNativeAnnotated`'s own `shouldForceBreak` doc comment for the full ruling this
 /// mirrors. Does NOT replicate that function's mark-WRAPPING row-cost math (`unitRows`):
 /// OLDTIMES.WS's own dot-commands/comments are all short (its 2 `NoteKind.comment` notes are
 /// empty strings — `oldtimesCommentNotesAreTaggedEvenThoughTheyCarryNoText`'s own finding) and

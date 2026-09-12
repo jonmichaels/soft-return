@@ -140,10 +140,18 @@ else
 fi
 
 # --- Never-cross exclusion: content that can never leak must not block --
-# outbox/ is 100% absent from every public snapshot (verified 2026-09-07);
-# scanning it would block ordinary private-repo work over paths that can
-# never reach anyone. A real hostname sitting in outbox/ must NOT fail the
-# audit -- but the exact same content in a file that DOES cross still must.
+# Some trees carry directories that are 100% absent from every published
+# snapshot; scanning those would block ordinary work over paths that can never
+# reach anyone, while the identical content in a file that DOES publish must
+# still be caught. This control only means anything where such a set exists.
+# In this repo PAT_NEVER_CROSS_DIRS is empty -- every tracked file here is
+# published -- so the control is skipped rather than asserted against a set
+# that does not exist.
+. "$(dirname "$0")/private_patterns.sh"
+if [ "${#PAT_NEVER_CROSS_DIRS[@]}" -eq 0 ]; then
+    echo "SKIP (never-cross guard): this repo publishes every tracked file," \
+         "so there is no never-cross set to exclude"
+else
 nc="$scratch/nevercross-repo"
 setup_repo "$nc"
 mkdir -p "$nc/outbox/job1"
@@ -172,6 +180,7 @@ else
          "(CROSSING.md's hit was not reported)"
     echo "$out"
     fail=1
+fi
 fi
 
 exit "$fail"

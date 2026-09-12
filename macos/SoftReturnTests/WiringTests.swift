@@ -285,7 +285,7 @@ private func walk(_ menu: NSMenu, path: String = "", _ visit: (NSMenuItem, Strin
 
 /// Printed must place text where `emitPDF` places it, or the screen and the export
 /// disagree about the same document.
-@Test @MainActor func printedGeometryMatchesTheExporter() throws {
+@Test @MainActor func nativeGeometryMatchesTheExporter() throws {
     let state = try makeState()
     state.style.setManually(.printed)
     let rendered = DocumentRenderer.render(state)
@@ -349,7 +349,7 @@ private func walk(_ menu: NSMenu, path: String = "", _ visit: (NSMenuItem, Strin
 /// flag rides on the pre-`coalesce` `PageLine`, not on any span content, so this is the one
 /// place a wiring bug (dropping the flag, or marking the wrong line) would show before it
 /// ever reaches a screen.
-@Test @MainActor func printedSoftLineFlagsMatchTheDocumentsOwnSoftReturns() throws {
+@Test @MainActor func nativeSoftLineFlagsMatchTheDocumentsOwnSoftReturns() throws {
     let state = try makeState()
     state.style.setManually(.printed)
     let rendered = DocumentRenderer.render(state)
@@ -566,7 +566,7 @@ private func walk(_ menu: NSMenu, path: String = "", _ visit: (NSMenuItem, Strin
 // MARK: - 6. Export
 
 @Test @MainActor func everyFormatExportsInBothStyles() throws {
-    for style in [RenderStyle.printed, .modern] {
+    for style in [RenderStyle.native, .modern] {
         let state = try makeState()
         let products = try ExportEngine.render(
             document: state.document, state: state,
@@ -598,7 +598,7 @@ private func walk(_ menu: NSMenu, path: String = "", _ visit: (NSMenuItem, Strin
 /// is not byte-stable run to run even with nothing else changed (embedded ICC profiles,
 /// image compression) — the wrong tool to prove a leak with. Modern's own guarantee is
 /// structural instead: `RenderedDocument.softLineFlags` is unconditionally `[]` there (see
-/// `printedSoftLineFlagsMatchTheDocumentsOwnSoftReturns`), so there is nothing for the
+/// `nativeSoftLineFlagsMatchTheDocumentsOwnSoftReturns`), so there is nothing for the
 /// overlay to draw regardless of what reuses its rendering pipeline.
 @Test @MainActor func showInvisiblesNeverReachesPrintedExportBytes() throws {
     // ONE parsed document, toggled in place — the same thing a user does (open, flip the

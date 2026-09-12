@@ -39,7 +39,7 @@ import Testing
         let title = (fixtureName as NSString).deletingPathExtension
         let products = try ExportEngine.render(
             document: state.document, state: state, formats: [format], notes: NoteSelection(),
-            style: mode == .modern ? .modern : .printed, title: title, docPath: fixtureURL.path)
+            style: mode == .modern ? .modern : .native, title: title, docPath: fixtureURL.path)
         guard let product = products.first else {
             throw SurfaceError.noBytesProduced("\(fixtureName) \(format.rawValue).\(mode.rawValue)")
         }

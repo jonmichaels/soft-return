@@ -12,7 +12,7 @@ import Testing
 /// genuine typewriter double space after a sentence-ending `.`/`?`/`!` rendered doubled on
 /// screen while its own Modern export collapsed it to one. Printed/Native stay exactly as
 /// typed by design — they never reach `modernParagraphContent`/`modernSemanticFlow` at all
-/// (`renderPrinted`'s own "Line-for-line typescript reproduction" doc comment), matching
+/// (`renderNative`'s own "Line-for-line typescript reproduction" doc comment), matching
 /// `resolveSentenceSpacing`'s own `.auto` default (single on Modern, keep on Printed).
 @Suite struct SentenceSpacingModernViewTests {
 

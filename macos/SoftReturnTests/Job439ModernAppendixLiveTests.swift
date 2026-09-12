@@ -6,7 +6,7 @@ import Testing
 
 /// Job 439 (b27 item 6): live-runtime coverage for the Modern footnote/endnote/comment
 /// appendix, replacing job 423's own static-string-only check
-/// (`SampleDocumentsTests.lyingWSBundledFootnoteReachesDocumentInfoAndThePrintedPage`,
+/// (`SampleDocumentsTests.lyingWSBundledFootnoteReachesDocumentInfoAndTheNativePage`,
 /// `modern.text.string.contains(...)`) with an assertion against the REAL, laid-out
 /// `PagedDocumentView` — the thing AppKit actually places, which is what a person looking
 /// at the screen actually sees. Jon reported the appendix MISSING on `-SCREEN.WS`; a live
@@ -141,9 +141,13 @@ struct Job439ModernAppendixLiveTests {
         let containers = view.pageViews.compactMap(\.textContainer)
 
         func realPage(containing needle: String) throws -> Int {
-            let range = try #require(rendered.text.string.range(of: needle),
-                                      "\"\(needle)\" not found in the rendered Modern text at all")
-            let location = NSRange(range, in: rendered.text.string).location
+            // Through Modern's own zero-width marks — see `AppModernFidelityTests
+            // .needleRange`. "Thirty-Dollar Prize" carries a hyphen, and a hyphen is exactly
+            // where one of those joiners goes.
+            let range = AppModernFidelityTests.needleRange(needle, in: rendered.text.string as NSString)
+            try #require(range.location != NSNotFound,
+                         "\"\(needle)\" not found in the rendered Modern text at all")
+            let location = range.location
             for (index, container) in containers.enumerated() {
                 let glyphRange = lm.glyphRange(for: container)
                 let charRange = lm.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
@@ -188,8 +192,17 @@ struct Job439ModernAppendixLiveTests {
         #expect(footnoteReached, "BOTHNOTE.WS's footnote text must reach a REAL laid-out Modern page's own foot")
         #expect(placed.contains("An endnote, collected instead"),
                 "BOTHNOTE.WS's endnote text must reach a REAL laid-out Modern page")
-        #expect(view.pageCount == 1,
-                "BOTHNOTE.WS (no image, the isolation control) fits on ONE Modern page — the appendix is on the same page as the body, unlike -SCREEN.WS")
+        // Planning #221 (Jon's ruling 2026-09-07): this used to assert ONE page, on the
+        // reasoning that BOTHNOTE.WS carries no image and its appendix therefore shared the
+        // body's page. That is no longer what the app should do — a page carrying footnotes
+        // hands the endnote appendix a page of its own — so the control now says what it was
+        // really controlling for: this document is short enough that its BODY is one page,
+        // and the only reason a second page exists is the appendix.
+        //
+        // `Planning221NotePaginationTests` owns the rule itself; this stays an
+        // appendix-reaches-real-layout test, which is what its name says.
+        #expect(view.pageCount == 2,
+                "BOTHNOTE.WS's body fits one Modern page and its endnote appendix opens a second (Jon's ruling 2026-09-07) — got \(view.pageCount)")
     }
 
     // MARK: - Word-standard endnote marker (lowercase roman) — job 439's fix REVERTED by
@@ -209,7 +222,7 @@ struct Job439ModernAppendixLiveTests {
         #expect(!modern.contains("[i] Endnote"), "the bracket convention must be gone (b28 note 7)")
 
         // Native/Printed are unaffected by this revert — regression guard, always arabic.
-        let printed = DocumentRenderer.render(state, style: .printed).text.string
+        let printed = DocumentRenderer.render(state, style: .native).text.string
         #expect(printed.contains("An endnote: 1"), "Printed's own structural rule: the inline endnote reference is always arabic")
         #expect(printed.contains("(1)  Endnote"), "Printed's own trailing endnote entry (paper ground truth, m479-scan-doc87.pdf p6)")
     }

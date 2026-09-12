@@ -25,11 +25,11 @@ import Testing
 
     /// Job 240 (b13, Part 1) RENAMED and RE-ASSERTED — MAC VIEWING RULING (decision register
     /// 2026-08-11; skill registry #25): the cp1252 esc-degradation this test used to assert
-    /// (`printedEscFallback`/`printedEscDegrade`) is REMOVED from this native path. That
+    /// (`nativeEscFallback`/`nativeEscDegrade`) is REMOVED from this native path. That
     /// degradation existed only because `emitPDF` hand-encodes Printed-mode text as a
     /// `/WinAnsiEncoding` PDF string literal, which has no slot for the raised bullet — a
     /// PDF-EXPORT constraint this native viewer no longer inherits: every Mac face
-    /// `printedMacFontName` now resolves carries `∙` natively. The character now passes
+    /// `nativeMacFontName` now resolves carries `∙` natively. The character now passes
     /// through UNCHANGED, the opposite of this test's old assertion.
     @Test @MainActor func escDegradationNoLongerAppliesNatively() throws {
         let font = NSFont(name: "Times-Roman", size: 12) ?? NSFont.systemFont(ofSize: 12)
