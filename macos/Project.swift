@@ -226,17 +226,17 @@ let quickLookTarget: Target = .target(
               "SoftReturn/Operations/DocumentPictures.swift",
               // Job 247 (ql-native): the native rendering path itself, mirrored the same
               // way — `QuickLookNativeRenderer` and everything it calls
-              // (`DocumentRenderer`/`PagedDocumentView`/`PrintedVectorGraphics`/
+              // (`DocumentRenderer`/`PagedDocumentView`/`NativeVectorGraphics`/
               // `CanvasColor`/`DocumentState`/`Provenance`/`SettingsStore`), all AppKit +
               // CtrlKD + Foundation only, no app-only type outside this list.
               "SoftReturn/Rendering/QuickLookNativeRenderer.swift",
               "SoftReturn/Rendering/DocumentRenderer.swift",
               "SoftReturn/Rendering/ModernScreenplay.swift",
               "SoftReturn/Rendering/PagedDocumentView.swift",
-              "SoftReturn/Rendering/PrintedVectorGraphics.swift",
+              "SoftReturn/Rendering/NativeVectorGraphics.swift",
               // Job 490: `PageTextView.drawPCLGraphics`'s own PCL rectangle port — same
-              // mirror, same reasoning as `PrintedVectorGraphics.swift` just above.
-              "SoftReturn/Rendering/PrintedPCLGraphics.swift",
+              // mirror, same reasoning as `NativeVectorGraphics.swift` just above.
+              "SoftReturn/Rendering/NativePCLGraphics.swift",
               "SoftReturn/Rendering/CanvasColor.swift",
               "SoftReturn/Document/DocumentState.swift",
               "SoftReturn/Document/Provenance.swift",
@@ -330,10 +330,10 @@ let thumbnailTarget: Target = .target(
               "SoftReturn/Rendering/DocumentRenderer.swift",
               "SoftReturn/Rendering/ModernScreenplay.swift",
               "SoftReturn/Rendering/PagedDocumentView.swift",
-              "SoftReturn/Rendering/PrintedVectorGraphics.swift",
+              "SoftReturn/Rendering/NativeVectorGraphics.swift",
               // Job 490: `PageTextView.drawPCLGraphics`'s own PCL rectangle port — same
-              // mirror, same reasoning as `PrintedVectorGraphics.swift` just above.
-              "SoftReturn/Rendering/PrintedPCLGraphics.swift",
+              // mirror, same reasoning as `NativeVectorGraphics.swift` just above.
+              "SoftReturn/Rendering/NativePCLGraphics.swift",
               "SoftReturn/Rendering/CanvasColor.swift",
               "SoftReturn/Document/DocumentState.swift",
               "SoftReturn/Document/Provenance.swift",
