@@ -1,4 +1,5 @@
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// The file → `CSSearchableItemAttributeSet`-shaped values the Spotlight importer indexes.

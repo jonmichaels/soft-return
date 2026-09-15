@@ -29,14 +29,14 @@ import UniformTypeIdentifiers
 /// is now 13.0) — see `DocumentState`'s header comment; nothing reads this store through
 /// SwiftUI's reactive tracking, so dropping the macro changes no observable behavior.
 @MainActor
-final class SettingsStore {
+public final class SettingsStore {
     /// Shared instance. The app has one preferences store; documents and the batch window
     /// read the same one so a change is visible everywhere immediately.
-    static let shared = SettingsStore()
+    public static let shared = SettingsStore()
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.startingView = defaults.decode(Key.startingView) ?? .document
         self.defaultZoom = defaults.decode(Key.defaultZoom) ?? .fit
@@ -59,38 +59,38 @@ final class SettingsStore {
 
     /// 1. Starting View. `document` opens with just the menu bar and NO file picker — the
     /// spec is explicit that an empty-handed launch does not nag.
-    var startingView: StartingView { didSet { defaults.encode(startingView, Key.startingView) } }
+    public var startingView: StartingView { didSet { defaults.encode(startingView, Key.startingView) } }
 
     /// 2. Default Zoom.
-    var defaultZoom: ZoomSetting { didSet { defaults.encode(defaultZoom, Key.defaultZoom) } }
+    public var defaultZoom: ZoomSetting { didSet { defaults.encode(defaultZoom, Key.defaultZoom) } }
 
     /// 3. Default Style. Native (job 265 ruling: the DEFAULT experience is unchanged — Native
     /// is what "Printed" meant before this job renamed it).
-    var defaultStyle: ViewStyle { didSet { defaults.encode(defaultStyle, Key.defaultStyle) } }
+    public var defaultStyle: ViewStyle { didSet { defaults.encode(defaultStyle, Key.defaultStyle) } }
 
     /// 4. Default Display.
-    var defaultDisplay: PageDisplay { didSet { defaults.encode(defaultDisplay, Key.defaultDisplay) } }
+    public var defaultDisplay: PageDisplay { didSet { defaults.encode(defaultDisplay, Key.defaultDisplay) } }
 
     /// 5. Font — Modern style only.
-    var modernFontName: String { didSet { defaults.set(modernFontName, forKey: Key.modernFontName) } }
+    public var modernFontName: String { didSet { defaults.set(modernFontName, forKey: Key.modernFontName) } }
 
     /// 6. Size. The spec fixes the menu to exactly these eight, default 14.
-    var modernFontSize: Int { didSet { defaults.set(modernFontSize, forKey: Key.modernFontSize) } }
+    public var modernFontSize: Int { didSet { defaults.set(modernFontSize, forKey: Key.modernFontSize) } }
 
     /// 7. Default Export Formats — multi-select; pre-checks the Export As sheet.
-    var defaultExportFormats: Set<ExportFormat> {
+    public var defaultExportFormats: Set<ExportFormat> {
         didSet { defaults.encode(defaultExportFormats, Key.defaultExportFormats) }
     }
 
     /// 8. Default Page Size — the fallback for files that declare no geometry of their own.
     /// Never overrides a file that did.
-    var defaultPageSize: NamedPageSize { didSet { defaults.encode(defaultPageSize, Key.defaultPageSize) } }
+    public var defaultPageSize: NamedPageSize { didSet { defaults.encode(defaultPageSize, Key.defaultPageSize) } }
 
     /// 9. Restore windows on launch. Default ON — a one-afternoon user does not want to be
     /// asked, and losing the documents they had open the last time they quit is the more
     /// surprising failure of the two. Gates whether `DocumentWindowController` writes ANY of
     /// its restorable state at all; see that class's `window(_:willEncodeRestorableState:)`.
-    var restoreWindowsOnLaunch: Bool {
+    public var restoreWindowsOnLaunch: Bool {
         didSet { defaults.set(restoreWindowsOnLaunch, forKey: Key.restoreWindowsOnLaunch) }
     }
 
@@ -98,12 +98,12 @@ final class SettingsStore {
     /// RULED (headers ON, TOC OFF, Pictures Embed, inline styling ON), matching `EmitOptions`'
     /// own field defaults exactly. The Export As sheet initializes its four new controls from
     /// these on every open; a per-export override there never writes back here.
-    var defaultHeaders: Bool { didSet { defaults.set(defaultHeaders, forKey: Key.defaultHeaders) } }
-    var defaultTOC: Bool { didSet { defaults.set(defaultTOC, forKey: Key.defaultTOC) } }
-    var defaultInlineStyling: Bool {
+    public var defaultHeaders: Bool { didSet { defaults.set(defaultHeaders, forKey: Key.defaultHeaders) } }
+    public var defaultTOC: Bool { didSet { defaults.set(defaultTOC, forKey: Key.defaultTOC) } }
+    public var defaultInlineStyling: Bool {
         didSet { defaults.set(defaultInlineStyling, forKey: Key.defaultInlineStyling) }
     }
-    var defaultPictures: EmitOptions.PixMode {
+    public var defaultPictures: EmitOptions.PixMode {
         didSet { defaults.encode(defaultPictures, Key.defaultPictures) }
     }
 
@@ -111,7 +111,7 @@ final class SettingsStore {
     /// `auto`/`on`/`off` page-numbering option — ruled default Auto. Both export surfaces
     /// (the Export As sheet, the Batch window) initialize their own per-export pulldown
     /// from this, same "initializes from, never writes back" rule the b24 flags follow.
-    var defaultPageNumbers: EmitOptions.PageNumberMode {
+    public var defaultPageNumbers: EmitOptions.PageNumberMode {
         didSet { defaults.encode(defaultPageNumbers, Key.defaultPageNumbers) }
     }
 
@@ -122,18 +122,18 @@ final class SettingsStore {
     /// (see `SettingsWindowController`'s Option-revealed checkbox). Feeds
     /// `SparkleChannelPolicy.allowedChannels(includeBetaVersions:)`, which
     /// `AppDelegate.allowedChannels(for:)` reads fresh on every Sparkle channel check.
-    var includeBetaVersions: Bool {
+    public var includeBetaVersions: Bool {
         didSet { defaults.set(includeBetaVersions, forKey: Key.includeBetaVersions) }
     }
 
     // MARK: - Fixed vocabularies
 
     /// The size menu, per spec: "9, 10, 11, 12, 13, 14, 16, 18 only, default 14".
-    static let fontSizes = [9, 10, 11, 12, 13, 14, 16, 18]
+    public static let fontSizes = [9, 10, 11, 12, 13, 14, 16, 18]
 
     /// Modern's default face. A serif reading face rather than the system UI font: Modern
     /// style exists to make a 1987 document *readable*, and body text is what it is for.
-    static let defaultFontName = "Georgia"
+    public static let defaultFontName = "Georgia"
 
     private enum Key {
         static let startingView = "settings.startingView"
@@ -155,27 +155,28 @@ final class SettingsStore {
 }
 
 /// What the app shows when it launches with no document.
-enum StartingView: String, Hashable, CaseIterable, Codable, Sendable {
+public enum StartingView: String, Hashable, CaseIterable, Codable, Sendable {
     case document
     case batchConvert
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
-        case .document:     return "Document"
-        case .batchConvert: return "Batch Convert"
+        // #271 M11 (batch 30): the Settings window's Open at Launch choices, as ruled.
+        case .document:     return "Document Viewer"
+        case .batchConvert: return "Batch Exporter"
         }
     }
 }
 
 /// The five export formats, in the order the spec lists them everywhere.
-enum ExportFormat: String, Hashable, CaseIterable, Codable, Sendable {
+public enum ExportFormat: String, Hashable, CaseIterable, Codable, Sendable {
     case text
     case markdown
     case html
     case rtf
     case pdf
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .text:     return "Text"
         case .markdown: return "Markdown"
@@ -186,10 +187,10 @@ enum ExportFormat: String, Hashable, CaseIterable, Codable, Sendable {
     }
 
     /// The name the library's emitter registry knows this format by.
-    var libraryFormatName: String { rawValue }
+    public var libraryFormatName: String { rawValue }
 
     /// File extension, without the dot.
-    var fileExtension: String {
+    public var fileExtension: String {
         switch self {
         case .text:     return "txt"
         case .markdown: return "md"
@@ -204,7 +205,7 @@ enum ExportFormat: String, Hashable, CaseIterable, Codable, Sendable {
     /// `NSSavePanel.allowedContentTypes` needs to append/enforce the extension itself (job
     /// 244 Leg 1: the panel grants the extension as part of what it hands back, so
     /// `ExportEngine.writeSingle` keeps writing exactly the granted URL).
-    var contentType: UTType {
+    public var contentType: UTType {
         UTType(filenameExtension: fileExtension) ?? .data
     }
 }
@@ -219,7 +220,7 @@ extension ZoomSetting: Codable {
         case percent(Int)
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         switch try Stored(from: decoder) {
         case .fit:              self = .fit
         case .actual:           self = .actual
@@ -227,7 +228,7 @@ extension ZoomSetting: Codable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         let stored: Stored
         switch self {
         case .fit:              stored = .fit

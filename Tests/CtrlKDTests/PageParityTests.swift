@@ -99,7 +99,11 @@ private func parityDoc(_ src: [UInt8]) -> Document {
     // A document that never uses `.poe`/`.poo` costs nothing -- every line's own
     // `parityLeft` stays `nil`, `closePage` never touches `.left`, byte-identical to
     // before this feature existed.
-    let doc = parityDoc(bytes(".po 2\"\r\nPAGE1") + HARD + bytes(".pa\r\nPAGE2") + HARD)
+    var parityDocArg102: [UInt8] = bytes(".po 2\"\r\nPAGE1")
+    parityDocArg102 += HARD
+    parityDocArg102 += bytes(".pa\r\nPAGE2")
+    parityDocArg102 += HARD
+    let doc = parityDoc(parityDocArg102)
     let out = emitPDF(doc, mode: .printed)
     let streams = pdfContentStreams(out)
     #expect(pdfWordX(streams[0], "PAGE1") == 144.0)

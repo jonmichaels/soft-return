@@ -17,7 +17,7 @@ import Testing
 /// can reach: the test host runs as Jon outside the sandbox, and the coder session can read
 /// it. Nothing here asserts anything, so it cannot fail a run; it is gated on the corpus
 /// purely so it does not write files on a machine that has nothing to dump.
-@Suite(.serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
+@Suite(.tags(.corpus), .serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct AppPDFWordsDumpProbe {
 
     static var dumpDirectory: URL {

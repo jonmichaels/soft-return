@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 
 /// One attached screen's ground truth for Help ▸ Copy Display Diagnostics (beta) — the same
 /// physical metrics `ActualSizeMagnification` computes from, laid out so Jon can paste a

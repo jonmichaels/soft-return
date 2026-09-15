@@ -48,6 +48,19 @@ public struct Line: Hashable, Sendable {
     /// is simply never consulted there).
     public var overprint: Bool
 
+    /// This line's last source byte was an ACTIVE soft hyphen (0x1F) — WordStar broke a
+    /// word here and shows the hyphen only BECAUSE the break falls at it. `decodeSpans`
+    /// turns 0x1F into a plain '-' (that is what prints), which is indistinguishable
+    /// afterwards from a hyphen the author typed; this flag is the difference.
+    ///
+    /// One consumer needs it, and needs it absolutely: `.pf on` print-time re-wrap
+    /// (planning #270 item 37), which re-joins a paragraph's physical lines — a
+    /// DISCRETIONARY hyphen disappears when the break it was made for goes away
+    /// ("Paragraph Indenta-" + "tion" prints as "Paragraph Indentation" on real WS7)
+    /// while a typed hyphen must survive. `false` for every line that did not end in
+    /// 0x1F, which is almost all of them. Port of ctrl-kd's `Line.soft_hyphen`.
+    public var softHyphen: Bool
+
     /// The line height IN FORCE ON THIS LINE, in `.lh`'s own 1/48in units — `nil` meaning
     /// "the document's own default" (`Document.page?.lh48`), which is the overwhelmingly
     /// common case and keeps the field free for every file that never changes leading.
@@ -148,10 +161,12 @@ public struct Line: Hashable, Sendable {
                 lead48: Double? = nil, overprint: Bool = false,
                 brkRaw: [UInt8]? = nil, togEnd: [UInt8] = [], fixups: [Fixup] = [],
                 kerning: Bool = true, poCols: Double? = nil, roll48: Double? = nil,
-                poeCols: Double? = nil, pooCols: Double? = nil) {
+                poeCols: Double? = nil, pooCols: Double? = nil,
+                softHyphen: Bool = false) {
         self.spans = spans
         self.soft = soft
         self.softpage = softpage
+        self.softHyphen = softHyphen
         self.lead48 = lead48
         self.kerning = kerning
         self.overprint = overprint

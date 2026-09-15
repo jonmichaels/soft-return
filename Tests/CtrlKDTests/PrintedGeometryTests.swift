@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import CtrlKD
 
@@ -48,7 +49,9 @@ private func geoDoc(
     )
     let m = printedMetrics(doc)
 
-    #expect(m.pageWidth == 612.0, "printed mode is always US Letter WIDTH regardless of sheet")
+    // 612 because every named PORTRAIT size the library resolves is 8.5in wide, not because
+    // the width is fixed -- a `.pr or=l` document rotates (see this file's landscape section).
+    #expect(m.pageWidth == 612.0, "Legal is 8.5in wide, like every other named portrait size")
     #expect(m.pageHeight == 1008.0, "Legal, 14in * 72pt/in")
     // `mtLines: 5` -- `printedTop` reserves `.mt` alone (mechanism U, ctrl-kd commit
     // 26169cd; `.hm` is never added, `mtSource` explicit or default): 5 lines * 12pt/line
@@ -167,4 +170,169 @@ private func geoDoc(
     // (792 - 2*72) / 12 = 54 lines/page at Modern's fixed 1in margins and 12pt lead.
     #expect(legal.capacity == 54)
     #expect(legal.size == 12, "Modern's own Courier figure, 12pt/6 LPI dot-matrix standard")
+}
+
+// MARK: - Landscape: the façade must describe the ROTATED page (planning #271 M2)
+
+/// `emitPDF` opens by folding in `options.pageSettings` and then, in Printed mode, swapping
+/// the sheet for a `.pr or=l` document (`landscapePage`). `printedMetrics` did NEITHER: it
+/// read `doc.page` as parsed and hard-coded `PDFMetrics.pageWidth`. So the app's Native view
+/// — which sizes its page from this struct — drew every landscape document on a 612-wide
+/// portrait sheet while the exported PDF used 792x612, and paginated against the unrotated
+/// page's height besides. Both now start from `printedDocument`, one shared call
+/// (`resolvedGeometryDocument`, PDFLayout.swift).
+///
+/// The PDF's own `/MediaBox` is the independent side of every comparison below: real emitted
+/// bytes, not another call to the helper the façade itself uses.
+
+/// `.pr or=l` with an explicit `.pl 8.50"` — the shape every real landscape document in the
+/// corpus has (GALLEYS.DOT/ADVANCE.DOT/BOOKLET.HOW/BOOKLET.RJS/-HOW-TO.RJS/HP-ENV.LST/
+/// HP-ENVMM.LST all declare `.pl 8.5(i|")` or `8.33"`; see `resolvePageSize`'s own comment).
+/// 8.5in is Letter's WIDTH column, so the landscape resolution gives the 11in companion:
+/// 792 wide x 612 tall.
+@Test func printedMetricsRotateTheSheetForPrOrLandscape() {
+    var data = bytes(".pr or=l")
+    data += HARD
+    data += bytes(".pl 8.50\"")
+    data += HARD
+    data += bytes("A booklet body paragraph.")
+    data += HARD
+    let doc = parseWS(data)
+
+    let m = printedMetrics(doc)
+    #expect(m.pageWidth == 792.0, "11in companion long edge, 11 * 72")
+    #expect(m.pageHeight == 612.0, "the declared 8.5in page, now the SHORT edge, 8.5 * 72")
+
+    // The emitter's own page box, from the rendered bytes.
+    let pdf = emitPDF(doc, mode: .printed)
+    #expect(contains(pdf, bytes("/MediaBox [0 0 792 612]")))
+    #expect(!contains(pdf, bytes("/MediaBox [0 0 612 792]")))
+
+    // A PORTRAIT document is untouched by any of this: still 612 x 792.
+    var portrait = bytes("A portrait body paragraph.")
+    portrait += HARD
+    let p = printedMetrics(parseWS(portrait))
+    #expect(p.pageWidth == 612.0)
+    #expect(p.pageHeight == 792.0)
+}
+
+/// `printedDocument` is the rotated document itself, for a caller that lays out its own
+/// pages: `docToPagelines(printedDocument(doc), printed: true)`. This pins both halves —
+/// that those are the pages `emitPDF` draws, and that handing `docToPagelines` the raw
+/// parsed document instead gives a genuinely DIFFERENT answer, so the test cannot pass by
+/// the rotation being a no-op.
+///
+/// `.pl 66` is 11in — a named PORTRAIT height, which `resolvePageSize`'s height-column
+/// match resolves FIRST, so this is the case the brief names: the rotated sheet is 8.5in
+/// tall (612pt) where the parsed one is 11in (792pt).
+///
+/// 60 prose lines against WordStar's own 55-line text body (`.pl 66` - `.mt 3` - `.mb 8`,
+/// a figure the rotation does NOT touch — capacity is a line count, not a height) is two
+/// pages either way. What the rotation moves is everything anchored off the page's own
+/// HEIGHT, which is where the two models part company below.
+@Test func printedDocumentPaginatesTheWayEmitPDFDoes() {
+    var data = bytes(".pr or=l")
+    data += HARD
+    data += bytes(".pl 66")
+    data += HARD
+    data += bytes(".fo Footer")
+    data += HARD
+    // Prose, not a wall of hard returns: `detect()` reads a soft-return-free file as a
+    // `printstream`, whose running content is already in band and therefore never drawn
+    // -- a different mechanism from the page geometry this test is about.
+    var n = 0
+    for _ in 1...20 {
+        for _ in 1...2 {
+            n += 1
+            data += bytes("Line \(n) of prose")
+            data += SOFT
+        }
+        n += 1
+        data += bytes("Line \(n) of prose")
+        data += HARD
+    }
+    let doc = parseWS(data)
+
+    let rotated = docToPagelines(printedDocument(doc), printed: true)
+    let asParsed = docToPagelines(doc, printed: true)
+    #expect(rotated.count == 2)
+    #expect(rotated.map(\.count) == [55, 5], "55-line text body, 60 lines of prose")
+
+    // NOT a no-op. The `.fo` is anchored off the page's own height
+    // (`attachHeadFootLinesPrinted` reads `resolvedPageHeight(doc, printed: true)`), so on
+    // the 792pt sheet the parsed document still has room for it under a 55-line body and on
+    // the 612pt rotated sheet it does not -- the body itself already runs past the bottom
+    // edge there (`.pl` is a LINE COUNT; a landscape sheet does not shrink it). Whether
+    // WordStar would really drop the footer is not what this test claims; it claims the
+    // façade and the emitter answer that question the SAME way, which they did not before.
+    #expect(rotated != asParsed, "the rotation reaches the laid-out model, not just the box")
+    #expect(asParsed[0].footerLines?.first?.y == 60.0, "11in sheet: room below a 55-line body")
+    #expect(rotated[0].footerLines == nil, "8.5in sheet: the body has already run off it")
+
+    // The independent side: the emitted bytes. `emitPDF` agrees with the ROTATED model.
+    let pdf = emitPDF(doc, mode: .printed)
+    let spans = contentSpans(pdf)
+    #expect(!spans.contains { $0.text == "Footer" })
+    // First body line, placed from the metrics the app would draw it with: `emitPDF` opens
+    // its content stream at `pageHeight - top - size` (a PDF `Td` positions a BASELINE),
+    // 612 - 36 - 12 = 564. The pre-fix façade reported a 792pt page and would have put it
+    // at 744 -- the whole defect, in one number.
+    let m = printedMetrics(doc)
+    #expect(spans.first?.text == "Line 1 of prose")
+    #expect(spans.first?.y == 564.0)
+    #expect(spans.first?.y == m.pageHeight - m.top - Double(m.size))
+    #expect(spans.first?.x == m.left, "`.po` 8 columns * 7.2pt = 57.6")
+
+    // One page box per paginated page, all on the rotated sheet.
+    var boxes = 0
+    var from = 0
+    let box = bytes("/MediaBox [0 0 792 612]")
+    while from + box.count <= pdf.count {
+        if Array(pdf[from..<(from + box.count)]) == box { boxes += 1 }
+        from += 1
+    }
+    #expect(boxes == rotated.count)
+}
+
+/// `options` reaches the façade, and in `emitPDF`'s order: `pageSettings` first, the
+/// rotation on TOP of whatever page that left. A `.pl`-less landscape document takes the
+/// preset's page length (a document's own dot command would win — see `effectivePage`), and
+/// the sheet it names is then rotated, not returned portrait.
+@Test func printedMetricsApplyPageSettingsBeforeTheRotation() {
+    var data = bytes(".pr or=l")
+    data += HARD
+    data += bytes("Body.")
+    data += HARD
+    let doc = parseWS(data)
+
+    // 84 lines is 14in — Legal. Portrait it is a 612 x 1008 page; rotated, Legal's own
+    // 8.5in width becomes the height and its 14in length the width.
+    let m = printedMetrics(doc, options: EmitOptions(pageSettings: PageSettings(plLines: 84)))
+    #expect(m.pageWidth == 1008.0, "14 * 72")
+    #expect(m.pageHeight == 612.0, "8.5 * 72")
+    // Same document, same options, through the emitter.
+    let pdf = emitPDF(doc, mode: .printed,
+                      options: EmitOptions(pageSettings: PageSettings(plLines: 84)))
+    #expect(contains(pdf, bytes("/MediaBox [0 0 1008 612]")))
+}
+
+/// The real document the defect was measured on (planning #271 M2): sawyer/REF/BOOKLET.RJS
+/// declares `.pr or=l` and `.pl 8.5"`, and Printed resolves it to 792 x 612. Gated on
+/// `CTRLKD_SAWYER_ARCHIVE` like every other Tier-2 suite (`sawyerArchiveArmed`/
+/// `sawyerArchiveSkipReason`, declared in `WSChangeTests.swift`); armed but missing the file
+/// FAILS LOUD rather than skipping.
+@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+func printedMetricsMatchTheEmittersPageBoxForBookletRJS() throws {
+    let url = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent("REF/BOOKLET.RJS")
+    let doc = parseWS([UInt8](try Data(contentsOf: url)))
+
+    let m = printedMetrics(doc)
+    #expect(m.pageWidth == 792.0)
+    #expect(m.pageHeight == 612.0)
+
+    let pdf = emitPDF(doc, mode: .printed)
+    var box = bytes("/MediaBox [0 0 ")
+    box += bytes("\(Int(m.pageWidth)) \(Int(m.pageHeight))]")
+    #expect(contains(pdf, box))
+    #expect(!contains(pdf, bytes("/MediaBox [0 0 612 792]")))
 }

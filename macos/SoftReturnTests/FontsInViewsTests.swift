@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -22,7 +23,7 @@ import Testing
 /// Job 535: every test in this suite reads `TestDocs/ws7` — gated at the suite level so a
 /// bare stranger run (no `CTRLKD_PRIVATE_CORPUS`, no in-repo `TestDocs/`) skips all of it
 /// cleanly.
-@Suite(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
+@Suite(.tags(.corpus), .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct FontsInViewsTests {
 
     /// Job 535: routes through `PrivateCorpusSupport` — see that file's own doc comment.
@@ -226,7 +227,7 @@ struct FontsInViewsTests {
     /// (`renderNative`/`renderModern`) exactly.
     @Test @MainActor func verdictParityAcrossWS7CorpusMatchesEngineResolveFont() throws {
         var checked = 0
-        for fixture in try FileManager.default.contentsOfDirectory(atPath: Self.ws7Directory.path)
+        for fixture in CorpusDocumentFilter.apply(try FileManager.default.contentsOfDirectory(atPath: Self.ws7Directory.path))
             where fixture.uppercased().hasSuffix(".WS") {
             let bytes = [UInt8](try Data(contentsOf: Self.ws7Directory.appendingPathComponent(fixture)))
             guard let doc = try? parse(bytes, variant: nil) else { continue }

@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import PDFKit
 import UniformTypeIdentifiers
 
@@ -389,6 +390,10 @@ struct NoteSelection: Equatable {
     /// tables exist for the CLI, whose caller chooses; every app-surface export call goes
     /// through here, so the app never surfaces the library's `.office` default (Univers →
     /// Arial) the way b12's RTF field evidence showed.
+    ///
+    /// Batch 31 (Jon, 2026-09-14, asked whether the Native export mode should differ): "It's a Mac app. It uses Mac
+    /// fonts." Every export keeps `.mac` in every mode, so a Native RTF or HTML export is the Printed one by
+    /// design — `NativeExportCLIParityTests` holds both to `sr -t rtf|html --mode printed --fonts mac`.
     func emitOptions(title: String = "", pageSettings: PageSettings? = nil) -> EmitOptions {
         EmitOptions(title: title, notes: kinds, fontsTarget: .mac, pageSettings: pageSettings)
     }

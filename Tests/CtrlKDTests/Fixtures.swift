@@ -51,7 +51,17 @@ func makeProse() -> [UInt8] {
     let l2 = bytes(String(repeating: "y", count: 50) + " continuing") // 61 chars, wrapped
     let l3 = bytes("ends here.")
     let p2 = bytes("Second paragraph.")
-    return l1 + SOFT + l2 + SOFT + l3 + SOFT + HARD + SOFT + p2 + HARD
+    var chain54: [UInt8] = l1
+    chain54 += SOFT
+    chain54 += l2
+    chain54 += SOFT
+    chain54 += l3
+    chain54 += SOFT
+    chain54 += HARD
+    chain54 += SOFT
+    chain54 += p2
+    chain54 += HARD
+    return chain54
 }
 
 /// A WS5+/WS7 1D symmetric block: `\x1d`, a little-endian 16-bit count, the command
@@ -69,7 +79,13 @@ func makeProse() -> [UInt8] {
 func ws7Block(_ cmd: UInt8, payload: [UInt8] = []) -> [UInt8] {
     let count = UInt16(payload.count + 4)
     let countBytes: [UInt8] = [UInt8(count & 0xFF), UInt8(count >> 8)]
-    return [0x1d] + countBytes + [cmd] + payload + countBytes + [0x1d]
+    var chain72: [UInt8] = [0x1d]
+    chain72 += countBytes
+    chain72 += [cmd]
+    chain72 += payload
+    chain72 += countBytes
+    chain72 += [0x1d]
+    return chain72
 }
 
 /// One footnote/endnote/annotation/comment note block (types 3-6), per the WordStar
@@ -138,7 +154,11 @@ func ws7AnnotationWithTag(
         if i > 0 { body += HARD }
         body += line
     }
-    body += HARD + tag + bytes(" ") + text + HARD
+    body += HARD
+    body += tag
+    body += bytes(" ")
+    body += text
+    body += HARD
     let content: [UInt8] = [0x01, 0x00, 0x00, 0x80, junkConvFlag] + body
     return ws7Block(0x05, payload: content)
 }
@@ -214,7 +234,11 @@ func wsBlock(cmd: UInt8, content: [UInt8] = []) -> [UInt8] {
 /// helper that emitted an invented 1-byte form real WordStar never wrote (it always
 /// writes 8 content bytes, and slot numbers carry no semantics).
 func styleRef(_ slot: Int) -> [UInt8] {
-    ws7Block(0x11, payload: le16(0x0200 | slot) + le16(0x0201) + le16(0x0300) + le16(0x0201))
+    var payload217: [UInt8] = le16(0x0200 | slot)
+    payload217 += le16(0x0201)
+    payload217 += le16(0x0300)
+    payload217 += le16(0x0201)
+    return ws7Block(0x11, payload: payload217)
 }
 
 func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
@@ -275,14 +299,27 @@ func styleLibrary(_ entries: [(name: String?, record: [UInt8]?)]) -> [UInt8] {
         var nm = bytes(name)
         while nm.count < 24 { nm.append(0x20) }
         if let rec = entry.record {
-            items += nm + [0x02] + [UInt8](repeating: 0, count: 4) + le32(recBase + records.count)
+            items += nm
+            items += [0x02]
+            items += [UInt8](repeating: 0, count: 4)
+            items += le32(recBase + records.count)
             records += rec
         } else {
             items += nm + [0x00] + [UInt8](repeating: 0, count: 8)
         }
     }
-    let head: [UInt8] = [0x1A, 0x55] + le16(1) + [0x01] + le16(n) + le16(102) + le32(13)
-    return head + [UInt8(n)] + [UInt8](repeating: 0, count: 4) + items + records
+    var head: [UInt8] = [0x1A, 0x55]
+    head += le16(1)
+    head += [0x01]
+    head += le16(n)
+    head += le16(102)
+    head += le32(13)
+    var chain285: [UInt8] = head
+    chain285 += [UInt8(n)]
+    chain285 += [UInt8](repeating: 0, count: 4)
+    chain285 += items
+    chain285 += records
+    return chain285
 }
 
 /// A ws5+ document whose header block points at `lib`: the body padded to a 128-byte

@@ -145,9 +145,17 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // Fixed: a fresh page picks up whatever .mt/.mb was in force at its own first block
     // (mtMbCheckpoints, mirroring how .lh already tracks per-line state) -- pl - 1 - 0 =
     // 65 lines of room, so the same 60 lines fit on one page.
-    var data = bytes(".mt7") + HARD + bytes(".mb6") + HARD
+    var data = bytes(".mt7")
+    data += HARD
+    data += bytes(".mb6")
+    data += HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
-    data += bytes(".pa") + HARD + bytes(".mt1") + HARD + bytes(".mb0") + HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes(".mt1")
+    data += HARD
+    data += bytes(".mb0")
+    data += HARD
     for i in 1...60 { data += bytes("Tiny line \(i).") + HARD }
     let doc = parseWS(data)
     #expect(doc.page?.mtLines == 7.0)      // global: the FIRST occurrence
@@ -175,9 +183,15 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // printedCapFor never returns less than printedCap(doc).
     // Reproduced synthetically here: a tighter .mb after a .pa must NOT split content
     // that fits within the document's own GLOBAL capacity.
-    var data = bytes(".mt3") + HARD + bytes(".mb3") + HARD
+    var data = bytes(".mt3")
+    data += HARD
+    data += bytes(".mb3")
+    data += HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
-    data += bytes(".pa") + HARD + bytes(".mb50") + HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes(".mb50")
+    data += HARD
     for i in 1...39 { data += bytes("Tight line \(i).") + HARD }
     let doc = parseWS(data)
     let checkpoints = mtMbCheckpoints(doc)
@@ -212,7 +226,12 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     var data = bytes(".mt7") + HARD + bytes(".mb6") + HARD + bytes(".hm3") + HARD
         + bytes(".he TITLE") + HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
-    data += bytes(".pa") + HARD + bytes(".mt1") + HARD + bytes(".mb0") + HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes(".mt1")
+    data += HARD
+    data += bytes(".mb0")
+    data += HARD
     for i in 1...60 { data += bytes("Tiny line \(i).") + HARD }
     let doc = parseWS(data)
     let pdf = emitPDF(doc, mode: .printed)
@@ -227,7 +246,10 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // `Page.mtLines`/`mbLines` stay at their nil default and no page ever triggers the
     // `doc.page` swap in `emitPDF`. Byte-identity for real documents is verified
     // separately (LYING.WS sha256 parity); this pins the mechanism directly.
-    var data = bytes(".mt7") + HARD + bytes(".mb6") + HARD
+    var data = bytes(".mt7")
+    data += HARD
+    data += bytes(".mb6")
+    data += HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
     let doc = parseWS(data)
     let checkpoints = mtMbCheckpoints(doc)
@@ -245,9 +267,17 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // (cap 38) -- the SECOND value, not the document's first-occurrence one, governs the
     // page it appears on. This reproduces it after an explicit `.pa`, the same structural
     // shape as the sibling `mtMbCheckpoints` tests above.
-    var data = bytes(".pl20") + HARD + bytes(".mt1") + HARD + bytes(".mb1") + HARD
+    var data = bytes(".pl20")
+    data += HARD
+    data += bytes(".mt1")
+    data += HARD
+    data += bytes(".mb1")
+    data += HARD
     for i in 1...18 { data += bytes("Apage line \(i).") + HARD }
-    data += bytes(".pa") + HARD + bytes(".pl40") + HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes(".pl40")
+    data += HARD
     for i in 1...60 { data += bytes("Bpage line \(i).") + HARD }
     let doc = parseWS(data)
     #expect(doc.page?.plLines == 20.0)        // global: first occurrence
@@ -278,7 +308,12 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // when the gate is checked), so the recompute silently never re-fired for any organic
     // break. `recomputeGeom` closed the gap: a second recompute call sits right after the
     // organic close, using the line that triggered it.
-    var data = bytes(".pl20") + HARD + bytes(".mt1") + HARD + bytes(".mb1") + HARD
+    var data = bytes(".pl20")
+    data += HARD
+    data += bytes(".mt1")
+    data += HARD
+    data += bytes(".mb1")
+    data += HARD
     for i in 1...18 { data += bytes("Apage line \(i).") + HARD }
     data += HARD + bytes(".pl40") + HARD          // blank line -> new block, no .pa
     for i in 1...60 { data += bytes("Bpage line \(i).") + HARD }
@@ -357,9 +392,17 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // along. The measured FOOTER PCL rows (ysF below) are real WS7 ground truth and do
     // not move; the HEADER rows (ysH) are this engine's own corrected-formula output, no
     // longer pinned against HMFM_PROBE's own contaminated reading.
-    var data = bytes(".he TITLE") + HARD + bytes(".fo FOOTTXT") + HARD
+    var data = bytes(".he TITLE")
+    data += HARD
+    data += bytes(".fo FOOTTXT")
+    data += HARD
     for i in 1...60 { data += bytes("Body line \(i).") + HARD }
-    data += bytes(".pa") + HARD + bytes(".hm6") + HARD + bytes(".fm6") + HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes(".hm6")
+    data += HARD
+    data += bytes(".fm6")
+    data += HARD
     for i in 1...60 { data += bytes("Page2 line \(i).") + HARD }
     let doc = parseWS(data)
     #expect(doc.page?.mtSource == .default)       // .mt NEVER appears
@@ -387,7 +430,10 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
 @Test func printedSingleGeometryDocumentNeverTouchesHmFmCheckpoints() {
     // A document that declares `.hm`/`.fm` once, up front (or never at all), never gets a
     // per-page render-time override -- byte-identical to before this fix.
-    var data = bytes(".hm5") + HARD + bytes(".fm5") + HARD
+    var data = bytes(".hm5")
+    data += HARD
+    data += bytes(".fm5")
+    data += HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
     let doc = parseWS(data)
     let checkpoints = hmFmCheckpoints(doc)
@@ -437,7 +483,12 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // running_head` (commit 9e7c779).
     var data = bytes(".he TITLE") + HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
-    data += bytes(".pa") + HARD + bytes(".po5") + HARD + bytes(".mt1\"") + HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes(".po5")
+    data += HARD
+    data += bytes(".mt1\"")
+    data += HARD
     for i in 1...20 { data += bytes("Page2 line \(i).") + HARD }
     let doc = parseWS(data)
     #expect(doc.page?.poCols == 8.0)      // global: unaffected (pre-text-last-wins), same
@@ -487,7 +538,10 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // A blank line separates the two `.pn`-bearing sections -- the same block-boundary
     // requirement the organic-break `.pl` test above needs: `Document.dotPositions` is
     // BLOCK-granular, so `.pn 500` needs its own block to be distinguishable from `.pn 10`'s.
-    var data = bytes(".he PAGENO #") + HARD + bytes(".pn 10") + HARD
+    var data = bytes(".he PAGENO #")
+    data += HARD
+    data += bytes(".pn 10")
+    data += HARD
     for i in 1...110 { data += bytes("Numline \(i).") + HARD }
     data += HARD + bytes(".pn 500") + HARD
     for i in 111...220 { data += bytes("Numline \(i).") + HARD }
@@ -504,7 +558,10 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
 @Test func printedSinglePnDocumentNeverTouchesPnCheckpoints() {
     // A document that sets `.pn` once, up front (or never at all), never gets a per-page
     // override beyond the normal +1-per-page count -- byte-identical to before this fix.
-    var data = bytes(".he PAGENO #") + HARD + bytes(".pn 7") + HARD
+    var data = bytes(".he PAGENO #")
+    data += HARD
+    data += bytes(".pn 7")
+    data += HARD
     for i in 1...110 { data += bytes("Body line \(i).") + HARD }
     let doc = parseWS(data)
     let checkpoints = pnCheckpoints(doc)
@@ -552,8 +609,24 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     let p2 = bytes("Second paragraph, still plain.")
     let p3 = bytes("Third paragraph closes the document.")
     let mark = ws7Block(0x0B, payload: [24, 0, 3, 0])
-    let base = parseWS(ws7Block(0x00) + p1 + HARD + p2 + HARD + p3 + HARD)
-    let marked = parseWS(ws7Block(0x00) + p1 + HARD + mark + p2 + HARD + mark + p3 + HARD)
+    var parseWSArg555: [UInt8] = ws7Block(0x00)
+    parseWSArg555 += p1
+    parseWSArg555 += HARD
+    parseWSArg555 += p2
+    parseWSArg555 += HARD
+    parseWSArg555 += p3
+    parseWSArg555 += HARD
+    let base = parseWS(parseWSArg555)
+    var parseWSArg556: [UInt8] = ws7Block(0x00)
+    parseWSArg556 += p1
+    parseWSArg556 += HARD
+    parseWSArg556 += mark
+    parseWSArg556 += p2
+    parseWSArg556 += HARD
+    parseWSArg556 += mark
+    parseWSArg556 += p3
+    parseWSArg556 += HARD
+    let marked = parseWS(parseWSArg556)
 
     #expect(marked.blocks.flatMap(\.lines).filter(\.softpage).count == 2)
     // and the mark must not sever the flow into extra blocks
@@ -1068,7 +1141,10 @@ private func pageTexts(_ page: Page) -> [String] {
 
 /// 120 numbered lines under a `.he`/`.fo` pair — Swift twin of Python's `_hf_doc`.
 private func hfDoc(_ n: Int = 120) -> [UInt8] {
-    var out = bytes(".he HEADER-TEXT PAGE #") + HARD + bytes(".fo FOOTER-TEXT PAGE #") + HARD
+    var out = bytes(".he HEADER-TEXT PAGE #")
+    out += HARD
+    out += bytes(".fo FOOTER-TEXT PAGE #")
+    out += HARD
     for i in 1...n {
         out += bytes("LINE \(zeroPadded(i, width: 3)) " + String(repeating: "-", count: 40)) + HARD
     }
@@ -1164,9 +1240,19 @@ private func hfDoc(_ n: Int = 120) -> [UInt8] {
     // pre-b26-header-baseline code produced for LJ6DTP by coincidence, not because this
     // fixture reproduces that bug (its own hm=2 here is genuinely applied, not left over
     // from an unconditional-subtract formula).
-    var data = bytes(".mt 1.1\"") + HARD + bytes(".lh 9.33333") + HARD + bytes(".he TITLE") + HARD
+    var data = bytes(".mt 1.1\"")
+    data += HARD
+    data += bytes(".lh 9.33333")
+    data += HARD
+    data += bytes(".he TITLE")
+    data += HARD
     for i in 1...4 { data += bytes("Body line \(i).") + HARD }
-    data += bytes(".pa") + HARD + bytes(".mt1\"") + HARD + bytes(".mb1\"") + HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes(".mt1\"")
+    data += HARD
+    data += bytes(".mb1\"")
+    data += HARD
     for i in 1...4 { data += bytes("Page2 line \(i).") + HARD }
     let doc = parseWS(data)
     #expect(doc.page?.mtSource == .file && doc.page?.hmSource == .default)

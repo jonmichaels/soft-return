@@ -68,7 +68,8 @@ import ucrt
 /// the inventory-mode softening above, not a suppression — the rest of the suite
 /// (`swift test` with no filter) is unaffected by this tier's verdicts either way.
 ///
-/// planning #224/#226 (ruled 2026-09-08): 20 of the 182 public v4 documents are further
+/// planning #224/#226 (ruled 2026-09-08; extended 2026-09-13 by planning #270 items 28
+/// and 38): 26 of the 182 public v4 documents are further
 /// EXCLUDED from the tier entirely — 3 PostScript-targeted documents with an
 /// unclassified typeface ID (postscript),
 /// `sawyer/OLDTIMES.WS` (freeze — WordStar itself hangs printing it, see
@@ -78,7 +79,19 @@ import ucrt
 /// `.xl` dot command (formfeed-off — `sawyer/ARTICLES/FORMFEED.WS`, a tutorial, plus
 /// `sawyer/REF/ROUNDED.BRD`, found by scanning the rest of the batch for the same
 /// command — real WS7 overprints multiple pages onto one sheet, unrepresentable as PDF
-/// pages; standing parked issue planning #15, no new issue opened). `capturedDocsV4`
+/// pages; standing parked issue planning #15, no new issue opened), 1 document whose own
+/// `.pl0` makes WS7's behaviour undefined (degenerate, planning #261), 1 investigated-
+/// but-unresolved single document (parked, planning #228), and 4 printer-font CHARTS
+/// (font-chart — `sawyer/REF/SYMBOL.CHT`, `sawyer/REF/WINGDING.CHT`,
+/// `sawyer/PRINTERS/fontcrib.ws`, `sawyer/PRINTER.PS`: each prints every character CODE
+/// of a printer-RESIDENT font we do not have, so the chart is not reproducible by
+/// construction and the residual is its own subject matter; Jon's ruling 2026-09-13,
+/// parked with LJ6DTP on planning #210), and 1 document deferred to that same LJ6DTP
+/// class (parked-lj6dtp — `sawyer/LSRBOX/LSRBOX.WS`, the LaserJet box/shading demo:
+/// Printed draws its fills OVER the text, Native draws no printer rectangles, and it is
+/// a Mail Merge template; Jon's ruling 2026-09-13. Every mechanism that document solely
+/// carries keeps its own synthetic fixture on the ctrl-kd side, checked there by
+/// `test_lsrbox_is_parked_with_lj6dtp_and_loses_no_sole_coverage`). `capturedDocsV4`
 /// below is UNCHANGED (still all 182
 /// public names, still 194 total with capturedDocsV1V3) — exclusion is decided per-document
 /// from ctrl-kd's own committed manifest (`verdict == "excluded"`, checked the same

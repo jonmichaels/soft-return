@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 
 /// Page-one thumbnails and the Get-Info rows for the batch window's preview column.
 ///
@@ -52,13 +53,18 @@ enum PagePreviewRenderer {
     /// The Get-Info-style rows, in the spec's fixed order: File Name / Kind / Size / Where /
     /// Created / Modified / Page Size / Pages.
     static func info(for url: URL, style: RenderStyle, variant: Variant?) -> [(String, String)] {
+        info(for: url, state: state(for: url, style: style, variant: variant), style: style)
+    }
+
+    /// The same rows for a document already open, read from its window's own state — so its
+    /// Margins choice is in the Page Size and Pages the rows report (#271 M9).
+    static func info(for url: URL, state: DocumentState?, style: RenderStyle) -> [(String, String)] {
         // Best-effort metadata read with a sound default: `byteText`/`dateText` below both
         // render a nil value as "—" rather than failing the whole info panel over one
         // missing attribute.
         let values = try? url.resourceValues(forKeys: [
             .fileSizeKey, .creationDateKey, .contentModificationDateKey,
         ])
-        let state = state(for: url, style: style, variant: variant)
 
         let kind: String
         if let detected = state?.variant.value {
@@ -67,16 +73,8 @@ enum PagePreviewRenderer {
             kind = "Unreadable"
         }
 
-        let pageSizeText: String
-        if let named = state?.pageSize.value {
-            pageSizeText = named.dimensionDescription
-        } else if let page = state?.document.page {
-            // A real geometry with no app-side name: report the truth rather than force a
-            // label onto it.
-            pageSizeText = String(format: "%.2f in tall (custom)", page.heightIn)
-        } else {
-            pageSizeText = "—"
-        }
+        // The sheet Printed lays out, so a landscape document reads landscape (#271 M9).
+        let pageSizeText = state?.pageSizeDescription ?? "—"
 
         let pageCount: String
         if let state {

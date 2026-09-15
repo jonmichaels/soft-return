@@ -1,4 +1,5 @@
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -36,12 +37,12 @@ import Testing
 /// `unresolvableImageIsDetectedAsUnresolved`, below, is UNCHANGED and stays: it exercises
 /// `DocumentPictures.resolve`'s own contract directly (an empty `docPath` leaves every pix
 /// tag `.unresolved`) and never reads the retired manifest at all.
-@Suite struct OracleByteParityTests {
+@Suite(.tags(.corpus)) struct OracleByteParityTests {
     static var ws7Directory: URL { PrivateCorpusSupport.ws7Directory }
 
     static var ws7Fixtures: [String] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: ws7Directory.path)) ?? []
-        return names.filter { $0.uppercased().hasSuffix(".WS") }.sorted()
+        return CorpusDocumentFilter.apply(names.filter { $0.uppercased().hasSuffix(".WS") }.sorted())
     }
 
     // MARK: - Item 0 (image-resolution gate)

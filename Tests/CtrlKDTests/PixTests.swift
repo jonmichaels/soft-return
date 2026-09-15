@@ -82,7 +82,10 @@ func buildPixBytes(gcols: Int, grows: Int, gfore: Int, pageRows: Int, pageCols: 
     modeBlob[20] = gr[0]; modeBlob[21] = gr[1]
     modeBlob[22] = UInt8(gfore)
 
-    let tileInfoBlob = le16(pageRows) + le16(pageCols) + le16(stpRows) + le16(stpCols)
+    var tileInfoBlob = le16(pageRows)
+    tileInfoBlob += le16(pageCols)
+    tileInfoBlob += le16(stpRows)
+    tileInfoBlob += le16(stpCols)
 
     let fullW = pageCols * stpCols, fullH = pageRows * stpRows
     var padded = indexImg.map { row -> [UInt8] in

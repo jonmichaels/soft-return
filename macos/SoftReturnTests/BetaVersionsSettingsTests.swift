@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 @testable import SoftReturn
+import SoftReturnShared
 
 /// Job 537 (rulings 20-21): `SettingsStore.includeBetaVersions` (default OFF) and the
 /// Option-revealed checkbox in `SettingsWindowController` — same "default value / real control

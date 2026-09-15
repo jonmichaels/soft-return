@@ -26,6 +26,38 @@ public enum NoteOrigin: String, Hashable, Sendable {
 public struct Note: Hashable, Sendable {
     public var kind: NoteKind
     public var text: String
+    /// The note's own PHYSICAL text lines, in order, with its dot-command lines already
+    /// removed and its EMPTY lines kept — `text` is these joined with a space, which is
+    /// what every flowing consumer wants and what this property exists to complement.
+    /// WordStar prints a note in the page-bottom (or endnote) area as the author typed
+    /// it: a hard return inside the note text is a hard return on paper. MEASURED
+    /// (ws7-prints/v4, PRISTINE.EXE): the Sawyer archive's TAGS/ annotations each store
+    /// a LEADING EMPTY line, and real WS7 prints the note's tag alone on the area's
+    /// first line with the text on the next — `text` alone cannot express that. Empty
+    /// for a note with no text at all. Port of Python's `core.Note.text_lines`.
+    public var textLines: [String]
+    /// WHICH of `textLines` the note's own marker (a footnote/endnote number, an
+    /// annotation's tag) sits on. WordStar stores the marker INLINE in the note's own
+    /// text stream, so a note whose text begins with a hard return carries its marker on
+    /// the SECOND line, not the first. MEASURED (ws7-prints/v4): `sawyer/TAGS/WHY`
+    /// stores the tag first and prints "[Why?] / Why?" on the area's two lines;
+    /// `sawyer/TAGS/WHEN` stores a return BEFORE the tag and real WS7 prints a blank
+    /// line, then "[When?]", then "When?". 0 (the marker on the first line) for every
+    /// note that does not do this. Port of Python's `core.Note.tag_line`.
+    public var tagLine: Int
+    /// Per entry of `textLines`: the column that line's own text starts in, measured
+    /// from the note area's left margin, or 0 for a line with no tab of its own.
+    /// WordStar stores a note exactly as typed, and what it typed can include the
+    /// note's own TAB — a nested type-9 block, absolute size in HMIs — and real WS7
+    /// honours it. MEASURED (ws7-prints/v4, PRISTINE.EXE) on `sawyer/REF/NOTES.TST`,
+    /// note-area left margin 57.6pt: its footnotes carry a tab to HMI 540 and WS7
+    /// prints "Footnote One." at column 3 (79.2pt); its endnotes carry one to HMI 900
+    /// and WS7 prints "Endnote one." at column 5 (93.6pt). Its ANNOTATIONS carry no
+    /// tab at all — their stored text simply opens with one blank after the tag — and
+    /// WS7 prints "Annotation One" at column 4 (86.4pt), which is the marker's own
+    /// plain single-space join. Empty for every note that tabs nothing, the common
+    /// case. Port of Python's `core.Note.text_indents`.
+    public var textIndents: [Int]
     /// Footnote/endnote only, and only when untagged: the file's own (0-based) note
     /// number. `nil` for annotations/comments (which have no numeric identity in the
     /// spec — annotations carry `tag` instead, comments carry neither) AND for a
@@ -65,6 +97,9 @@ public struct Note: Hashable, Sendable {
     public init(
         kind: NoteKind,
         text: String = "",
+        textLines: [String] = [],
+        tagLine: Int = 0,
+        textIndents: [Int] = [],
         number: Int? = nil,
         tag: String? = nil,
         lineCount: Int = 0,
@@ -76,6 +111,9 @@ public struct Note: Hashable, Sendable {
     ) {
         self.kind = kind
         self.text = text
+        self.textLines = textLines
+        self.tagLine = tagLine
+        self.textIndents = textIndents
         self.number = number
         self.tag = tag
         self.lineCount = lineCount
@@ -307,6 +345,16 @@ public enum HFParity: Hashable, Sendable {
 /// defines its head after page 1's title block gets no running head on page 1, which the
 /// final-state dicts alone cannot distinguish from "defined from the very start." The
 /// paginator replays these events instead — see `PDFLayout.swift`'s `Page`.
+/// Where inside a block a `.he`/`.fo` sits — see `Document.hfEventsWithin`.
+public struct HFWithin: Hashable, Sendable {
+    public var block: Int
+    public var linesBefore: Int
+    public init(block: Int, linesBefore: Int) {
+        self.block = block
+        self.linesBefore = linesBefore
+    }
+}
+
 public struct HFEvent: Hashable, Sendable {
     public var kind: HFKind
     /// 1-5 — `.he`/`.fo` are line 1, the numbered forms select their own.
@@ -330,6 +378,21 @@ public struct HFEvent: Hashable, Sendable {
 /// sequence), when its typed text carries one — see `Document.headerTabs`/`footerTabs`.
 /// Port of Python's `Document.header_tabs`/`footer_tabs` tuple entry (planning #202,
 /// ctrl-kd 605e27b).
+/// One 0x0F user print control found inside a `.h#`/`.f#` argument — see
+/// `Document.headerPcl`. `offset` is where it sat in the argument's own bytes (an
+/// ordering key only), `hmi` the block's declared character advance, `pcl` the index
+/// into `Document.pclPrograms` of its raw printer payload (nil when it had none).
+public struct HFPrintControl: Hashable, Sendable {
+    public var offset: Int
+    public var hmi: Int
+    public var pcl: Int?
+    public init(offset: Int, hmi: Int, pcl: Int?) {
+        self.offset = offset
+        self.hmi = hmi
+        self.pcl = pcl
+    }
+}
+
 public struct HFTabMark: Hashable, Sendable {
     /// Character offset where the tab's own BAKED padding run (already expanded to
     /// `cols` space characters when the file was last saved, exactly like a body span's
@@ -573,6 +636,16 @@ public struct Document: Hashable, Sendable {
     /// C2 (LJ6DTP parity): LJ6DTP.WS's page border (all 8 pages) and page 4's
     /// checkerboard are raw PCL a Printed renderer EXECUTES, not decoration.
     public var pclPrograms: [[UInt8]] = []
+    /// The document KIND, when the bytes are more specific than their variant —
+    /// `mergeDataKind` for a MailMerge data file (planning #264, mail-merge scope ruled
+    /// 2026-09-13: "It should show up listed as such in Document Info"). `nil` for an
+    /// ordinary document, which is every other file. The VARIANT is left exactly as the
+    /// bytes found it; this is an additional fact about the same bytes.
+    public var kind: String? = nil
+    /// How many records a MailMerge data file holds, and how many fields each has.
+    /// `nil` for everything else.
+    public var mergeRecords: Int? = nil
+    public var mergeFields: Int? = nil
     /// Colour changes (type 0x01): palette indices, not RGB. Register C2.
     public var colours: [ColourChange]
     /// Font changes (type 0x02/0x15). Size is 1/20 point. Register C3.
@@ -623,6 +696,23 @@ public struct Document: Hashable, Sendable {
     /// limitation `headerFonts`/`footerFonts` have.
     public var headerTabs: [Int: HFTabMark] = [:]
     public var footerTabs: [Int: HFTabMark] = [:]
+
+    /// A `.h#`/`.f#` argument's own 0x0F USER PRINT CONTROLS, per line — the same
+    /// three numbers a body span's own `.pctl` mark carries, and empty/absent for
+    /// every header or footer that has none (every document but
+    /// `sawyer/LSRBOX/LSRBOX.WS`, whose `.h1` IS a LaserJet box-drawing control).
+    ///
+    /// WHY THE TEXT NO LONGER CARRIES THEM: a print control's display string is
+    /// SCREEN-ONLY. On paper WordStar sends the control's raw printer payload and
+    /// advances by the block's own HMI word — the body-text path has done exactly
+    /// that since the `.pctl` mark existed, but a running head had no such mechanism
+    /// and printed the string as words. Measured against real WS7 (`ws7-prints/v4`,
+    /// PRISTINE.EXE): LSRBOX.WS's own `.h1` is one control (HMI 0, a full-page shaded
+    /// frame), and WS7 prints NO header text on any of its 7 pages — it draws 38
+    /// rectangles on page 1 and 2 on every page after. Port of Python's
+    /// `Document.header_pcl`/`footer_pcl`.
+    public var headerPcl: [Int: [HFPrintControl]] = [:]
+    public var footerPcl: [Int: [HFPrintControl]] = [:]
     /// Planning #255: a `.h#`/`.f#` argument's own embedded paragraph-style-sheet
     /// reference (a 0x11 selection, the SAME symmetric-block mechanism a body
     /// paragraph's style select uses — WSFORMAT's own "Header Odd"/"Header Even" style
@@ -676,6 +766,31 @@ public struct Document: Hashable, Sendable {
     /// a plain `.h1`/`.he`/`.f1`/`.fo` event, else `.even`/`.odd` for
     /// `.h1e`/`.h1o`/`.f1e`/`.f1o`.
     public var hfEventsParity: [HFParity?] = []
+    /// `hfEvents`'s own 0x0F USER PRINT CONTROLS, INDEX-ALIGNED with it exactly as
+    /// `hfEventsParity` is and for exactly the same reason — a SEPARATE array so
+    /// every existing `hfEvents` consumer stays byte-identical for the 388 corpus
+    /// documents whose running heads carry none. Each entry is that event's own
+    /// controls (the array `headerPcl` holds for the document's FINAL state; this is
+    /// the per-EVENT value the Printed paginator's replay needs, since
+    /// `sawyer/LSRBOX/LSRBOX.WS` restates `.h1` three times with a different control
+    /// each time). Port of Python's `Document.hf_events_pcl`.
+    public var hfEventsPcl: [[HFPrintControl]] = []
+    /// `hfEvents`'s own WITHIN-BLOCK position, INDEX-ALIGNED with it exactly as
+    /// `hfEventsParity`/`hfEventsPcl` are, and a separate array for the same reason —
+    /// `HFEvent`'s own shape, and every existing consumer of it, stay unchanged.
+    ///
+    /// `blockAnchor` alone is BLOCK-granular: it names the block the command points at,
+    /// which for a command read while a block is still open is the NEXT one. That is
+    /// right for a command between paragraphs and WRONG for one INSIDE a paragraph, and
+    /// WordStar writes those — a running head redefined mid-paragraph is stored exactly
+    /// where the author typed it, between two of the paragraph's own physical lines.
+    /// `sawyer/MACROS/HOLYMAC/-HOLYMAC.WS` does it three times (pages 17, 177 and 184 of
+    /// its real WS7 print), and block granularity deferred each one past the rest of its
+    /// paragraph and onto the following page. Each entry is `(block index, how many of
+    /// that block's lines came first)` for a mid-block event, or `nil` — the common
+    /// case, where `blockAnchor` already says everything. Port of Python's
+    /// `Document.hf_events_within` (triage Q9).
+    public var hfEventsWithin: [HFWithin?] = []
     /// Round-trip ledger — see `RoundtripLedger` (tasks #20/#21). `nil` for documents
     /// not built by `parseWS`.
     public var roundtrip: RoundtripLedger?

@@ -786,33 +786,20 @@ func enteringLeadPt(_ block: Block, _ doc: Document, prevBlock: Block?) -> Doubl
 func fontLeadPt(_ line: Line, fonts: [FontChange], baseSize: Double, state: inout Double?)
     -> Double
 {
-    var propSizesHere: [Double] = []
-    var lastTagProportional: Bool? = nil
-    for s in line.spans {
-        guard let fidx = s.font, fidx >= 0, fidx < fonts.count else { continue }
-        let entry = fonts[fidx]
-        if entry.proportional, entry.points <= fontLeadCapPt {
-            propSizesHere.append(entry.points)
-            lastTagProportional = true
-        } else {
-            lastTagProportional = false
-        }
+    func entry(_ span: Span) -> FontChange? {
+        guard let fidx = span.font, fidx >= 0, fidx < fonts.count else { return nil }
+        let e = fonts[fidx]
+        return e.points > 0 ? e : nil
     }
-    let governing: Double?
-    if let established = state {
-        governing = established
-    } else {
-        governing = propSizesHere.max()
+    var governing = (state ?? 0) > 0 ? state! : baseSize
+    for span in line.spans {
+        if let e = entry(span), e.points > governing { governing = e.points }
     }
-    if lastTagProportional == false {
-        state = baseSize
-    } else if !propSizesHere.isEmpty {
-        state = propSizesHere.max()
+    if let last = line.spans.last {
+        let e = entry(last)
+        state = (e?.proportional ?? false) ? e!.points : baseSize
     }
-    // Python's `governing if governing else base_size` — a falsy (nil OR 0.0) governing
-    // size falls back to the document's own printed size, not just a nil one.
-    let effective = (governing != nil && governing != 0) ? governing! : baseSize
-    return effective * autoLeadFactor
+    return governing * autoLeadFactor
 }
 
 /// One RESOLVED running head/footer LINE (planning #251(d)) -- `text` already carries
@@ -857,6 +844,18 @@ public struct AutoPageNumber: Hashable, Sendable {
 /// A struct that behaves as a collection of `PageLine` for the same reason `PageLine`
 /// itself is one: every existing consumer iterates a page as a sequence of lines and
 /// keeps working untouched, while new code can ask for `.headers`/`.footers`.
+/// How far into the document a page had read when it closed — `bi` is the block its
+/// last line belonged to and `count` is how many lines of THAT block the document has
+/// printed in total up to here. Triage Q12; see `Page.readPos`.
+public struct PageReadPos: Hashable, Sendable {
+    public var bi: Int
+    public var count: Int
+    public init(bi: Int, count: Int) {
+        self.bi = bi
+        self.count = count
+    }
+}
+
 public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableCollection,
                     ExpressibleByArrayLiteral, Hashable, Sendable {
     public var lines: [PageLine]
@@ -869,6 +868,28 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     /// Python's `getattr(pl, 'headers', None)` on a plain list (no attribute at all).
     public var headers: [Int: String]
     public var footers: [Int: String]
+    /// Whether this page has a running FOOTER at all, INCLUDING a `.fo` whose text is
+    /// empty. `footers` above drops empty slots (nothing to draw), but "is a footer in
+    /// use" is a different question from "is there footer text to draw": a bare `.fo`
+    /// draws nothing and still silences WordStar's automatic bottom-of-page number.
+    /// See `resolveHeadFootLines`'s own `footerInUse` comment for the measurement.
+    /// `false` for every document that never writes `.fo`.
+    ///
+    /// DEFAULTS to `!footers.isEmpty` for every `Page` built anywhere but `closePage`
+    /// (the notes-aware paginator's pages, the column merge, the wrapped bare lists) --
+    /// those carry `doc.footers`, whose empty slots were never filtered out, so
+    /// deriving it is exactly right there AND is what Python's own call sites do for
+    /// the plain LISTS it uses in the same places (`getattr(pl, 'footer_in_use', None)`
+    /// -> "no opinion, derive from `footers`"). Only `closePage` knows more than the
+    /// dict does, and only `closePage` overrides it. Port of Python's
+    /// `pdf.Page.footer_in_use`.
+    public var footerInUse: Bool
+    /// `(block index, how many lines of that block this page had read)` at the moment
+    /// the page closed — the position the paginator had reached, recorded BEFORE
+    /// `finalizePages` strips a page's trailing blanks (triage Q12). A page of nothing
+    /// but blank lines ends up EMPTY otherwise, with no `bi` left to read, and a leading
+    /// blank run is exactly where a `.pn` needs placing. See `checkpointsByPage`.
+    public var readPos: PageReadPos?
     /// The `.mt`/`.mb` IN FORCE when this page's own pagination started (Finding 3,
     /// b26-print-fidelity-2) — `nil` for "the document's global (first-occurrence)
     /// value", which is every page of every document that never changes `.mt`/`.mb`
@@ -931,6 +952,24 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     public var columns: Int?
     public var columnGutterPt: Double?
     public var columnWidthPt: Double?
+    /// `columnTopOffsetPt` (planning #227 follow-up, 2026-09-12): how far BELOW this
+    /// sheet's own first text line every column of the group begins -- the height of
+    /// the non-columnar prefix (a title and its blank) the sheet opened with, in
+    /// points, `0.0` when the region owns the sheet from its first line. Column 0's
+    /// own lines are drawn straight down from the top and simply pass through the
+    /// prefix; columns 1..n-1 restart at this offset, which is where real WS7 puts
+    /// them (see `applyColumns`). `nil` on every non-columnar page, the same "no
+    /// opinion" convention as the three above. Port of Python's
+    /// `Page.column_top_offset_pt`.
+    public var columnTopOffsetPt: Double?
+    /// `headerPcl`/`footerPcl` (2026-09-12, cause 10 of the ws7-prints/v4 triage): the
+    /// 0x0F user print controls IN FORCE on this page's own running head/foot,
+    /// replayed from `doc.hfEventsPcl` exactly as `headers`/`footers` are replayed from
+    /// `doc.hfEvents`, because a document may restate `.h1` with a different control on
+    /// different pages (`sawyer/LSRBOX/LSRBOX.WS` does, three times). Empty on every
+    /// page of every document whose running heads carry none.
+    public var headerPcl: [Int: [HFPrintControl]] = [:]
+    public var footerPcl: [Int: [HFPrintControl]] = [:]
     /// `headerLines`/`footerLines`/`autoPageno` (planning #251(d), 2026-09-10): this
     /// page's own RESOLVED running head/foot -- `#` substituted, fontless right-tab
     /// realignment baked, `y`/`x`/`font` attached -- set ONLY by
@@ -966,11 +1005,13 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         columns = nil
         columnGutterPt = nil
         columnWidthPt = nil
+        columnTopOffsetPt = nil
         headerLines = nil
         footerLines = nil
         autoPageno = nil
         headHfOverride = nil
         footHfOverride = nil
+        footerInUse = false
     }
 
     public init(_ lines: [PageLine], headers: [Int: String] = [:], footers: [Int: String] = [:],
@@ -983,6 +1024,8 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.lines = lines
         self.headers = headers
         self.footers = footers
+        self.footerInUse = !footers.isEmpty
+        self.readPos = nil
         self.mtLines = mtLines
         self.mbLines = mbLines
         self.plLines = plLines
@@ -995,6 +1038,7 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.columns = columns
         self.columnGutterPt = columnGutterPt
         self.columnWidthPt = columnWidthPt
+        self.columnTopOffsetPt = nil
         self.headerLines = nil
         self.footerLines = nil
         self.headHfOverride = nil
@@ -1035,7 +1079,13 @@ func hasPlaceableNotes(_ doc: Document) -> Bool {
 /// A comment's reference mark is POSITION, not ink — it renders nowhere on this path
 /// (printed facsimile, or the plain line layer). Port of `_doc_to_pagelines`'s
 /// `_keep_span` (ruling 2026-08-06 M9).
-func keepSpanOnPageline(_ span: Span, refNotes: [Note]) -> Bool {
+///
+/// `printed`: a ^ONI index ENTRY (`Span.indexEntry`) is the index file's text, not the
+/// page's — real WS7 spends the row and prints nothing on it (MEASURED, ws7-prints/v4
+/// `sawyer/REF/-INDEX.HOW`; see `symmetricBlocks`' cmd 0x0E branch). PRINTED only: every
+/// other emitter, Modern included, keeps the phrase exactly as it always did.
+func keepSpanOnPageline(_ span: Span, refNotes: [Note], printed: Bool = false) -> Bool {
+    if printed, span.indexEntry { return false }
     if span.styles.contains(.fnref), let k = Int(span.text),
        k >= 1, k <= refNotes.count, refNotes[k - 1].kind == .comment {
         return false
@@ -1162,6 +1212,156 @@ public func coalesce(_ line: PageLine) -> PageLine {
 /// No balancing (research §5): a trailing group of fewer than n columnar pages is merged
 /// into one physical page using only the columns actually present -- the remaining column
 /// slots are simply never drawn into.
+/// The FIRST block of the contiguous `.co n>1` region block `bi` belongs to -- planning
+/// #227 follow-up (2026-09-12), the block whose `.rm`/`.co` pair the author wrote
+/// together and which therefore fixes the whole region's column grid.
+///
+/// A REGION'S COLUMN WIDTH IS SET ONCE, BY THE `.co` THAT OPENED IT. `.rm` is stateful
+/// and a document may move it INSIDE a live region: `sawyer/MICKEE/MICKEE.WS`
+/// alternates `.rm 0.7"` (the little box-drawing figures its `.co2` sets in columns)
+/// with `.rm 6.5"` (full-measure prose) all through both of its columnar regions, and
+/// `sawyer/PRINTERS/fontcrib.ws` and `sawyer/PRINTER.PS` restate `.rm 6.9i` at the top
+/// of every sheet after the first, before restating `.rm .88"` and `.co5`. Reading the
+/// width off whichever columnar block a SHEET happens to open with then hands that
+/// sheet a completely different column pitch from the one before it -- measured on
+/// fontcrib.ws, `.rm 6.9i` gives a 496.8pt column against the region's real 63.36pt
+/// one, walking columns 2-5 out to x = 572/1123/1674/2225pt, right off an 8.5in sheet,
+/// where real WS7 keeps all five columns in the same place on both sheets. MICKEE.WS's
+/// own two columns overprinted for the same reason. A later `.rm` inside a region still
+/// moves ordinary lines' right edge, exactly as `.rm` always does; it just no longer
+/// re-cuts the column grid.
+///
+/// SENTINEL BLOCKS ARE SKIPPED, not treated as the region's edge -- `pagebreak`/
+/// `colbreak`/`condpage`/`condcolumn` blocks carry no columns state at all (`columns`
+/// reads 1 on every one of them), and the corpus's columnar documents are full of them:
+/// fontcrib.ws's own region is broken by a `.pa` every 51 blocks, the author's manual
+/// column-simulation convention the paginator absorbs. This is the same "real ('para')
+/// blocks only" rule the paginator's own `prevCols` tracker already follows. Port of
+/// Python's `pdf._region_first_bi`.
+func regionFirstBI(_ doc: Document, _ bi: Int) -> Int {
+    guard bi >= 0, bi < doc.blocks.count else { return bi }
+    var first = bi
+    var k = bi - 1
+    while k >= 0 {
+        let b = doc.blocks[k]
+        if b.kind != .para {
+            k -= 1
+            continue
+        }
+        if (b.columns ?? 1) <= 1 { break }
+        first = k
+        k -= 1
+    }
+    return first
+}
+
+// MARK: - MailMerge page-number variables (planning #270 item 40)
+//
+// Jon's ruling 2026-09-13 (triage Q7): "I guess we can adopt... page numbers seems
+// reasonable." WordStar's MailMerge substitutes the page-number variable `&#&` at
+// PRINT time with the number of the page the variable lands on, and real WS7 does
+// exactly that in both corpus documents that print one:
+//
+//   sawyer/REF/TOCTRICK.WS       prints `2` on page 2, twice, where the author typed
+//                                `&#/r&`
+//   sawyer/ARTICLES/POWERUSE.WS  prints `CNT=8` and `8 is a new...` on page 8, where
+//                                the author typed `CNT=&#&` and `&#&`
+//
+// MICKEE.WS (20 occurrences) and RTF-RJS/NOVEL.WS (6) carry the same reference many
+// times over, but every one of theirs sits on a `.tc` table-of-contents line, which
+// never puts ink on the page — so neither prints one today and neither prints one
+// after this change.
+//
+// SCOPE, from the same ruling's MAIL MERGE paragraph: this is the ONLY merge variable
+// that is ever substituted. "A merge letter opens and exports as the letter itself,
+// variables shown as-is (not substituted, not stripped), except the page-number
+// variables per item 40." Every other `&NAME&` stays visible exactly as typed, in
+// every view and every export — which is what keying this to the literal `#` name
+// guarantees. WordStar's own trailing `/x` modifiers (`&#/r&`) are accepted and
+// ignored: real WS7 prints the plain arabic number for `&#/r&` on TOCTRICK's page 2,
+// not a roman numeral. Port of ctrl-kd's `_substitute_merge_page_numbers_printed`.
+
+/// Does `text` carry the two characters `&#`, adjacent, anywhere? The cheap pre-filter
+/// in front of the per-character scan below.
+///
+/// Written as an index walk ON PURPOSE. `String.contains(_:)` taking another STRING is
+/// the Swift 5.7 stdlib `Collection` overload and is `@available(macOS 13.0, *)`; this
+/// package's floor is macOS 10.15 (Package.swift `platforms:`), so it compiles happily
+/// on a modern toolchain and then fails the Mac floor build. `range(of:)` is the
+/// Foundation answer, and this module deliberately imports nothing (see
+/// `SymmetricBlocks.swift`'s own note on the same constraint). The single-CHARACTER
+/// `contains(_:)` other call sites in this module use is the `Sequence` overload and is
+/// available at any floor — only the String-argument form is the trap.
+func containsMergePageNumberOpener(_ text: String) -> Bool {
+    var i = text.startIndex
+    while let amp = text[i...].firstIndex(of: "&") {
+        let next = text.index(after: amp)
+        if next == text.endIndex { return false }
+        if text[next] == "#" { return true }
+        i = next
+    }
+    return false
+}
+
+/// `&#&` / `&#/r&` — the MailMerge page-number variable, and nothing else. Written as
+/// a hand scan rather than a regular expression so the accepted shape is exactly the
+/// one this comment describes: `&`, `#`, optionally `/` plus one or more ASCII
+/// letters, `&`.
+func mergePageNumberRange(_ chars: [Character], from start: Int) -> Int? {
+    guard start + 2 < chars.count, chars[start] == "&", chars[start + 1] == "#" else {
+        return nil
+    }
+    var i = start + 2
+    if chars[i] == "/" {
+        i += 1
+        let modifierStart = i
+        while i < chars.count, chars[i].isASCII, chars[i].isLetter { i += 1 }
+        if i == modifierStart { return nil }          // `&#/&` is not a variable
+    }
+    guard i < chars.count, chars[i] == "&" else { return nil }
+    return i + 1
+}
+
+/// Replace every MailMerge page-number variable in a printed page's own body lines
+/// with that page's resolved page number, in place.
+///
+/// Runs as a `docToPagelines` post-pagination pass, BEFORE
+/// `attachJustifyWordXPrinted`/`attachGraphicCellsPrinted`, so every per-word x those
+/// passes compute is measured on the text that actually prints. Printed physical lines
+/// are never re-wrapped, so a substitution that shortens a line cannot move anything
+/// onto another page — which is why this can safely run after pagination rather than
+/// before it.
+///
+/// The page number is `resolvePageNumbers`' own answer — the same `.pn`/`.pg`
+/// checkpoint walk the running head's `#` and the automatic page number already use,
+/// never the page's index — so a document that restarts its numbering substitutes the
+/// number WordStar would have printed.
+func substituteMergePageNumbersPrinted(_ doc: Document, _ pages: inout [Page]) {
+    let pageNumbers = resolvePageNumbers(pnCheckpoints(doc), pages)
+    for pageIndex in pages.indices {
+        let shown = String(pageNumbers[pageIndex])
+        for lineIndex in pages[pageIndex].lines.indices {
+            for spanIndex in pages[pageIndex].lines[lineIndex].spans.indices {
+                let text = pages[pageIndex].lines[lineIndex].spans[spanIndex].text
+                guard containsMergePageNumberOpener(text) else { continue }
+                let chars = Array(text)
+                var out = ""
+                var i = 0
+                while i < chars.count {
+                    if let end = mergePageNumberRange(chars, from: i) {
+                        out += shown
+                        i = end
+                    } else {
+                        out.append(chars[i])
+                        i += 1
+                    }
+                }
+                pages[pageIndex].lines[lineIndex].spans[spanIndex].text = out
+            }
+        }
+    }
+}
+
 func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
     if pages.isEmpty { return pages }
     let size = printedSize(doc)
@@ -1183,7 +1383,7 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
             i += 1
             continue
         }
-        let blk = doc.blocks[firstColBI!]
+        let blk = doc.blocks[regionFirstBI(doc, firstColBI!)]
         let gutterCols = blk.columnGutter ?? 0.0
         let rmCols = blk.rightMargin ?? 65.0
         let gutterPt = gutterCols * pdfPtPerCol
@@ -1194,6 +1394,11 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
         // page's own metadata already means.
         merged.headers = pg.headers
         merged.footers = pg.footers
+        merged.footerInUse = pg.footerInUse
+        // cause 10: the running head's own print controls travel with its text through
+        // the merge, same passthrough as `headers`/`footers`.
+        merged.headerPcl = pg.headerPcl
+        merged.footerPcl = pg.footerPcl
         // planning #250: carry the source page's own parity font/tab override through
         // the merge, same passthrough as headers/footers just above.
         merged.headHfOverride = pg.headHfOverride
@@ -1217,6 +1422,29 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
         // `left` values this same loop sets.
         merged.columns = cols
         merged.columnGutterPt = gutterPt
+        // planning #227 follow-up (2026-09-12): A COLUMN GROUP SHARES ONE TOP. Every
+        // column of this sheet begins where the COLUMNAR REGION begins on it, not at
+        // the sheet's own first text line -- so a sheet that opened with a
+        // non-columnar prefix (`REF/WINGDING.CHT` and `REF/SYMBOL.CHT`: a title line
+        // and its blank, ahead of the `.co5`; `PRINTERS/fontcrib.ws` and `PRINTER.PS`:
+        // the same shape) pushes columns 1..n-1 down by exactly that prefix's height.
+        // MEASURED against real WS7 (`ws7-prints/v4`, PRISTINE.EXE):
+        //   REF/WINGDING.CHT  WS7 columns 2-5 open at 153.2pt, which is `.mt 1.6"`
+        //                     (115.2) + 12 + 12 + their own 14pt lead -- NOT the
+        //                     sheet's own 129.2pt first line. Same 45 lines as column
+        //                     1's columnar part; this engine gave them 46.
+        //   REF/SYMBOL.CHT    WS7 124.4pt, 47 lines (engine: 100.4pt, 48).
+        //   fontcrib.ws, PRINTER.PS   WS7 66.8pt, 51 lines (engine: 42.8pt, 52).
+        // Summed from the prefix lines' OWN leads, the same quantity the paginator
+        // charged against each column's budget (`colOffsetPt`) -- derived twice from
+        // the same leads rather than threaded. Port of Python's `_apply_columns`.
+        var prefixPt = 0.0
+        for pl0 in pages[i].lines {
+            if let bi0 = pl0.bi, bi0 >= 0, bi0 < doc.blocks.count,
+               (doc.blocks[bi0].columns ?? 1) > 1 { break }
+            prefixPt += pl0.lead ?? printedLead(doc)
+        }
+        merged.columnTopOffsetPt = prefixPt
         let groupEnd = Swift.min(i + cols, nPages)
         // A later sub-page belonging to a DIFFERENT columns/gutter pair (a new `.co`
         // restatement) or a non-columnar page ends the group early -- the forced break
@@ -1229,15 +1457,33 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
                 guard let bi = pl.bi, bi >= 0, bi < doc.blocks.count else { return false }
                 return (doc.blocks[bi].columns ?? 1) > 1
             }?.bi
-            let subCols = subColBI.map { doc.blocks[$0].columns ?? 1 } ?? 1
-            let subGutter = subColBI.map { doc.blocks[$0].columnGutter ?? 0.0 } ?? 0.0
+            let subRegionBlk = subColBI.map { doc.blocks[regionFirstBI(doc, $0)] }
+            let subCols = subRegionBlk.map { $0.columns ?? 1 } ?? 1
+            let subGutter = subRegionBlk.map { $0.columnGutter ?? 0.0 } ?? 0.0
             if subCols != cols || subGutter != gutterCols { break }
             for var pl in sub.lines {
                 let baseLeft = pl.left ?? printedLeft(doc, size: size)
-                // `rmPt` is column 0's own right edge, measured from the SAME
-                // page-left origin `baseLeft` is -- so `rmPt - baseLeft` is exactly
-                // one column's own width (docstring).
-                let columnWidthPt = rmPt - baseLeft
+                // `.rm` IS the column's own width. WordStar measures `.rm` from the
+                // `.po` origin, not from the paper's left edge -- the same reading
+                // `printedHfRight` already uses for an ordinary line's right edge --
+                // so there is nothing to subtract.
+                //
+                // This used to read `rmPt - baseLeft`, and planning #227's own
+                // research validated that against `sawyer/REF/SYMBOL.CHT`, whose
+                // `.po .0"` is ZERO: the two formulas are identical when `.po` is 0,
+                // which is why the subtraction survived. Every OTHER `.co` document in
+                // the corpus has a non-zero `.po`, and all of them landed their columns
+                // `.po` points per column too far left, overprinting column 1
+                // (`sawyer/REVIEW.DOC` page 1 was unreadable for it). MEASURED against
+                // real WS7 (ws7-prints/v4, PRISTINE.EXE), column origins in points:
+                //   REF/WINGDING.CHT `.po .3"` `.rm .88"` gutter .75"
+                //       WS7: 21.6 / 138.9 / 256.3 / 373.6 / 491.0
+                //       this formula: 21.6 + i*(63.36 + 54) -- exact
+                //       old formula: 21.6 + i*(41.76 + 54)  -- 21.6pt/col short
+                //   REVIEW.DOC `.rm 3.13"` gutter .25": WS7 57.6 / 300.9
+                //   REF/SYMBOL.CHT `.po .0"` -- unchanged either way.
+                // Port of Python's `pdf._apply_columns`.
+                let columnWidthPt = rmPt
                 if merged.columnWidthPt == nil { merged.columnWidthPt = columnWidthPt }
                 pl.left = baseLeft + Double(colIdx) * (columnWidthPt + gutterPt)
                 // planning #227 follow-up: the unambiguous "which column, RESET Y"
@@ -1256,67 +1502,10 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
     return out
 }
 
-/// A bare 0x09 tab byte's print-time expansion target, in document columns — same
-/// constant as `PDFWriter.swift`'s own (now render-time-only-as-fallback) copy.
-private let modelTabModulus = 8
-
-/// Expand every bare 0x09 tab byte in `spans`' own text into the literal spaces
-/// WordStar's print-time rule computes — planning #251 (2026-09-09), moved one layer
-/// EARLIER than planning #244's own fix: `PDFWriter.swift`'s `expandBareTabsForPrintedLayout`
-/// used to do this at RENDER time, on the `[LineSegment]` array built from a `PageLine`'s
-/// `Span`s — which meant only the PDF writer ever saw the expansion; `docToPagelines`'s own
-/// callers (chiefly `emitLayout`'s 'printed' pagelines — the JSON the app's own
-/// `docToPagelines` port reads) still received the raw, un-expanded byte (planning #251,
-/// item 9: RNFOREST/RECYCLE/WETLAND landed a full modulus-8 stop short in the app because of
-/// exactly this). This function does the identical rule (same doc comment, ctrl-kd's own
-/// `_expand_bare_tabs_for_printed_layout` mirrors it too) at MODEL-BUILD time instead, on
-/// `Span`s, before a `PageLine` is ever constructed — so every consumer of the model
-/// (the PDF writer AND the layout JSON) sees the same, already-expanded text. Called ONLY
-/// from Printed-only pageline construction (`resolvePlainBody`'s `if printed` branch,
-/// `resolvePrintedBody`'s unconditional Printed-only body) — Modern's own flow never
-/// calls this and keeps seeing the bare byte, unchanged, matching planning #244's original
-/// Modern-untouched guarantee. Column-tracking matches `PDFWriter.swift`'s own former
-/// semantics exactly: a running count across the WHOLE physical line (every `spans` entry,
-/// in order, regardless of style — a font/colour change never consumes a column), reset to
-/// 0 for each call (one call = one physical line). A literal space (or WS5+ soft space,
-/// already collapsed to plain " " by decode) immediately preceding a bare tab shifts the
-/// modulus-8 stop by the length of that trailing run — planning #237 remainder, see
-/// `PDFWriter.swift`'s own doc comment (still there, unchanged) for the full probe table.
-private func expandBareTabsForPrintedLayout(_ spans: [Span]) -> [Span] {
-    guard spans.contains(where: { $0.text.contains("\t") }) else { return spans }
-    var col = 0
-    var spaceRun = 0
-    return spans.map { span in
-        guard span.text.contains("\t") else {
-            col += span.text.count
-            let trailing = span.text.reversed().prefix(while: { $0 == " " }).count
-            spaceRun = trailing == span.text.count ? spaceRun + trailing : trailing
-            return span
-        }
-        var out = ""
-        out.reserveCapacity(span.text.count)
-        for ch in span.text {
-            if ch == "\t" {
-                let base = col - spaceRun
-                let needed = modelTabModulus - (base % modelTabModulus)
-                out += String(repeating: " ", count: needed)
-                col = base + needed + spaceRun
-                spaceRun = 0
-            } else if ch == " " {
-                out.append(ch)
-                col += 1
-                spaceRun += 1
-            } else {
-                out.append(ch)
-                col += 1
-                spaceRun = 0
-            }
-        }
-        var newSpan = span
-        newSpan.text = out
-        return newSpan
-    }
-}
+// The bare-0x09 expansion this file's Printed pageline construction calls
+// (`expandBareTabsForPrintedLayout`) moved to `EmitterRules.swift` by planning #264
+// item 1 (packet row B3), where Printed RTF and the fixed-pitch HTML block call the
+// same one. Same rule, same doc comment, same column-tracking semantics — see it there.
 
 /// IR -> pages of laid-out lines. Port of `_doc_to_pagelines` (pdf.py:57-112) for Modern
 /// mode; Printed mode is this project's own addition (job — period-authentic footnote
@@ -1338,9 +1527,41 @@ private func expandBareTabsForPrintedLayout(_ spans: [Span]) -> [Span] {
 /// - Returns: at least one page, possibly a single empty one.
 public func docToPagelines(
     _ doc: Document, printed: Bool, pixResults: [PixResult] = [],
-    pictures: EmitOptions.PixMode = .off, sentenceSpacing: Bool = false
+    pictures: EmitOptions.PixMode = .off, sentenceSpacing: Bool = false,
+    maxPages: Int? = nil
 ) -> [Page] {
     let isPrintStream = doc.detection?.variant == .printstream
+    // planning #271 M10. `maxPages: 1` must return EXACTLY the full call's `pages[0]`,
+    // byte for byte -- a thumbnail that disagrees with the document is worse than a slow
+    // one -- so the prefix is only taken where nothing downstream of pagination reads
+    // the pages it would not have built. Three cases where something does, and all three
+    // simply paginate in full and slice at the end (correct, just not faster):
+    //
+    //   a print stream   `finalizePages`' machine-margin strip is a MINIMUM over pages
+    //                    2..n of the whole document. Fewer pages can only raise that
+    //                    minimum, which would strip leading blanks off page 1 that a
+    //                    full run keeps.
+    //   placeable notes  the notes paginator reserves a page's bottom area from the
+    //                    notes its own body references, and that reservation is decided
+    //                    while walking the document, not page by page -- so a prefix is
+    //                    not obviously the same prefix. Measured, not assumed, is the
+    //                    only way this one gets opened up.
+    //   columns          NOT excluded, but budgeted for: `applyColumns` folds n
+    //                    sub-pages into one sheet, so the sub-page cap is n times the
+    //                    caller's page count. `n` is the deepest `.co` the document
+    //                    declares anywhere, which is an over-estimate and is meant to be.
+    //
+    // Plus one spare sub-page in every case, so the page the caller wants is never the
+    // array's last and never meets `finalizePages`' own tail rules early.
+    var rawPageCap: Int? = nil
+    if let maxPages, maxPages > 0, printed, !isPrintStream, !hasPlaceableNotes(doc) {
+        let widest = doc.blocks.compactMap { $0.columns }.max() ?? 1
+        rawPageCap = maxPages * max(1, widest) + 1
+    }
+    func capped(_ pages: [Page]) -> [Page] {
+        guard let maxPages, maxPages > 0, pages.count > maxPages else { return pages }
+        return Array(pages.prefix(maxPages))
+    }
     // Planning #250: resolved once, shared by both `printed` branches below (the
     // "zero real pages" fallback -- GALLEYS.DOT/ADVANCE.DOT) -- see
     // `parityResolvedFallbackHeadFoot`'s own doc comment.
@@ -1373,34 +1594,38 @@ public func docToPagelines(
             // see identical model data regardless of which pagination path a
             // given document takes.
             let attachSize = printedSize(doc)
+            substituteMergePageNumbersPrinted(doc, &notesPages)
             attachJustifyWordXPrinted(doc, &notesPages, size: attachSize)
             attachLineNumbersPrinted(doc, &notesPages, size: attachSize)
             attachGraphicCellsPrinted(doc, &notesPages, size: attachSize)
             attachHeadFootLinesPrinted(doc, &notesPages, size: attachSize, isNotesPath: true)
-            return notesPages
+            return capped(notesPages)
         }
         var plainPages = applyColumns(doc,
             finalizePages(layoutPrintedPagesPlain(doc, pixResults: pixResults,
                                                   pictures: pictures,
-                                                  sentenceSpacing: sentenceSpacing),
+                                                  sentenceSpacing: sentenceSpacing,
+                                                  rawPageCap: rawPageCap),
                          printed: true, isPrintStream: isPrintStream,
                          fallbackHeaders: fallback.headers, fallbackFooters: fallback.footers,
                          fallbackHeadOverride: fallback.headOverride,
                          fallbackFootOverride: fallback.footOverride,
                          fallbackPoCols: fallback.poCols, fallbackPoParity: fallback.poParity))
         let attachSize = printedSize(doc)
+        substituteMergePageNumbersPrinted(doc, &plainPages)
         attachJustifyWordXPrinted(doc, &plainPages, size: attachSize)
         attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
         attachGraphicCellsPrinted(doc, &plainPages, size: attachSize)
         attachHeadFootLinesPrinted(doc, &plainPages, size: attachSize)
-        return plainPages
+        return capped(plainPages)
     }
     // Modern PDF's own real pipeline is `modernStreams` (PDFModernLayout.swift), which
     // embeds since round 22; this legacy Modern layout is not an emitter path for it,
     // so `pixResults`/`pictures` are simply unused on this branch. Modern never calls
     // `runningOps` (`printed` guard), so a fallback header/footer here would be inert —
     // omitted rather than passed for no reason.
-    return finalizePages(layoutModernPages(doc), printed: false, isPrintStream: isPrintStream)
+    return capped(finalizePages(layoutModernPages(doc), printed: false,
+                                isPrintStream: isPrintStream))
 }
 
 /// `{blockIndex: pageNumber}` — the REAL paginator's own answer for which page each
@@ -1813,9 +2038,20 @@ private let footerContinuedLine = "...Continued..."
 /// single local computation covers both call sites. A comment's reference has no
 /// note-area entry of its own (`keepSpanOnPageline`) and never reaches here. Port of
 /// Python's `_notes_marker_pad_cols`.
+///
+/// 2026-09-12 (`sawyer/REF/NOTES.TST`): a note that carries its OWN tab
+/// (`Note.textIndents`, a nested type-9 block in the note's own text stream) states
+/// where its text goes and is left out of this vote entirely — WS7 obeys the document,
+/// not a hang column derived from the other notes. The two documents this finding was
+/// measured on turn out to tab BOTH their notes to column 5, exactly the number this
+/// function returned for them, so they render identically either way; NOTES.TST tabs
+/// its footnotes to 3 and its endnotes to 5, and only its (untabbed) annotations still
+/// ask this question — of one marker width, so the answer is `nil` and their own
+/// single-space join stands, which is what WS7 prints.
 private func notesMarkerPadCols(_ doc: Document) -> Int? {
     var widths = Set<Int>()
     for (i, note) in doc.notes.enumerated() {
+        if note.textIndents.contains(where: { $0 != 0 }) { continue }
         switch note.kind {
         case .footnote: widths.insert("\(noteLabel(note, doc: doc, index: i))." .width)
         case .endnote: widths.insert("(\(noteLabel(note, doc: doc, index: i)))".width)
@@ -1887,6 +2123,66 @@ private func noteMarker(_ note: Note, doc: Document, index: Int) -> String {
 /// boundaries), so this only matters where the segment STRUCTURE is itself observed --
 /// `layout.json`'s `printed.pages[].lines[].segments` (planning #202 residuals round,
 /// AnswerKeyParityTests' `LYING.WS.layout.*` divergence, LYING's own "1.Did" case).
+/// One note's own PHYSICAL text lines (`Note.textLines`), with the sentence-spacing and
+/// euro-table passes already applied -- what the page-bottom and endnote areas actually
+/// print.
+///
+/// WordStar stores a note as the author typed it and prints it the same way: a hard
+/// return inside the note text is a hard return on paper. MEASURED (ws7-prints/v4,
+/// PRISTINE.EXE): each of the 19 TAGS/ annotations in the Sawyer archive stores a
+/// LEADING EMPTY line, and real WS7 prints the tag alone on the note area's first line
+/// with the text on the next -- `sawyer/TAGS/WHY` puts "[Why?]" at 672.0pt and "Why?"
+/// at 684.0pt. Flowing the note's lines into one string put both on a single line and
+/// lifted the whole (bottom-anchored) area a line.
+///
+/// A note with no `textLines` at all -- a dot-line comment, a synthetic fixture built by
+/// hand -- falls back to its flowed `text` as one line, byte-identical to this
+/// function's predecessor. Port of Python's `pdf._note_texts`.
+private func noteTexts(_ note: Note, doc: Document, sentenceSpacing: Bool) -> [String] {
+    let raw = note.textLines.isEmpty ? [note.text] : note.textLines
+    let spaced = sentenceSpacing ? sentenceSpacingTexts(raw) : raw
+    let euro = pesetaMeansEuro(doc)
+    return spaced.map { euroText($0, euro) }
+}
+
+/// One note's rendered lines, the marker joining the line it is STORED on. Port of
+/// Python's `pdf._note_wrap(marker, texts, width, tag_line)`.
+///
+/// `indents` (`Note.textIndents`, 2026-09-12) is the note's own TAB per physical line —
+/// an ABSOLUTE column from the note area's left margin, 0 for a line that tabs nothing.
+/// A tab MOVES RIGHT only: WordStar cannot pull text back over a marker already
+/// printed, so a column at or left of where the line already stands is spent and leaves
+/// no gap (the same reading a body tab gets). MEASURED against real WS7 (ws7-prints/v4,
+/// PRISTINE.EXE) on `sawyer/REF/NOTES.TST`: footnote marker "1." at 57.6pt with its
+/// text tabbed to HMI 540 prints "Footnote One." at 79.2pt (column 3); endnote "(1)"
+/// with HMI 900 prints "Endnote one." at 93.6pt (column 5).
+func noteWrapLines(marker: String, texts: [String], width: Int,
+                           tagLine: Int, separateSpans: Bool,
+                           indents: [Int] = []) -> [PageLine] {
+    let texts = texts.isEmpty ? [""] : texts
+    let tagLine = Swift.min(Swift.max(0, tagLine), texts.count - 1)
+    var out: [PageLine] = []
+    for (n, line) in texts.enumerated() {
+        let col = n < indents.count ? indents[n] : 0
+        if n == tagLine {
+            let head = col > marker.width
+                ? marker + String(repeating: " ", count: col - marker.width)
+                : marker
+            out.append(contentsOf: separateSpans
+                ? wrapLine([Span(text: head), Span(text: line)], width: width)
+                : wrapLine([Span(text: "\(head)\(line)")], width: width))
+        } else if col > 0 {
+            let pad = String(repeating: " ", count: col)
+            out.append(contentsOf: separateSpans
+                ? wrapLine([Span(text: pad), Span(text: line)], width: width)
+                : wrapLine([Span(text: "\(pad)\(line)")], width: width))
+        } else {
+            out.append(contentsOf: wrapLine([Span(text: line)], width: width))
+        }
+    }
+    return out
+}
+
 private func footerEntryLines(_ note: Note, doc: Document, index: Int,
                               width: Int, padCols: Int? = nil,
                               sentenceSpacing: Bool = false,
@@ -1896,8 +2192,7 @@ private func footerEntryLines(_ note: Note, doc: Document, index: Int,
     // punctuation of its own to interact with.
     // planning #266: the driver-keyed cp437-158 rule (`pesetaMeansEuro`) -- a note is part
     // of the document, and this path reads `note.text` straight off it.
-    let noteText = euroText(sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text,
-                            pesetaMeansEuro(doc))
+    let noteTextLines = noteTexts(note, doc: doc, sentenceSpacing: sentenceSpacing)
     let marker: String
     switch note.kind {
     case .footnote:
@@ -1905,13 +2200,13 @@ private func footerEntryLines(_ note: Note, doc: Document, index: Int,
         marker = padCols != nil ? padMarker(base, padCols: padCols) : base
     case .annotation:
         marker = padMarker(noteMarker(note, doc: doc, index: index), padCols: padCols)
-    default: return wrapLine([Span(text: noteText)], width: width)
-                                              // unreached: endnotes/comments never queue here
+    default:
+        // unreached: endnotes/comments never queue here
+        return wrapLine([Span(text: noteTextLines.joined(separator: " "))], width: width)
     }
-    if separateSpans {
-        return wrapLine([Span(text: marker), Span(text: noteText)], width: width)
-    }
-    return wrapLine([Span(text: "\(marker)\(noteText)")], width: width)
+    return noteWrapLines(marker: marker, texts: noteTextLines, width: width,
+                         tagLine: note.tagLine, separateSpans: separateSpans,
+                         indents: note.textIndents)
 }
 
 /// The true-end-of-document entry for one endnote — factory-default mark `(1)`.
@@ -1923,12 +2218,10 @@ private func endnoteEntryLines(_ note: Note, doc: Document, index: Int,
                                separateSpans: Bool = true) -> [PageLine] {
     let marker = padMarker("(\(noteMarker(note, doc: doc, index: index)))", padCols: padCols)
     // planning #266: see `footerEntryLines`.
-    let noteText = euroText(sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text,
-                            pesetaMeansEuro(doc))
-    if separateSpans {
-        return wrapLine([Span(text: marker), Span(text: noteText)], width: width)
-    }
-    return wrapLine([Span(text: "\(marker)\(noteText)")], width: width)
+    return noteWrapLines(marker: marker,
+                         texts: noteTexts(note, doc: doc, sentenceSpacing: sentenceSpacing),
+                         width: width, tagLine: note.tagLine, separateSpans: separateSpans,
+                         indents: note.textIndents)
 }
 
 /// Blocks -> printed body items, fixing up every `fnref` span's displayed text along the
@@ -1952,8 +2245,8 @@ private func resolvePrintedBody(
     sentenceSpacing: Bool = false
 ) -> [PrintedBodyItem] {
     // ALL kinds are numbered by the parser's shared counter since M9 (comments
-    // included), so the cursor walks all of `doc.notes`; a comment consumes its
-    // position and renders NOTHING — never printed: no ink, no ref.
+    // included), so a mark's own number indexes all of `doc.notes`; a comment
+    // holds its position and renders NOTHING — never printed: no ink, no ref.
     let referenced = inlineReferenceNotes(doc)
     // planning #266: this document's own driver-keyed cp437-158 rule, resolved once.
     let euro = pesetaMeansEuro(doc)
@@ -1968,9 +2261,8 @@ private func resolvePrintedBody(
     // round 26 wave 3 (fidelity_gate.py Finding B): same carried-governing-size mechanism
     // as `resolvePlainBody` — see `fontLeadPt`.
     var fontLeadState: Double? = nil
-    let fontLeadOk = doc.fonts.contains { $0.proportional } && doc.page?.lhSource != .file
+    let fontLeadOk = doc.blocks.contains { $0.lhAuto } && doc.page?.lhSource != .file
     let fontLeadBase = fontLeadOk ? Double(printedSize(doc)) : 0.0
-    var cursor = 0
     var items: [PrintedBodyItem] = []
     // Planning #245 (closing the scope gap this comment used to document at planning
     // #227): `.cb`/`.cc` now get the SAME sentinel treatment `resolvePlainBody` already
@@ -2039,12 +2331,17 @@ private func resolvePrintedBody(
         // Indexed (not a plain `for`) so an embedded pix substitution below can look
         // ahead and CONSUME the blank placeholder lines WordStar reserved for it — see
         // `pixReservedAdvance`.
+        // planning #270 item 37: the same `.pf on` print-time re-wrap
+        // `resolvePlainBody` applies -- this function is its sibling for a document
+        // with placeable notes, and the two must not disagree about what the physical
+        // lines of a realigning paragraph are.
+        let blkLines = pfRewrappedLines(doc, block)
         var li = 0
-        while li < block.lines.count {
+        while li < blkLines.count {
             // planning #238 scope gap: same pre-increment index `resolvePlainBody`
             // uses to spot a block's own last line.
             let lineIdx = li
-            let line = block.lines[li]
+            let line = blkLines[li]
             li += 1
             let baseSpans = line.spans.map { sp -> Span in
                 let styles = effectiveSpanStyles(sp, block: block, headingBold: true)
@@ -2066,7 +2363,21 @@ private func resolvePrintedBody(
             var outSpans: [Span] = []
             var due: [(note: Note, index: Int)] = []
             for span in baseSpans {
-                guard span.styles.contains(.fnref), cursor < referenced.count else {
+                // a ^ONI index ENTRY is the index file's text, not the page's — see
+                // `keepSpanOnPageline`, which applies the same rule on the plain
+                // (note-free) printed path
+                if span.indexEntry { continue }
+                // The mark's OWN text is the reference — `symmetricBlocks` numbers every
+                // note kind through one counter in document order, and that number is
+                // what the span carries. This used to walk `referenced` with a running
+                // cursor instead, one step per `fnref` span seen, which agrees with the
+                // text only while EVERY mark reaches this loop: `pfRewrappedLines` now
+                // takes a comment's mark off the line before anything printed sees it
+                // (`dropCommentMarks`), and a cursor then resolved every later mark to
+                // the wrong note. ctrl-kd's `_body_stream_printed` has always read the
+                // text (`k = int(s.text)`); this is that, ported.
+                guard span.styles.contains(.fnref), let k = Int(span.text),
+                      k >= 1, k <= referenced.count else {
                     // planning #266: the driver-keyed cp437-158 rule (`pesetaMeansEuro`).
                     // This path reads the document's own spans directly and never passes
                     // through `modernSemanticFlow`, so it applies the rule itself.
@@ -2075,9 +2386,8 @@ private func resolvePrintedBody(
                     outSpans.append(converted)
                     continue
                 }
-                let noteIndex = cursor
-                let note = referenced[cursor]
-                cursor += 1
+                let noteIndex = k - 1
+                let note = referenced[noteIndex]
                 if note.kind == .comment {
                     continue                     // never printed: no ink, no ref (M9)
                 }
@@ -2135,7 +2445,7 @@ private func resolvePrintedBody(
             // round 26 wave 3 (fidelity_gate.py Finding B): a WS5+ FONT-BLOCK document
             // with no style governing this line (ownLead still nil) gets its lead from
             // the font block actually in force. See `fontLeadPt`.
-            if ownLead == nil, fontLeadOk {
+            if ownLead == nil, fontLeadOk, block.lhAuto {
                 ownLead = fontLeadPt(line, fonts: doc.fonts, baseSize: fontLeadBase,
                                      state: &fontLeadState)
             }
@@ -2152,7 +2462,7 @@ private func resolvePrintedBody(
                let sub = spansPixSubstitution(outSpans.map { (text: $0.text, pix: $0.pix) },
                                               pixMap: pixMap, maxWPt: textWidthPt) {
                 let (reserved, nBlank) = pixReservedAdvance(
-                    block.lines, startIdx: li, ownLeadPt: ownLead ?? defaultLeadPt)
+                    blkLines, startIdx: li, ownLeadPt: ownLead ?? defaultLeadPt)
                 li += nBlank
                 items.append(.line(PageLine([], soft: line.soft, lead: reserved,
                                             overprint: line.overprint, bi: bi,
@@ -2170,7 +2480,7 @@ private func resolvePrintedBody(
             // Planning #251 (2026-09-09): model-build-time bare-tab expansion, same
             // point ctrl-kd's own `_body_stream_printed` sibling applies it (right
             // before this function's own PageLine construction) — see
-            // `expandBareTabsForPrintedLayout`'s own doc comment above.
+            // `expandBareTabsForPrintedLayout`'s own doc comment (`EmitterRules.swift`).
             outSpans = expandBareTabsForPrintedLayout(outSpans)
             // A PageLine, not a bare list of spans, so the line's own `.lh` survives the
             // footnote paginator too — body lines keep their lead whether or not the
@@ -2188,8 +2498,17 @@ private func resolvePrintedBody(
             // was measured against; duplicated rather than shared since the two
             // functions' loops read from different local names for otherwise-
             // identical quantities.
+            // A `.oc on` line's own centring tab is the EDITOR's arithmetic; the
+            // printer re-centres on the ink alone (see recentredCentreTabSpans).
+            outSpans = recentredCentreTabSpans(outSpans, block: block, doc: doc)
             var justifyRightX: Double? = nil
-            if block.align == .justify, lineIdx < block.lines.count - 1 {
+            // planning #270 item 37: under `.pf on` the PARAGRAPH is the unit, and
+            // WordStar never justifies a paragraph's LAST line -- which is exactly
+            // what `line.soft` says after the re-wrap. Without `.pf` the block remains
+            // the unit, unchanged.
+            let lastInUnit = block.printReformat == "on"
+                ? !line.soft : lineIdx >= blkLines.count - 1
+            if block.align == .justify, !lastInUnit {
                 let poOriginPt = ownLeft ?? printedLeft(doc, size: sizeForLeft)
                 let rmCols = block.rightMargin ?? 65.0
                 justifyRightX = poOriginPt + rmCols * pdfPtPerCol
@@ -2260,6 +2579,45 @@ func landscapePage(_ page: PageGeometry) -> PageGeometry {
     eff.heightIn = pwIn
     eff.pwIn = heightIn
     return eff
+}
+
+/// The document an emitter actually lays out: `options.pageSettings` folded in, then
+/// Printed's `.pr or=l` rotation on top of it, in that order. THE one place that order is
+/// written down.
+///
+/// `options.pageSettings` is replacement geometry for everything the document does not
+/// declare itself (a field is overridden only when its own resolved value is still this
+/// project's built-in default — a document's own dot commands always win), because
+/// WordStar's stock defaults are not what a given machine printed: WSCHANGE patches them
+/// per installation. Applied to a COPY — `Document` is a value type, so there is nothing to
+/// restore afterward, unlike Python's save/try/finally dance around a shared mutable
+/// `doc.meta['page']`. The CLI applies the same thing once per document (`Run.swift`) via
+/// the same `effectivePage` (EmitOptions.swift).
+///
+/// The rotation is PRINTED-ONLY (b24 round 17, RULINGS-LEDGER row 2), same doctrine as
+/// every other Printed-only geometry item, and lands AFTER `pageSettings` — matching
+/// ctrl-kd: page-settings replacement geometry, then orientation swap on top of it.
+///
+/// WHY IT IS A FUNCTION (planning #271 M2). Both steps used to be written inline at the top
+/// of `emitPDF`, and the public façade the app draws its on-screen Printed page from
+/// (`printedMetrics`, PrintedGeometry.swift) did NEITHER: a landscape document measured a
+/// 612-wide portrait page on screen while the exported PDF used the rotated 792x612 and
+/// anchored its running content, note area and first baseline to that — the same document
+/// two ways, which is the exact failure that file exists to prevent. `printedDocument` is
+/// the public form of this call; nothing outside re-derives the order.
+///
+/// `printed` is the caller's own already-resolved mode flag (`mode == .printed ||
+/// isPrinted(doc)`), not re-derived here, so a caller that already knows which page it is
+/// asking about (the façade: always Printed) does not have to fake a `Document` to say so.
+func resolvedGeometryDocument(_ doc: Document, printed: Bool, options: EmitOptions) -> Document {
+    var out = doc
+    if let pageSettings = options.pageSettings, let page = out.page {
+        out.page = effectivePage(page, settings: pageSettings)
+    }
+    if printed, out.formatting.orientation == .landscape, let page = out.page {
+        out.page = landscapePage(page)
+    }
+    return out
 }
 
 /// Resolved page height, in points, for THIS document — the general form of Python's
@@ -2396,6 +2754,56 @@ func printedCapFor(_ doc: Document, mtLines: Double, mbLines: Double, plLines: D
     let lh = doc.page?.lh48 ?? defaultLh48
     let local = max(footnoteFloor + 1, textLinesPerPage(pl: pl, mt: mtLines, mb: mbLines, lh48: lh))
     return max(local, printedCap(doc))
+}
+
+/// A printed page's own vertical budget IN POINTS -- the real text height
+/// `.pl - .mt - .mb` measures on paper, at the 6 LPI grid those three commands are
+/// counted on (`PDFMetrics.lead`, 12pt a line), NOT that height re-quantized to a whole
+/// number of DEFAULT leads. Port of Python's `pdf._printed_budget_pt`.
+///
+/// `printedCap` answers a different question -- "how many default-lead lines fit" -- and
+/// answering it requires a FLOOR (`textLinesPerPage`'s own `Int(usable * 8 / lh48)`).
+/// Spending the floored count back out as `cap * defaultLead` throws away the page's own
+/// fractional remainder: up to one default lead of real paper that WordStar does put
+/// lines on whenever the lines that land there are SHORTER than the default. Measured
+/// against real WS7 (`ws7-prints/v4`, PRISTINE.EXE), on the four documents that pair a
+/// fractional-inch `.mt` with an explicit `.lh 14pt` and open with two 12pt lines before
+/// that `.lh` takes effect:
+///
+///   | Doc | `.mt`/`.mb` | usable | cap x 14pt | WS7 | old | new |
+///   |---|---|---:|---:|---:|---:|---:|
+///   | REF/WINGDING.CHT | 1.6"/.3" | 655.2pt | 644 | 2 + 45 | 2 + 44 | 2 + 45 |
+///   | REF/SYMBOL.CHT | 1.2"/.3" | 684.0pt | 672 | 2 + 47 | 2 + 46 | 2 + 47 |
+///   | PRINTERS/fontcrib.ws | .4"/.3" | 741.6pt | 728 | 2 + 51 | 2 + 50 | 2 + 51 |
+///   | PRINTER.PS | .4"/.3" | 741.6pt | 728 | 2 + 51 | 2 + 50 | 2 + 51 |
+///
+/// Every one lost EXACTLY one line per page, on every column of every page.
+///
+/// BYTE-IDENTICAL WHEREVER THE LEAD IS UNIFORM, which is the whole corpus outside those
+/// documents: with every line on a page carrying the same lead `L`, `n` lines fit iff
+/// `n * L <= usablePt`, i.e. `n <= floor(usablePt / L)` -- and when `L` is the document
+/// default that floor IS `cap`, so the answer does not move. The remainder can only ever
+/// be spent by a line whose own lead is SMALLER than the default, which is exactly the
+/// mixed-`.lh` page this corrects (register open question #15's second half, now
+/// measured rather than guessed).
+///
+/// NEVER BELOW `cap * defaultLead`: `printedCap`/`printedCapFor` carry two rulings that
+/// RAISE the line count above what this page's own `.pl/.mt/.mb` would give -- the
+/// `footnoteFloor + 1` floor, and b26-mtmb-general's `max(local, global)` (a mid-document
+/// margin change may loosen a page, never tighten it). Both are expressed in lines, so
+/// they are re-applied here as `cap * defaultLead` and win when they are the larger
+/// number; a `.pl 0` document (capacity 10^9, page breaks off) falls out of the same max
+/// with no special case.
+func printedBudgetPt(_ doc: Document, capacity: Int, defaultLead: Double,
+                     mtLines: Double? = nil, mbLines: Double? = nil,
+                     plLines: Double? = nil) -> Double {
+    let pl = plLines ?? (doc.page?.plLines ?? defaultPlLines)
+    let mt = mtLines ?? (doc.page?.mtLines ?? defaultMtLines)
+    let mb = mbLines ?? (doc.page?.mbLines ?? defaultMbLines)
+    let ruledFloor = Double(capacity) * defaultLead
+    let usablePt = (pl - mt - mb) * Double(PDFMetrics.lead)
+    if !usablePt.isFinite { return ruledFloor }
+    return max(ruledFloor, usablePt)
 }
 
 /// `[(blockIndex, mtLines, mbLines), ...]` in ascending block order — the `.mt`/`.mb`
@@ -2666,22 +3074,143 @@ func leftForParity(_ po: Double, _ poe: Double?, _ poo: Double?, isEven: Bool) -
 /// `hmFmCheckpoints` seed at the hardcoded default rather than `doc.page?.pnStart` -- see
 /// their doc comments. Same hand-built-fixture fallback too: no `.pn` entry anywhere in
 /// `dotPositions` reseeds from `doc.page?.pnStart`.
-func pnCheckpoints(_ doc: Document) -> [(blockIndex: Int, pn: Int)] {
-    var checkpoints: [(blockIndex: Int, pn: Int)] = [(0, 1)]
+/// 2026-09-12: a `.pn` is a real checkpoint even when its VALUE repeats one already
+/// seen. The old guard compared against the last checkpoint's number rather than
+/// against the number this page would otherwise have taken, and so threw away every
+/// restart-to-a-number-already-used. MEASURED against real WS7 (ws7-prints/v4,
+/// PRISTINE.EXE) on `sawyer/REF/CTRL-K.H1`, whose mid-document `.pn1` follows five
+/// pages numbered 1-5: WS7 numbers its remaining sheets 6, 7, 8, 9 as pages 1, 2, 3, 4
+/// -- which is also the parity its own `^K` even-page header rule reads
+/// (`ctrlKEvenPage`). Two `.pn` inside the SAME block keep the last; a `.pn` in block 0
+/// replaces the seed rather than doubling it.
+func pnCheckpoints(_ doc: Document) -> [PNCheckpoint] {
+    var checkpoints: [PNCheckpoint] = [PNCheckpoint(blockIndex: 0, lineIndex: 0, pn: 1)]
+    var sawPN = false
     for dp in doc.dotPositions {
         guard let (name, arg) = dotCommandNameAndArg(Array(dp.text.utf8)) else { continue }
         let upperName = String(decoding: name.map(asciiUppercased), as: UTF8.self)
         guard upperName == "PN" else { continue }
         guard let (value, _) = parseDotNumber(arg) else { continue }
         let intValue = Int(value)
-        if intValue != checkpoints[checkpoints.count - 1].pn {
-            checkpoints.append((dp.blockIndex, intValue))
+        sawPN = true
+        // Two `.pn` commands at the SAME position keep the last one (the later command
+        // wins, as for any other stateful dot command); a `.pn` at the seed's own
+        // position replaces the seed rather than doubling it. POSITION, not block
+        // (triage Q12): a block can hold two `.pn` commands sixty lines apart --
+        // `-HOLYMAC.WS`'s front matter is one such block -- and merging them by block
+        // index alone threw away the first and moved the second's page.
+        let last = checkpoints[checkpoints.count - 1]
+        if last.blockIndex == dp.blockIndex && last.lineIndex == dp.lineIndex {
+            checkpoints[checkpoints.count - 1] = PNCheckpoint(
+                blockIndex: dp.blockIndex, lineIndex: dp.lineIndex, pn: intValue)
+        } else {
+            checkpoints.append(PNCheckpoint(blockIndex: dp.blockIndex,
+                                            lineIndex: dp.lineIndex, pn: intValue))
         }
     }
-    if checkpoints.count == 1 {
+    if !sawPN {
         checkpoints[0].pn = doc.page?.pnStart ?? 1
     }
     return checkpoints
+}
+
+/// One `.pn` re-anchor, with the position it was read at.
+///
+/// THE LINE INDEX (triage Q12, probes 2026-09-14) is `dotPositions`' own second field:
+/// how many of that block's lines came BEFORE the command. A block index alone is too
+/// coarse for the same reason it was too coarse for a running head (triage Q9,
+/// `Document.hfEventsWithin`) -- WordStar stores a `.pn` typed mid-paragraph between two
+/// of that paragraph's own physical lines, and `-HOLYMAC.WS` does exactly that: its
+/// second `.pn0` sits immediately after "Charles Maher", the last line page 1 has room
+/// for. Read at block granularity it re-anchored the numbering ON page 1, which printed
+/// a `0` real WS7 does not print.
+struct PNCheckpoint {
+    var blockIndex: Int
+    var lineIndex: Int
+    var pn: Int
+}
+
+/// One `.pn`/`.pg`/`.op` toggle of the automatic number, with the position it was read at
+/// — the same anchor `PNCheckpoint` carries, for the same reason.
+struct PgnumCheckpoint {
+    var blockIndex: Int
+    var lineIndex: Int
+    var on: Bool
+}
+
+/// For each page, the index of the LAST checkpoint READ on or before it — the one shared
+/// walk `resolvePageNumbers` and the automatic-number toggle (`pgnumByPage`) both need,
+/// so the two cannot disagree about where a `.pn` was read.
+///
+/// A checkpoint has been read by the end of a page when the paginator, ON that page, had
+/// got past its position. THE POSITION IS THE PAGE'S OWN `readPos` — `(block, how many
+/// lines of that block this page had read)` when it closed — and NOT a count taken off
+/// the finished pages, because `finalizePages` strips a page's trailing blanks: a page of
+/// nothing but blank lines ends up empty, with no `bi` on it at all, which is precisely
+/// the shape a leading blank run makes. A page that never got one (a synthetic or
+/// degenerate page) inherits the last real position rather than resetting the walk.
+///
+/// A PAGE WITH NO POSITION AT ALL — not even an inherited one, because no earlier page
+/// had one either — FALLS BACK TO THE BLOCK-RANGE RULE, the granularity this walk
+/// replaced on 2026-09-14: the last checkpoint whose block index is at or before the
+/// highest block index this page carries. Leaving it on the seeded checkpoint 0 instead
+/// silently answered "the document's opening default" for a page that plainly reads
+/// further in, and the document's own `.op` was never consulted: `LYING.WS` numbered all
+/// three of its pages where real WordStar 7 numbers none of them, because the footnote
+/// paginator set no `readPos` and LYING's `.op` is checkpoint 1 (research: "Why real WS7
+/// prints no page number on some documents", 2026-09-15). Never moves BACKWARD — the
+/// walk's consumers (`resolvePageNumbers`' re-anchor test) read a falling index as a new
+/// anchor.
+///
+/// Checkpoints are ascending, so the first one this page has not reached stops the walk:
+/// nothing after it can have been reached either. Port of `_checkpoints_by_page`.
+func checkpointsByPage(_ positions: [(blockIndex: Int, lineIndex: Int)],
+                       _ pages: [Page]) -> [Int] {
+    var out: [Int] = []
+    var last = 0
+    var pos: PageReadPos?
+    for pg in pages {
+        if let p = pg.readPos { pos = p }
+        if let pos {
+            var idx = last + 1
+            while idx < positions.count {
+                let cp = positions[idx]
+                if !(cp.blockIndex < pos.bi
+                     || (cp.blockIndex == pos.bi && cp.lineIndex < pos.count)) { break }
+                last = idx
+                idx += 1
+            }
+        } else {
+            last = max(last, checkpointByBlock(positions, pg))
+        }
+        out.append(last)
+    }
+    return out
+}
+
+/// The BLOCK-RANGE answer for one page: the index of the last checkpoint whose block
+/// index is at or before the highest block index the page carries — `pgnumAt`/`plAt`'s own
+/// "last checkpoint at or before this block wins" contract, as an index rather than a
+/// value so the positional walk above can keep using it as a floor.
+///
+/// A page carrying no `bi` at all (nothing but emitter-made lines — a footnote-area-only
+/// page, a blank page whose trailing blanks were stripped) has no block range to test, so
+/// it keeps whatever the walk already had. Port of `_checkpoint_by_block`.
+func checkpointByBlock(_ positions: [(blockIndex: Int, lineIndex: Int)],
+                       _ pg: Page) -> Int {
+    var top: Int?
+    for ln in pg {
+        if let bi = ln.bi, top == nil || bi > top! { top = bi }
+    }
+    guard let top else { return 0 }
+    var last = 0
+    var idx = 1
+    while idx < positions.count {
+        if positions[idx].blockIndex > top { break }
+        last = idx
+        idx += 1
+    }
+    return last
 }
 
 /// `[pageNumber, ...]`, one per `pages` (ascending, from `docToPagelines`) -- walks the
@@ -2697,26 +3226,19 @@ func pnCheckpoints(_ doc: Document) -> [(blockIndex: Int, pn: Int)] {
 /// used, so a checkpoint sitting mid-page is applied to THAT page (not the next one) and
 /// never re-applied to a later page that also happens to satisfy `cp.blockIndex <=
 /// pageMaxBi`.
-func resolvePageNumbers(_ checkpoints: [(blockIndex: Int, pn: Int)], _ pages: [Page]) -> [Int] {
+func resolvePageNumbers(_ checkpoints: [PNCheckpoint], _ pages: [Page]) -> [Int] {
     var numbers: [Int] = []
     var current: Int?
-    var appliedBi = -1
-    for pg in pages {
-        let pageMaxBi = pg.compactMap(\.bi).max()
-        var candidate: (blockIndex: Int, pn: Int)?
-        if let pageMaxBi {
-            for cp in checkpoints where appliedBi < cp.blockIndex && cp.blockIndex <= pageMaxBi {
-                candidate = cp     // last match in range wins
-            }
-        }
-        if let candidate {
-            appliedBi = candidate.blockIndex
-            current = candidate.pn
-        } else if current == nil {
-            current = checkpoints[0].pn
+    var previous = -1
+    let byPage = checkpointsByPage(
+        checkpoints.map { (blockIndex: $0.blockIndex, lineIndex: $0.lineIndex) }, pages)
+    for idx in byPage {
+        if current == nil || idx > previous {
+            current = checkpoints[idx].pn      // re-anchored on this page
         } else {
             current! += 1
         }
+        previous = idx
         numbers.append(current!)
     }
     return numbers
@@ -2756,8 +3278,9 @@ func resolvePageNumbers(_ checkpoints: [(blockIndex: Int, pn: Int)], _ pages: [P
 /// for the overwhelming majority of documents that never touch any of these four
 /// commands (they now get the stock automatic number instead of none). `.on`/`.off`
 /// bypass this entirely -- see `emitPDF`'s own call site (PDFWriter.swift).
-func pgnumCheckpoints(_ doc: Document) -> [(blockIndex: Int, on: Bool)] {
-    var checkpoints: [(blockIndex: Int, on: Bool)] = [(0, true)]
+func pgnumCheckpoints(_ doc: Document) -> [PgnumCheckpoint] {
+    var checkpoints: [PgnumCheckpoint] = [PgnumCheckpoint(blockIndex: 0, lineIndex: 0,
+                                                          on: true)]
     for dp in doc.dotPositions {
         // No word-boundary check: a real WS7 file overwhelmingly writes `.pn0`/`.pn22`/
         // `.pg` with NO space before a following digit, and `dotCommandNameAndArg`'s own
@@ -2775,17 +3298,33 @@ func pgnumCheckpoints(_ doc: Document) -> [(blockIndex: Int, on: Bool)] {
         } else {
             continue
         }
-        if value != checkpoints[checkpoints.count - 1].on {
-            checkpoints.append((dp.blockIndex, value))
+        let last = checkpoints[checkpoints.count - 1]
+        if value != last.on {
+            checkpoints.append(PgnumCheckpoint(blockIndex: dp.blockIndex,
+                                               lineIndex: dp.lineIndex, on: value))
+        } else if last.blockIndex == dp.blockIndex && last.lineIndex == dp.lineIndex {
+            checkpoints[checkpoints.count - 1] = PgnumCheckpoint(
+                blockIndex: dp.blockIndex, lineIndex: dp.lineIndex, on: value)
         }
     }
     return checkpoints
 }
 
+/// Whether the automatic page number is ON, per page — the positional twin of `pgnumAt`
+/// (triage Q12, probes 2026-09-14). `.pn`/`.pg` turn it on and `.op` turns it off, and
+/// WHERE each one is read is the same question `resolvePageNumbers` asks, so it is the
+/// same walk: `checkpointsByPage`. Read at block granularity, `-HOLYMAC.WS`'s second
+/// `.pn0` — which sits immediately after "Charles Maher", the last line page 1 has room
+/// for — turned numbering back on ON page 1 and printed a `0` real WS7 does not print.
+func pgnumByPage(_ checkpoints: [PgnumCheckpoint], _ pages: [Page]) -> [Bool] {
+    checkpointsByPage(checkpoints.map { (blockIndex: $0.blockIndex, lineIndex: $0.lineIndex) },
+                      pages).map { checkpoints[$0].on }
+}
+
 /// Whether the automatic page number is ON at block index `bi`, per `checkpoints`
 /// (ascending, from `pgnumCheckpoints`) -- the LAST checkpoint at or before `bi`,
 /// mirroring `plAt`/`hmFmAt`. Port of ctrl-kd's `_pgnum_at`.
-func pgnumAt(_ checkpoints: [(blockIndex: Int, on: Bool)], _ bi: Int) -> Bool {
+func pgnumAt(_ checkpoints: [PgnumCheckpoint], _ bi: Int) -> Bool {
     var on = checkpoints[0].on
     for cp in checkpoints {
         if cp.blockIndex > bi { break }
@@ -3016,7 +3555,7 @@ func printedLead(_ doc: Document) -> Double {
 /// same gates they already use. Port of `pdf.resolved_printed_leads_48`.
 func resolvedPrintedLeads48(_ doc: Document) -> [Int: Double] {
     var fontLeadState: Double? = nil
-    let fontLeadOk = doc.fonts.contains { $0.proportional } && doc.page?.lhSource != .file
+    let fontLeadOk = doc.blocks.contains { $0.lhAuto } && doc.page?.lhSource != .file
     let fontLeadBase = fontLeadOk ? Double(printedSize(doc)) : 0.0
     let defaultLeadPt = printedLead(doc)
     var out: [Int: Double] = [:]
@@ -3046,7 +3585,7 @@ func resolvedPrintedLeads48(_ doc: Document) -> [Int: Double] {
             if let styleLead {
                 ownLead = styleLead
             }
-            if ownLead == nil, fontLeadOk {
+            if ownLead == nil, fontLeadOk, block.lhAuto {
                 ownLead = fontLeadPt(line, fonts: doc.fonts, baseSize: fontLeadBase,
                                      state: &fontLeadState)
             }
@@ -3072,7 +3611,7 @@ func resolvedPrintedLeads48(_ doc: Document) -> [Int: Double] {
                 if let styleLead {
                     ownLead = styleLead
                 }
-                if ownLead == nil, fontLeadOk {
+                if ownLead == nil, fontLeadOk, block.lhAuto {
                     ownLead = fontLeadPt(line, fonts: doc.fonts, baseSize: fontLeadBase,
                                          state: &fontLeadState)
                 }
@@ -3136,29 +3675,348 @@ public let typedIndentSpaceEM = 0.336
 /// li=0 an unstyled/WS4 Printed RTF paragraph already gets from the SAME round 6 code.
 /// `nil` when the block never set `.pm`. Port of Python's `_printed_pm_fi_pt`.
 ///
-/// TYPED-INDENT OFFSET (PCL tier, WARPRAYR.WS, planning #202, ctrl-kd 8956ad4): `.pm`'s
-/// column is where a paragraph's first line auto-indents to when WordStar STARTS it under
-/// that margin — it is not an amount added on top of whatever the author already typed
-/// there by hand. WARPRAYR's two Quote-styled blocks (`paraMargin` 5, from the style
-/// record, not a literal `.pm`) open each stanza with 10 literal leading spaces the author
-/// typed — real WS7 (ws7-prints/v1/WARPRAYR.pcl/.measurements.json, page 1 y=448.5 and
-/// page 2 y=326.1/369.6/513.3/556.5) prints those lines at exactly left-edge + 10 typed
-/// columns (e.g. 50.4 + 72.0 = 122.4pt) — the style's own 5-column indent contributes
-/// NOTHING once the typed text already reaches column 10. Modelled as `max(0, pmCols -
-/// alreadyTypedCols)`: a typed indent SHORTER than `.pm`'s column still gets topped up to
-/// it; one that already reaches or passes it adds nothing further. Blank leading lines are
-/// skipped — this reads the block's first REAL (non-blank) line, the same line the
-/// pageline pass ultimately applies `fi` to.
-func printedPMFiPt(_ block: Block) -> Double? {
-    guard let paraMargin = block.paraMargin else { return nil }
-    var typedCols = 0.0
-    if let firstReal = block.lines.first(where: { line in
-        line.spans.contains { $0.text.contains { !$0.isWhitespace } }
-    }) {
-        let text = firstReal.spans.map { $0.text }.joined()
-        typedCols = Double(text.prefix(while: { $0 == " " }).count)
+/// The rule itself — `.pm`'s absolute column, reduced by whatever the author already
+/// typed, clamped at zero — is `pmFirstLineIndentCols` (EmitterRules.swift), where
+/// planning #264 item 2 moved it so Printed RTF asks the same question. Its doc comment
+/// carries the WARPRAYR.WS (planning #202) and -HOW-TO.RJS (planning #257) evidence.
+/// This function is only that answer in points.
+///
+/// `.pf` GATE (planning #270 item 39 / triage Q6, 2026-09-14; port of ctrl-kd). A
+/// paragraph margin reaches the PRINTED page only through print-time realignment.
+/// MicroPro's own file-format reference says so in one sentence — `.PF`: "When OFF,
+/// paragraphs are not realigned... Paragraphs are aligned using the left, right, and
+/// paragraph margins currently in effect" — and the corpus agrees: with realignment off
+/// WordStar prints the stored physical lines verbatim, whatever indentation the author
+/// typed included, and `.lm`/`.rm`/`.pm` are EDIT-time state that already spent itself
+/// at typing time (which is exactly why this module has never applied `.lm` to a
+/// printed line either).
+///
+/// MEASURED, `sawyer/MACROS/HOLYMAC/-HOLYMAC.WS` (v4 PRISTINE capture, no `.pf`
+/// anywhere in the file, `.pm4` in force): its pages 223, 258 and 293 each open with a
+/// line real WS7 prints at the plain left edge (x 72.0pt, and 77.5pt for the page-293
+/// footnote's own superscript) while this engine indented all three by `.pm`'s 3
+/// columns, +21.60pt, 16 divergences. Every other `.pm`-bearing block in the HOLYMAC
+/// set (`7MAC1`/`7MAC2`/`7MAC3`, clean) opens on a BLANK line, so the indent never
+/// showed and none of them was evidence either way. No document in the corpus prints a
+/// `.pm` first-line indent with `.pf` off. `dis` is treated as not-on: it realigns only
+/// when merge data is substituted, which never happens here.
+// MARK: - `.pf on`: print-time re-wrap
+//
+// Planning #270 item 37 (Jon's ruling 2026-09-13, triage Q5: "Yes, support it."),
+// MicroPro's own definition (WSFORMAT.TXT, the `.PF` row): "Paragraph realignment while
+// printing... When ON, subsequent paragraphs are realigned as they are printed... using
+// the left, right, and paragraph margins currently in effect."
+//
+// WHY A DOCUMENT NEEDS THIS AT ALL. WordStar's EDITOR is a character screen: it wraps at
+// a COLUMN COUNT whatever face the text is set in, and stores the break it chose. The
+// PRINTER is not: it wraps at the real measure, in the real fonts, at print time. With
+// `.pf on` the two can disagree, and the paper is the one that wins. Two measured cases,
+// both from the v4 PRISTINE captures:
+//
+//   `sawyer/REF/REFORM.DOT` — Courier, `.rm 6.5"` at print time but `.rm 5.0"` in the
+//   editor (its own `.if 1=0` block, true while editing and false while printing). The
+//   file stores "...in editing, but" + soft return + "another to occur during printing";
+//   real WS7 prints ONE 63-character line ending "...another to occur". 65 columns is the
+//   measure; "during" needs 7 more.
+//
+//   `sawyer/PRINT.TST` — the OPPOSITE case, and the regression test that matters: all 94
+//   of its soft-wrapped lines print EXACTLY as stored ("custom-"/"ized", "de-"/"fault",
+//   "docu-"/"ment", "professional-"/"looking"), because nothing changed between edit time
+//   and print time.
+//
+// ONE MEASURE for both: the sum of each span's own printed advance, `spanPitch` —
+// WordStar's own HMI for a WS5+ font block, the `.cw`-derived cell otherwise — so a
+// Courier paragraph measures in 7.2pt columns and an 11pt Helv one in 5.52pt cells, from
+// one formula. (Real per-glyph widths are what the PRINTER used, and decide both captured
+// cases identically; `spanPitch` is chosen because it is what this module then DRAWS
+// with, so a re-wrapped line can never overflow the right edge its own justification pins
+// to.)
+//
+// SCOPE, deliberately narrow, every bound measurable: only `.pf on` (`off`/`dis`/absent
+// keep the stored lines, and ZERO archive documents say `dis`); only a paragraph WordStar
+// ITSELF broke — two or more physical lines joined by soft returns, a single stored line
+// is never re-broken; only `left`/`justify` blocks with word wrap on (`.aw on`); and never
+// a paragraph carrying a tab, a print control, a picture placeholder or an index entry,
+// because those spans encode a POSITION. A note reference is deliberately NOT in that
+// list: it travels with the word it follows.
+//
+// A paragraph ends at a HARD return. Soft returns inside it are re-flowable, and an
+// ACTIVE SOFT HYPHEN at one of them is discretionary (`Line.softHyphen`): it disappears
+// with the break it was made for and is printed again when the break is still needed. A
+// TYPED hyphen is text — also a break point, and it survives the break.
+//
+// Port of ctrl-kd's `pdf.pf_rewrapped_lines`, byte-identical.
+
+/// The 1-based reference indices (an `fnref` span's own text) that point at a COMMENT.
+///
+/// `symmetricBlocks` numbers every note kind through ONE counter in document order and
+/// `refPairs` keeps that order, so the index a mark carries IS the position in
+/// `doc.notes`. Port of `pdf._comment_mark_indices`.
+func commentMarkIndices(_ doc: Document) -> Set<Int> {
+    var out: Set<Int> = []
+    for (i, n) in doc.notes.enumerated() where n.kind == .comment { out.insert(i + 1) }
+    return out
+}
+
+/// `lines` with every COMMENT reference mark removed.
+///
+/// A WordStar comment PRINTS NOTHING — not the comment, not a number standing in for it.
+/// `..` (and its `.IG` spelling) is a non-printing comment LINE: MicroPro's own reference
+/// gives it no paper presence at all, and real WS7 confirms it — `sawyer/REF/REFORM.DOT`
+/// carries three `..` lines and the v4 PRISTINE capture has no mark, no digit and no
+/// shift where they sit. The ^ON comment BLOCK is a different construct and is equally
+/// silent on paper (ruling 2026-08-06: "printed ALWAYS silent"), so both origins are
+/// dropped here by the same rule.
+///
+/// The mark is still IR: Modern anchors RTF's `\*\annotation` and HTML's backlink at
+/// exactly this position, and Show Invisibles needs somewhere to draw the comment icon.
+/// Only the PRINTED surfaces lose it — and they lose it HERE, before anything measures or
+/// re-wraps, rather than at the drawing step: a mark that survives into the measure is
+/// three columns of width WordStar never spent, and under `.pf on` its characters fuse
+/// with the neighbouring text into a word ("123") that then gets printed.
+///
+/// The identical array back when the document has no comment at all, which is nearly
+/// every document, so nothing else can move. Port of `pdf._drop_comment_marks`.
+func dropCommentMarks(_ doc: Document, _ lines: [Line]) -> [Line] {
+    guard doc.notes.contains(where: { $0.kind == .comment }) else { return lines }
+    let marks = commentMarkIndices(doc)
+    if marks.isEmpty { return lines }
+    func keep(_ s: Span) -> Bool {
+        guard s.styles.contains(.fnref), let k = Int(s.text) else { return true }
+        return !marks.contains(k)
     }
-    return max(0.0, (paraMargin - typedCols) * pdfPtPerCol)
+    var touched = false
+    for line in lines where line.spans.contains(where: { !keep($0) }) {
+        touched = true
+        break
+    }
+    if !touched { return lines }
+    return lines.map { line -> Line in
+        let kept = line.spans.filter(keep)
+        if kept.count == line.spans.count { return line }
+        var copy = line
+        copy.spans = kept
+        return copy
+    }
+}
+
+/// True when this span PLACES something rather than merely carrying text — the one
+/// reason `.pf on` leaves a paragraph exactly as WordStar stored it.
+func pfPositional(_ span: Span) -> Bool {
+    span.tabHMI != nil || span.pctlHMI != nil || span.pix != nil || span.pcl != nil
+        || span.indexEntry || span.text.contains("\t" as Character)
+}
+
+/// The leading run of pure whitespace of one stored physical line, split out of the
+/// first span if it only STARTS with one, and the rest. WordStar re-stamps `.lm`/`.pm`
+/// as real spaces on every line it writes, so this IS the paragraph's indent, read off
+/// the file rather than recomputed from the dot commands.
+private func pfLeadingIndent(_ line: Line) -> (indent: [Span], rest: [Span]) {
+    var head: [Span] = []
+    var rest = line.spans
+    while let first = rest.first, first.text.trimmed().isEmpty {
+        head.append(first)
+        rest.removeFirst()
+    }
+    if var first = rest.first {
+        let stripped = String(first.text.drop(while: { $0 == " " }))
+        if stripped.count != first.text.count {
+            var lead = first
+            lead.text = String(first.text.prefix(first.text.count - stripped.count))
+            head.append(lead)
+            first.text = stripped
+            rest[0] = first
+        }
+    }
+    return (head, rest)
+}
+
+/// One character of the paragraph being re-wrapped: the character itself and the span it
+/// came out of (its text ignored), so the re-wrapped rows can be rebuilt with every
+/// attribute intact and coalesced back to runs.
+private struct PFCell {
+    var ch: Character
+    var span: Span
+    /// Which span of the paragraph this character came out of, or `nil` when the span is
+    /// ordinary text. The re-wrap works a character at a time, and two REFERENCE MARKS
+    /// that end up side by side must not fuse back into one span the way two runs of
+    /// plain text legitimately do — the text of a mark is a pointer, not letters
+    /// (`coalesceSpans` states the same rule; here the marks have already been reduced to
+    /// characters, so the source index is what tells two of them apart).
+    var source: Int?
+}
+
+private func pfSameAttrs(_ a: Span, _ b: Span) -> Bool {
+    a.styles == b.styles && a.font == b.font && a.colour == b.colour
+        && a.pctlHMI == b.pctlHMI && a.pix == b.pix && a.pcl == b.pcl
+        && a.tabHMI == b.tabHMI && a.tabLeader == b.tabLeader
+        && a.indexEntry == b.indexEntry
+}
+
+/// One paragraph's physical lines, re-wrapped to `measure` points. `nil` when the
+/// paragraph is one this mechanism leaves alone (see the SCOPE note above) — the caller
+/// then keeps the stored lines.
+private func pfRewrapParagraph(_ para: [Line], measure: Double, fonts: [FontChange],
+                               size: Int, cache: inout [Int?: Double]) -> [Line]? {
+    guard para.count >= 2 else { return nil }
+    for line in para where line.spans.contains(where: pfPositional) { return nil }
+
+    func pitch(_ span: Span) -> Double {
+        if let w = cache[span.font] { return w }
+        let w = spanPitch(spanFontEntry(span.font, fonts), size)
+        cache[span.font] = w
+        return w
+    }
+    func width(_ cells: [PFCell]) -> Double {
+        cells.reduce(0.0) { $0 + pitch($1.span) }
+    }
+    var markSeq = 0
+    func cells(_ spans: [Span]) -> [PFCell] {
+        spans.flatMap { sp -> [PFCell] in
+            var src: Int?
+            if sp.styles.contains(.fnref) { markSeq += 1; src = markSeq }
+            return sp.text.map { PFCell(ch: $0, span: sp, source: src) }
+        }
+    }
+
+    let firstIndent = pfLeadingIndent(para[0]).indent
+    let contIndent = pfLeadingIndent(para[1]).indent
+    let firstW = width(cells(firstIndent))
+    let contW = width(cells(contIndent))
+    guard measure - max(firstW, contW) > 0 else { return nil }
+
+    // The paragraph's text as one run, joined the way `mergedLines` joins a soft-wrapped
+    // run. `dis` collects the DISCRETIONARY hyphen positions: a break there prints a '-'
+    // and no break there prints nothing, which is why the character itself is not in the
+    // run.
+    var chars: [PFCell] = []
+    var dis: Set<Int> = []
+    for (k, line) in para.enumerated() {
+        var run = cells(pfLeadingIndent(line).rest)
+        if k < para.count - 1 {
+            if line.softHyphen, run.last?.ch == "-" {
+                run.removeLast()
+                dis.insert(chars.count + run.count)
+            } else if let last = run.last, last.ch != " ", last.ch != "-" {
+                run.append(PFCell(ch: " ", span: last.span, source: nil))
+            }
+        }
+        chars.append(contentsOf: run)
+    }
+    guard !chars.isEmpty else { return nil }
+
+    // TOKENS: (leading spaces, body, what ends it). A break may be taken between any two
+    // tokens; the spaces that separate them stay on the line that is finished, exactly
+    // where WordStar itself stores them.
+    enum PFEnd { case plain, typed, discretionary }
+    var tokens: [(gap: [PFCell], body: [PFCell], end: PFEnd)] = []
+    var i = 0
+    while i < chars.count {
+        var gap: [PFCell] = []
+        while i < chars.count, chars[i].ch == " " { gap.append(chars[i]); i += 1 }
+        var body: [PFCell] = []
+        var end = PFEnd.plain
+        while i < chars.count {
+            if dis.contains(i), !body.isEmpty { end = .discretionary; break }
+            if chars[i].ch == " " { break }
+            body.append(chars[i])
+            i += 1
+            if body[body.count - 1].ch == "-" { end = .typed; break }   // TYPED hyphen
+        }
+        tokens.append((gap, body, end))
+    }
+
+    let hyphW = pitch(chars[chars.count - 1].span)
+    var rows: [[PFCell]] = []
+    var cur: [PFCell] = []
+    var curW = firstW
+    var prevEnd = PFEnd.plain
+    for token in tokens {
+        let gw = width(token.gap), bw = width(token.body)
+        // a token a break may follow with a PRINTED hyphen has to leave room for it
+        let need = gw + bw + (token.end == .discretionary ? hyphW : 0.0)
+        if !cur.isEmpty, curW + need > measure + 1e-6 {
+            if prevEnd == .discretionary {
+                cur.append(PFCell(ch: "-", span: cur[cur.count - 1].span, source: nil))
+            }
+            cur.append(contentsOf: token.gap)
+            rows.append(cur)
+            cur = token.body
+            curW = contW + bw
+        } else {
+            cur.append(contentsOf: token.gap)
+            cur.append(contentsOf: token.body)
+            curW += gw + bw
+        }
+        prevEnd = token.end
+    }
+    if !cur.isEmpty { rows.append(cur) }
+
+    var out: [Line] = []
+    for (k, row) in rows.enumerated() {
+        var spans: [Span] = []
+        var prevSource: Int?
+        for cell in row {
+            if let last = spans.last, pfSameAttrs(last, cell.span), cell.source == prevSource {
+                spans[spans.count - 1].text.append(cell.ch)
+            } else {
+                var fresh = cell.span
+                fresh.text = String(cell.ch)
+                spans.append(fresh)
+            }
+            prevSource = cell.source
+        }
+        let src = k == 0 ? para[0] : para[1]
+        out.append(Line(spans: coalesceSpans((k == 0 ? firstIndent : contIndent) + spans),
+                        soft: k < rows.count - 1 || para[para.count - 1].soft,
+                        lead48: src.lead48, kerning: src.kerning, poCols: src.poCols,
+                        roll48: src.roll48, poeCols: src.poeCols, pooCols: src.pooCols))
+    }
+    return out
+}
+
+/// `block.lines` as WordStar PRINTS them: unchanged unless the block is under `.pf on`,
+/// in which case every paragraph WordStar itself broke is re-joined and re-wrapped to the
+/// margins and fonts in force. See the note above for the rule, the two measured
+/// documents and the scope.
+///
+/// Returns the block's OWN array when this pass re-decided nothing, so a caller can
+/// assert "nothing moved" identically for a `.pf on` block WordStar left alone and for
+/// every block in every other document.
+public func pfRewrappedLines(_ doc: Document, _ block: Block) -> [Line] {
+    let base = dropCommentMarks(doc, block.lines)
+    guard block.printReformat == "on", block.kind == .para, block.wrap,
+          block.align == .left || block.align == .justify else { return base }
+    let measure = (block.rightMargin ?? 65.0) * pdfPtPerCol
+    let size = printedSize(doc)
+    var cache: [Int?: Double] = [:]
+    var out: [Line] = []
+    var moved = false
+    var i = 0
+    let lines = base
+    while i < lines.count {
+        var j = i
+        while j < lines.count - 1, lines[j].soft, !lines[j].spans.isEmpty { j += 1 }
+        let para = Array(lines[i...j])
+        i = j + 1
+        let rewrapped = para.allSatisfy { !$0.spans.isEmpty }
+            ? pfRewrapParagraph(para, measure: measure, fonts: doc.fonts, size: size,
+                                cache: &cache)
+            : nil
+        if let rewrapped {
+            moved = true
+            out.append(contentsOf: rewrapped)
+        } else {
+            out.append(contentsOf: para)
+        }
+    }
+    return moved ? out : base
+}
+
+func printedPMFiPt(_ block: Block) -> Double? {
+    guard block.printReformat == "on" else { return nil }
+    guard let cols = pmFirstLineIndentCols(block) else { return nil }
+    return cols * pdfPtPerCol
 }
 
 /// `(sb, sa)` in points from WordTsar's own `.psa`/`.psb` extensions — b24 round 17
@@ -3408,6 +4266,58 @@ private func layoutPrintedPages(
     // the WS7 measurements. Python's `_paginate_printed_notes` third return value.
     var lastPageHasArea = false
 
+    // planning #227 follow-up (2026-09-12): A COLUMN GROUP SHARES ONE TOP, and this
+    // paginator has to know it too. `docToPagelines`'s own main loop already charges a
+    // columnar group's shared non-columnar PREFIX against every column of the group
+    // except the first (its `colCut()`); this function — the paginator every
+    // NOTE-BEARING document takes instead — had no such notion, so a later column kept
+    // a whole page's capacity while starting BELOW the page top, and ran off the sheet.
+    //
+    // MEASURED against real WS7 (ws7-prints/v4, PRISTINE.EXE) on `sawyer/PRINT.TST`
+    // page 2 — `.co3, .20"` under a "Paragraph Styles" prefix. WS7 opens all three
+    // columns at 288.0pt and, with a text bottom of 720.0pt (`.mt 1"`/`.mb 1"`/
+    // `.pl 11"`) at a 12pt lead, gives each 36 rows: column 1 holds 15 and ends on its
+    // own `.cb`, column 2 holds 21 and ends on `.cc 19` (12 rows left, fewer than the
+    // 19 asked for), column 3 holds 23. This engine gave column 2 the full 54-row page,
+    // never reached the `.cc` at all, and placed 51 lines from y 286 down to y 884 —
+    // past the text bottom, past the sheet (792), through the page number at 756 —
+    // leaving column 3 empty.
+    //
+    // `colCapacity()` is this function's own capacity in its own LINE units: the page's
+    // `capacity` for column 0 (which pays the prefix line by line out of the same
+    // budget) and `capacity - prefix` for every column after it, which starts below
+    // that prefix. That is exactly `(text bottom - column top) / lead`, per column.
+    var colGroupCols = 1             // `.co n` of the region the open page is in
+    var colGroupIndex = 0            // which column of the group the open page is
+    var colOffset = 0.0              // the group's shared prefix, in line units
+    func itemCols(_ line: PageLine) -> Int? {
+        guard let bi = line.bi, bi >= 0, bi < doc.blocks.count else { return nil }
+        return doc.blocks[bi].columns ?? 1
+    }
+    func colCapacity() -> Double {
+        Double(capacity) - (colGroupIndex > 0 ? colOffset : 0.0)
+    }
+    func advanceColumn() {
+        guard colGroupCols > 1 else { return }
+        colGroupIndex += 1
+        if colGroupIndex >= colGroupCols {
+            colGroupCols = 1
+            colGroupIndex = 0
+            colOffset = 0.0
+        }
+    }
+
+    // The same running per-block line tally `docToPagelines`' paginator keeps, for the
+    // same consumer: `checkpointsByPage` asks each page HOW FAR INTO THE DOCUMENT it had
+    // read when it closed, and a page built here never answered — so a document with
+    // footnotes lost its own `.op`/`.pn`/`.pg` and took the seeded "numbering ON"
+    // default. `LYING.WS` numbered all three pages where real WS7 numbers none (research:
+    // "Why real WS7 prints no page number on some documents", 2026-09-15). Counted off
+    // the BODY only: a footnote area's lines are the emitter's own, and the reference
+    // that pulled them down here was already counted on the body line carrying it.
+    var readTally: [Int: Int] = [:]
+    var readPos: PageReadPos?
+
     // Python's `last_idx`: the last stream item carrying real ink (an image, or any
     // non-blank text). The page that admits it holds the document's last line of regular
     // text, so `footnoteCeiling`'s floor protection lifts there (the WS5 manual's stated
@@ -3443,10 +4353,22 @@ private func layoutPrintedPages(
                 // the test is strictly `remaining < n`. An empty page never breaks: that
                 // would emit a blank sheet, which is what `.cp` exists to avoid.
                 idx += 1
-                if Double(capacity) - bodyLen < Double(n), !body.isEmpty {
+                if colCapacity() - bodyLen < Double(n), !body.isEmpty {
                     break bodyLoop
                 }
             case .line(let line, let due):
+                if let lc = itemCols(line), lc > 1, colGroupCols == 1 {
+                    // the group starts HERE: whatever this page has already spent is
+                    // the prefix every column of it shares
+                    colGroupCols = lc
+                    colGroupIndex = 0
+                    colOffset = bodyLen
+                } else if itemCols(line) == 1, colGroupCols > 1 {
+                    // a line LEAVING the region releases the shared prefix
+                    colGroupCols = 1
+                    colGroupIndex = 0
+                    colOffset = 0.0
+                }
                 let cost = lineCost(line)
                 // Port of Python's `if body and body_len + cost + _area_size(entries) >
                 // cap` admission: a body line is admitted while it fits ABOVE the area
@@ -3463,10 +4385,14 @@ private func layoutPrintedPages(
                 // admitted somewhere or this loop would never advance — a slightly
                 // overflowing page beats a hang or lost content (the same doctrine
                 // `fitFooter` documents).
-                if !body.isEmpty, bodyLen + cost + Double(areaSize(entries)) > Double(capacity) {
+                if !body.isEmpty, bodyLen + cost + Double(areaSize(entries)) > colCapacity() {
                     break bodyLoop
                 }
                 body.append(line)
+                if let bi = line.bi {
+                    readTally[bi, default: 0] += 1
+                    readPos = PageReadPos(bi: bi, count: readTally[bi]!)
+                }
                 bodyLen += cost
                 if idx == lastIdx { isTerminal = true }
                 idx += 1
@@ -3520,7 +4446,10 @@ private func layoutPrintedPages(
                 area[0].lead = override
             }
         }
-        pages.append(Page(body + area, headers: doc.headers, footers: doc.footers))
+        var closed = Page(body + area, headers: doc.headers, footers: doc.footers)
+        closed.readPos = readPos
+        pages.append(closed)
+        advanceColumn()
         lastPageCost = bodyLen + Double(areaSize(entries))
         lastPageHasArea = !entries.isEmpty
     }
@@ -3924,7 +4853,55 @@ private enum PlainBodyItem {
     /// A `.he`/`.h1`-`.h5`/`.fo`/`.f1`-`.f5` occurrence, replayed at the block it precedes.
     /// `parity` (planning #250) is `nil` for a plain `.h1`/`.he`/`.f1`/`.fo`, else
     /// `.even`/`.odd` for `.h1e`/`.h1o`/`.f1e`/`.f1o`.
-    case hf(kind: HFKind, line: Int, text: String, parity: HFParity?)
+    case hf(kind: HFKind, line: Int, text: String, parity: HFParity?,
+            pcl: [HFPrintControl])
+}
+
+/// A centred line's own centring tab, recomputed for the PRINTER.
+///
+/// WordStar 5+ centres a `.oc on` line at EDITOR time and stores the result as an
+/// absolute tab mark (`Span.tabHMI`, a type-9 block) on the line's own leading padding
+/// span. That stored number is the EDITOR's arithmetic, and the editor counted the
+/// line's TRAILING BLANKS as part of the text it was centring. Real WS7 does not: it
+/// re-centres the line on the ink, with trailing blanks off.
+///
+/// MEASURED against ws7-prints/v4/sawyer__PLAYBILL_EXT_DOC (a `.oc on` playbill, every
+/// line a centring tab of its own). Of its 12 centred lines, 9 carry a stored tab that
+/// already equals the re-centred value and 3 do not — and those 3 are exactly the 3
+/// lines whose stored text ends in blanks (one, one, and two). WS7 prints all 12 at
+/// `(rm - inkCols) / 2`: `A gala opening night with the ` at column 18 where the file
+/// stores 17.5, `City ... special season ` at 4.5 where the file stores 4, `for Theatre
+/// in the Park.  ` at 20.5 where the file stores 19.5. All 12 land on WS7's own
+/// decipoint.
+///
+/// ONLY a line whose every span is FIXED-PITCH is recomputed. A proportionally-set
+/// centred line's stored tab is the editor's own measurement of a font WE DO NOT HAVE
+/// (LYING's and WARPRAYR's title pages store fractional-column tabs for exactly that
+/// reason, and both are clean against WS7 today); recomputing those from a substituted
+/// face's metrics would replace a real measurement with a guess. Their stored tab is
+/// left exactly as WordStar wrote it.
+func recentredCentreTabSpans(_ spans: [Span], block: Block, doc: Document) -> [Span] {
+    guard block.align == .center, let head = spans.first, head.tabHMI != nil else {
+        return spans
+    }
+    for span in spans {
+        if let f = span.font, f >= 0, f < doc.fonts.count, doc.fonts[f].proportional {
+            return spans
+        }
+    }
+    var inkChars = Array(spans.map(\.text).joined())
+    while let f = inkChars.first, f == " " { inkChars.removeFirst() }
+    while let l = inkChars.last, l == " " { inkChars.removeLast() }
+    if inkChars.isEmpty { return spans }
+    let lm = block.leftMargin ?? 0.0
+    let rm = block.rightMargin ?? 65.0
+    var cols = lm + (rm - lm - Double(inkChars.count)) / 2.0
+    if cols < lm { cols = lm }
+    let want = roundHalfToEven(cols * Double(tabHMIPerCol))
+    if want == head.tabHMI { return spans }
+    var out = spans
+    out[0].tabHMI = want
+    return out
 }
 
 /// Blocks -> plain body items, with `doc.hfEvents` replayed at the block each one
@@ -3938,14 +4915,30 @@ private func resolvePlainBody(
     let refNotes = inlineReferenceNotes(doc)
     // planning #266: this document's own driver-keyed cp437-158 rule, resolved once.
     let euro = pesetaMeansEuro(doc)
-    var hfByBlock: [Int: [(HFKind, Int, String, HFParity?)]] = [:]
+    var hfByBlock: [Int: [(HFKind, Int, String, HFParity?, [HFPrintControl])]] = [:]
     // planning #250: `doc.hfEventsParity` is index-aligned with `doc.hfEvents` itself
-    // — see `Document.hfEventsParity`'s own doc comment.
+    // — see `Document.hfEventsParity`'s own doc comment. 2026-09-12 (cause 10):
+    // `doc.hfEventsPcl` is index-aligned the same way, and empty for every document
+    // whose running heads carry no 0x0F user print control.
     let hfParityByIndex = doc.hfEventsParity
+    let hfPclByIndex = doc.hfEventsPcl
+    // triage Q9: an event read INSIDE a block carries its own line position
+    // (`doc.hfEventsWithin`) and is emitted THERE, between that block's own lines,
+    // instead of at the block boundary `blockAnchor` names. This is the PRINTED body;
+    // Modern re-groups a block's lines and draws no running head to time.
+    var hfMid: [HFWithin: [(HFKind, Int, String, HFParity?, [HFPrintControl])]] = [:]
+    let hfWithinByIndex = doc.hfEventsWithin
     for (i, event) in doc.hfEvents.enumerated() {
         let parity = i < hfParityByIndex.count ? hfParityByIndex[i] : nil
-        hfByBlock[event.blockAnchor, default: []].append(
-            (event.kind, event.line, event.text, parity))
+        let pcl = i < hfPclByIndex.count ? hfPclByIndex[i] : []
+        let within = i < hfWithinByIndex.count ? hfWithinByIndex[i] : nil
+        if let within {
+            hfMid[within, default: []].append(
+                (event.kind, event.line, event.text, parity, pcl))
+        } else {
+            hfByBlock[event.blockAnchor, default: []].append(
+                (event.kind, event.line, event.text, parity, pcl))
+        }
     }
     // b24 round 19 (RULINGS-LEDGER PIX row); round 22 closed the round-19 scope cuts --
     // `layoutPrintedPages` (the notes-aware paginator) and Modern's `modernStreams`
@@ -3974,7 +4967,7 @@ private func resolvePlainBody(
     // cross-block carry as `pendingSa`. `lhSource == .file` guard mirrors `styleLeadPt`'s
     // own — see `fontLeadPt`'s docstring.
     var fontLeadState: Double? = nil
-    let fontLeadOk = doc.fonts.contains { $0.proportional } && doc.page?.lhSource != .file
+    let fontLeadOk = doc.blocks.contains { $0.lhAuto } && doc.page?.lhSource != .file
     let fontLeadBase = fontLeadOk ? Double(printedSize(doc)) : 0.0
     // Finding 1 (b26 visual pass): scoped, per Jon's binding ruling, to a
     // POSITIVELY-DETECTED condition -- `variant == .ws4` -- rather than trusting the
@@ -4011,8 +5004,8 @@ private func resolvePlainBody(
         // literal empty dictionary for every non-WS4 document, so this lookup always
         // returns the empty set there and nothing below can touch one.
         let spacingBlanks = spacingMap[bi] ?? []
-        for (kind, line, text, parity) in hfByBlock[bi] ?? [] {
-            items.append(.hf(kind: kind, line: line, text: text, parity: parity))
+        for (kind, line, text, parity, pcl) in hfByBlock[bi] ?? [] {
+            items.append(.hf(kind: kind, line: line, text: text, parity: parity, pcl: pcl))
         }
         if block.kind == .pagebreak && prevCols > 1 {
             // Planning #227 (corrected): a bare `.pa` occurring INSIDE an active
@@ -4078,13 +5071,21 @@ private func resolvePlainBody(
         // paper, so it stays broken here. Indexed (not a plain `for`) so an embedded pix
         // substitution below can look ahead and CONSUME the blank placeholder lines
         // WordStar reserved for it — see `pixReservedAdvance`.
+        // planning #270 item 37: `.pf on` re-wraps a paragraph at PRINT time
+        // (`pfRewrappedLines`; every other block hands back `block.lines` itself, same
+        // array, so nothing else in the corpus can move).
+        let blkLines = pfRewrappedLines(doc, block)
         var li = 0
-        while li < block.lines.count {
+        while li < blkLines.count {
+            for ev in hfMid[HFWithin(block: bi, linesBefore: li)] ?? [] {   // triage Q9
+                items.append(.hf(kind: ev.0, line: ev.1, text: ev.2,
+                                 parity: ev.3, pcl: ev.4))
+            }
             let lineIdx = li
-            let line = block.lines[li]
+            let line = blkLines[li]
             li += 1
             var spans = line.spans
-                .filter { keepSpanOnPageline($0, refNotes: refNotes) }
+                .filter { keepSpanOnPageline($0, refNotes: refNotes, printed: true) }
                 .map { sp -> Span in
                     let styles = effectiveSpanStyles(sp, block: block, headingBold: true)
                     // Register C5: the block's own paragraph-style colour is a default
@@ -4161,7 +5162,7 @@ private func resolvePlainBody(
             // round 26 wave 3 (fidelity_gate.py Finding B): a WS5+ FONT-BLOCK document
             // with no style governing this line (ownLead still nil) gets its lead from
             // the font block actually in force. See `fontLeadPt`.
-            if ownLead == nil, fontLeadOk {
+            if ownLead == nil, fontLeadOk, block.lhAuto {
                 ownLead = fontLeadPt(line, fonts: doc.fonts, baseSize: fontLeadBase,
                                      state: &fontLeadState)
             }
@@ -4203,7 +5204,7 @@ private func resolvePlainBody(
                let sub = spansPixSubstitution(spans.map { (text: $0.text, pix: $0.pix) },
                                               pixMap: pixMap, maxWPt: textWidthPt) {
                 let (reserved, nBlank) = pixReservedAdvance(
-                    block.lines, startIdx: li, ownLeadPt: ownLead ?? defaultLeadPt)
+                    blkLines, startIdx: li, ownLeadPt: ownLead ?? defaultLeadPt)
                 li += nBlank
                 items.append(.line(PageLine([], soft: line.soft, lead: reserved + extra,
                                             overprint: line.overprint, bi: bi,
@@ -4223,7 +5224,7 @@ private func resolvePlainBody(
                 // Planning #251 (2026-09-09): model-build-time bare-tab expansion, same
                 // point ctrl-kd's own `_doc_to_pagelines` plain path applies it (right
                 // before this function's own PageLine construction) — see
-                // `expandBareTabsForPrintedLayout`'s own doc comment above.
+                // `expandBareTabsForPrintedLayout`'s own doc comment (`EmitterRules.swift`).
                 spans = expandBareTabsForPrintedLayout(spans)
                 // Planning #238 (.oj on full justification, research/
                 // 2026-09-08_justification-rule.md, ctrl-kd aeb34ad): every line of an
@@ -4242,8 +5243,16 @@ private func resolvePlainBody(
                 // 65 cols (468pt)). This function is Printed-only (see its own doc
                 // comment), so there is no `printed` guard here — ctrl-kd's own
                 // equivalent gate is `printed and b.align == 'justify' and ...`.
+                // A `.oc on` line's own centring tab is the EDITOR's arithmetic; the
+                // printer re-centres on the ink alone (see recentredCentreTabSpans).
+                spans = recentredCentreTabSpans(spans, block: block, doc: doc)
                 var justifyRightX: Double? = nil
-                if block.align == .justify, lineIdx < block.lines.count - 1 {
+                // planning #270 item 37: under `.pf on` the PARAGRAPH is the unit --
+                // `line.soft` after the re-wrap. See the notes-bearing sibling's own
+                // comment for the rule and the captures behind it.
+                let lastInUnit = block.printReformat == "on"
+                    ? !line.soft : lineIdx >= blkLines.count - 1
+                if block.align == .justify, !lastInUnit {
                     let poOriginPt = ownLeft ?? printedLeft(doc, size: sizeForLeft)
                     let rmCols = block.rightMargin ?? 65.0
                     justifyRightX = poOriginPt + rmCols * pdfPtPerCol
@@ -4257,6 +5266,18 @@ private func resolvePlainBody(
                                             justifyRightX: justifyRightX,
                                             parityLeft: ownParityLeft)))
                 firstLineOfBlock = false
+            }
+        }
+        // triage Q9: any event whose recorded line index is at or past this block's own
+        // line count belongs at the block's END — the same place the block-boundary
+        // anchor would have put it. `blkLines` is not always `block.lines` (`.pf on`
+        // re-wraps), so this is a scan, not an equality: an event must never be dropped
+        // for landing past it.
+        for key in hfMid.keys.filter({ $0.block == bi && $0.linesBefore >= blkLines.count })
+                             .sorted(by: { $0.linesBefore < $1.linesBefore }) {
+            for ev in hfMid[key] ?? [] {
+                items.append(.hf(kind: ev.0, line: ev.1, text: ev.2,
+                                 parity: ev.3, pcl: ev.4))
             }
         }
         // `!firstLineOfBlock`: this block actually appended at least one real PageLine
@@ -4275,10 +5296,15 @@ private func resolvePlainBody(
 /// Paper is physical: WordStar advances each line by the `.lh` in force and starts a
 /// new page when the next advance would leave the text area, so a document that varies
 /// its leading fits more or fewer lines than the default-lead COUNT says. The budget is
-/// `(cap - 1)` leads at the document default — the first line sits at the top, each
-/// following line spends its own lead — which makes a uniform-lead document paginate
-/// EXACTLY as the old line-count did, so no fontless byte moves. Overprint lines spend
-/// no lead at all, on paper and here.
+/// the page's own text HEIGHT (`printedBudgetPt`) and EVERY line — the first one
+/// included — spends its own lead out of it, which is exactly where each line's
+/// baseline lands on paper (`pageStream`: the first line sits at `top` plus its OWN
+/// lead, each later one a further lead down). A uniform-lead page therefore paginates
+/// EXACTLY as the old line count did (n leads fit iff n <= floor(height / lead) == cap),
+/// so no fontless byte moves; only a page that MIXES leads can now reach into the
+/// fractional remainder `cap`'s own floor discarded — see `printedBudgetPt`, which
+/// measures that against real WS7. Overprint lines spend no lead at all, on paper and
+/// here.
 ///
 /// The running head/foot IN FORCE on a page is replayed from `doc.hfEvents` rather than
 /// read from the document's final state: WordStar applies a running head from the page
@@ -4290,13 +5316,13 @@ private func resolvePlainBody(
 // call site, every line of the body, is untouched.
 func layoutPrintedPagesPlain(
     _ doc: Document, pixResults: [PixResult] = [], pictures: EmitOptions.PixMode = .off,
-    sentenceSpacing: Bool = false
+    sentenceSpacing: Bool = false, rawPageCap: Int? = nil
 ) -> [Page] {
     let items = resolvePlainBody(doc, pixResults: pixResults, pictures: pictures,
                                  sentenceSpacing: sentenceSpacing)
     var capacity = printedCap(doc)
     let defaultLead = printedLead(doc)
-    var budget = Double(capacity - 1) * defaultLead
+    var budget = printedBudgetPt(doc, capacity: capacity, defaultLead: defaultLead)
     // b24 round 17b (RULINGS-LEDGER row 5/6, register C8): `.sb` suppresses blank lines
     // specifically at the TOP of a page — WordStar's own pagination concern, not a
     // text-content one, so it belongs in THIS loop (the only place that knows a page
@@ -4381,10 +5407,23 @@ func layoutPrintedPagesPlain(
 
     var pages: [Page] = []
     var page: [PageLine] = []
+    // triage Q12: how far into the document this page has READ, kept as a running
+    // per-block line tally. `checkpointsByPage` needs it because `finalizePages` strips
+    // a page's trailing blanks -- a page of nothing but blank lines ends up EMPTY, with
+    // no `bi` left on it at all, and the leading blank run a `.pn` sits inside is
+    // exactly that shape. Counted here, before anything is stripped.
+    var readTally: [Int: Int] = [:]
+    var readPos: PageReadPos?
     var spent = 0.0
     var curHeaders: [Int: String] = [:]
     var curFooters: [Int: String] = [:]
     var pageHeaders: [Int: String] = [:]     // state at the OPEN page's start
+    // cause 10: the 0x0F print-control siblings of `curHeaders`/`pageHeaders`,
+    // snapshotted at exactly the same moments -- see `Page.headerPcl`.
+    var curHeadersPcl: [Int: [HFPrintControl]] = [:]
+    var curFootersPcl: [Int: [HFPrintControl]] = [:]
+    var pageHeadersPcl: [Int: [HFPrintControl]] = [:]
+    var pageFootersPcl: [Int: [HFPrintControl]] = [:]
     var pageFooters: [Int: String] = [:]
     // Planning #250: the SAME flat/snapshot machinery as `curHeaders`/`pageHeaders`
     // above, one independent pair per parity — `.h1e`/`.f1e` write only `curHeadersE`/
@@ -4401,50 +5440,84 @@ func layoutPrintedPagesPlain(
     var pageFootersE: [Int: String] = [:]
     var pageFootersO: [Int: String] = [:]
 
+    // Planning #227 follow-up (2026-09-12): A COLUMN GROUP SHARES ONE TOP.
+    // `applyColumns` folds every N consecutive sub-"pages" of a `.co n` region into one
+    // physical sheet, side by side -- so those N sub-pages are N COLUMNS OF THE SAME
+    // SHEET, and on paper they all begin at the SAME vertical position: wherever the
+    // columnar region itself began on that sheet, BELOW any non-columnar prefix (a
+    // title line and its blank) the sheet opened with. Each column therefore has that
+    // much LESS room than a whole page, not a whole page's worth.
+    //
+    // Measured against real WS7 (`ws7-prints/v4`, PRISTINE.EXE) -- every column of
+    // every one of these begins at the region's own top, and every column holds the
+    // same number of lines as column 1's own columnar part, never more:
+    //   REF/WINGDING.CHT   prefix 2 lines (24pt): WS7 columns 2-5 start at 153.2pt and
+    //                      hold 45 lines; this engine started them at the sheet's own
+    //                      first text line (129.2pt) and gave them 46.
+    //   REF/SYMBOL.CHT     prefix 2 lines (24pt): WS7 124.4pt / 47 lines; engine
+    //                      100.4pt / 48.
+    //   PRINTERS/fontcrib.ws, PRINTER.PS   prefix 2 lines (24pt): WS7 66.8pt / 51
+    //                      lines; engine 42.8pt / 52.
+    // `colOffsetPt` is that prefix's own height in points, captured from `spent` at the
+    // moment the group's FIRST columnar line is admitted -- the same quantity
+    // `applyColumns` re-derives per merged sheet for the DRAW side
+    // (`Page.columnTopOffsetPt`), from the same lines' own leads. It is charged against
+    // `budget` for every column of the group EXCEPT the first (which pays the prefix
+    // itself, out of the same budget, line by line), and released when the group wraps
+    // onto a fresh sheet or the region ends. Port of Python's `_doc_to_pagelines`.
+    var colGroupCols = 1            // `.co n` of the region the open page is in
+    var colGroupIndex = 0           // which column of the group the open page is
+    var colOffsetPt = 0.0           // the group's shared prefix height, in points
+    func lineCols(_ line: PageLine) -> Int? {
+        guard let bi = line.bi, bi >= 0, bi < doc.blocks.count else { return nil }
+        return doc.blocks[bi].columns ?? 1
+    }
+    /// How much of `budget` the OPEN page must leave to the group's shared prefix:
+    /// nothing for column 0, which pays that prefix line by line out of the same
+    /// budget, and the prefix's own height for every column after it, which starts
+    /// BELOW it.
+    func colCut() -> Double { colGroupIndex > 0 ? colOffsetPt : 0.0 }
+
+    /// This line's own vertical advance, in points -- what it spends out of `budget`
+    /// (the page's real text height, `printedBudgetPt`).
+    ///
+    /// EVERY line spends its own lead, the page's first one included: `pageStream`
+    /// places that first baseline at `top` plus its OWN lead, so on paper it has
+    /// already consumed exactly that much of the text height. This used to credit the
+    /// first line as free against a budget one default lead short
+    /// (`(cap - 1) * defaultLead`), which is the same arithmetic whenever that line's
+    /// lead is at or above the document default -- but a page opening on a line
+    /// SHORTER than the default (sawyer/REF/WINGDING.CHT's own 12pt title under its
+    /// `.lh 14pt`) was charged the full default for it and lost the difference. See
+    /// `printedBudgetPt` for the measurements.
+    ///
+    /// b26-mtmb-general (pictures-mode pagination, -README.WS) and planning #236
+    /// (sawyer/INTERVU.WS) both fall straight out of this rule rather than needing
+    /// their own credits: an embedded image's `.lead` is a RESERVED-BAND total
+    /// (`pixReservedAdvance` -- the pix tag's own line plus its contiguous following
+    /// blanks), and charging it in full is precisely what the `pictures = .off` path
+    /// spends on the same band as ordinary per-line advances, so the two modes break in
+    /// the same place wherever the band lands; and a page whose first body line runs at
+    /// a STYLE's own larger VMI (INTERVU.WS's 24pt "MS Body Copy" against an unset 12pt
+    /// `.lh`) no longer pockets phantom room it never had.
+    ///
+    /// An OVERPRINT line shares the previous line's baseline and spends nothing, on
+    /// paper and here. Port of Python's `_doc_to_pagelines`'s own `_cost`.
     func cost(_ line: PageLine) -> Double {
         let lead = line.lead ?? defaultLead
-        guard let last = page.last else {
-            // b26-mtmb-general (pictures-mode pagination parity, -README.WS): an
-            // embedded image's `.lead` is a RESERVED-BAND total (the pix tag's own line
-            // plus its contiguous following blanks — `pixReservedAdvance`), not one
-            // physical line's advance. The "first line is free" rule below assumes the
-            // opposite — that `.lead` represents exactly the ONE source line `budget`'s
-            // own `(cap - 1)` already accounts for (see this function's own doc comment
-            // above) — so crediting the WHOLE reserved band when the image happens to
-            // land as a page's first line freed 7 extra lines' worth of budget (96pt
-            // reserved band, 84pt of which should have stayed charged) that the
-            // `pictures = .off` path, where the SAME tag line and blanks are ordinary
-            // PageLines and only the tag line's own one-line advance is ever free, never
-            // received — off matches WS7's real page break exactly, embed ran several
-            // lines longer before this fix. Only the amount ABOVE one line's own advance
-            // is charged even at a page's own start, so embed's image-band cost matches
-            // off's natural per-line accumulation exactly, regardless of where either
-            // mode's break happens to fall.
-            // planning #236 remainder (sawyer/INTERVU.WS): the credit above is
-            // scoped to `defaultLead`'s OWN worth, same as the image case just
-            // above — a page's first line was always free even when a STYLE
-            // (not `.lh`) gives it a bigger real lead than the document
-            // default, over-crediting the page by (real lead - defaultLead)
-            // points of budget that were never actually free. INTERVU.WS's
-            // whole body runs at the "MS Body Copy" style's own 24pt VMI
-            // while the document's `.lh` (hence `defaultLead`) stays the
-            // unset 12pt default — every page opening on a body line
-            // pocketed 12pt of phantom room this way, which is exactly the
-            // margin a later `.cp2` needed to correctly push a whole
-            // paragraph to the next page. Mathematically identical to the
-            // previous flat `0.0` for every document whose first line's
-            // lead already equals `defaultLead` (the overwhelming common
-            // case). Port of Python's identical `pdf._doc_to_pagelines`
-            // fix, same rule, same evidence.
-            return max(0.0, lead - defaultLead)
-        }
-        if last.overprint { return 0.0 }                   // this line shares a baseline
+        if let last = page.last, last.overprint { return 0.0 }
         return lead
     }
     func closePage(explicit: Bool = false, breakBI: Int? = nil) {
         var pg = Page(page,
                       headers: pageHeaders.filter { !$0.value.isEmpty },
                       footers: pageFooters.filter { !$0.value.isEmpty })
+        // cause 10: kept even when the text dicts above drop the slot -- a header line
+        // whose whole content was one print control has EMPTY text and a real control
+        // to draw, which is exactly LSRBOX.WS's own `.h1`.
+        pg.headerPcl = pageHeadersPcl.filter { !$0.value.isEmpty }
+        pg.footerPcl = pageFootersPcl.filter { !$0.value.isEmpty }
+        pg.footerInUse = !pageFooters.isEmpty
         // #228: only ever true from the post-loop trailing-`.pa` branch below,
         // and only when `page` (this closing page's own body) is empty -- a
         // page WITH content already carries real `.bi`-bearing lines, so it
@@ -4550,35 +5623,105 @@ func layoutPrintedPagesPlain(
                 pg.lines[i].left = isEvenPage ? parityLeft.even : parityLeft.odd
             }
         }
+        // triage Q12 -- see `Page.readPos`'s own comment.
+        pg.readPos = readPos
         pages.append(pg)
     }
     func openNewPage() {
+        // One sub-page just closed: the NEXT one is the next column of this group,
+        // until the group wraps onto a fresh physical sheet (where there is no prefix
+        // above the region any more). Port of Python's `_advance_column`.
+        if colGroupCols > 1 {
+            colGroupIndex += 1
+            if colGroupIndex >= colGroupCols {
+                colGroupIndex = 0
+                colOffsetPt = 0.0
+            }
+        }
         page = []
         spent = 0.0
         pageHeaders = curHeaders
         pageFooters = curFooters
+        pageHeadersPcl = curHeadersPcl
+        pageFootersPcl = curFootersPcl
         pageHeadersE = curHeadersE
         pageHeadersO = curHeadersO
         pageFootersE = curFootersE
         pageFootersO = curFootersO
     }
 
+    /// Triage Q9: WordStar closes a page the MOMENT it is full; this engine breaks
+    /// lazily, when the next line turns out not to fit. True when the next real line on
+    /// this page cannot fit — i.e. the break has, in WordStar's own reckoning, already
+    /// happened, so a dot command read here belongs to the next page. An EXPLICIT break
+    /// ahead is not this case: the command still belongs to the page it was read on.
+    func pageAlreadyFull(_ fromIndex: Int) -> Bool {
+        if page.isEmpty { return false }
+        for peek in items[(fromIndex + 1)...] {
+            switch peek {
+            case .pageBreak: return false
+            case .line(let pl): return spent + cost(pl) > budget - colCut() + 1e-6
+            default: continue
+            }
+        }
+        return false
+    }
+
+    // planning #271 M10 (the QuickLook thumbnail): stop paginating once the caller's
+    // prefix is on the shelf. `rawPageCap` is already the SUB-page budget -- one column
+    // of a `.co n` region is a sub-page here, and `applyColumns` folds n of them into
+    // one sheet afterwards -- with one spare on top, so the page the caller asked for is
+    // never the array's LAST page and never meets a tail rule it would not meet in a
+    // full run. `docToPagelines` computes it; nothing else calls this with a cap.
+    var stoppedEarly = false
     for (itemIndex, item) in items.enumerated() {
+        if let cap = rawPageCap, pages.count >= cap {
+            stoppedEarly = true
+            break
+        }
         switch item {
-        case .hf(let kind, let line, let text, let parity):
+        case .hf(let kind, let line, let text, let parity, let pcl):
             if parity == .even {
                 if kind == .header { curHeadersE[line] = text } else { curFootersE[line] = text }
             } else if parity == .odd {
                 if kind == .header { curHeadersO[line] = text } else { curFootersO[line] = text }
             }
             if kind == .header { curHeaders[line] = text } else { curFooters[line] = text }
-            if page.isEmpty {          // nothing printed on this page yet
-                pageHeaders = curHeaders
+            // cause 10: this event's own print controls travel with its text.
+            if kind == .header { curHeadersPcl[line] = pcl } else { curFootersPcl[line] = pcl }
+            // A HEADER is emitted at the TOP of a page, so a `.he`/`.h#` read after
+            // the page's first line cannot reach it -- that is the `page.isEmpty`
+            // gate, and it is right. A FOOTER is emitted at the BOTTOM, so a
+            // `.fo`/`.f#` read ANYWHERE before the page ends still governs that page.
+            // Both used to take the header's rule, which put every footer change one
+            // page late.
+            //
+            // MEASURED against real WS7 (ws7-prints/v4, PRISTINE.EXE) on
+            // `sawyer/MACROS/HOLYMAC/8MAC`, which sets `.fo<31 blanks>#` after a blank
+            // line (so page 1 has already begun) and clears it with a bare `.fo`
+            // immediately AFTER its first page break. WS7 prints "286" at 280.8pt --
+            // column 31, exactly where the `#` sits -- at the foot of page 1 and NO
+            // footer on pages 2-10; and, from the same commands, NO header on page 1
+            // and "HOLY MACRO!  #" on 2-10. This engine printed the automatic page
+            // number on page 1 (centred, 291.6pt) and the footer on page 2.
+            //
+            // AND (triage Q9) WordStar closes a page the MOMENT it is full; this engine
+            // breaks lazily, when the next line turns out not to fit. A dot command
+            // sitting exactly on that boundary is therefore read on the OLD page here and
+            // on the NEW page in WordStar. `8MAC`'s page 1 fills exactly (its last body
+            // line at 7200 decipoints, the last the page has) and its bare `.fo` sits
+            // immediately after it: real WS7 keeps `286` at the foot of page 1, so that
+            // `.fo` was read on page 2.
+            if kind == .footer && !pageAlreadyFull(itemIndex) {
                 pageFooters = curFooters
-                pageHeadersE = curHeadersE
-                pageHeadersO = curHeadersO
+                pageFootersPcl = curFootersPcl
                 pageFootersE = curFootersE
                 pageFootersO = curFootersO
+            } else if kind == .header && page.isEmpty {   // nothing printed on this page yet
+                pageHeaders = curHeaders
+                pageHeadersPcl = curHeadersPcl
+                pageHeadersE = curHeadersE
+                pageHeadersO = curHeadersO
             }
         case .condPage(let n):
             // Strictly fewer than n lines left -> break; exactly n is enough room.
@@ -4613,7 +5756,7 @@ func layoutPrintedPagesPlain(
                     if seen >= n { break peekLoop }
                 }
             }
-            let room = budget - spent
+            let room = budget - colCut() - spent
             if room < needed - 1e-6, !page.isEmpty {
                 closePage()
                 openNewPage()
@@ -4638,9 +5781,19 @@ func layoutPrintedPagesPlain(
                 curPoe = poe
                 curPoo = poo
                 capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
-                budget = Double(capacity - 1) * defaultLead
+                budget = printedBudgetPt(doc, capacity: capacity, defaultLead: defaultLead,
+                                         mtLines: mt, mbLines: mb, plLines: pl)
             }
-            let overflow = spent + cost(line) > budget + 1e-6
+            // A line LEAVING the columnar region releases the group's shared prefix
+            // before this page's own room is judged -- the break that carried us here
+            // was forced by that same state change (`resolvePlainBody`'s own `prevCols`
+            // gate), so the page it opens is an ordinary whole one again.
+            if colGroupCols > 1, lineCols(line) == 1 {
+                colGroupCols = 1
+                colGroupIndex = 0
+                colOffsetPt = 0.0
+            }
+            let overflow = spent + cost(line) > budget - colCut() + 1e-6
             // Finding 1 (b26 visual pass): the FIRST `ws4Spacing` blank (see
             // `ws4SpacingBlankIndices`) to overflow a page's budget never triggers
             // the break by itself -- a physical blank-line paper advance right at
@@ -4657,7 +5810,7 @@ func layoutPrintedPagesPlain(
             // consecutive over-budget spacing blank (a paragraph boundary's own 2-3
             // blank run): forgiving every blank in a run over-admits a whole extra
             // real line one measured source's own WS7 capture didn't have.
-            let alreadyOver = spent > budget + 1e-6
+            let alreadyOver = spent > budget - colCut() + 1e-6
             let full = overflow && !(line.ws4Spacing && !alreadyOver)
             if full, !page.isEmpty {
                 closePage()
@@ -4677,16 +5830,35 @@ func layoutPrintedPagesPlain(
                     curPoe = poe
                     curPoo = poo
                     capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
-                    budget = Double(capacity - 1) * defaultLead
+                    budget = printedBudgetPt(doc, capacity: capacity, defaultLead: defaultLead,
+                                             mtLines: mt, mbLines: mb, plLines: pl)
                 }
             }
             // `.sb`: a blank line at the top of a page doesn't print.
             if suppressBlanks, page.isEmpty, isBlank(line) {
                 continue
             }
+            if let lc = lineCols(line), lc > 1, colGroupCols == 1 {
+                // The group starts HERE: whatever this page has already spent is the
+                // prefix every column of it shares.
+                colGroupCols = lc
+                colGroupIndex = 0
+                colOffsetPt = spent
+            }
             spent += cost(line)
+            if let bi = line.bi {
+                readTally[bi, default: 0] += 1
+                readPos = PageReadPos(bi: bi, count: readTally[bi]!)
+            }
             page.append(line)
         }
+    }
+    if stoppedEarly {
+        // The open page is a partial page of content we deliberately stopped reading;
+        // closing it would append a page that a full run would have filled further.
+        // Everything below this line is end-of-document reasoning, and this is not the
+        // end of the document.
+        return pages
     }
     if !page.isEmpty {
         closePage()

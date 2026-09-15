@@ -131,7 +131,12 @@ import Testing
 
 @Test func sluglineWithTrailingSceneNumberNeverWraps() throws {
     let line = bytes("12    INT. A VERY LONG LOCATION NAME THAT GOES ON AND ON - DAY   12")
-    let data = ws7Block(0x00) + line + HARD + HARD + bytes("Action line.") + HARD
+    var data = ws7Block(0x00)
+    data += line
+    data += HARD
+    data += HARD
+    data += bytes("Action line.")
+    data += HARD
     let doc = parseWS(data)
     #expect(!detectScreenplayBlocks(doc).isEmpty, "fixture must trigger detection")
     let pdf = emitPDF(doc, mode: .modern)
@@ -146,7 +151,10 @@ import Testing
     // real work above, not just "everything happens to fit."
     let line = bytes("This is a very long ordinary line of prose text that goes "
                      + "well past the margin at twelve point type")
-    let data = ws7Block(0x00) + fontBlock(0, points: 12.0) + line + HARD
+    var data = ws7Block(0x00)
+    data += fontBlock(0, points: 12.0)
+    data += line
+    data += HARD
     let doc = parseWS(data)
     #expect(detectScreenplayBlocks(doc).isEmpty)
     let pdf = emitPDF(doc, mode: .modern)

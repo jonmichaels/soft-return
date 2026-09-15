@@ -120,10 +120,16 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     // front so the indent isn't applied twice.
     var data = ws7Block(0x00)
     data += bytes("Full width prose before the quotation, ordinary and plain.") + HARD
-    data += bytes(".lm 8") + HARD + bytes(".rm 58") + HARD
+    data += bytes(".lm 8")
+    data += HARD
+    data += bytes(".rm 58")
+    data += HARD
     data += bytes("       An indented quotation, with enough words in it that the "
         + "line has to wrap inside its own narrowed measure to pass.") + HARD
-    data += bytes(".lm 1") + HARD + bytes(".rm 65") + HARD
+    data += bytes(".lm 1")
+    data += HARD
+    data += bytes(".rm 65")
+    data += HARD
     data += bytes("Back to the full measure after the quotation ends here.") + HARD
     let pdf = emitPDF(parseWS(data), mode: .modern)
     let shown = contentSpans(pdf)
@@ -399,7 +405,10 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     // Items carry columns, not points — consumers convert with their own metrics.
     var data = ws7Block(0x00)
     data += bytes(".oc on") + HARD
-    data += bytes("     A Centered Heading") + HARD + bytes(".oc off") + HARD
+    data += bytes("     A Centered Heading")
+    data += HARD
+    data += bytes(".oc off")
+    data += HARD
     data += bytes(".lm 8") + HARD
     data += bytes("       An indented quotation line, plain prose and clear.") + HARD
     data += bytes(".lm 1") + HARD
@@ -435,7 +444,7 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     let emitter = try #require(EmitterRegistry.standard.getEmitter("layout"))
     let out = try #require(emitter.emit(doc, .modern, EmitOptions()).asText)
     #expect(out.contains("\"format\": \"ctrl-kd-layout\""))
-    #expect(out.contains("\"version\": 7"))
+    #expect(out.contains("\"version\": 10"))
     #expect(out.contains("\"encoding\": \"cp437\""))
     #expect(out.contains("\"size_name\": \"Letter\""))
     #expect(out.contains("\"kind\": \"para\""))                 // semantic flow present
@@ -452,10 +461,18 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     // .PL 70 = 11.667in: within 0.026 of A4's 11.693 — since 2026-08-06 ("the 3 main
     // page sizes") that IS A4, at the 210mm width. Farther out stays honest Custom at
     // the 8.5in sheet.
-    let a4 = parseWS(bytes(".PL 70") + HARD + bytes("x") + HARD)
+    var parseWSArg455: [UInt8] = bytes(".PL 70")
+    parseWSArg455 += HARD
+    parseWSArg455 += bytes("x")
+    parseWSArg455 += HARD
+    let a4 = parseWS(parseWSArg455)
     #expect(a4.page?.sizeName == "A4")
     #expect(abs((a4.page?.pwIn ?? 0) - 8.268) < 1e-6)
-    let far = parseWS(bytes(".PL 74") + HARD + bytes("x") + HARD)
+    var parseWSArg458: [UInt8] = bytes(".PL 74")
+    parseWSArg458 += HARD
+    parseWSArg458 += bytes("x")
+    parseWSArg458 += HARD
+    let far = parseWS(parseWSArg458)
     #expect(far.page?.sizeName == "Custom")
     #expect(far.page?.pwIn == 8.5)
     #expect(abs((far.page?.heightIn ?? 0) - 74.0 / 6.0) < 1e-9)

@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 
 /// One open file.
 ///
@@ -38,11 +39,44 @@ final class WSDocument: NSDocument {
         try read(from: try Data(contentsOf: url), ofType: typeName)
     }
 
+    /// Batch 26 (#271 M7): files at least this large are parsed off the main thread, starting the moment
+    /// they are read (`startDeferredParse`). A smaller file parses here, before any window exists, in
+    /// less time than a window takes to appear — and keeps the standard "can't open" alert with no
+    /// window at all. -HOLYMAC.WS (538 KB) took 1.0 s here in a Debug build, a whole second of a
+    /// frozen app before anything showed.
+    ///
+    /// Batch 27: the deferral is a WINDOW's concern, not the document's. Batch 26 started the parse from
+    /// `makeWindowControllers`, so a long document opened with no window — `openDocument(withContentsOf:
+    /// display: false)`, as a script's export or `AppleEventSelfSendProbe` does it — never parsed at all,
+    /// and a script read the empty placeholder. The parse now starts in `read`, window or not, and
+    /// anything that needs the document without a window to wait in takes it from `ensureParsed()`.
+    static var backgroundParseThreshold = 64 * 1024
+
+    /// The parse under way for a document opened awaiting one.
+    private var deferredParse: Task<Void, Never>?
+    /// Everyone waiting on that parse — the document's own windows (`deferredParseFinished`), a test —
+    /// each told once, when it settles.
+    private var parseObservers: [@MainActor @Sendable (Error?) -> Void] = []
+    /// Whether the deferred parse has settled, and the "can't open" error it settled with, if any.
+    private var deferredParseSettled = false
+    private var deferredParseError: Error?
+
     override nonisolated func read(from data: Data, ofType typeName: String) throws {
         let bytes = [UInt8](data)
         try MainActor.assumeIsolated {
+            if bytes.count >= Self.backgroundParseThreshold {
+                state = DocumentState(awaitingParseOf: bytes, settings: .shared, docPath: fileURL?.path ?? "")
+                // Batch 27: now, whether or not a window will ever show this document.
+                startDeferredParse { [weak self] error in
+                    self?.deferredParseFinished(error)
+                }
+                return
+            }
             do {
-                state = try DocumentState(data: bytes, settings: .shared, docPath: fileURL?.path ?? "")
+                // #271 M7: the engine's detect and parse, and the document's pictures.
+                state = try PerformanceSignposts.measure("open.parse") {
+                    try DocumentState(data: bytes, settings: .shared, docPath: fileURL?.path ?? "")
+                }
             } catch {
                 throw Self.cannotOpenError(fileName: fileURL?.lastPathComponent, underlying: error)
             }
@@ -59,22 +93,10 @@ final class WSDocument: NSDocument {
         ])
     }
 
-    /// The standard alert for a file we cannot read, phrased for someone holding a 1987
-    /// floppy rather than a stack trace. The spec asks that it mention the Inspector as the
-    /// diagnostic route.
+    /// The standard alert for a file we cannot read — its text lives in `CannotOpenError`
+    /// (Shared/), so the iPhone app says exactly the same thing.
     private static func cannotOpenError(fileName: String?, underlying: Error) -> NSError {
-        let name = fileName.map { "“\($0)”" } ?? "That file"
-        var reason = "\(name) doesn’t appear to be a WordStar or text document."
-        if case ParseError.notConvertible(let variant, _, _) = underlying, variant == .binary {
-            reason = "\(name) looks like binary data, not a document."
-        }
-        return NSError(domain: NSCocoaErrorDomain, code: NSFileReadCorruptFileError, userInfo: [
-            NSLocalizedDescriptionKey: reason,
-            NSLocalizedRecoverySuggestionErrorKey:
-                "If you believe it is one, open it anyway and use the bottom bar’s variant "
-                + "control to try a specific WordStar format.",
-            NSUnderlyingErrorKey: underlying as NSError,
-        ])
+        CannotOpenError.make(fileName: fileName, underlying: underlying)
     }
 
     #if DEBUG
@@ -91,7 +113,9 @@ final class WSDocument: NSDocument {
     // MARK: - Windows
 
     override func makeWindowControllers() {
-        addWindowController(DocumentWindowController(state: state))
+        // #271 M7: the app's own open is progressive — a long Native document shows its first pages
+        // at once and renders the rest while the window answers.
+        addWindowController(DocumentWindowController(state: state, progressiveOpen: true))
         // Eager half of restoration persistence — see `DocumentRestorationStore
         // .persistOpenDocuments`. `applicationWillTerminate` alone is not reliable: this app
         // opts into sudden/automatic termination, and macOS skips that callback on those
@@ -101,6 +125,112 @@ final class WSDocument: NSDocument {
         // that the file is worth indexing now, since the app never writes to it (mds reindexes
         // on write events, which never happen here).
         SpotlightFileIndexer.requestIndex(for: fileURL, category: "index-on-open")
+        // Batch 27: a parse that already failed, with no window then to say so in, says so now.
+        if let error = deferredParseError {
+            MainRunLoop.perform { [weak self] in
+                self?.deferredParseFinished(error)
+            }
+        }
+    }
+
+    /// Batch 26 (#271 M7): parses a document opened awaiting its parse (`read`) on another thread, adopts
+    /// the result on the main thread, then calls `finished` — with nil, or the "can't open" error the parse
+    /// would have raised in `read`. Batch 27: `read` starts it, so a later call only adds `finished` to the
+    /// parse already under way; once that parse has settled, `finished` hears how on the next turn. A
+    /// document that never awaited a parse (a short file) never calls it.
+    func startDeferredParse(finished: @escaping @MainActor @Sendable (Error?) -> Void) {
+        guard state.isAwaitingParse, !deferredParseSettled else {
+            if deferredParseSettled {
+                let error = deferredParseError
+                MainRunLoop.perform { finished(error) }
+            }
+            return
+        }
+        parseObservers.append(finished)
+        guard deferredParse == nil else { return }
+        let bytes = state.data
+        let docPath = state.docPath
+        let fileName = fileURL?.lastPathComponent
+        let start = DispatchTime.now().uptimeNanoseconds
+        deferredParse = Task.detached(priority: .userInitiated) {
+            let result = Result { try DocumentState.parsed(from: bytes, docPath: docPath) }
+            MainRunLoop.perform { [weak self] in
+                self?.completeDeferredParse(result, startedAt: start, fileName: fileName)
+            }
+        }
+    }
+
+    private func completeDeferredParse(_ result: Result<DocumentState.Parsed, any Error>, startedAt start: UInt64,
+                                       fileName: String?) {
+        deferredParse = nil
+        // `ensureParsed()` got there first, and told everyone.
+        guard !deferredParseSettled else { return }
+        PerformanceSignposts.record("open.parse", startedAt: start)
+        switch result {
+        case .success(let parsed):
+            state.adopt(parsed)
+            settleDeferredParse(nil)
+        case .failure(let error):
+            settleDeferredParse(Self.cannotOpenError(fileName: fileName, underlying: error))
+        }
+    }
+
+    /// Batch 27: the document parsed, now. A document still awaiting its background parse is parsed here,
+    /// synchronously, for every caller with no window to wait in — a script's property or export, a test —
+    /// and everyone waiting on the parse is told, as if the background parse had returned. A parse that
+    /// failed throws the "can't open" error, every time it is asked.
+    @discardableResult
+    func ensureParsed() throws -> DocumentState {
+        if let deferredParseError { throw deferredParseError }
+        guard state.isAwaitingParse else { return state }
+        do {
+            let bytes = state.data
+            let docPath = state.docPath
+            let parsed = try PerformanceSignposts.measure("open.parse") {
+                try DocumentState.parsed(from: bytes, docPath: docPath)
+            }
+            state.adopt(parsed)
+            settleDeferredParse(nil)
+            return state
+        } catch {
+            let cannotOpen = Self.cannotOpenError(fileName: fileURL?.lastPathComponent, underlying: error)
+            settleDeferredParse(cannotOpen)
+            throw cannotOpen
+        }
+    }
+
+    private func settleDeferredParse(_ error: Error?) {
+        deferredParseSettled = true
+        deferredParseError = error
+        let observers = parseObservers
+        parseObservers = []
+        for observer in observers {
+            observer(error)
+        }
+    }
+
+    /// The app's own end to a deferred parse: every window shows the document, or — the bytes were not a
+    /// document after all — the windows close and the standard "can't open" alert says why. A document with
+    /// no window keeps the error for whoever asks for it (`ensureParsed`), and shows no alert of its own.
+    private func deferredParseFinished(_ error: Error?) {
+        let controllers = windowControllers.compactMap { $0 as? DocumentWindowController }
+        if let error {
+            guard !controllers.isEmpty else { return }
+            close()
+            NSDocumentController.shared.presentError(error)
+            return
+        }
+        for controller in controllers {
+            controller.documentDidFinishParsing()
+        }
+    }
+
+    /// Nothing prints while the document is still being parsed: there is nothing to print yet.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if state?.isAwaitingParse == true, item.action == #selector(printDocument(_:)) {
+            return false
+        }
+        return super.validateUserInterfaceItem(item)
     }
 
     /// Persists the open-document list with THIS document excluded before calling through —

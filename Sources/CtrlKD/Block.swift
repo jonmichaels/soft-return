@@ -69,6 +69,28 @@ public struct Block: Hashable, Sendable {
     public var leftMargin: Double?
     public var rightMargin: Double?
     public var paraMargin: Double?
+    /// `.pf` — PRINT-TIME PARAGRAPH REALIGNMENT, in force when this block opened:
+    /// `"on"`, `"off"`, `"dis"` (discretionary), or `nil` when the file never said.
+    /// MicroPro's own file-format reference (WSFORMAT.TXT, the `.PF` row) is the
+    /// definition: "Paragraph realignment while printing. May be ON, OFF, or DIS (for
+    /// discretionary). When ON, subsequent paragraphs are realigned as they are
+    /// printed. When OFF, paragraphs are not realigned. When DIS, paragraphs are
+    /// realigned only when merge print data is substituted in the document. Paragraphs
+    /// are aligned using the left, right, and paragraph margins currently in effect."
+    ///
+    /// That last sentence is why this exists: `.lm`/`.rm`/`.pm` reach the PRINTED page
+    /// only through realignment. With realignment off — every archive file but seven —
+    /// WordStar prints the physical lines exactly as the editor stored them,
+    /// indentation included, and the margins are EDIT-time state that already spent
+    /// itself when the author typed. Port of ctrl-kd's `Block.print_reformat`.
+    public var printReformat: String?
+    /// `.lh a` / `.lh auto` — AUTO-LEADING, in force when this block opened. A line then
+    /// takes its baseline advance from the fonts on it rather than from a fixed line
+    /// height; `fontLeadPt` is the rule, measured on the real WS7 harness 2026-09-14
+    /// (planning #270 item 34 / triage Q4). Auto-leading is a MODE a document turns ON,
+    /// not a state inferred from the presence of proportional fonts: seven archive files
+    /// ask for it and no other document in the corpus leads by its fonts at all.
+    public var lhAuto: Bool
     /// Python typing provenance for the margins (layout byte parity, ruled 2026-08-18):
     /// a paragraph-STYLE margin is a Python int (`round(hmi / 180)`), a dot-command
     /// margin a Python float (`float()`d) — and the layout JSON spells "7" vs "7.0"
@@ -139,6 +161,7 @@ public struct Block: Hashable, Sendable {
         kind: BlockKind = .para, lines: [Line] = [], heading: Int = 0,
         align: Alignment = .left, wrap: Bool = true,
         leftMargin: Double? = nil, rightMargin: Double? = nil, paraMargin: Double? = nil,
+        printReformat: String? = nil, lhAuto: Bool = false,
         leftMarginPyInt: Bool = false, rightMarginPyInt: Bool = false,
         tabStops: [Double]? = nil,
         columns: Int? = nil, columnGutter: Double? = nil, styleID: Int? = nil,
@@ -151,6 +174,8 @@ public struct Block: Hashable, Sendable {
         self.leftMargin = leftMargin
         self.rightMargin = rightMargin
         self.paraMargin = paraMargin
+        self.printReformat = printReformat
+        self.lhAuto = lhAuto
         self.leftMarginPyInt = leftMarginPyInt
         self.rightMarginPyInt = rightMarginPyInt
         self.columns = columns

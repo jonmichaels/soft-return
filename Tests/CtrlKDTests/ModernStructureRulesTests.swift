@@ -144,7 +144,13 @@ private func paraStructures(_ doc: Document) -> [RowStructure] {
     // consumer that wants one uniform signal -- but the tag's own existing HTML
     // rendering (M3 already strips its padding) is left completely alone, so a tagged
     // document's output is unchanged by this rule set.
-    let doc = modernDoc(bytes(".oc on") + HARD + bytes("Centred.") + HARD + bytes(".oc off") + HARD)
+    var modernDocArg147: [UInt8] = bytes(".oc on")
+    modernDocArg147 += HARD
+    modernDocArg147 += bytes("Centred.")
+    modernDocArg147 += HARD
+    modernDocArg147 += bytes(".oc off")
+    modernDocArg147 += HARD
+    let doc = modernDoc(modernDocArg147)
     let s = paraStructures(doc)[0]
     #expect(s.centered)
     #expect(s.centerVia == .tag)
@@ -248,15 +254,23 @@ private func tabBlock(cols: Int, absHMI: Int = 1000, tabType: UInt8 = 0x20) -> [
                + "paragraph long enough to stay unclassified.") + HARD
     let doc = try parse(data, variant: nil)
     let html = emitHTML(doc, mode: .modern)
+    // The `&nbsp;` run is what this guards, and it is intact. The <p> now carries a
+    // HANGING indent (planning #264 item 4(a), 2026-09-14): this row's meaning is its
+    // two columns, and a first-line indent left every wrapped continuation back at the
+    // body margin in a narrow window.
     #expect(html.contains(
-        "<p>00h ^@" + String(repeating: "&nbsp;", count: 9) + "Fix the print"))
+        "00h ^@" + String(repeating: "&nbsp;", count: 9) + "Fix the print"))
+    #expect(html.contains("padding-left:15ch;text-indent:-15ch"))
 }
 
 @Test func ordinaryMultilineBlockStaysOneParagraph() {
     // Regression guard: a block with NO list/def/center structure at all -- a
     // signature block with several hard-broken lines -- must still render as ONE <p>
     // with <br> between lines, exactly as before this rule set existed.
-    let data = bytes("-- Robert J. Sawyer") + HARD + bytes("   sawyer@sfwriter.com") + HARD
+    var data = bytes("-- Robert J. Sawyer")
+    data += HARD
+    data += bytes("   sawyer@sfwriter.com")
+    data += HARD
     let doc = modernDoc(data)
     let html = emitHTML(doc, mode: .modern)
     // b24 round 20 (slate item 4): this signature block verse-classifies (short,

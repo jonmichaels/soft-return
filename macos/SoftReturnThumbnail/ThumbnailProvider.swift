@@ -7,6 +7,7 @@ import PDFKit
 // SoftReturnQuickLook/PreviewProvider.swift's doc comment on the same import trap for the
 // preview extension point).
 import QuickLookThumbnailing
+import SoftReturnShared
 
 /// The grid icon Finder shows before a person ever hits Space — a separate extension point
 /// (`com.apple.quicklook.thumbnail`) from Quick Look's preview (`com.apple.quicklook.preview`,
@@ -21,10 +22,6 @@ import QuickLookThumbnailing
 /// thumbnail can never disagree with what Quick Look's own preview, or the app's own window,
 /// shows for the same file.
 final class ThumbnailProvider: QLThumbnailProvider {
-    enum ThumbnailError: Error {
-        case noRenderablePage
-    }
-
     override func provideThumbnail(
         for request: QLFileThumbnailRequest,
         _ handler: @escaping (QLThumbnailReply?, Error?) -> Void
@@ -88,56 +85,21 @@ final class ThumbnailProvider: QLThumbnailProvider {
             // method `nonisolated` alone, per swiftlang/swift#75063's inference gaps; this
             // function is already nonisolated, called directly on QuickLookThumbnailing's own
             // background reply queue, which is what makes the `.sync` round-trip safe here.)
+            // Batch 28 (#271 M10): the parse and the engine's pagination — most of a thumbnail's
+            // time once only page 1 is built — happen HERE, on QuickLookThumbnailing's own request
+            // queue, not inside the main-queue hop below. Every request funnels through that one
+            // main thread, so a folder of files used to be parsed one file at a time; now each
+            // request parses on its own queue and takes the main thread only for page 1's text,
+            // its layout and the drawing. `QuickLookEngineWork` is plain `Sendable` data.
+            let work = try QuickLookEngineWork.make(
+                bytes: bytes, docPath: fileURL.path,
+                pageSettingsPreset: QuickLookPageSettingsPreference.resolvedDefault())
             let (image, thumbnailSize) = try DispatchQueue.main.sync {
                 try MainActor.assumeIsolated { () throws -> (CGImage, CGSize) in
-                    let rendered = try QuickLookNativeRenderer.renderedDocument(
-                        fromFileBytes: bytes, docPath: fileURL.path)
-                    let page = try QuickLookNativeRenderer.firstPage(for: rendered)
-                    let pageBounds = page.bounds(for: .mediaBox)
-                    guard pageBounds.width > 0, pageBounds.height > 0 else {
-                        throw ThumbnailError.noRenderablePage
-                    }
-
-                    // Fit within the requested size, aspect preserved, but never past
-                    // `maxDimension` regardless of how large `maximumSize` asks for — Finder
-                    // never actually shows a THUMBNAIL representation anywhere near this
-                    // large (the preview panel's own extension point, `.preview`/
-                    // `SoftReturnQuickLook`, is what serves full-size views). Capping our OWN
-                    // output is the documented, accepted pattern regardless of what a caller
-                    // asks for: QuickLookUI scales a smaller-than-requested thumbnail up
-                    // rather than showing nothing.
-                    let maxDimension: CGFloat = 1024
-                    let requestedSize = CGSize(
-                        width: min(maximumSize.width, maxDimension),
-                        height: min(maximumSize.height, maxDimension))
-                    let scale = min(requestedSize.width / pageBounds.width,
-                                    requestedSize.height / pageBounds.height)
-                    let thumbnailSize = CGSize(width: pageBounds.width * scale, height: pageBounds.height * scale)
-
-                    guard let bitmapContext = CGContext(
-                        data: nil,
-                        width: max(1, Int(thumbnailSize.width.rounded(.up))),
-                        height: max(1, Int(thumbnailSize.height.rounded(.up))),
-                        bitsPerComponent: 8,
-                        bytesPerRow: 0,
-                        space: CGColorSpaceCreateDeviceRGB(),
-                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                    ) else {
-                        throw ThumbnailError.noRenderablePage
-                    }
-                    // PAPER IS WHITE — same reasoning as `PagedDocumentView.draw(_:)`: a
-                    // page with any transparent region must not pick up Finder's own
-                    // background.
-                    bitmapContext.setFillColor(NSColor.white.cgColor)
-                    bitmapContext.fill(CGRect(origin: .zero, size: thumbnailSize))
-                    bitmapContext.scaleBy(x: scale, y: scale)
-                    // Our own bitmap context, origin bottom-left — the same convention
-                    // `PDFPage.draw(with:to:)` expects, no extra flip.
-                    page.draw(with: .mediaBox, to: bitmapContext)
-                    guard let image = bitmapContext.makeImage() else {
-                        throw ThumbnailError.noRenderablePage
-                    }
-                    return (image, thumbnailSize)
+                    // The drawing itself is `QuickLookNativeRenderer.thumbnail` — page 1, fitted and
+                    // capped, on white — which `QuickLookTimingTests` times.
+                    let thumbnail = try QuickLookNativeRenderer.thumbnail(for: work, maximumSize: maximumSize)
+                    return (thumbnail.image, thumbnail.size)
                 }
             }
 

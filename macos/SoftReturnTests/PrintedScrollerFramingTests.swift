@@ -65,70 +65,72 @@ private enum ScrollerFramingEvidence {
     }
 }
 
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func printedScrollerNotNeededAtFit() throws {
-    let controller = try ScrollerFramingEvidence.controller()
-    controller.setZoom(.fit)
-    controller.setStyle(.printed)
-    controller.window?.contentView?.layoutSubtreeIfNeeded()
+@Suite struct PrintedScrollerFramingTests {
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func printedScrollerNotNeededAtFit() throws {
+        let controller = try ScrollerFramingEvidence.controller()
+        controller.setZoom(.fit)
+        controller.setStyle(.printed)
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
 
-    let pdfView = controller.pdfView
-    let page = try #require(pdfView.document?.page(at: 0))
-    let pageSize = page.bounds(for: .mediaBox).size
-    let documentViewSize = try #require(ScrollerFramingEvidence.documentViewSize(in: pdfView),
-        "could not find PDFKit's internal PDFDocumentView")
+        let pdfView = controller.pdfView
+        let page = try #require(pdfView.document?.page(at: 0))
+        let pageSize = page.bounds(for: .mediaBox).size
+        let documentViewSize = try #require(ScrollerFramingEvidence.documentViewSize(in: pdfView),
+            "could not find PDFKit's internal PDFDocumentView")
 
-    #expect(abs(documentViewSize.width - pageSize.width) < 0.5,
-        "PDFDocumentView is \(documentViewSize.width)pt wide for a \(pageSize.width)pt page — pageBreakMargins padding it")
-    #expect(abs(documentViewSize.height - pageSize.height) < 0.5,
-        "PDFDocumentView is \(documentViewSize.height)pt tall for a \(pageSize.height)pt page — pageBreakMargins padding it")
+        #expect(abs(documentViewSize.width - pageSize.width) < 0.5,
+            "PDFDocumentView is \(documentViewSize.width)pt wide for a \(pageSize.width)pt page — pageBreakMargins padding it")
+        #expect(abs(documentViewSize.height - pageSize.height) < 0.5,
+            "PDFDocumentView is \(documentViewSize.height)pt tall for a \(pageSize.height)pt page — pageBreakMargins padding it")
 
-    let visibleScrollers = ScrollerFramingEvidence.scrollers(in: pdfView).filter { !$0.isHidden && $0.alphaValue > 0 }
-    #expect(visibleScrollers.isEmpty,
-        "Printed shows \(visibleScrollers.count) live scroller(s) at Fit that Native does not — \(visibleScrollers.map(\.frame))")
-}
+        let visibleScrollers = ScrollerFramingEvidence.scrollers(in: pdfView).filter { !$0.isHidden && $0.alphaValue > 0 }
+        #expect(visibleScrollers.isEmpty,
+            "Printed shows \(visibleScrollers.count) live scroller(s) at Fit that Native does not — \(visibleScrollers.map(\.frame))")
+    }
 
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func printedScrollerNotNeededAt100Percent() throws {
-    let controller = try ScrollerFramingEvidence.controller()
-    controller.setZoom(.percent(100))
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func printedScrollerNotNeededAt100Percent() throws {
+        let controller = try ScrollerFramingEvidence.controller()
+        controller.setZoom(.percent(100))
 
-    // Whatever "100%" (actual size, screen-DPI-dependent — see `ZoomSetting.scale`) makes
-    // Native itself need, at the SAME window and zoom — the parity that matters is with
-    // Native's own live scroller state, not a derived "should it overflow" guess that can
-    // disagree with AppKit's own rounding.
-    controller.setStyle(.native)
-    controller.window?.contentView?.layoutSubtreeIfNeeded()
-    let scrollView = try #require(controller.pagedView.enclosingScrollView)
-    let nativeScrollers = ScrollerFramingEvidence.scrollers(in: scrollView).filter { !$0.isHidden && $0.alphaValue > 0 }
+        // Whatever "100%" (actual size, screen-DPI-dependent — see `ZoomSetting.scale`) makes
+        // Native itself need, at the SAME window and zoom — the parity that matters is with
+        // Native's own live scroller state, not a derived "should it overflow" guess that can
+        // disagree with AppKit's own rounding.
+        controller.setStyle(.native)
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
+        let scrollView = try #require(controller.pagedView.enclosingScrollView)
+        let nativeScrollers = ScrollerFramingEvidence.scrollers(in: scrollView).filter { !$0.isHidden && $0.alphaValue > 0 }
 
-    controller.setStyle(.printed)
-    controller.window?.contentView?.layoutSubtreeIfNeeded()
-    let pdfView = controller.pdfView
-    let printedScrollers = ScrollerFramingEvidence.scrollers(in: pdfView).filter { !$0.isHidden && $0.alphaValue > 0 }
+        controller.setStyle(.printed)
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
+        let pdfView = controller.pdfView
+        let printedScrollers = ScrollerFramingEvidence.scrollers(in: pdfView).filter { !$0.isHidden && $0.alphaValue > 0 }
 
-    #expect(nativeScrollers.isEmpty == printedScrollers.isEmpty,
-        "Native has \(nativeScrollers.count) live scroller(s) at 100%, Printed has \(printedScrollers.count) — not parity")
-}
+        #expect(nativeScrollers.isEmpty == printedScrollers.isEmpty,
+            "Native has \(nativeScrollers.count) live scroller(s) at 100%, Printed has \(printedScrollers.count) — not parity")
+    }
 
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func printedScrollerNotNeededAfterWindowResize() throws {
-    let controller = try ScrollerFramingEvidence.controller(width: 900, height: 700)
-    controller.setZoom(.fit)
-    controller.setStyle(.printed)
-    controller.window?.contentView?.layoutSubtreeIfNeeded()
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func printedScrollerNotNeededAfterWindowResize() throws {
+        let controller = try ScrollerFramingEvidence.controller(width: 900, height: 700)
+        controller.setZoom(.fit)
+        controller.setStyle(.printed)
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
 
-    controller.window?.setContentSize(NSSize(width: 1200, height: 900))
-    controller.window?.contentView?.layoutSubtreeIfNeeded()
+        controller.window?.setContentSize(NSSize(width: 1200, height: 900))
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
 
-    let pdfView = controller.pdfView
-    let page = try #require(pdfView.document?.page(at: 0))
-    let pageSize = page.bounds(for: .mediaBox).size
-    let documentViewSize = try #require(ScrollerFramingEvidence.documentViewSize(in: pdfView))
-    #expect(abs(documentViewSize.width - pageSize.width) < 0.5)
-    #expect(abs(documentViewSize.height - pageSize.height) < 0.5)
+        let pdfView = controller.pdfView
+        let page = try #require(pdfView.document?.page(at: 0))
+        let pageSize = page.bounds(for: .mediaBox).size
+        let documentViewSize = try #require(ScrollerFramingEvidence.documentViewSize(in: pdfView))
+        #expect(abs(documentViewSize.width - pageSize.width) < 0.5)
+        #expect(abs(documentViewSize.height - pageSize.height) < 0.5)
 
-    let visibleScrollers = ScrollerFramingEvidence.scrollers(in: pdfView).filter { !$0.isHidden && $0.alphaValue > 0 }
-    #expect(visibleScrollers.isEmpty,
-        "Printed shows \(visibleScrollers.count) live scroller(s) after a window resize — \(visibleScrollers.map(\.frame))")
+        let visibleScrollers = ScrollerFramingEvidence.scrollers(in: pdfView).filter { !$0.isHidden && $0.alphaValue > 0 }
+        #expect(visibleScrollers.isEmpty,
+            "Printed shows \(visibleScrollers.count) live scroller(s) after a window resize — \(visibleScrollers.map(\.frame))")
+    }
 }

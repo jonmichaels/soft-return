@@ -12,74 +12,76 @@ private func throwawayDefaults() -> UserDefaults {
     UserDefaults(suiteName: "AppleEventDiagnosticTapTests.\(UUID().uuidString)")!
 }
 
-@Test func recordInstallWritesInstalledAtAndPriorHandlerPresent() {
-    let defaults = throwawayDefaults()
+@Suite struct AppleEventDiagnosticTapTests {
+    @Test func recordInstallWritesInstalledAtAndPriorHandlerPresent() {
+        let defaults = throwawayDefaults()
 
-    AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: true, defaults: defaults)
+        AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: true, defaults: defaults)
 
-    let state = AppleEventDiagnosticTap.readState(defaults: defaults)
-    #expect(state.installedAt != nil)
-    #expect(state.priorHandlerPresent == true)
-    #expect(state.arrivals.isEmpty)
-    #expect(state.lastForwardResult == 0)
-    #expect(state.installError == nil)
-}
-
-@Test func recordInstallWithFalsePriorHandlerPresent() {
-    let defaults = throwawayDefaults()
-
-    AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, defaults: defaults)
-
-    #expect(AppleEventDiagnosticTap.readState(defaults: defaults).priorHandlerPresent == false)
-}
-
-@Test func recordInstallWithInstallErrorRecordsIt() {
-    let defaults = throwawayDefaults()
-
-    AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, installError: -54, defaults: defaults)
-
-    #expect(AppleEventDiagnosticTap.readState(defaults: defaults).installError == -54)
-}
-
-@Test func recordArrivalAppendsATimestampReadableBack() {
-    let defaults = throwawayDefaults()
-    AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, defaults: defaults)
-
-    AppleEventDiagnosticTap.recordArrival(defaults: defaults)
-
-    #expect(AppleEventDiagnosticTap.readState(defaults: defaults).arrivals.count == 1)
-}
-
-@Test func arrivalsRingBufferDropsTheOldestPastCapacityTwenty() {
-    let defaults = throwawayDefaults()
-    AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, defaults: defaults)
-
-    for _ in 0..<25 {
-        AppleEventDiagnosticTap.recordArrival(defaults: defaults)
+        let state = AppleEventDiagnosticTap.readState(defaults: defaults)
+        #expect(state.installedAt != nil)
+        #expect(state.priorHandlerPresent == true)
+        #expect(state.arrivals.isEmpty)
+        #expect(state.lastForwardResult == 0)
+        #expect(state.installError == nil)
     }
 
-    #expect(AppleEventDiagnosticTap.readState(defaults: defaults).arrivals.count == 20)
-}
+    @Test func recordInstallWithFalsePriorHandlerPresent() {
+        let defaults = throwawayDefaults()
 
-@Test func recordForwardResultOverwritesTheLatestValue() {
-    let defaults = throwawayDefaults()
-    AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, defaults: defaults)
+        AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, defaults: defaults)
 
-    AppleEventDiagnosticTap.recordForwardResult(-1708, defaults: defaults)
-    #expect(AppleEventDiagnosticTap.readState(defaults: defaults).lastForwardResult == -1708)
+        #expect(AppleEventDiagnosticTap.readState(defaults: defaults).priorHandlerPresent == false)
+    }
 
-    AppleEventDiagnosticTap.recordForwardResult(0, defaults: defaults)
-    #expect(AppleEventDiagnosticTap.readState(defaults: defaults).lastForwardResult == 0)
-}
+    @Test func recordInstallWithInstallErrorRecordsIt() {
+        let defaults = throwawayDefaults()
 
-@Test func readStateOnAnEmptySuiteReturnsDefaults() {
-    let defaults = throwawayDefaults()
+        AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, installError: -54, defaults: defaults)
 
-    let state = AppleEventDiagnosticTap.readState(defaults: defaults)
+        #expect(AppleEventDiagnosticTap.readState(defaults: defaults).installError == -54)
+    }
 
-    #expect(state.installedAt == nil)
-    #expect(state.priorHandlerPresent == false)
-    #expect(state.arrivals.isEmpty)
-    #expect(state.lastForwardResult == 0)
-    #expect(state.installError == nil)
+    @Test func recordArrivalAppendsATimestampReadableBack() {
+        let defaults = throwawayDefaults()
+        AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, defaults: defaults)
+
+        AppleEventDiagnosticTap.recordArrival(defaults: defaults)
+
+        #expect(AppleEventDiagnosticTap.readState(defaults: defaults).arrivals.count == 1)
+    }
+
+    @Test func arrivalsRingBufferDropsTheOldestPastCapacityTwenty() {
+        let defaults = throwawayDefaults()
+        AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, defaults: defaults)
+
+        for _ in 0..<25 {
+            AppleEventDiagnosticTap.recordArrival(defaults: defaults)
+        }
+
+        #expect(AppleEventDiagnosticTap.readState(defaults: defaults).arrivals.count == 20)
+    }
+
+    @Test func recordForwardResultOverwritesTheLatestValue() {
+        let defaults = throwawayDefaults()
+        AppleEventDiagnosticTap.recordInstall(priorHandlerPresent: false, defaults: defaults)
+
+        AppleEventDiagnosticTap.recordForwardResult(-1708, defaults: defaults)
+        #expect(AppleEventDiagnosticTap.readState(defaults: defaults).lastForwardResult == -1708)
+
+        AppleEventDiagnosticTap.recordForwardResult(0, defaults: defaults)
+        #expect(AppleEventDiagnosticTap.readState(defaults: defaults).lastForwardResult == 0)
+    }
+
+    @Test func readStateOnAnEmptySuiteReturnsDefaults() {
+        let defaults = throwawayDefaults()
+
+        let state = AppleEventDiagnosticTap.readState(defaults: defaults)
+
+        #expect(state.installedAt == nil)
+        #expect(state.priorHandlerPresent == false)
+        #expect(state.arrivals.isEmpty)
+        #expect(state.lastForwardResult == 0)
+        #expect(state.installError == nil)
+    }
 }

@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 @testable import SoftReturn
+import SoftReturnShared
 
 /// Job 549: the real proof for Jon's verbatim ruling on the Export As sheet's 4th column
 /// (Pictures/Page Numbering/Sentence Spacing) — against REAL, window-hosted frames via

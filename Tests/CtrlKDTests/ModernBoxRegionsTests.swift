@@ -82,7 +82,10 @@ private func paraItems(_ flow: [ModernFlowItem]) -> [[ModernToken]] {
     // non-proportional `entry`) already measured consistently before this fix (both the
     // graphic and plain-text branches reduce to the same `spanPitch` formula) -- must
     // stay exactly as consistent, same shape of assertion as the fontless case above.
-    var data = ws7Block(0x00) + fontBlock(0, points: 12.0) + boxTop + HARD
+    var data = ws7Block(0x00)
+    data += fontBlock(0, points: 12.0)
+    data += boxTop
+    data += HARD
     for _ in 0..<5 { data += boxMid + HARD }
     data += boxBot + HARD
     let doc = parseWS(data)
@@ -112,7 +115,10 @@ private func paraItems(_ flow: [ModernFlowItem]) -> [[ModernToken]] {
     // rather than breaking between its border and its interior gap -- before the fix,
     // `modernWrap` split the closing border onto its own line.
     let row: [UInt8] = [0xB3] + [UInt8](repeating: 0x20, count: 88) + [0xB3]
-    let data = ws7Block(0x00) + fontBlock(0, points: 12.0) + row + HARD
+    var data = ws7Block(0x00)
+    data += fontBlock(0, points: 12.0)
+    data += row
+    data += HARD
     let doc = parseWS(data)
     let paras = paraItems(boxFlow(doc))
     let vis = modernWrap(paras[0], width: 468.0)

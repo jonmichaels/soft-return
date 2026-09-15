@@ -254,10 +254,15 @@ import Testing
     // Python guards both rules with `text.strip()`. Without it, an underlined space run —
     // which the wrapper produces whenever a styled span ends in a space — would draw a
     // stray dash between words.
+    //
+    // 2026-09-14 (planning #270 item 39): the run is no longer SHOWN either. Blanks put
+    // no ink on the paper in any face, and real WS7 never sends them to a printer — it
+    // moves the cursor instead. The advance is what survives, and the assertion below
+    // is now the only thing that proves the run happened at all.
     let spaces: Page = [[Span(text: "   ", styles: [.underline, .strike])]]
     let stream = latin1(pageStream(spaces, top: 72))
     #expect(!stream.contains(" l S"), "no rule under whitespace")
-    #expect(stream.contains("(   ) Tj"), "but the run is still shown, and still advances x")
+    #expect(!stream.contains(") Tj"), "and no text op either — blanks draw nothing")
 
     // The advance happens even though no rule was drawn: the next run starts three
     // characters along, at 72.0 + 3 * 12 * 0.6 = 93.6.
@@ -344,7 +349,12 @@ import Testing
     // Catalog 1, page tree 2, fonts 3-6, then a page/contents pair per page. Written in a
     // different order than numbered, then sorted — so a broken sort shows up as objects out
     // of sequence in the file, which is what this reads back.
-    let data = bytes("one") + HARD + bytes(".pa") + HARD + bytes("two") + HARD
+    var data = bytes("one")
+    data += HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes("two")
+    data += HARD
     let text = latin1(emitPDF(parseWS(data), mode: .modern))
     let numbers = text.components(separatedBy: " 0 obj\n").dropLast().map {
         Int($0.components(separatedBy: "\n").last!)

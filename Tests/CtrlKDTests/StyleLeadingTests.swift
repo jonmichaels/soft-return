@@ -224,7 +224,11 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
     // over-generalisation this fix replaces with a narrower, font-relative one.
     let exp16 = styleRecord(font: (width: 180, height: 320, typestyle: 0), vmi: 240)
     let exp12 = styleRecord(font: (width: 180, height: 240, typestyle: 0), vmi: 240)
-    let body = styleRef(2) + bytes("Line one.") + HARD + bytes("Line two.") + HARD
+    var body = styleRef(2)
+    body += bytes("Line one.")
+    body += HARD
+    body += bytes("Line two.")
+    body += HARD
     for (rec, want) in [(exp16, 16.0), (exp12, 12.0)] {
         let lib = styleLibrary([
             (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
@@ -246,7 +250,11 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
         (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
         (name: "AutoNoFont", record: rec),
     ])
-    let body = styleRef(2) + bytes("Line one.") + HARD + bytes("Line two.") + HARD
+    var body = styleRef(2)
+    body += bytes("Line one.")
+    body += HARD
+    body += bytes("Line two.")
+    body += HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
     #expect(doc.blocks[0].styleFontPt == nil)
     #expect(gaps(doc) == [12.0])                     // autoLeadFactor (1.0) x document default 12pt
@@ -303,7 +311,11 @@ private let exp240At12pt = styleRecord(font: (width: 180, height: 240, typestyle
             (name: "WordStar Defaults", record: nil), (name: "WordStar Defaults", record: nil),
             (name: "Big", record: rec),
         ])
-        let body = styleRef(2) + bytes("Line one.") + HARD + bytes("Line two.") + HARD
+        var body = styleRef(2)
+        body += bytes("Line one.")
+        body += HARD
+        body += bytes("Line two.")
+        body += HARD
         return parseWS(documentWithStyleLibrary(body: body, library: lib))
     }
 

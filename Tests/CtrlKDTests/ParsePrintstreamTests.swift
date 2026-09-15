@@ -9,7 +9,11 @@ import Testing
     // exactly as the Python test does — job-007 had to stand these two in against joined
     // span text because no emitter existed yet; restored per job-008's request.
     var data: [UInt8] = bytes("treaties with Indians.")
-    data += [0x18] + bytes("1") + [0x12] + bytes("  More text") + HARD
+    data += [0x18]
+    data += bytes("1")
+    data += [0x12]
+    data += bytes("  More text")
+    data += HARD
     data += [0x14] + bytes("page one") + HARD
     data += [0x0c] + bytes("page two") + HARD
 
@@ -31,7 +35,10 @@ import Testing
     // are directional though: an OFF code with the style not active is a no-op
     // (Python uses set.discard), whereas a toggle would switch the style ON. Expectation
     // from the real Python parse_printstream.
-    let data = bytes("plain") + [0x12] + bytes("still plain") + HARD   // 0x12 = sup OFF
+    var data = bytes("plain")
+    data += [0x12]
+    data += bytes("still plain")
+    data += HARD   // 0x12 = sup OFF
     let doc = parsePrintstream(data)
     let spans = doc.blocks[0].lines[0].spans
     #expect(spans.map(\.text) == ["plain", "still plain"])
@@ -74,7 +81,10 @@ import Testing
     // full detection — so a GUI's error alert and the CLI message can say
     // "detected: binary -- <reason>" instead of just "no".
     let byteRange = (0...255).map { UInt8($0) }
-    let binary = byteRange + byteRange + byteRange + byteRange
+    var binary = byteRange
+    binary += byteRange
+    binary += byteRange
+    binary += byteRange
     let error = #expect(throws: ParseError.self) { _ = try parse(binary) }
     guard case .notConvertible(let variant, let reason, let detection) = try #require(error) else {
         Issue.record("expected .notConvertible")

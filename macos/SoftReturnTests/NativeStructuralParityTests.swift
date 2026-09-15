@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -1395,11 +1396,11 @@ enum AppOutput {
 /// and with the suites that drive real windows, QuickLook and the UI target. Serializing
 /// them costs nothing when they are the only thing running and stops the full suite from
 /// thrashing.
-@Suite(.serialized) struct NativeStructuralParityTests {
+@Suite(.tags(.corpus), .serialized) struct NativeStructuralParityTests {
     /// Job 535: routes through `PrivateCorpusSupport` — see that file's own doc comment.
     static var ws7Fixtures: [String] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: PrivateCorpusSupport.ws7Directory.path)) ?? []
-        return names.filter { $0.uppercased().hasSuffix(".WS") }.sorted()
+        return CorpusDocumentFilter.apply(names.filter { $0.uppercased().hasSuffix(".WS") }.sorted())
     }
 
     struct Divergence: CustomStringConvertible {
@@ -1531,6 +1532,7 @@ enum AppOutput {
     /// the fix each is waiting on; anything NEW fails the suite outright, so this gate can only
     /// ever get stricter by accident-proofing, never quietly regress further.
     @Test(arguments: ws7Fixtures) @MainActor func structuralParity(fixtureName: String) throws {
+        if CorpusDocumentFilter.recordIfUnmatched(fixtureName) { return }
         let found = try Self.divergences(fixtureName: fixtureName)
         if !found.isEmpty {
             print("### Structural divergence table — \(fixtureName) ###")

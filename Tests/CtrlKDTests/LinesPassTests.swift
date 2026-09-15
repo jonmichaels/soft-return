@@ -20,10 +20,16 @@ import Testing
     // Mirrors test_poem_lines_kept: short lines ending in SOFT returns where the next
     // word would have fit are deliberate breaks (the wrap test); the stanza gap is a
     // soft+hard run -> para.
-    let poem = bytes("     A short poem line,") + SOFT +
-               bytes("     another short line.") + SOFT + HARD + SOFT +
-               bytes("     Second stanza opens,") + SOFT +
-               bytes("     and closes.") + HARD
+    var poem = bytes("     A short poem line,")
+    poem += SOFT
+    poem += bytes("     another short line.")
+    poem += SOFT
+    poem += HARD
+    poem += SOFT
+    poem += bytes("     Second stanza opens,")
+    poem += SOFT
+    poem += bytes("     and closes.")
+    poem += HARD
     let seps = linesPass(poem).lines.map(\.separator)
     #expect(seps.filter { $0 != .blankSoft && $0 != .blankHard }
             == [.line, .para, .line, .eof])
@@ -37,15 +43,25 @@ import Testing
     // Mirrors test_wrap_boundary_is_strict: a word landing EXACTLY at the margin means
     // WS4 still wrapped -> join, not break. 57 + 1 + 7 == 65, which is not < 65.
     let l1 = bytes(String(repeating: " ", count: 5) + String(repeating: "a", count: 52)) // len 57
-    let result = linesPass(l1 + SOFT + bytes("mother.") + HARD)
+    var linesPassArg40: [UInt8] = l1
+    linesPassArg40 += SOFT
+    linesPassArg40 += bytes("mother.")
+    linesPassArg40 += HARD
+    let result = linesPass(linesPassArg40)
     #expect(result.margin == 65)
     #expect(result.lines[0].separator == .wrap)
 }
 
 @Test func singleHardIsLineBreak() {
     // Mirrors test_single_hard_is_line_break.
-    let data = bytes("Jon Michaels") + SOFT + bytes("March 6, 1992") + SOFT + HARD + SOFT +
-               bytes("Body text.") + HARD
+    var data = bytes("Jon Michaels")
+    data += SOFT
+    data += bytes("March 6, 1992")
+    data += SOFT
+    data += HARD
+    data += SOFT
+    data += bytes("Body text.")
+    data += HARD
     let seps = linesPass(data).lines.map(\.separator)
     #expect(seps.filter { $0 != .blankSoft && $0 != .blankHard }
             == [.line, .para, .eof])
@@ -62,14 +78,23 @@ import Testing
     let wrappedEOF: [UInt8] = [0x1B, 0x1A, 0x1C]
     let wrappedCR: [UInt8] = [0x1B, 0x0D, 0x1C]
     let wrappedLF: [UInt8] = [0x1B, 0x0A, 0x1C]
-    let data = bytes("1A") + wrappedEOF + bytes(" 0D") + wrappedCR + bytes(" 0A") + wrappedLF + HARD
+    var data = bytes("1A")
+    data += wrappedEOF
+    data += bytes(" 0D")
+    data += wrappedCR
+    data += bytes(" 0A")
+    data += wrappedLF
+    data += HARD
     let result = linesPass(data)
     #expect(result.lines.count == 1)                      // ONE row, not four
     #expect(result.lines[0].text == Array(data.dropLast(HARD.count)))
 
     // A BARE 0x1A still ends the file, and a bare 0x0D still breaks the line — the rule
     // is "not a triple middle", not "never".
-    let bare = bytes("kept") + [0x1A] + bytes("dropped") + HARD
+    var bare = bytes("kept")
+    bare += [0x1A]
+    bare += bytes("dropped")
+    bare += HARD
     #expect(linesPass(bare).lines.map(\.text) == [bytes("kept")])
 }
 
@@ -77,6 +102,10 @@ import Testing
     // Mirrors test_double_spaced_wrap_collapses: double-spaced files put a blank soft
     // line between every wrapped line.
     let l1 = bytes(String(repeating: "z", count: 58) + " filler")
-    let data = l1 + SOFT + SOFT + bytes("continues on.") + HARD
+    var data = l1
+    data += SOFT
+    data += SOFT
+    data += bytes("continues on.")
+    data += HARD
     #expect(linesPass(data).lines[0].separator == .wrap)
 }

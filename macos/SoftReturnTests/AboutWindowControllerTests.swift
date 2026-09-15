@@ -176,6 +176,32 @@ struct AboutWindowControllerTests {
         #expect(controller.window?.styleMask.contains(.resizable) == false)
     }
 
+    /// #271 M5: every piece of text in the About window is set in the system font — the system's
+    /// own faces all carry a private name starting with "." (`.AppleSystemUIFont…`), a named
+    /// family never does — and the window is photographed for the record (in-process, no Screen
+    /// Recording). `ChromeFontScannerTests` holds the same line for the source as a whole.
+    @Test func everyLabelIsSetInTheSystemFont() throws {
+        let controller = AboutWindowController(
+            engineProbe: FakeEngineVersionProbe(result: nil), urlOpener: FakeAboutURLOpener())
+        controller.showWindow(nil)
+        defer { controller.close() }
+        let content = try #require(controller.window?.contentView)
+        content.layoutSubtreeIfNeeded()
+        let controls = RenderProbeKit.descendants(content).compactMap { $0 as? NSControl }.filter { $0.font != nil }
+        #expect(!controls.isEmpty, "the About window has no text controls to check")
+        for control in controls {
+            let font = try #require(control.font)
+            #expect(font.fontName.hasPrefix("."),
+                    "\(type(of: control)) “\(control.stringValue)” is set in \(font.fontName), not the system font")
+        }
+        let proofs = RenderProbeKit.resolveOutputDirectory(
+            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
+            fallbackName: "soft-return-proofs")
+        let png = proofs.appendingPathComponent("m5-about-window.png")
+        #expect(try RenderProbeKit.renderPNG(view: content, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
+        print("PROOF: \(png.path)")
+    }
+
     /// Jon's ruling (job 335): match Ghostty's About window — an untitled title bar. Traffic
     /// lights still show (`.titled` + `.closable` are unchanged), just no title text.
     @Test func titleBarHasNoText() throws {

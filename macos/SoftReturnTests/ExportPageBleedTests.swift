@@ -19,7 +19,7 @@ import Testing
 ///
 /// A negative page-local y is the general form of that bug, so that is what this asserts,
 /// over the whole corpus rather than the one document that exposed it.
-@Suite(.serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
+@Suite(.tags(.corpus), .serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct ExportPageBleedTests {
 
     /// THE CORPUS-WIDE FORM, over every fixture rather than the one document that exposed
@@ -63,7 +63,7 @@ struct ExportPageBleedTests {
     /// not lose the page's own overlay content — DARKNESS.WS's title belongs on page 1 and
     /// is drawn there by the same overlay this fix constrains.
     @Test @MainActor func thePageThatOwnsTheInkKeepsIt() throws {
-        let url = try #require(Oracle.fixtureURLs.first { $0.lastPathComponent == "DARKNESS.WS" })
+        let url = try #require(Oracle.allFixtureURLs.first { $0.lastPathComponent == "DARKNESS.WS" })
         let state = try Oracle.state(for: url)
         let pdf = try Oracle.appNativePDF(for: url, state: state)
         let words = try AppPDFWords.payload(from: pdf).words

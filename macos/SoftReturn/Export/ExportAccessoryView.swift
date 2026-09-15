@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 
 /// The Export As sheet's accessory: a centered Style pulldown above three balanced checkbox
 /// columns, Formats, Notes, and Options.
@@ -125,9 +126,11 @@ final class ExportAccessoryView: NSView {
         let popup = Self.makePopup(
             titles: ViewStyle.allCases.map(\.displayName),
             selectedIndex: ViewStyle.allCases.firstIndex(of: style) ?? 0,
-            identifier: "export-style-popup", accessibilityLabel: "Style")
+            identifier: "export-style-popup", accessibilityLabel: "Mode")
         stylePopup = popup
-        let styleRow = NSStackView(views: [Self.makeLabel("Style:"), popup])
+        // #271 M11, batch 31 (Jon: "Exports are Modes. Looking at something is a View"): the export's Mode — the CLI's
+        // --mode — offered in the same three values as before.
+        let styleRow = NSStackView(views: [Self.makeLabel("Mode:"), popup])
         styleRow.orientation = .horizontal
         styleRow.spacing = 8
 

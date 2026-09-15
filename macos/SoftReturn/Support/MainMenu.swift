@@ -1,4 +1,5 @@
 import AppKit
+import SoftReturnShared
 
 /// The menu bar, built in code.
 ///

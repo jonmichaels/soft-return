@@ -1,6 +1,7 @@
 import AppKit
 import CoreText
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -166,8 +167,12 @@ struct ModernTitleAscenderTests {
         NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
             controller.pagedView.cacheDisplay(in: controller.pagedView.bounds, to: bitmap)
         }
+        // Composited over the paper: at a fractional capture scale the page's top pixel row is only
+        // partly covered, and the desk's 23%-alpha grey there is not the document's ink
+        // (`RenderProbeKit.inkMargins`' `compositeOverBackground`).
         guard let margins = RenderProbeKit.inkMargins(
-            in: bitmap, background: .white, viewSize: controller.pagedView.bounds.size)
+            in: bitmap, background: .white, viewSize: controller.pagedView.bounds.size,
+            compositeOverBackground: true)
         else { throw ProbeError.noInk }
         return margins.top
     }

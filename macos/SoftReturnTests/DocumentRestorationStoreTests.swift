@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 @testable import SoftReturn
+import SoftReturnShared
 
 /// The fallback half of window restoration: see `DocumentRestorationStore`'s own doc comment
 /// for why AppKit's own secure state restoration is not enough on its own. These tests never
@@ -37,167 +38,169 @@ private final class FakeDocumentController: DocumentOpening {
 
 // MARK: - Persist / resolve round trip
 
-@Test @MainActor func persistingWritesBookmarksThatResolveBackToTheSameFile() throws {
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = true
-    let url = try scratchDocumentURL()
+@Suite struct DocumentRestorationStoreTests {
+    @Test @MainActor func persistingWritesBookmarksThatResolveBackToTheSameFile() throws {
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = true
+        let url = try scratchDocumentURL()
 
-    DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
-    let resolved = DocumentRestorationStore.resolvedURLs(defaults: defaults)
+        DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
+        let resolved = DocumentRestorationStore.resolvedURLs(defaults: defaults)
 
-    #expect(resolved.count == 1)
-    #expect(resolved.first?.path == url.path)
-}
+        #expect(resolved.count == 1)
+        #expect(resolved.first?.path == url.path)
+    }
 
-@Test @MainActor func persistingWithThePreferenceOffStoresNothing() throws {
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = false
-    let url = try scratchDocumentURL()
+    @Test @MainActor func persistingWithThePreferenceOffStoresNothing() throws {
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = false
+        let url = try scratchDocumentURL()
 
-    DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
+        DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
 
-    #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
-}
+        #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
+    }
 
-@Test @MainActor func turningThePreferenceOffClearsWhatWasPreviouslyStored() throws {
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = true
-    let url = try scratchDocumentURL()
-    DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
-    #expect(!DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
+    @Test @MainActor func turningThePreferenceOffClearsWhatWasPreviouslyStored() throws {
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = true
+        let url = try scratchDocumentURL()
+        DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
+        #expect(!DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
 
-    settings.restoreWindowsOnLaunch = false
-    DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
+        settings.restoreWindowsOnLaunch = false
+        DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
 
-    #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty,
-            "a preference turned off must stop remembering anything, not just stop writing new URLs")
-}
+        #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty,
+                "a preference turned off must stop remembering anything, not just stop writing new URLs")
+    }
 
-@Test @MainActor func persistingAnEmptyListClearsAPreviouslyStoredDocument() throws {
-    // A quit with nothing open must not leave a stale document to reopen next launch.
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = true
-    let url = try scratchDocumentURL()
-    DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
+    @Test @MainActor func persistingAnEmptyListClearsAPreviouslyStoredDocument() throws {
+        // A quit with nothing open must not leave a stale document to reopen next launch.
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = true
+        let url = try scratchDocumentURL()
+        DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
 
-    DocumentRestorationStore.persist(urls: [], settings: settings, defaults: defaults)
+        DocumentRestorationStore.persist(urls: [], settings: settings, defaults: defaults)
 
-    #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
-}
+        #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
+    }
 
-// MARK: - Eager persistence (open/close, not just quit)
+    // MARK: - Eager persistence (open/close, not just quit)
 
-@Test @MainActor func openingThenClosingADocumentUpdatesTheStoredListWithoutATerminateCall() throws {
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = true
-    let first = try scratchDocumentURL(name: "FIRST.ws4")
-    let second = try scratchDocumentURL(name: "SECOND.ws4")
-    let controller = FakeDocumentController()
-    let firstDoc = NSDocument()
-    firstDoc.fileURL = first
+    @Test @MainActor func openingThenClosingADocumentUpdatesTheStoredListWithoutATerminateCall() throws {
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = true
+        let first = try scratchDocumentURL(name: "FIRST.ws4")
+        let second = try scratchDocumentURL(name: "SECOND.ws4")
+        let controller = FakeDocumentController()
+        let firstDoc = NSDocument()
+        firstDoc.fileURL = first
 
-    controller.documents = [firstDoc]
-    DocumentRestorationStore.persistOpenDocuments(settings: settings, defaults: defaults,
-                                                   documentController: controller)
-    #expect(Set(DocumentRestorationStore.resolvedURLs(defaults: defaults).map(\.path)) == [first.path])
+        controller.documents = [firstDoc]
+        DocumentRestorationStore.persistOpenDocuments(settings: settings, defaults: defaults,
+                                                       documentController: controller)
+        #expect(Set(DocumentRestorationStore.resolvedURLs(defaults: defaults).map(\.path)) == [first.path])
 
-    let secondDoc = NSDocument()
-    secondDoc.fileURL = second
-    controller.documents = [firstDoc, secondDoc]
-    DocumentRestorationStore.persistOpenDocuments(settings: settings, defaults: defaults,
-                                                   documentController: controller)
-    #expect(Set(DocumentRestorationStore.resolvedURLs(defaults: defaults).map(\.path))
-            == Set([first, second].map(\.path)))
+        let secondDoc = NSDocument()
+        secondDoc.fileURL = second
+        controller.documents = [firstDoc, secondDoc]
+        DocumentRestorationStore.persistOpenDocuments(settings: settings, defaults: defaults,
+                                                       documentController: controller)
+        #expect(Set(DocumentRestorationStore.resolvedURLs(defaults: defaults).map(\.path))
+                == Set([first, second].map(\.path)))
 
-    // Closing `firstDoc`: it is still in `controller.documents` at this point (removal is
-    // `close()`'s job, which has not run) — `excluding` is how the close path leaves it out.
-    DocumentRestorationStore.persistOpenDocuments(excluding: firstDoc, settings: settings,
-                                                   defaults: defaults, documentController: controller)
-    #expect(Set(DocumentRestorationStore.resolvedURLs(defaults: defaults).map(\.path)) == [second.path])
-}
+        // Closing `firstDoc`: it is still in `controller.documents` at this point (removal is
+        // `close()`'s job, which has not run) — `excluding` is how the close path leaves it out.
+        DocumentRestorationStore.persistOpenDocuments(excluding: firstDoc, settings: settings,
+                                                       defaults: defaults, documentController: controller)
+        #expect(Set(DocumentRestorationStore.resolvedURLs(defaults: defaults).map(\.path)) == [second.path])
+    }
 
-@Test @MainActor func closingTheLastDocumentLeavesAnEmptyNotStaleList() throws {
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = true
-    let url = try scratchDocumentURL()
-    let controller = FakeDocumentController()
-    let doc = NSDocument()
-    doc.fileURL = url
-    controller.documents = [doc]
-    DocumentRestorationStore.persistOpenDocuments(settings: settings, defaults: defaults,
-                                                   documentController: controller)
-    #expect(!DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
+    @Test @MainActor func closingTheLastDocumentLeavesAnEmptyNotStaleList() throws {
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = true
+        let url = try scratchDocumentURL()
+        let controller = FakeDocumentController()
+        let doc = NSDocument()
+        doc.fileURL = url
+        controller.documents = [doc]
+        DocumentRestorationStore.persistOpenDocuments(settings: settings, defaults: defaults,
+                                                       documentController: controller)
+        #expect(!DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
 
-    DocumentRestorationStore.persistOpenDocuments(excluding: doc, settings: settings,
-                                                   defaults: defaults, documentController: controller)
+        DocumentRestorationStore.persistOpenDocuments(excluding: doc, settings: settings,
+                                                       defaults: defaults, documentController: controller)
 
-    #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty,
-            "the last window closing must leave an empty list, not a stale one")
-}
+        #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty,
+                "the last window closing must leave an empty list, not a stale one")
+    }
 
-@Test @MainActor func eagerPersistenceStillRespectsThePreferenceGate() throws {
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = false
-    let url = try scratchDocumentURL()
-    let controller = FakeDocumentController()
-    let doc = NSDocument()
-    doc.fileURL = url
-    controller.documents = [doc]
+    @Test @MainActor func eagerPersistenceStillRespectsThePreferenceGate() throws {
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = false
+        let url = try scratchDocumentURL()
+        let controller = FakeDocumentController()
+        let doc = NSDocument()
+        doc.fileURL = url
+        controller.documents = [doc]
 
-    DocumentRestorationStore.persistOpenDocuments(settings: settings, defaults: defaults,
-                                                   documentController: controller)
+        DocumentRestorationStore.persistOpenDocuments(settings: settings, defaults: defaults,
+                                                       documentController: controller)
 
-    #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
-}
+        #expect(DocumentRestorationStore.resolvedURLs(defaults: defaults).isEmpty)
+    }
 
-// MARK: - Reopen gating
+    // MARK: - Reopen gating
 
-@Test @MainActor func reopenDoesNothingWhenThePreferenceIsOff() throws {
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = true
-    let url = try scratchDocumentURL()
-    DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
-    settings.restoreWindowsOnLaunch = false
-    let controller = FakeDocumentController()
+    @Test @MainActor func reopenDoesNothingWhenThePreferenceIsOff() throws {
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = true
+        let url = try scratchDocumentURL()
+        DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
+        settings.restoreWindowsOnLaunch = false
+        let controller = FakeDocumentController()
 
-    DocumentRestorationStore.reopenIfNeeded(settings: settings, defaults: defaults, documentController: controller)
+        DocumentRestorationStore.reopenIfNeeded(settings: settings, defaults: defaults, documentController: controller)
 
-    #expect(controller.openedURLs.isEmpty)
-}
+        #expect(controller.openedURLs.isEmpty)
+    }
 
-@Test @MainActor func reopenDoesNothingWhenADocumentIsAlreadyOpen() throws {
-    // The system already restored (or -SoftReturnOpenDocument already opened something) —
-    // this fallback must not open the same document a second time.
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = true
-    let url = try scratchDocumentURL()
-    DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
-    let controller = FakeDocumentController(documents: [NSDocument()])
+    @Test @MainActor func reopenDoesNothingWhenADocumentIsAlreadyOpen() throws {
+        // The system already restored (or -SoftReturnOpenDocument already opened something) —
+        // this fallback must not open the same document a second time.
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = true
+        let url = try scratchDocumentURL()
+        DocumentRestorationStore.persist(urls: [url], settings: settings, defaults: defaults)
+        let controller = FakeDocumentController(documents: [NSDocument()])
 
-    DocumentRestorationStore.reopenIfNeeded(settings: settings, defaults: defaults, documentController: controller)
+        DocumentRestorationStore.reopenIfNeeded(settings: settings, defaults: defaults, documentController: controller)
 
-    #expect(controller.openedURLs.isEmpty)
-}
+        #expect(controller.openedURLs.isEmpty)
+    }
 
-@Test @MainActor func reopenOpensEveryStoredURLWhenNothingIsOpenAndThePreferenceIsOn() throws {
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = true
-    let first = try scratchDocumentURL(name: "FIRST.ws4")
-    let second = try scratchDocumentURL(name: "SECOND.ws4")
-    DocumentRestorationStore.persist(urls: [first, second], settings: settings, defaults: defaults)
-    let controller = FakeDocumentController()
+    @Test @MainActor func reopenOpensEveryStoredURLWhenNothingIsOpenAndThePreferenceIsOn() throws {
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = true
+        let first = try scratchDocumentURL(name: "FIRST.ws4")
+        let second = try scratchDocumentURL(name: "SECOND.ws4")
+        DocumentRestorationStore.persist(urls: [first, second], settings: settings, defaults: defaults)
+        let controller = FakeDocumentController()
 
-    DocumentRestorationStore.reopenIfNeeded(settings: settings, defaults: defaults, documentController: controller)
+        DocumentRestorationStore.reopenIfNeeded(settings: settings, defaults: defaults, documentController: controller)
 
-    #expect(Set(controller.openedURLs.map(\.path)) == Set([first, second].map(\.path)))
-}
+        #expect(Set(controller.openedURLs.map(\.path)) == Set([first, second].map(\.path)))
+    }
 
-@Test @MainActor func reopenDoesNothingWithNoStoredDocumentsEvenWhenThePreferenceIsOn() throws {
-    let (settings, defaults) = throwawaySettings()
-    settings.restoreWindowsOnLaunch = true
-    let controller = FakeDocumentController()
+    @Test @MainActor func reopenDoesNothingWithNoStoredDocumentsEvenWhenThePreferenceIsOn() throws {
+        let (settings, defaults) = throwawaySettings()
+        settings.restoreWindowsOnLaunch = true
+        let controller = FakeDocumentController()
 
-    DocumentRestorationStore.reopenIfNeeded(settings: settings, defaults: defaults, documentController: controller)
+        DocumentRestorationStore.reopenIfNeeded(settings: settings, defaults: defaults, documentController: controller)
 
-    #expect(controller.openedURLs.isEmpty)
+        #expect(controller.openedURLs.isEmpty)
+    }
 }

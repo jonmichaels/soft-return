@@ -31,6 +31,10 @@ Derived/
 .tuist-cache/
 .tuist-bin/
 
+# iOS screen proofs rendered by ios/SoftReturnIOSTests (one PNG per design artboard) —
+# evidence for review, never committed.
+ios/ScreenshotProofs/
+
 # macOS
 .DS_Store
 __pycache__/

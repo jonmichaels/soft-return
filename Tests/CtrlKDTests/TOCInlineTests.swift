@@ -13,7 +13,15 @@ import Testing
 /// `documentInfo` (which gates its whole shape-3 report on that classification) or
 /// requests `mode: .modern` on a document that would otherwise force printed rendering
 /// via `isPrinted`'s own `printstream` check. Same fix pattern as `PrintedFidelityTests`.
-private let tocDiagnoseProse = bytes("word") + SOFT + bytes("word") + SOFT + bytes("word") + SOFT
+private let tocDiagnoseProse: [UInt8] = {
+    var v = bytes("word")
+    v += SOFT
+    v += bytes("word")
+    v += SOFT
+    v += bytes("word")
+    v += SOFT
+    return v
+}()
 
 /// A document with two `.tc` entries either side of a real `.pa` break, and one `.ix`
 /// entry after it -- `.pa` always closes the current page (even an empty one), so this
@@ -50,7 +58,11 @@ private func tocFixture() -> [UInt8] {
 }
 
 @Test func tocIndexInNonPagedFormatsHasNoPageNumbers() throws {
-    let data = bytes(".tc Chapter One") + HARD + tocDiagnoseProse + bytes("End.") + HARD
+    var data = bytes(".tc Chapter One")
+    data += HARD
+    data += tocDiagnoseProse
+    data += bytes("End.")
+    data += HARD
     let doc = parseWS(data)
     let options = EmitOptions(toc: true)
     let text = emitText(doc, mode: .modern, options: options)

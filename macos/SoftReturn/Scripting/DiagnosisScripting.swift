@@ -1,4 +1,5 @@
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// Turns `DocumentOperations.DiagnosisResult` into the `diagnosis` record

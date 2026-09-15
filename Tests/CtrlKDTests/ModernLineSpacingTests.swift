@@ -49,7 +49,10 @@ private func lineYs(_ pdf: [UInt8]) -> [Double] {
     // bottom, and these two lines are different sizes, so their descents differ too
     // (Courier's 157/1000 at 24pt against the same at 8pt). Adding each line's own descent
     // back puts both boxes back on the ladder the blank's arithmetic actually governs.
-    var data = fontBlock(0, points: 24.0) + bytes("Big line.") + HARD + HARD
+    var data = fontBlock(0, points: 24.0)
+    data += bytes("Big line.")
+    data += HARD
+    data += HARD
     data += fontBlock(0, points: 8.0) + bytes("Small line.") + HARD
     let doc = parseWS(data)
     let pdf = emitPDF(doc, mode: .modern)
@@ -68,7 +71,10 @@ private func lineYs(_ pdf: [UInt8]) -> [Double] {
     // Two 24pt lines separated by a blank: BOTH sides of the gap scale with the 24pt
     // size (28.8 + 28.8 = 57.6), not the old fixed-blank total of 45.6 (28.8 entering +
     // a 16.8 constant that ignored the 24pt line being left).
-    var data = fontBlock(0, points: 24.0) + bytes("First big line.") + HARD + HARD
+    var data = fontBlock(0, points: 24.0)
+    data += bytes("First big line.")
+    data += HARD
+    data += HARD
     data += fontBlock(0, points: 24.0) + bytes("Second big line.") + HARD
     let doc = parseWS(data)
     let pdf = emitPDF(doc, mode: .modern)
@@ -80,7 +86,10 @@ private func lineYs(_ pdf: [UInt8]) -> [Double] {
     // The regression shape itself: three same-size (24pt) one-line paragraphs, each
     // separated by one blank line -- both gaps must be IDENTICAL (57.6pt each), proving
     // the rule is truly proportional and not just correct for one transition.
-    var data = fontBlock(0, points: 24.0) + bytes("Line one.") + HARD + HARD
+    var data = fontBlock(0, points: 24.0)
+    data += bytes("Line one.")
+    data += HARD
+    data += HARD
     data += bytes("Line two.") + HARD + HARD
     data += bytes("Line three.") + HARD
     let doc = parseWS(data)
@@ -95,7 +104,11 @@ private func lineYs(_ pdf: [UInt8]) -> [Double] {
     // corpus doc without an explicit font-sample page) must render at exactly the
     // pre-existing 16.8pt-per-blank spacing (1.2 x the 14pt Modern body default) -- the
     // fix must not perturb the overwhelmingly common uniform-size case.
-    let data = bytes("Line one.") + HARD + HARD + bytes("Line two.") + HARD
+    var data = bytes("Line one.")
+    data += HARD
+    data += HARD
+    data += bytes("Line two.")
+    data += HARD
     var doc = parseWS(data)
     doc.detection = Detection(variant: .ws4)
     let pdf = emitPDF(doc, mode: .modern)
@@ -110,7 +123,10 @@ private func lineYs(_ pdf: [UInt8]) -> [Double] {
     // present, proven by an unrelated Printed invariant: `.lh`-driven leading stays
     // exactly what `.lh` says.
     var data = bytes(".lh 20\r\n") + fontBlock(0, points: 24.0)
-    data += bytes("Line one.") + HARD + bytes("Line two.") + HARD
+    data += bytes("Line one.")
+    data += HARD
+    data += bytes("Line two.")
+    data += HARD
     let doc = parseWS(data)
     let pdf = emitPDF(doc, mode: .printed)
     let ys = lineYs(pdf)
@@ -184,7 +200,10 @@ private func sizedPixResult(wPt: Double, hPt: Double) throws -> PixResult {
     // is scoped to blanks that FOLLOW an image, not blanks generally near one. Two 24pt
     // lines with a blank between them, matching the pre-existing unequal-size rule this
     // file already pins above.
-    var data = fontBlock(0, points: 24.0) + bytes("Big line.") + HARD + HARD
+    var data = fontBlock(0, points: 24.0)
+    data += bytes("Big line.")
+    data += HARD
+    data += HARD
     data += fontBlock(0, points: 24.0) + bytes("Second.") + HARD
     let doc = parseWS(data)
     let pdf = emitPDF(doc, mode: .modern)

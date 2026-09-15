@@ -107,6 +107,13 @@ public func documentInfo(_ data: [UInt8], path: String? = nil,
         info["symmetric_blocks_1d"] = .int(detection.symmetricBlocks1D)
         info["size"] = .int(detection.size)
     }
+    // planning #264, mail-merge scope (ruled 2026-09-13): "It should show up listed as
+    // such in Document Info." Alongside the variant, never instead of it.
+    if let kind = detection.kind {
+        info["kind"] = .string(kind)
+        if let records = detection.mergeRecords { info["merge_records"] = .int(records) }
+        if let fields = detection.mergeFields { info["merge_fields"] = .int(fields) }
+    }
 
     if detection.variant == .ws4 || detection.variant == .ws5plus {
         let doc = parseWS(data)

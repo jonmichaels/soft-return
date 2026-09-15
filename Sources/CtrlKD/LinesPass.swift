@@ -141,10 +141,22 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
         // after it. The terminator KIND is carried because WordStar distinguishes
         // them — soft blanks are `.ls` filler and are suppressed at a page top,
         // hard blanks are the author's and print.
+        //
+        // A VISUALLY blank line at EOF (no terminator after it) is the file's own
+        // trailing padding and is dropped -- except when it carries MARKS. A mark is a
+        // note/graphic/style reference WordStar anchored at this point in the text; the
+        // line looks blank only because the reference itself contributes no characters.
+        // Dropping it deletes the reference, and with it the note the reference is the
+        // ONLY anchor for (measured: the 19 TAGS/ annotation documents, ws7-prints/v4).
+        // Port of Python's `core.lines_pass`.
         if isBlank(vis) {
             if kind != .eof {
                 out.append(PhysicalLine(text: text,
                                         separator: kind == .soft ? .blankSoft : .blankHard,
+                                        markPairs: lines[i].marks))
+                rawBreaks.append(lines[i].brk)
+            } else if !lines[i].marks.isEmpty {
+                out.append(PhysicalLine(text: text, separator: .eof,
                                         markPairs: lines[i].marks))
                 rawBreaks.append(lines[i].brk)
             }
@@ -346,6 +358,7 @@ private func pythonMarkOrderKey(_ m: StructuralMark) -> (kind: String, values: [
     // worth reproducing.
     case .pctl(let hmi, let byteLen, let pcl): return ("pctl", [hmi, byteLen, pcl ?? -1])
     case .pix(let index, let byteLen): return ("pix", [index, byteLen])
+    case .ixentry(let byteLen): return ("ixentry", [byteLen])
     case .softpage: return ("softpage", [])
     case .tab(let absHMI, let leader, let cols): return ("tab", [absHMI, Int(leader), cols])
     case .style(let handle): return ("style", [handle])
@@ -412,7 +425,34 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
         } else if b == 0x0d {
             // A BARE CR (not paired above with a following LF) is `^PM` Overprint Line
             // in a WS document; a CR-only text file (classic Mac endings) never opts in.
-            emit(overprintCr ? .over : .hard, 1); i += 1
+            //
+            // ...UNLESS A FORM FEED FOLLOWS IT. `<0D 0C>` — in the file `<0D 8C>`, the
+            // flagged/soft `^L` the `_FLAGGED` translate has already de-flagged — is
+            // WordStar's own record of a COLUMN BREAK, the 0x0C closing the line the
+            // break happened on exactly as a flagged 0x0A closes a soft-wrapped one. It
+            // is NOT a bare CR, and the line in front of it is not overprinted by
+            // anything. Counted in Robert J. Sawyer's own WS7 archive, `<0D 8C>` tallies
+            // column break for column break: REF/WINGDING.CHT 4 (one sheet, `.co5`),
+            // PRINTERS/fontcrib.ws 8 (two sheets), PRINTER.PS 12 (three), MICKEE.WS 6
+            // and ARTICLES/FORMFEED.WS 1 (each directly after an explicit `.cb`),
+            // LSRBOX/LSRBOX.WS 1 (its one `.co2` sheet, page 7).
+            //
+            // Read as an overprint, the line BEFORE every column break spent no vertical
+            // room at all (the printed budget credits the line after an overprint with a
+            // free lead). Measured on LSRBOX.WS page 7 against the ws7-prints/v4
+            // PRISTINE.EXE capture: real WS7 ends column 1 after its tenth `.lh 1"` line
+            // — 720pt of a 766.8pt text height, the eleventh line's own 55.44pt lead not
+            // fitting — and this engine spent 0pt on the tenth, swallowed four more lines
+            // out of column 2 and printed two of them off the foot of the sheet.
+            //
+            // The 0x0C itself is deliberately NOT consumed as part of the break: it stays
+            // the next line's leading byte, where planning #246's form-feed peeling
+            // (measured on PRINT.TST) turns it into the page eject real WS7 performs
+            // there. Both spellings are tested because the flagged-byte translate runs
+            // only on the WS5+ document path. Port of Python `core._emit`'s own `after`
+            // test.
+            let formFeedFollows = (next == 0x0c || next == 0x8c)
+            emit((overprintCr && !formFeedFollows) ? .over : .hard, 1); i += 1
         } else if b == 0x0a {
             emit(.hard, 1); i += 1
         } else {
@@ -420,7 +460,23 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
             i += 1
         }
     }
-    if !text.isEmpty {
+    // A zero-length final line (no text, no terminator) is the file's own tail and is
+    // normally not a line at all -- EXCEPT when a note REFERENCE is anchored inside it.
+    // A note's own bytes contribute nothing to the cleaned stream, so a document whose
+    // entire body is one note block reduces to exactly this case: an empty EOF line
+    // holding an `fnref` mark and nothing else. Dropping it dropped the reference, left
+    // the document with no blocks, and printed a completely BLANK page where real WS7
+    // prints the annotation's tag on the first body line and the annotation itself at
+    // the page bottom (measured, ws7-prints/v4 PRISTINE.EXE: all 19 documents in the
+    // Sawyer archive's TAGS/ directory). Only `fnref` counts: every other mark kind is
+    // forward-looking STATE (a colour, font or style change) with nothing after it to
+    // apply to, and materialising a line for one of those would add a blank line no
+    // WordStar ever printed. Port of Python's `core._emit`.
+    let tailCarriesNoteRef = marks.contains { off, list in
+        off >= lineStart && off <= lineStart + text.count
+            && list.contains { if case .fnref = $0 { return true } else { return false } }
+    }
+    if !text.isEmpty || tailCarriesNoteRef {
         emit(.eof, 0)
     }
     // Attach each mark to the line containing it. A mark landing INSIDE a break — a

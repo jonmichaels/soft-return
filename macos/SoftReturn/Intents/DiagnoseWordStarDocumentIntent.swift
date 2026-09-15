@@ -1,5 +1,6 @@
 import AppIntents
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// Shortcuts' "Diagnose WordStar Document" — a thin translation over

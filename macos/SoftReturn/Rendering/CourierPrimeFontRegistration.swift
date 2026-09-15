@@ -1,5 +1,5 @@
-import AppKit
 import CoreText
+import Foundation
 
 /// Job 306 (b18): registers the four vendored Courier Prime faces
 /// (`Vendor/CourierPrime/*.ttf`, SIL OFL 1.1, `Vendor/CourierPrime/VENDORED.md`) — Native's

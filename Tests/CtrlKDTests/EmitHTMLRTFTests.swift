@@ -17,7 +17,10 @@ import Testing
     // CSS property instead; every OTHER line in a verified verse unit keeps its literal
     // leading spaces exactly as before (a poem's second verse is content, not a
     // paragraph-start marker), so it still renders as &nbsp; via `htmlSpan`'s own rule.
-    let poem = bytes("     line one,") + SOFT + bytes("     line two.") + HARD
+    var poem = bytes("     line one,")
+    poem += SOFT
+    poem += bytes("     line two.")
+    poem += HARD
     let html = emitHTML(parseWS(poem))
     #expect(html.contains("<br>"))
     // b24 round 20 (slate item 4): a verse-classified unit now also carries the tight
@@ -145,10 +148,19 @@ import Testing
     // Python exactly as here (verified against the reference). The assertion is a shape
     // check for prose, not an escaping check; this exact-output test is the escaping check.
     let doc = Document(blocks: [Block(lines: [Line(spans: [Span(text: "a{b}c{")])])])
-    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
-            + #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
-            + "\n" + #"\f0\fs28 "# + "\n"
-            + #"{a\{b\}c\{}\par "# + "\n}\n")
+    // Built with `+=` rather than one chained `+`: this repo's own pre-push fixture
+    // rule (planning #253).
+    var expected = #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
+    expected += #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
+    // planning #264 item 3: every document gets stock WordStar 7's own automatic page
+    // number when it declares no footer of its own.
+    expected += #"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#
+    expected += "\n"
+    expected += #"\f0\fs28 "#
+    expected += "\n"
+    expected += #"{a\{b\}c\{}\par "#
+    expected += "\n}\n"
+    #expect(emitRTF(doc) == expected)
 }
 
 @Test func rtfModernParagraphSpacingFollowsTheAuthorsBlankLines() {
@@ -161,11 +173,22 @@ import Testing
         Block(lines: []),
         Block(lines: [Line(spans: [Span(text: "B")])]),
     ])
-    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
-            + #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
-            + "\n" + #"\f0\fs28 "# + "\n"
-            + #"{A}\par "# + "\n" + #"\par "# + "\n"
-            + #"{B}\par "# + "\n}\n")
+    // Built with `+=` rather than one chained `+`: this repo's own pre-push fixture
+    // rule (planning #253).
+    var expected = #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
+    expected += #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
+    // planning #264 item 3: see the escaped-braces test above.
+    expected += #"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#
+    expected += "\n"
+    expected += #"\f0\fs28 "#
+    expected += "\n"
+    expected += #"{A}\par "#
+    expected += "\n"
+    expected += #"\par "#
+    expected += "\n"
+    expected += #"{B}\par "#
+    expected += "\n}\n"
+    #expect(emitRTF(doc) == expected)
 }
 
 @Test func printedModeKeepsAnEmptyBlockAsABlankParagraph() throws {
@@ -181,12 +204,26 @@ import Testing
     // round 6: Printed RTF now also opens with `\sl-240\slmult0` (the document default
     // leading, 8/48in, at -30 twips per 1/48in unit) -- the same token every other
     // Printed paragraph carries, first paragraph included.
-    #expect(emitRTF(doc) == #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
-            + #"\paperw12240\paperh15840\margl1152\margr1152\margt720\margb1920"#
-            + "\n" + #"\f1\fs24 "# + "\n"
-            + #"\sl-240\slmult0 "# + "\n"
-            + #"{Some plain text here today.}\line \par "# + "\n"
-            + #"\page "# + "\n" + #"\par "# + "\n}\n")
+    // Built with `+=` rather than one chained `+`: this repo's own pre-push fixture
+    // rule (planning #253) -- macOS CI's type-checker abandons a long chain.
+    var expected = #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
+    expected += #"\paperw12240\paperh15840\margl1152\margr1152\margt720\margb1920"#
+    // planning #264 item 4: `\headery`/`\footery` are the document's own
+    // `.mt`/`.hm`/`.mb`/`.fm` gaps, Printed only; item 3 adds the footer.
+    expected += #"\headery0\footery1200"#
+    expected += #"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#
+    expected += "\n"
+    expected += #"\f1\fs24 "#
+    expected += "\n"
+    expected += #"\sl-240\slmult0 "#
+    expected += "\n"
+    expected += #"{Some plain text here today.}\line \par "#
+    expected += "\n"
+    expected += #"\page "#
+    expected += "\n"
+    expected += #"\par "#
+    expected += "\n}\n"
+    #expect(emitRTF(doc) == expected)
     // HTML's printed branch takes the opposite decision on the same block — no empty
     // Native paragraph. b23 exports overhaul (round 3 addendum): Native no longer wraps in
     // a bare `<pre>` (a width-constraining monospace grid, the page-geometry opinion this
@@ -209,8 +246,14 @@ import Testing
     let doc = Document(blocks: [Block(
         kind: .pagebreak, lines: [Line(spans: [Span(text: "X")])], heading: 2
     )])
-    #expect(emitHTML(doc).contains("<body>\n<hr class=\"pb\">\n</body></html>\n"))
-    #expect(emitRTF(doc).contains("\n" + #"\page "# + "\n}\n"))
+    // planning #264 items 2 and 4: the pagebreak IS this document's own last block and
+    // nothing was typed after it, so WordStar opens no page for it -- and since item 4
+    // neither the RTF nor the HTML marks one. The heading-vs-break precedence this test
+    // exists for is unchanged: the block still renders as the BREAK (its "X" line is
+    // dropped), which is now visible as an empty body rather than as a rule.
+    #expect(emitHTML(doc).contains("<body>\n\n</body></html>\n"))
+    #expect(!emitHTML(doc).contains("X"))
+    #expect(emitRTF(doc).hasSuffix("\n}\n") && !emitRTF(doc).contains(#"\page"#))
 }
 
 @Test func htmlAnnotationTagWithPunctuationIsSluggedInIdsButRawInDisplay() {

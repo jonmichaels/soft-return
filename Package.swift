@@ -8,8 +8,10 @@ let package = Package(
     // stdlib calls gated above this (see StyleLibrary's hand-rolled
     // contains). macOS 10.15 is the oldest target with the Swift
     // concurrency-capable runtime story and covers 2019-era Intel Macs;
-    // the app consumes this package at its own (higher) floor.
-    platforms: [.macOS(.v10_15)],
+    // the app consumes this package at its own (higher) floor. iOS 16 is the
+    // iPhone app's floor (Jon's ruling 2026-08-30); the engine adds nothing
+    // for it — the same stdlib-only code, one more platform.
+    platforms: [.macOS(.v10_15), .iOS(.v16)],
     products: [
         .library(name: "CtrlKD", targets: ["CtrlKD"]),
     ],
@@ -55,7 +57,7 @@ let package = Package(
         // alternatives were rejected outright.
         .target(name: "CtrlKD",
                swiftSettings: [.enableExperimentalFeature("Extern")],
-               linkerSettings: [.linkedLibrary("z", .when(platforms: [.macOS, .linux])),
+               linkerSettings: [.linkedLibrary("z", .when(platforms: [.macOS, .iOS, .linux])),
                                 .linkedLibrary("zs", .when(platforms: [.windows]))]),
         // Everything `sr` does except talk to the OS: argument parsing, the diagnose
         // report, the conversion loop. Split out from the executable so the tests can

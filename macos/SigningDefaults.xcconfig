@@ -1,0 +1,14 @@
+// Soft Return (Mac): the signing every checkout starts from (planning #269, part 2).
+//
+// Every target's Debug and Release configurations take this file (Project.swift). Here it signs
+// the way Tuist's defaults did before signing left Project.swift: automatic style, the ad-hoc
+// identity ("-"), no team. That is how the public snapshot builds.
+//
+// Then, when this checkout has it, Signing.xcconfig names the team and the identities per target.
+// It is committed only in the private repo, and its assignments come after these, so they win.
+// `#include?` is the optional include: a checkout without the file builds with the lines above.
+
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = -
+
+#include? "Signing.xcconfig"

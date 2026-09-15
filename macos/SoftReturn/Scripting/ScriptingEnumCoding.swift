@@ -1,4 +1,5 @@
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// Bridges every enumeration in `SoftReturn.sdef` to and from the library/app-side Swift

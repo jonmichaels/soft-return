@@ -11,7 +11,7 @@ import Foundation
 ///
 /// Distinct from `CtrlKD.Provenance`, which has only the parser's own two cases, because
 /// the app has a third: the user overrode it by hand.
-enum SettingProvenance: String, Hashable, Sendable {
+public enum SettingProvenance: String, Hashable, Sendable {
     /// The file itself said so — a dot command, or the byte-level detector.
     case detected
     /// The user chose it explicitly, overriding whatever was detected or defaulted.
@@ -21,7 +21,7 @@ enum SettingProvenance: String, Hashable, Sendable {
 
     /// Lift the library's provenance into the app's three. `.manual` is only ever set by
     /// user action, so it has no counterpart to map from.
-    init(_ library: CtrlKD.Provenance) {
+    public init(_ library: CtrlKD.Provenance) {
         switch library {
         case .file:           self = .detected
         case .default:        self = .default
@@ -34,7 +34,7 @@ enum SettingProvenance: String, Hashable, Sendable {
     }
 
     /// The parenthesized suffix, including its leading space: `" (Detected)"`.
-    var suffix: String {
+    public var suffix: String {
         switch self {
         case .detected: return " (Detected)"
         case .manual:   return " (Manual)"
@@ -44,7 +44,7 @@ enum SettingProvenance: String, Hashable, Sendable {
 
     /// Spoken form for accessibility labels, where parentheses would be read as
     /// punctuation noise: "WS5+, detected" beats "WS5+ open paren Detected close paren".
-    var spokenSuffix: String {
+    public var spokenSuffix: String {
         switch self {
         case .detected: return ", detected"
         case .manual:   return ", set manually"
@@ -55,17 +55,17 @@ enum SettingProvenance: String, Hashable, Sendable {
 
 /// A value together with where it came from. Each of the bottom bar's four controls is one
 /// of these, and its display string is always `value + provenance.suffix`.
-struct Resolved<Value: Equatable>: Equatable {
-    var value: Value
-    var provenance: SettingProvenance
+public struct Resolved<Value: Equatable>: Equatable {
+    public var value: Value
+    public var provenance: SettingProvenance
 
-    init(_ value: Value, _ provenance: SettingProvenance) {
+    public init(_ value: Value, _ provenance: SettingProvenance) {
         self.value = value
         self.provenance = provenance
     }
 
     /// Replace the value by user action — which by definition makes it `.manual`.
-    mutating func setManually(_ newValue: Value) {
+    public mutating func setManually(_ newValue: Value) {
         value = newValue
         provenance = .manual
     }

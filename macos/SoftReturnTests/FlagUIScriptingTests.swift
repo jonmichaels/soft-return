@@ -1,5 +1,6 @@
 import AppIntents
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn

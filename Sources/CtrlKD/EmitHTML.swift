@@ -11,10 +11,10 @@
 /// OUR OWN page-width opinion, the same category of thing the rest of this round strips.
 /// HTML has no page; width belongs entirely to the renderer/reader, in both Modern AND
 /// Native output. `padding` is a fixed breathing-room gutter, not a measure.
-private let htmlCSS = """
+let htmlCSS = """
 body{margin:0;padding:2rem 1rem;
 font:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}
-.ws-native{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.ws-native{white-space:pre;overflow-x:auto;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}
 span.ws-graphic{font-family:ui-monospace,Menlo,Consolas,monospace}
 hr.pb{border:none;border-top:1px dashed #bbb;margin:2rem 0}
 blockquote{margin:1em 2em;padding-left:1em;border-left:2px solid #ccc}
@@ -308,10 +308,25 @@ private let htmlAlignCSS: [Alignment: String] = [
 /// paragraph (which may itself wrap in the reader, "wrapped centered units") — sets
 /// line-height to `verseLineHeight` instead of the document default. Port of
 /// `emit._html_para_style`.
-func htmlParaStyle(_ align: Alignment, indentCols: Int = 0, tight: Bool = false) -> String {
+func htmlParaStyle(_ align: Alignment, indentCols: Int = 0, tight: Bool = false,
+                   hangCols: Int? = nil) -> String {
     var props: [String] = []
     if let css = htmlAlignCSS[align] { props.append(css) }
-    if indentCols != 0 { props.append("text-indent:\(indentCols)ch") }
+    if let hang = hangCols, hang != 0 {
+        // planning #264 item 4(a), the browser check's section 2 (2026-09-14): a row
+        // whose meaning is its COLUMNS gets a real hanging indent, not a first-line one.
+        // `text-indent` moves the first line and nothing else, so WSFORMAT.WS's
+        // control-code table read correctly at 1200px and fell apart at 400: the first
+        // line still started at its column and every wrapped continuation went back to
+        // the body margin. `padding-left` is the column the row's SECOND column stands
+        // in; the negative `text-indent` pulls the first line back out to where the
+        // label starts. A narrow window then folds the description under itself, which
+        // is what the table means.
+        props.append("padding-left:\(hang)ch")
+        props.append("text-indent:\(indentCols - hang)ch")
+    } else if indentCols != 0 {
+        props.append("text-indent:\(indentCols)ch")
+    }
     if tight { props.append("line-height:\(verseLineHeight)") }
     return props.isEmpty ? "" : " style=\"\(props.joined(separator: ";"))\""
 }
@@ -343,11 +358,155 @@ func sliceSpans(_ spans: [Span], start: Int, end: Int? = nil) -> [Span] {
         pos = spEnd
         let lo = max(start, spStart), hi = min(end, spEnd)
         if lo < hi {
+            // EVERY field rides along. Python's Span carries `pcl<N>`/`tabhmi<N>`/
+            // `tableader<N>` inside the same `frozenset` as the style codes, so its own
+            // `_slice_spans` preserves them for free; dropping them here silently let a
+            // TAB's padding span coalesce into the prose beside it (found 2026-09-12,
+            // planning #264 item 5: the corpus's own bullet rows pad marker-to-text with
+            // a real type-9 tab, and Modern RTF's new structure-row slice rendered
+            // `{marker}{ text}` where ctrl-kd renders `{marker}{ }{text}`).
             out.append(Span(text: String(chars[(lo - spStart)..<(hi - spStart)]), styles: sp.styles,
-                            font: sp.font, colour: sp.colour, pctlHMI: sp.pctlHMI, pix: sp.pix))
+                            font: sp.font, colour: sp.colour, pctlHMI: sp.pctlHMI,
+                            pix: sp.pix, pcl: sp.pcl, tabHMI: sp.tabHMI,
+                            tabLeader: sp.tabLeader))
         }
     }
     return out
+}
+
+/// Planning #264 item 5, the HTML half of packet row C3: explicit list geometry, so a
+/// definition or bullet list lands on WordStar's own ladder instead of whatever the
+/// browser's default happens to be.
+///
+/// The SAME two numbers the Modern PDF lays (`modernLevelStepCols`, `modernDefHangPt`),
+/// read from those constants rather than restated here: one nesting step is 4 print
+/// columns — 0.4in at 10 CPI, WordStar's own frame — and a definition's body column, where
+/// a wrapped continuation lands, is a fixed 72pt past the margin.
+///
+/// `<dt>` floats and `<dd>` starts at the hang, which is the standard hanging-definition
+/// idiom and reproduces the PDF's own row exactly: a label longer than the hang pushes the
+/// body right on the FIRST line and the continuations still land on the column. Port of
+/// `_list_css`.
+/// The PRINT stylesheet (planning #264 R5, Jon's ruling 2026-09-14 "Fine. Add it.";
+/// packet row C6) — everything inside one `@media print` block, and nothing outside it.
+///
+/// THIS DOES NOT GIVE HTML PAGES. The 2026-08-17 doctrine stands: HTML has none, on
+/// screen or anywhere else, and nothing here changes what a browser shows. What it
+/// changes is what comes OUT OF A PRINTER when someone hits Print on the page — until now
+/// the sheet was the browser's default paper at the browser's default margins, and the
+/// breaks fell wherever the browser felt like putting them.
+///
+/// Three rules, and each one is a fact the document already carries:
+///
+///   `@page`  the document's OWN paper size and margins. Size from `.pl`'s resolved
+///            height and the page-model width; margins from `.mt`/`.mb` at 6 LPI and
+///            `.po` at 10 CPI — the identical numbers the RTF page setup writes as twips.
+///            Right margin mirrors left, exactly as `emitRTF`'s own page setup does and
+///            for the same reason: `.po` is the only horizontal offset WordStar states.
+///   `hr.pb`  the document's own page breaks become real ones. The marker is a DECORATIVE
+///            dashed rule on screen and stays exactly that; in print it becomes the break
+///            it stands for and draws nothing.
+///   keeps    `.ws-keep` — the paragraphs `.cp`/`.cc` asked to hold together (R2's own
+///            `rtfKeepPlan`, read here too so the two exports cannot disagree) — get
+///            `break-inside:avoid`, and `.ws-keepn` additionally gets
+///            `break-after:avoid`, which is CSS's own name for `\keepn`.
+///
+/// MODERN GETS `@page` AND NOTHING ELSE (planning #264 item 4(c), the browser check's
+/// section 3, 2026-09-14). Modern has no pages, and this does not give it any: no
+/// `hr.pb`, no `break-after`, no keeps, nothing that decides where a sheet ends. What it
+/// does say is what SHEET — until now a reader who hit Print on a Modern page got the
+/// browser's default paper at the browser's default margins, which for a document that
+/// declares its own is simply wrong information. The stylesheet says so in its own
+/// comment, so the absence of breaks reads as a decision rather than an omission.
+/// Port of `_print_css`.
+func printCSS(_ doc: Document, hasBreak: Bool, hasKeep: Bool, printed: Bool = true) -> String {
+    let wIn = doc.page?.pwIn ?? 8.5
+    let hIn = doc.page?.heightIn ?? 11.0
+    let topIn = (doc.page?.mtLines ?? 3.0) / 6.0          // 6 LPI
+    let botIn = (doc.page?.mbLines ?? 8.0) / 6.0
+    let sideIn = (doc.page?.poCols ?? 8.0) / 10.0         // 10 CPI
+    var rules: [String] = []
+    rules.append("@page{size:\(cssInches(wIn))in \(cssInches(hIn))in;"
+                 + "margin:\(cssInches(topIn))in \(cssInches(sideIn))in "
+                 + "\(cssInches(botIn))in \(cssInches(sideIn))in}")
+    if !printed {
+        // Modern: the paper, and deliberately nothing else. See this function's own
+        // "MODERN GETS `@page` AND NOTHING ELSE".
+        return "\n@media print{"
+            + "\n/* Modern has no pages: this says what SHEET the document asks for,"
+            + " never where one ends. No page breaks, by design. */"
+            + "\n" + rules[0] + "}"
+    }
+    if hasBreak {
+        rules.append("hr.pb{break-after:page;border:none;margin:0;height:0}")
+    }
+    if hasKeep {
+        rules.append(".ws-keep{break-inside:avoid}")
+        rules.append(".ws-keepn{break-after:avoid}")
+    }
+    var out = "\n@media print{"
+    for rule in rules { out += "\n" + rule }
+    out += "}"
+    return out
+}
+
+/// One length, formatted the way Python's `%g` formats it — SIX SIGNIFICANT digits, then
+/// trailing zeros and a trailing point removed. Not `%.6f`: `.mt 5` is five sixths of an
+/// inch, and `%g` writes that `0.833333` (six significant digits past the leading zero)
+/// while eight sixths is `1.33333` (six from the leading 1). Hand-written because this
+/// module imports no Foundation — the same reason `fixedTwoDecimals` exists — and the
+/// values here are always positive and far inside `%g`'s own fixed-notation range, so no
+/// exponent form can arise.
+func cssInches(_ value: Double) -> String {
+    if value <= 0 { return "0" }
+    var exponent = 0
+    var mantissa = value
+    while mantissa >= 10 {
+        mantissa /= 10
+        exponent += 1
+    }
+    while mantissa < 1 {
+        mantissa *= 10
+        exponent -= 1
+    }
+    let decimals = max(0, 5 - exponent)
+    var scale = 1.0
+    for _ in 0..<decimals { scale *= 10 }
+    // `Int(_:)` truncates, so +0.5 rounds half away from zero — `fixedTwoDecimals`' own
+    // idiom, for the same no-libm reason.
+    var digits = String(Int(value * scale + 0.5))
+    if decimals == 0 { return digits }
+    while digits.count <= decimals { digits = "0" + digits }
+    let point = digits.index(digits.endIndex, offsetBy: -decimals)
+    var whole = String(digits[digits.startIndex..<point])
+    var fraction = String(digits[point...])
+    while fraction.hasSuffix("0") { fraction.removeLast() }
+    if fraction.isEmpty { return whole }
+    if whole.isEmpty { whole = "0" }
+    return whole + "." + fraction
+}
+
+func listCSS() -> String {
+    let step = Double(modernLevelStepCols) * 0.1          // print cols -> inches
+    let hang = modernDefHangPt / 72.0                     // points -> inches
+    var css = "\nul{margin:0 0 1em;padding-left:\(inches(step))in}"
+    css += "\ndl{margin:0 0 1em;padding-left:0}"
+    css += "\nli{margin:0}"
+    css += "\nul ul,ul dl,dl ul,dl dl{margin-bottom:0}"
+    css += "\ndt{float:left;clear:left;margin:0;min-width:\(inches(hang))in;"
+    css += "box-sizing:border-box;padding-right:.5em}"
+    css += "\ndd{margin:0 0 0 \(inches(hang))in}"
+    return css
+}
+
+/// Python's own `'%.2fin' % value`, for the list stylesheet's two inch figures.
+/// Hand-rolled: Foundation's `String(format:)` stays out of this library (job-001), the
+/// same reason `fixedOneDecimalDouble` is. Both values here derive from integer engine
+/// constants, so hundredths are exact.
+private func inches(_ value: Double) -> String {
+    let hundredths = roundHalfToEven(value * 100.0)
+    let fraction = hundredths % 100
+    return "\(hundredths / 100)." + (fraction < 10 ? "0\(fraction)" : "\(fraction)")
 }
 
 /// One row's spans -> escaped, tagged HTML, joined. Coalesces adjacent identically-styled
@@ -366,10 +525,33 @@ private func htmlLine(_ spans: [Span], keepWS: Bool = false, refNotes: [Note], l
     // Graphic runs split out AFTER coalescing, not before (round 8): coalescing merges
     // by style equality alone, so a split-then-coalesce order would silently re-glue a
     // box character back onto the prose beside it the moment they share a style.
-    return splitGraphicSpans(coalesceSpans(spans)).map {
+    let html = splitGraphicSpans(coalesceSpans(spans)).map {
         htmlBodySpan($0, keepWS: keepWS, refNotes: refNotes, labels: labels, options: options,
                     shownMap: shownMap, nonpropFallback: nonpropFallback)
     }.joined()
+    // planning #264 item 3 (packet row B4): a picture row is kept on one line. Decided
+    // HERE because this function is the single choke point every HTML render path funnels
+    // through (printed physical lines, Modern paragraph units, `htmlSlice`'s structure-row
+    // slices, headings) -- so a legend row reaches it as a row whether it ended up a <p>,
+    // a <dd> or a physical line, and the question is asked on the text this call is
+    // actually about to render, which is the rule's own "read the row's final tokens". An
+    // inline <span> rather than a property on the block element: a Modern paragraph unit
+    // can carry several rows, and only the picture among them must stop wrapping.
+    guard !html.isEmpty, htmlRowIsNowrap(spans.map(\.text).joined()) else { return html }
+    return "<span class=\"ws-nowrap\">" + html + "</span>"
+}
+
+/// Whether this HTML row must be kept on one line -- planning #264 item 3 (packet row
+/// B4). The rule is `graphicRowClips` (EmitterRules.swift), the same one the Modern PDF
+/// reads; HTML drops its third branch (a row with nowhere to break) because a browser
+/// never breaks inside a word on its own, so emitting the class there would be markup
+/// that changes nothing. What remains is exactly the two branches that DO change a
+/// browser's behaviour: a wholly graphic row (a box border, a rule) and a mixed row
+/// carrying more than one graphic character (a legend row, a substitution-table row) --
+/// the rows that fold in the middle in a narrow window and stop being the picture they
+/// draw. The CONTENT set, never the PDF's drawing tables -- see `graphicRowClips`.
+private func htmlRowIsNowrap(_ text: String) -> Bool {
+    text.contains(where: { contentGraphicChars.contains($0) }) && graphicRowClips(text)
 }
 
 private func htmlSlice(_ spans: [Span], start: Int, end: Int?, refNotes: [Note], labels: [String],
@@ -500,6 +682,27 @@ private final class HTMLListBuilder {
         root.nodes.append(.text(html))
     }
 
+    /// A plain row that belongs to the list item currently open — planning #264 item
+    /// 4(b), the browser check's section 3 (2026-09-14).
+    ///
+    /// `addText` closes every open list back to the document flow, which is right for a
+    /// row that resumes the document and wrong for the wrapped remainder of a bullet.
+    /// STRENGTH.WS's last bullet ended "…via the free" and its continuation, "and open
+    /// source DOS emulator DOSBox-X: https://dosbox-x.com", rendered as a paragraph
+    /// BELOW the `</ul>` — while the identically-shaped continuation two bullets
+    /// earlier, which happens not to be last in the list, stayed joined. The caller
+    /// decides which rows qualify (`classifyRows`' own `containerCol`); this just puts
+    /// them where they belong, nested inside the open `<li>`/`<dd>` the same way a
+    /// deeper list already nests there.
+    ///
+    /// Nothing open means nothing to continue, so it degrades to `addText` rather than
+    /// inventing a list.
+    func addItemContinuation(_ html: String) {
+        guard !html.trimmed().isEmpty else { return }
+        guard stack.count > 1 else { addText(html); return }
+        stack[stack.count - 1].currentItem.nodes.append(.text(html))
+    }
+
     func addBullet(level: Int, cls: String, html: String) {
         let item = open(level: level, kind: .bullet, cls: cls)
         item.nodes.append(.text(html))
@@ -574,6 +777,10 @@ private func renderListNodes(_ nodes: [HTMLListNode]) -> [String] {
 
 public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                      options: EmitOptions = EmitOptions()) -> String {
+    // planning #264 item 1: see emitText's identical call.
+    // planning #270 item 42: a non-paged format carries no page apparatus —
+    // the MailMerge page-number variable is removed here, never shown as typed.
+    let doc = mergePagenoDropped(driverSubstituted(doc))
     let title = options.title
     let printed = mode == .printed || isPrinted(doc)
     var options = options
@@ -646,20 +853,45 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
 
     func flushQuote() {
         if !quoteBuffer.isEmpty {
+            // THE BUILDER FIRST. An ordinary Modern paragraph goes into the list
+            // builder's own buffer (`builder.addText`) while a quote-classified one goes
+            // into `quoteBuffer`, and this function writes straight to `parts` — so a
+            // plain paragraph sitting in the builder when a quote group closed came out
+            // AFTER the `<blockquote>` it was typed before. Found 2026-09-14 by the #264
+            // check plan's own round trip, on OLDTIMES.WS: its right-aligned byline is
+            // typed between the title and the copyright quote and was rendered after the
+            // quote in Modern HTML, and in Modern HTML alone — Modern text, Markdown and
+            // RTF all had it in the author's order, which is exactly why no byte
+            // comparison between the two engines could see it.
+            builder.flush(&parts)
             parts.append("<blockquote>" + quoteBuffer.joined() + "</blockquote>")
             quoteBuffer.removeAll()
         }
         quoteIndentCols = nil
     }
 
+    // planning #264 item 4 (packet row A10, extended): see `trailingPASkipIndex`
+    // (EmitterRules.swift). The list/quote buffers are still closed -- only the RULE is
+    // dropped, since everything before it stands.
+    let skipPA = trailingPASkipIndex(doc)
+    // planning #264 R5 (packet row C6): the paragraphs `.cp`/`.cc` asked to hold
+    // together, read from R2's OWN plan so the RTF and the printed HTML cannot disagree
+    // about which they are. The classes are inert on screen -- nothing outside the
+    // `@media print` block mentions them -- and Modern, which has no pages, never
+    // carries them.
+    let keepPlan = printed ? rtfKeepPlan(doc) : [:]
     for (bi, block) in doc.blocks.enumerated() {
         if block.kind == .pagebreak {
             if !printed { builder.flush(&parts) }
             flushQuote()
+            if bi == skipPA { continue }
             parts.append(pageRule)
             continue
         }
-        let cls = block.styleID.flatMap { styleClass[$0] } ?? ""
+        var cls = block.styleID.flatMap { styleClass[$0] } ?? ""
+        let keepFlags = keepPlan[bi] ?? (keep: false, keepn: false)
+        if keepFlags.keep { cls = addHTMLClass(cls, "ws-keep") }
+        if keepFlags.keepn { cls = addHTMLClass(cls, "ws-keepn") }
         // emit.py:167-172 — a heading is a heading in both modes; note this check sits
         // AFTER the two break kinds and BEFORE the printed/modern split, so a heading never
         // renders as Native.
@@ -692,8 +924,15 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             // -- not a boxed, non-wrapping element. Every physical line break is now an
             // explicit <br> rather than a literal newline relying on <pre>'s own
             // whitespace handling.
-            let lines = block.lines.map { line in
-                htmlLine(line.spans, keepWS: true, refNotes: refNotes, labels: labels,
+            // planning #264 item 1 (packet row B3): a bare 0x09 lands on WordStar's
+            // own modulus-8 stop here, where the face is fixed-pitch (`p.ws-native`)
+            // and a column IS a character -- see `expandBareTabsForPrintedLayout`
+            // (EmitterRules.swift). Modern never calls it.
+            // planning #270 item 37: `.pf on`'s print-time re-wrap -- the printed
+            // HTML facsimile renders the same physical lines the Printed PDF does.
+            let lines = pfRewrappedLines(doc, block).map { line in
+                htmlLine(expandBareTabsForPrintedLayout(line.spans), keepWS: true,
+                        refNotes: refNotes, labels: labels,
                         options: options, shownMap: shownMap, sentenceSpacing: ssOn)
             }
             let body = lines.joined(separator: "<br>\n")
@@ -731,6 +970,12 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             }
             let dominant = blockDominantStyles(mergedLines(block))
             var plainRunLines: [Line] = []
+            // planning #264 item 4(b): does this plain run continue the list item that is
+            // still open, rather than resume the document? True only while EVERY row
+            // buffered so far is a continuation (a row that opens no container of its own
+            // and starts at exactly the open container's column -- `classifyRows`'
+            // `containerCol`). Reset with the run, like `plainRunLines` itself.
+            var plainRunContinuesItem = true
             // The convention-outlier/positional epigraph route only makes sense when the
             // plain run IS the block's own opening lines -- a run that starts after a
             // structure-classified row (a bullet list's own trailing plain note, say)
@@ -785,8 +1030,27 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                     // centered paragraph (which may itself wrap in the reader) --
                     // unchanged VERSE-TRIGGER logic, this round only adds the tight-
                     // spacing CONSEQUENCE.
-                    let style = htmlParaStyle(block.align, indentCols: indentCols,
-                                              tight: isVerse || block.align == .center)
+                    // A fixed-pitch COLUMN row hangs (item 4(a)): one source line whose
+                    // own text puts a second column past a run of three or more spaces.
+                    // One line only -- a flowed multi-line unit is prose, and its `para`
+                    // no longer has a row's shape to read. And the second column has to
+                    // BE a column: a gap three quarters of the way across a line is an
+                    // accident of prose, so a hang past half the measure is dropped (one
+                    // WSFORMAT.WS line asked for `padding-left:445ch`).
+                    var hang: Int?
+                    if unit.count == 1,
+                       let bodyCol = fixedPitchColumnBodyCol(first.map(\.text).joined()) {
+                        let h = indentCols + bodyCol
+                        if h * 2 <= Int(margin) { hang = h }
+                    }
+                    // A continuation of the list item still open supplies no indent of
+                    // its own: the column it starts at IS the item's body column, which
+                    // the `<li>`/`<dd>` already provides, so a `text-indent` on top would
+                    // push it in twice (planning #264 item 4(b)).
+                    let style = htmlParaStyle(block.align,
+                                              indentCols: plainRunContinuesItem ? 0 : indentCols,
+                                              tight: isVerse || block.align == .center,
+                                              hangCols: plainRunContinuesItem ? nil : hang)
                     var pHTML = "<p\(cls)\(style)>\(para)</p>"
                     // C5: newspaper columns. CSS does this properly, so HTML is the one
                     // format that can honour `.co` rather than merely record it. A gutter
@@ -803,11 +1067,14 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                         // round 3/4: quote-classified styles become a real <blockquote>;
                         // CONSECUTIVE quote paragraphs share ONE.
                         quoteBuffer.append(pHTML)
+                    } else if plainRunContinuesItem {
+                        builder.addItemContinuation(pHTML)
                     } else {
                         builder.addText(pHTML)
                     }
                 }
                 plainRunLines.removeAll()
+                plainRunContinuesItem = true
             }
 
             // Columns (or any other block excluded from structure classification --
@@ -847,6 +1114,10 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                             }
                         }
                     } else {
+                        if !(structure != nil && structure!.kind == nil
+                             && structure!.containerCol == structure!.col.value) {
+                            plainRunContinuesItem = false
+                        }
                         plainRunLines.append(line)
                     }
                     continue
@@ -922,6 +1193,31 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     if nonpropFallback, parts.contains(where: { asciiContains($0, "ws-nonprop") }) {
         css += "\nspan.ws-nonprop{font-family:ui-monospace,Menlo,Consolas,monospace}"
     }
+    // planning #264 item 5 (HTML half of packet row C3): appended only when the document
+    // actually produced a list, the same discipline the `.ws-nonprop` rule just above
+    // follows -- a document with no list never pays a CSS-byte delta for one.
+    if parts.contains(where: { asciiContains($0, "<ul") || asciiContains($0, "<dl") }) {
+        css += listCSS()
+    }
+    // planning #264 item 3 (packet row B4): the picture rows that must not fold. Same
+    // appended-only-when-used discipline as the two rules above. TWO rules, because the
+    // two blocks start from different whitespace handling: ordinary Modern prose wraps
+    // under `normal`, so `nowrap` is the change there; the fixed-pitch block
+    // (`p.ws-native`) is already `pre-wrap`, where `nowrap` would ALSO collapse the very
+    // column spacing that block exists to preserve -- `pre` is `pre-wrap`'s non-wrapping
+    // twin and is the right value inside it.
+    if parts.contains(where: { asciiContains($0, "ws-nowrap") }) {
+        css += "\nspan.ws-nowrap{white-space:nowrap}"
+        css += "\np.ws-native span.ws-nowrap{white-space:pre}"
+    }
+    // planning #264 R5 (packet row C6, ruled 2026-09-14 "Fine. Add it."): the print
+    // stylesheet. Printed only, appended last so everything above it is the SCREEN
+    // stylesheet and stays byte-for-byte what it was -- see `printCSS` for the three
+    // rules and why none of them gives HTML pages.
+    css += printCSS(doc,
+                    hasBreak: printed && parts.contains(where: { asciiContains($0, "hr class=\"pb\"") }),
+                    hasKeep: printed && parts.contains(where: { asciiContains($0, "ws-keep") }),
+                    printed: printed)
     // b24 round 18 (RULINGS-LEDGER row 4): TOC/Index at the document's own end, gated by
     // `--toc` (default off). HTML is non-paged: no page references, ever.
     if options.toc {

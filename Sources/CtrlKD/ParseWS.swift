@@ -174,6 +174,7 @@ private func decodeSpans(
     colourAt: [(offset: Int, colour: Int)] = [],
     pctlAt: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = [],
     pixAt: [(offset: Int, index: Int, byteLen: Int)] = [],
+    ixAt: [(offset: Int, byteLen: Int)] = [],
     tabTargetAt: [(offset: Int, absHMI: Int, leader: UInt8, cols: Int)] = []
 ) -> [Span] {
     var spans: [Span] = []
@@ -215,6 +216,11 @@ private func decodeSpans(
     // mechanism as pctl above -- the whole placeholder string is decoded as ONE span
     // carrying `pix`, bypassing the ordinary byte-by-byte loop for its bytes.
     var pendingPix = pixAt.sorted { $0.offset < $1.offset }
+    // ^ONI index entries, same mechanism again: one span for the whole stored phrase,
+    // tagged `indexEntry`. The phrase is the INDEX's text, not the page's — real WS7
+    // prints nothing for it (see `symmetricBlocks`' own cmd 0x0E branch) — so the
+    // Printed facsimile skips such a span and every other consumer keeps it.
+    var pendingIx = ixAt.sorted { $0.offset < $1.offset }
     // Tab targets, the same mechanism again: one span for the tab's own padding run
     // (already sitting in `raw` as `leader * cols`, see `symmetricBlocks`), carrying the
     // block's ABSOLUTE target so a Printed-mode PDF renderer can set the pen there
@@ -252,6 +258,16 @@ private func decodeSpans(
                 let text = decodeCP437(Array(raw[i..<end]))
                 spans.append(Span(text: text, styles: active, font: font, colour: colour,
                                   pctlHMI: hmi, pcl: pcl))
+                i = end
+                advanced = true
+            }
+            while !pendingIx.isEmpty, pendingIx[0].offset <= i, i < raw.count {
+                let (_, count) = pendingIx.removeFirst()
+                flush()
+                let end = Swift.min(i + count, raw.count)
+                let text = decodeCP437(Array(raw[i..<end]))
+                spans.append(Span(text: text, styles: active, font: font, colour: colour,
+                                  indexEntry: true))
                 i = end
                 advanced = true
             }
@@ -576,6 +592,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var footerStyleAttrsParity: [Int: [HFParity: Style]] = [:]
     var hfEvents: [HFEvent] = []
     var hfEventsParity: [HFParity?] = []
+    // 2026-09-12 (cause 10): see `Document.headerPcl`/`hfEventsPcl`.
+    var headerPcl: [Int: [HFPrintControl]] = [:]
+    var footerPcl: [Int: [HFPrintControl]] = [:]
+    var hfEventsPcl: [[HFPrintControl]] = []
+    var hfEventsWithin: [HFWithin?] = []
     // Running FORMATTING state, stamped onto each block as it opens. Stateful, unlike
     // page geometry — see `Formatting2.swift`.
     var fmt = FormatState()
@@ -623,6 +644,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
               leftMargin: styleFmt.leftMargin ?? fmt.leftMargin,
               rightMargin: styleFmt.rightMargin ?? fmt.rightMargin,
               paraMargin: styleFmt.paraMargin ?? fmt.paraMargin,
+              printReformat: fmt.printReformat,
+              lhAuto: fmt.lhAuto,
               // Python typing provenance: a style's HMI margin is an int there
               // (`round(hmi / 180)`), a dot command's a float — the layout JSON
               // spells the number the same way (byte parity, 2026-08-18)
@@ -998,6 +1021,22 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // or the next one to open. Same convention as `pointsAt` just below --
             // WordStar applies a running head/foot from the page where it is defined.
             let hfAnchor = blocks.count + ((!cur.lines.isEmpty || !curLine.spans.isEmpty) ? 1 : 0)
+            // triage Q9: WHERE inside the block being built, so a running head redefined
+            // mid-paragraph takes effect on the line the author typed it on rather than
+            // after the whole paragraph. The "nothing open" case is NOT "between blocks":
+            // a blank line arriving while `cur` is empty is appended to the PREVIOUS para
+            // block, so a command read inside a run of trailing blanks belongs after
+            // however many of them have arrived so far — `-HOLYMAC.WS` page 17, whose
+            // `.he` sits between two blank lines of one such run and was otherwise
+            // deferred past both.
+            let hfWithin: HFWithin?
+            if !cur.lines.isEmpty || !curLine.spans.isEmpty {
+                hfWithin = HFWithin(block: blocks.count, linesBefore: cur.lines.count)
+            } else if let last = blocks.last, last.kind == .para {
+                hfWithin = HFWithin(block: blocks.count - 1, linesBefore: last.lines.count)
+            } else {
+                hfWithin = nil
+            }
             // Header/footer TEXT is content, not command syntax: hand it the UNMASKED
             // line for WS5+. The bit-7 mask that protects WS4 command letters corrupts
             // 8-bit argument text -- LJ6DTP's `.h1` carries a wrapped <1B F9 1C> middle
@@ -1021,6 +1060,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 if case .tab(let absHMI, let leader, let cols) = mark {
                     hfTabMark = (rel, absHMI, leader, cols)
                     break
+                }
+            }
+            // 2026-09-12 (cause 10): this line's own 0x0F user print controls, found
+            // exactly the way `hfTabMark` is -- see `parseHeadFoot`'s `pctlMarks`.
+            var hfPctlMarks: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = []
+            for (rel, mark) in physical.marks {
+                if case .pctl(let hmi, let byteLen, let pcl) = mark {
+                    hfPctlMarks.append((offset: rel, hmi: hmi, byteLen: byteLen, pcl: pcl))
                 }
             }
             // Planning #255: a `.h#`/`.f#` argument can ALSO open with its own 0x11
@@ -1070,9 +1117,13 @@ public func parseWS(_ data: [UInt8]) -> Document {
                          headerAlignParity: &headerAlignParity, footerAlignParity: &footerAlignParity,
                          headerStyleAttrsParity: &headerStyleAttrsParity,
                          footerStyleAttrsParity: &footerStyleAttrsParity,
+                         headerPcl: &headerPcl, footerPcl: &footerPcl,
                          hfEvents: &hfEvents, hfEventsParity: &hfEventsParity,
-                         anchor: hfAnchor, fontIdx: hfFontIdx ?? hfStyleFontIdx,
-                         tabMark: hfTabMark, align: hfAlign, styleAttrs: hfStyleAttrs)
+                         hfEventsPcl: &hfEventsPcl,
+                         hfEventsWithin: &hfEventsWithin,
+                         anchor: hfAnchor, within: hfWithin, fontIdx: hfFontIdx ?? hfStyleFontIdx,
+                         tabMark: hfTabMark, align: hfAlign, styleAttrs: hfStyleAttrs,
+                         pctlMarks: hfPctlMarks)
             // The index of the block this entry POINTS AT — the one that follows it,
             // which is the block still open (if it has content) or the next to open.
             // "This heading is in the table of contents" refers forward, not back.
@@ -1190,16 +1241,130 @@ public func parseWS(_ data: [UInt8]) -> Document {
         // engines were wrong in the same way and matched; once the split stopped, the
         // divergence in what happens to the trailing part became visible — one archive
         // document, a table whose rows carry a wrapped 0x0C and a style selection.
+        // planning #270 item 37: the entry's LAST source byte, which the separator
+        // handling below needs to tell an active soft hyphen from a typed one (see
+        // `Line.softHyphen`). The form-feed branch empties `raw`, so it keeps its own
+        // last non-empty segment here instead.
+        // Structural marks, carried as OFFSETS rather than injected bytes — every byte
+        // the old sentinels used (0x00 ^@, 0x0B ^K, 0x11 ^Q) is a real WordStar control
+        // code that occurs in real documents, so a literal one was read as a page break,
+        // a heading, or a note reference the author never wrote. See `StructuralMark`.
+        var fnrefAt: [Int] = []
+        var fontAt: [(offset: Int, index: Int)] = []
+        var colourAt: [(offset: Int, colour: Int)] = []
+        var pctlAt: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = []
+        var pixAt: [(offset: Int, index: Int, byteLen: Int)] = []
+        var ixAt: [(offset: Int, byteLen: Int)] = []
+        var tabTargetAt: [(offset: Int, absHMI: Int, leader: UInt8, cols: Int)] = []
+        // see the dot-command branch above
+        var lineMarks = physical.marks
+        if !carriedMarks.isEmpty {
+            lineMarks = carriedMarks.map { (0, $0) } + lineMarks
+            carriedMarks = []
+        }
+        // The SPAN-LEVEL marks — everything that locates something inside this line's own
+        // bytes — are collected HERE, before the form-feed branch below, because that
+        // branch decodes its segments on the spot and needs them. It used to decode them
+        // with NO marks at all, so a font block, a colour change, a note reference, a tab
+        // target, a print control or an index entry sitting on a physical line that also
+        // carried a form feed was silently thrown away.
+        //
+        // MEASURED, `sawyer/PRINT.TST` (and `DEFAULT/PRINT.TST`, `PSPRINT.TST`): the
+        // "Paragraph Indentation" heading is `.cb` + form feed + ^B + the heading's own
+        // font block (Helv 11pt, HMI 138 — the block's FIRST three words, WSFORMAT's
+        // "current"; the second three are the PREVIOUS font it restores to, here Courier
+        // 12pt, which is why the closing block carries the same pair reversed). Real WS7
+        // prints that heading in Helv — 54.4pt for "Paragraph " on the v4 PRISTINE
+        // capture, page 2 y=288.0pt — and this engine printed it in Courier because the
+        // font mark never reached the text.
+        //
+        // A style SELECTION's own font (the `fontAt` append in the loop further down) is
+        // deliberately NOT hoisted with these: resolving it closes a block, and on a
+        // form-feed line that close has always happened AFTER the segments were decoded.
+        // Order stays as it is; the branch below resolves the FONT, and only the font,
+        // for itself.
+        for (rel, mark) in lineMarks {
+            switch mark {
+            case .fnref:
+                fnrefAt.append(rel)
+            case .font(let index):
+                fontAt.append((offset: rel, index: index))
+            case .colour(let index):
+                colourAt.append((offset: rel, colour: index))
+            case .pctl(let hmi, let byteLen, let pcl):
+                pctlAt.append((offset: rel, hmi: hmi, byteLen: byteLen, pcl: pcl))
+            case .pix(let index, let byteLen):
+                pixAt.append((offset: rel, index: index, byteLen: byteLen))
+            case .ixentry(let byteLen):
+                ixAt.append((offset: rel, byteLen: byteLen))
+            case .tab(let absHMI, let leader, let cols):
+                tabTargetAt.append((offset: rel, absHMI: absHMI, leader: leader, cols: cols))
+            default:
+                break
+            }
+        }
+
+        var wrapRaw = raw
         if raw.contains(0x0C) {
+            // A style SELECTION carries a font too, and the loop that resolves one runs
+            // AFTER this branch (it closes a block, and on a form-feed line that close
+            // has always happened after the segments were decoded — an order this must
+            // not disturb). So the font, and only the font, is resolved here as well:
+            // `styleFontIndex` is cached and deduplicates against `fonts`, so asking
+            // twice costs a lookup and creates nothing. Without it every style-governed
+            // span on such a line kept whatever font the PREVIOUS line ended in —
+            // `sawyer/PRINTER.PS`'s and `sawyer/REF/SYMBOL.CHT`'s chart rows printed
+            // their decimal code column in the symbol face the row's GLYPH column asks
+            // for.
+            var ffFontAt = fontAt
+            for (rel, mark) in lineMarks {
+                guard case .style(let w0) = mark, (w0 >> 8) == 0x02,
+                      let entry = styleSlots[w0 & 0xFF], let record = entry.record,
+                      let font = record.font,
+                      font.width != 0 || font.height != 0 || font.typestyle != 0
+                else { continue }
+                ffFontAt.append((offset: rel,
+                                 index: styleFontIndex(width: font.width,
+                                                       height: font.height,
+                                                       typestyle: font.typestyle)))
+            }
+            ffFontAt.sort { $0.offset < $1.offset }
+
             var segment: [UInt8] = []
+            var segStart = 0
             var k = 0
             func decodeSegment() {
                 if !segment.isEmpty {
+                    wrapRaw = segment
+                    // `lo <= offset <= hi`, with the next segment's `lo` one past this
+                    // `hi` (the 0x0C byte itself), partitions the line exactly: every
+                    // mark reaches one segment and only one. A line with a single segment
+                    // (the wrapped-0x0C case) gets all of them, unshifted.
+                    let lo = segStart, hi = segStart + segment.count
                     let spans = decodeSpans(segment, stripHibit: stripHibit,
                                             active: &active, activeFont: &activeFont,
                                             unknown: &unknown,
                                             fnCounter: &fnCounter,
-                                            activeColour: &activeColour)
+                                            fnrefAt: fnrefAt.filter { $0 >= lo && $0 <= hi }
+                                                            .map { $0 - lo },
+                                            fontAt: ffFontAt.filter { $0.offset >= lo && $0.offset <= hi }
+                                                            .map { (offset: $0.offset - lo, index: $0.index) },
+                                            fonts: fonts,
+                                            activeColour: &activeColour,
+                                            colourAt: colourAt.filter { $0.offset >= lo && $0.offset <= hi }
+                                                              .map { (offset: $0.offset - lo, colour: $0.colour) },
+                                            pctlAt: pctlAt.filter { $0.offset >= lo && $0.offset <= hi }
+                                                          .map { (offset: $0.offset - lo, hmi: $0.hmi,
+                                                                  byteLen: $0.byteLen, pcl: $0.pcl) },
+                                            pixAt: pixAt.filter { $0.offset >= lo && $0.offset <= hi }
+                                                        .map { (offset: $0.offset - lo, index: $0.index,
+                                                                byteLen: $0.byteLen) },
+                                            ixAt: ixAt.filter { $0.offset >= lo && $0.offset <= hi }
+                                                      .map { (offset: $0.offset - lo, byteLen: $0.byteLen) },
+                                            tabTargetAt: tabTargetAt.filter { $0.offset >= lo && $0.offset <= hi }
+                                                                    .map { (offset: $0.offset - lo,
+                                                                            absHMI: $0.absHMI,
+                                                                            leader: $0.leader, cols: $0.cols) })
                     if !pendingMarks.isEmpty, !spans.isEmpty {
                         curLine.spans += pendingMarks
                         pendingMarks = []
@@ -1213,6 +1378,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // glyph at 0x0C (the chart cell in ASCIITAB.WS), never a page eject.
                 // `_split_bare_ff` in core.py.
                 if raw[k] == 0x1B && k + 2 < raw.count && raw[k + 2] == 0x1C {
+                    if segment.isEmpty { segStart = k }
                     segment.append(raw[k]); segment.append(raw[k + 1]); segment.append(raw[k + 2])
                     k += 3
                     continue
@@ -1230,6 +1396,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
                     blocks.append(Block(kind: .pagebreak, origin: .ff))
                     rtTally += 1
                 } else {
+                    if segment.isEmpty { segStart = k }
                     segment.append(raw[k])
                 }
                 k += 1
@@ -1238,22 +1405,6 @@ public func parseWS(_ data: [UInt8]) -> Document {
             raw = []
         }
 
-        // Structural marks, carried as OFFSETS rather than injected bytes — every byte
-        // the old sentinels used (0x00 ^@, 0x0B ^K, 0x11 ^Q) is a real WordStar control
-        // code that occurs in real documents, so a literal one was read as a page break,
-        // a heading, or a note reference the author never wrote. See `StructuralMark`.
-        var fnrefAt: [Int] = []
-        var fontAt: [(offset: Int, index: Int)] = []
-        var colourAt: [(offset: Int, colour: Int)] = []
-        var pctlAt: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = []
-        var pixAt: [(offset: Int, index: Int, byteLen: Int)] = []
-        var tabTargetAt: [(offset: Int, absHMI: Int, leader: UInt8, cols: Int)] = []
-        // see the dot-command branch above
-        var lineMarks = physical.marks
-        if !carriedMarks.isEmpty {
-            lineMarks = carriedMarks.map { (0, $0) } + lineMarks
-            carriedMarks = []
-        }
         // #236: did a style-select mark on THIS physical entry just force a
         // closeBlock() below, before this entry's own separator (blank/line/
         // para) is handled? Reset per entry. A style change can land on an
@@ -1364,18 +1515,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // still a block boundary in the file, so this runs either way.
                 closeBlock()
                 styleClosedHere = true
-            case .fnref:
-                fnrefAt.append(rel)
-            case .font(let index):
-                fontAt.append((offset: rel, index: index))
-            case .colour(let index):
-                colourAt.append((offset: rel, colour: index))
-            case .pctl(let hmi, let byteLen, let pcl):
-                pctlAt.append((offset: rel, hmi: hmi, byteLen: byteLen, pcl: pcl))
-            case .pix(let index, let byteLen):
-                pixAt.append((offset: rel, index: index, byteLen: byteLen))
-            case .tab(let absHMI, let leader, let cols):
-                tabTargetAt.append((offset: rel, absHMI: absHMI, leader: leader, cols: cols))
+            default:
+                // every other mark kind is SPAN-LEVEL and was collected in the pass
+                // above this one, before the form-feed branch that needs it
+                break
             }
         }
 
@@ -1393,6 +1536,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
             colourAt: colourAt,
             pctlAt: pctlAt,
             pixAt: pixAt,
+            ixAt: ixAt,
             tabTargetAt: tabTargetAt
         )
         if !pendingMarks.isEmpty, !spans.isEmpty {
@@ -1412,6 +1556,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // choice now.
             if !curLine.spans.isEmpty {
                 curLine.soft = true
+                // planning #270 item 37: an ACTIVE soft hyphen (0x1F) is always the
+                // last byte before the wrap it was activated for -- record that the
+                // trailing '-' `decodeSpans` just wrote is discretionary, not typed.
+                if wrapRaw.last == 0x1F { curLine.softHyphen = true }
                 closeLine()
             } else if !cur.lines.isEmpty {
                 cur.lines[cur.lines.count - 1].soft = true   // invisible (toggles-only)
@@ -1749,6 +1897,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
     doc.headerStyleAttrsParity = headerStyleAttrsParity
     doc.footerStyleAttrsParity = footerStyleAttrsParity
     doc.hfEventsParity = hfEventsParity
+    doc.headerPcl = headerPcl
+    doc.footerPcl = footerPcl
+    doc.hfEventsPcl = hfEventsPcl
+    doc.hfEventsWithin = hfEventsWithin
     // Register C2: raw PCL printer payloads, indexed by a span's own `pcl`.
     doc.pclPrograms = pclPrograms
     // #228 (planning #228, research/2026-09-08_trailing-pa-rule.md): only
@@ -2384,10 +2536,15 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
                    footerAlignParity: inout [Int: [HFParity: Alignment]],
                    headerStyleAttrsParity: inout [Int: [HFParity: Style]],
                    footerStyleAttrsParity: inout [Int: [HFParity: Style]],
+                   headerPcl: inout [Int: [HFPrintControl]],
+                   footerPcl: inout [Int: [HFPrintControl]],
                    hfEvents: inout [HFEvent], hfEventsParity: inout [HFParity?],
-                   anchor: Int, fontIdx: Int? = nil,
+                   hfEventsPcl: inout [[HFPrintControl]],
+                   hfEventsWithin: inout [HFWithin?],
+                   anchor: Int, within: HFWithin? = nil, fontIdx: Int? = nil,
                    tabMark: (offset: Int, absHMI: Int, leader: UInt8, cols: Int)? = nil,
-                   align: Alignment? = nil, styleAttrs: Style = []) {
+                   align: Alignment? = nil, styleAttrs: Style = [],
+                   pctlMarks: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = []) {
     guard cmd.count >= 3 else { return }
     let first = asciiUppercased(cmd[1])
     let second = asciiUppercased(cmd[2])
@@ -2426,6 +2583,26 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     if rest.first == 0x20 { rest.removeFirst(); argStart += 1 }
     // planning #202: `tabMark`'s own offset is in `cmd`'s coordinate space; `rest` (the
     // argument text this function actually decodes) starts at `argStart` within `cmd`.
+    // 2026-09-12 (cause 10 of the ws7-prints/v4 triage): a 0x0F user print control's
+    // display string is SCREEN-ONLY -- on paper WordStar sends the raw printer payload
+    // instead and advances by the declared HMI. The body path has always done that; a
+    // running head kept the string and PRINTED it. Excised here, BEFORE anything else
+    // reads this text, working right to left so the earlier offsets stay valid;
+    // `pctlHere` collects the controls in source order so a header that mixes real
+    // words with a control (LSRBOX.WS's own later `.h1`: `Sawyer * LSRBOX * #`
+    // followed by a `VrtLin` rule control) keeps its words exactly where they were.
+    var pctlHere: [HFPrintControl] = []
+    if !pctlMarks.isEmpty {
+        for mark in pctlMarks.sorted(by: { $0.offset > $1.offset }) {
+            let off = mark.offset - argStart
+            if off >= 0, off <= rest.count, mark.byteLen >= 0,
+               off + mark.byteLen <= rest.count {
+                rest.removeSubrange(off..<(off + mark.byteLen))
+                pctlHere.append(HFPrintControl(offset: off, hmi: mark.hmi, pcl: mark.pcl))
+            }
+        }
+        pctlHere.reverse()
+    }
     let tabByteIdx = tabMark.map { $0.offset - argStart }
     // Wrapped extended characters `<1B x 1C>` appear in header text exactly as in the
     // body (LJ6DTP separates its title from the `#` page number with a wrapped middle
@@ -2460,8 +2637,10 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     }
     if kind == .header {
         if let tabValue { headerTabs[line] = tabValue } else { headerTabs.removeValue(forKey: line) }
+        headerPcl[line] = pctlHere
     } else {
         if let tabValue { footerTabs[line] = tabValue } else { footerTabs.removeValue(forKey: line) }
+        footerPcl[line] = pctlHere
     }
     // Planning #255: a `.h#`/`.f#` argument's own 0x11 style-select resolves into
     // `headerAlign`/`headerStyleAttrs` (+ parity) exactly like `fontIdx`/`tabValue`
@@ -2503,6 +2682,8 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     }
     hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: anchor))
     hfEventsParity.append(parity)
+    hfEventsPcl.append(pctlHere)
+    hfEventsWithin.append(within)          // triage Q9; see the field
 }
 
 /// Decode header/footer TEXT, expanding `<1B x 1C>` wrapped characters: the middle byte

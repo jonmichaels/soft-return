@@ -29,7 +29,12 @@ import Testing
     // case it was already popped correctly at 1.1.5. It is here as the pop's other half:
     // together the two prove the pop handles a page that starts empty AND a page that only
     // becomes empty.
-    let data = bytes("Page one text here.") + HARD + bytes(".pa") + HARD + bytes(".pa") + HARD
+    var data = bytes("Page one text here.")
+    data += HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes(".pa")
+    data += HARD
     let pages = docToPagelines(parseWS(data), printed: false)
     #expect(pages.allSatisfy { !$0.isEmpty }, "page line counts: \(pages.map(\.count))")
 

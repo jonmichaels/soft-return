@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import PDFKit
 import Testing

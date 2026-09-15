@@ -39,180 +39,182 @@ private final class FakeMDImportRunner: MDImportRunning {
 
 // MARK: - enqueue: append / dedupe / cap
 
-@Test func enqueueAppendsAnEntryReadableBackViaPeekAll() {
-    let container = throwawayContainer()
-    let defaults = throwawayDefaults()
+@Suite struct SpotlightIndexQueueTests {
+    @Test func enqueueAppendsAnEntryReadableBackViaPeekAll() {
+        let container = throwawayContainer()
+        let defaults = throwawayDefaults()
 
-    SpotlightIndexQueue.enqueue(path: "/tmp/a.wsd", category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
-
-    let entries = SpotlightIndexQueue.peekAll(containerURL: container)
-    #expect(entries.count == 1)
-    #expect(entries[0].path == "/tmp/a.wsd")
-    #expect(entries[0].category == "index-on-view")
-}
-
-@Test func enqueueDedupesTheSamePathInsteadOfDuplicatingIt() {
-    let container = throwawayContainer()
-    let defaults = throwawayDefaults()
-
-    SpotlightIndexQueue.enqueue(path: "/tmp/reopened.wsd", category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
-    SpotlightIndexQueue.enqueue(path: "/tmp/reopened.wsd", category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
-
-    #expect(SpotlightIndexQueue.peekAll(containerURL: container).count == 1)
-}
-
-@Test func enqueueOfDifferentPathsNeverDedupesAgainstEachOther() {
-    let container = throwawayContainer()
-    let defaults = throwawayDefaults()
-
-    SpotlightIndexQueue.enqueue(path: "/tmp/a.wsd", category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
-    SpotlightIndexQueue.enqueue(path: "/tmp/b.wsd", category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
-
-    #expect(SpotlightIndexQueue.peekAll(containerURL: container).count == 2)
-}
-
-@Test func enqueuePastCapacityDropsTheOldestEntriesFirst() {
-    let container = throwawayContainer()
-    let defaults = throwawayDefaults()
-
-    for i in 0..<(SpotlightIndexQueue.capacity + 1) {
-        SpotlightIndexQueue.enqueue(path: "/tmp/\(i).wsd", category: "index-on-view",
+        SpotlightIndexQueue.enqueue(path: "/tmp/a.wsd", category: "index-on-view",
                                     containerURL: container, defaults: defaults, perform: { $0() })
+
+        let entries = SpotlightIndexQueue.peekAll(containerURL: container)
+        #expect(entries.count == 1)
+        #expect(entries[0].path == "/tmp/a.wsd")
+        #expect(entries[0].category == "index-on-view")
     }
 
-    let entries = SpotlightIndexQueue.peekAll(containerURL: container)
-    #expect(entries.count == SpotlightIndexQueue.capacity)
-    #expect(entries.first?.path == "/tmp/1.wsd", "entry 0 should have been evicted as the oldest")
-    #expect(entries.last?.path == "/tmp/\(SpotlightIndexQueue.capacity).wsd")
-}
+    @Test func enqueueDedupesTheSamePathInsteadOfDuplicatingIt() {
+        let container = throwawayContainer()
+        let defaults = throwawayDefaults()
 
-@Test func enqueueWithNoContainerRecordsAQueueFailedBreadcrumbAndNeverThrows() {
-    let defaults = throwawayDefaults()
+        SpotlightIndexQueue.enqueue(path: "/tmp/reopened.wsd", category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
+        SpotlightIndexQueue.enqueue(path: "/tmp/reopened.wsd", category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
 
-    SpotlightIndexQueue.enqueue(path: "/tmp/a.wsd", category: "index-on-view",
-                                containerURL: nil, defaults: defaults, perform: { $0() })
-
-    let entries = SpotlightTriggerBreadcrumbs.readEntries(defaults: defaults)
-    #expect(entries.map(\.stage) == ["enqueue-called", "queue-failed"])
-}
-
-@Test func enqueueWithNilOrEmptyPathIsANoOp() {
-    let container = throwawayContainer()
-    let defaults = throwawayDefaults()
-
-    SpotlightIndexQueue.enqueue(path: nil, category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
-    SpotlightIndexQueue.enqueue(path: "", category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
-
-    #expect(SpotlightIndexQueue.peekAll(containerURL: container).isEmpty)
-    #expect(SpotlightTriggerBreadcrumbs.readEntries(defaults: defaults).map(\.stage) ==
-            ["enqueue-called", "enqueue-called"])
-}
-
-// MARK: - enqueue: concurrent-append
-
-/// The whole reason this uses `NSFileCoordinator` instead of an in-process lock: multiple OS
-/// processes write this file. The closest an in-process test can get to proving that
-/// coordination actually holds is real concurrent writers on real background queues (the
-/// DEFAULT `perform`, not the synchronous `{ $0() }` every other test injects) racing for the
-/// same file — if coordination were absent or broken, this drops entries under contention.
-@Test func concurrentEnqueuesFromDistinctPathsAllSurvive() {
-    let container = throwawayContainer()
-    let defaults = throwawayDefaults()
-    let count = 25
-    let group = DispatchGroup()
-
-    for i in 0..<count {
-        group.enter()
-        SpotlightIndexQueue.enqueue(path: "/tmp/concurrent-\(i).wsd", category: "index-on-view",
-                                    containerURL: container, defaults: defaults,
-                                    perform: { work in
-                                        DispatchQueue.global().async {
-                                            work()
-                                            group.leave()
-                                        }
-                                    })
+        #expect(SpotlightIndexQueue.peekAll(containerURL: container).count == 1)
     }
 
-    #expect(group.wait(timeout: .now() + 10) == .success, "concurrent enqueues did not all complete in time")
-    let entries = SpotlightIndexQueue.peekAll(containerURL: container)
-    #expect(entries.count == count, "expected all \(count) concurrent enqueues to survive, got \(entries.count)")
-}
+    @Test func enqueueOfDifferentPathsNeverDedupesAgainstEachOther() {
+        let container = throwawayContainer()
+        let defaults = throwawayDefaults()
 
-// MARK: - drain
+        SpotlightIndexQueue.enqueue(path: "/tmp/a.wsd", category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
+        SpotlightIndexQueue.enqueue(path: "/tmp/b.wsd", category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
 
-@Test func drainAllFeedsEveryQueuedEntryThroughTheRunnerUnderTheDrainedCategory() {
-    let container = throwawayContainer()
-    let defaults = throwawayDefaults()
-    let runner = FakeMDImportRunner()
-    SpotlightIndexQueue.enqueue(path: "/tmp/one.wsd", category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
-    SpotlightIndexQueue.enqueue(path: "/tmp/two.wsd", category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
+        #expect(SpotlightIndexQueue.peekAll(containerURL: container).count == 2)
+    }
 
-    SpotlightIndexQueue.drainAll(containerURL: container, runner: runner,
-                                 dedupe: SpotlightFileIndexer.DedupeWindow(), defaults: defaults,
-                                 perform: { $0() })
+    @Test func enqueuePastCapacityDropsTheOldestEntriesFirst() {
+        let container = throwawayContainer()
+        let defaults = throwawayDefaults()
 
-    #expect(Set(runner.calls.flatMap { $0 }) == ["/tmp/one.wsd", "/tmp/two.wsd"])
-    let breadcrumbs = SpotlightTriggerBreadcrumbs.readEntries(defaults: defaults)
-    #expect(breadcrumbs.contains { $0.category == "index-on-view-drained" && $0.stage == "spawn" })
-}
+        for i in 0..<(SpotlightIndexQueue.capacity + 1) {
+            SpotlightIndexQueue.enqueue(path: "/tmp/\(i).wsd", category: "index-on-view",
+                                        containerURL: container, defaults: defaults, perform: { $0() })
+        }
 
-@Test func drainAllClearsTheQueueAfterDraining() {
-    let container = throwawayContainer()
-    let defaults = throwawayDefaults()
-    let runner = FakeMDImportRunner()
-    SpotlightIndexQueue.enqueue(path: "/tmp/one.wsd", category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
+        let entries = SpotlightIndexQueue.peekAll(containerURL: container)
+        #expect(entries.count == SpotlightIndexQueue.capacity)
+        #expect(entries.first?.path == "/tmp/1.wsd", "entry 0 should have been evicted as the oldest")
+        #expect(entries.last?.path == "/tmp/\(SpotlightIndexQueue.capacity).wsd")
+    }
 
-    SpotlightIndexQueue.drainAll(containerURL: container, runner: runner,
-                                 dedupe: SpotlightFileIndexer.DedupeWindow(), defaults: defaults,
-                                 perform: { $0() })
+    @Test func enqueueWithNoContainerRecordsAQueueFailedBreadcrumbAndNeverThrows() {
+        let defaults = throwawayDefaults()
 
-    #expect(SpotlightIndexQueue.peekAll(containerURL: container).isEmpty)
-}
+        SpotlightIndexQueue.enqueue(path: "/tmp/a.wsd", category: "index-on-view",
+                                    containerURL: nil, defaults: defaults, perform: { $0() })
 
-@Test func drainAllOnAnEmptyQueueCallsTheRunnerZeroTimes() {
-    let container = throwawayContainer()
-    let runner = FakeMDImportRunner()
+        let entries = SpotlightTriggerBreadcrumbs.readEntries(defaults: defaults)
+        #expect(entries.map(\.stage) == ["enqueue-called", "queue-failed"])
+    }
 
-    SpotlightIndexQueue.drainAll(containerURL: container, runner: runner,
-                                 dedupe: SpotlightFileIndexer.DedupeWindow(), perform: { $0() })
+    @Test func enqueueWithNilOrEmptyPathIsANoOp() {
+        let container = throwawayContainer()
+        let defaults = throwawayDefaults()
 
-    #expect(runner.calls.isEmpty)
-}
+        SpotlightIndexQueue.enqueue(path: nil, category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
+        SpotlightIndexQueue.enqueue(path: "", category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
 
-@Test func drainAllWithNoContainerIsANoOp() {
-    let runner = FakeMDImportRunner()
+        #expect(SpotlightIndexQueue.peekAll(containerURL: container).isEmpty)
+        #expect(SpotlightTriggerBreadcrumbs.readEntries(defaults: defaults).map(\.stage) ==
+                ["enqueue-called", "enqueue-called"])
+    }
 
-    SpotlightIndexQueue.drainAll(containerURL: nil, runner: runner,
-                                 dedupe: SpotlightFileIndexer.DedupeWindow(), perform: { $0() })
+    // MARK: - enqueue: concurrent-append
 
-    #expect(runner.calls.isEmpty)
-}
+    /// The whole reason this uses `NSFileCoordinator` instead of an in-process lock: multiple OS
+    /// processes write this file. The closest an in-process test can get to proving that
+    /// coordination actually holds is real concurrent writers on real background queues (the
+    /// DEFAULT `perform`, not the synchronous `{ $0() }` every other test injects) racing for the
+    /// same file — if coordination were absent or broken, this drops entries under contention.
+    @Test func concurrentEnqueuesFromDistinctPathsAllSurvive() {
+        let container = throwawayContainer()
+        let defaults = throwawayDefaults()
+        let count = 25
+        let group = DispatchGroup()
 
-// MARK: - extension call sites (see this file's own doc comment on why this, not an import)
+        for i in 0..<count {
+            group.enter()
+            SpotlightIndexQueue.enqueue(path: "/tmp/concurrent-\(i).wsd", category: "index-on-view",
+                                        containerURL: container, defaults: defaults,
+                                        perform: { work in
+                                            DispatchQueue.global().async {
+                                                work()
+                                                group.leave()
+                                            }
+                                        })
+        }
 
-/// `ThumbnailProvider.provideThumbnail(for:_:)` and `PreviewProvider.providePreview(for:)` both
-/// now read, verbatim: `SpotlightIndexQueue.enqueue(path: request.fileURL.path, category:
-/// "index-on-view")`. This is that exact call, proving the shared code path both extensions
-/// delegate to actually queues under the category they actually pass.
-@Test func theCallBothViewExtensionsMakeEnqueuesUnderIndexOnView() {
-    let container = throwawayContainer()
-    let defaults = throwawayDefaults()
-    let requestFileURL = URL(fileURLWithPath: "/tmp/viewed-in-finder.wsd")
+        #expect(group.wait(timeout: .now() + 10) == .success, "concurrent enqueues did not all complete in time")
+        let entries = SpotlightIndexQueue.peekAll(containerURL: container)
+        #expect(entries.count == count, "expected all \(count) concurrent enqueues to survive, got \(entries.count)")
+    }
 
-    SpotlightIndexQueue.enqueue(path: requestFileURL.path, category: "index-on-view",
-                                containerURL: container, defaults: defaults, perform: { $0() })
+    // MARK: - drain
 
-    let entries = SpotlightIndexQueue.peekAll(containerURL: container)
-    #expect(entries.map(\.path) == [requestFileURL.path])
-    #expect(entries.map(\.category) == ["index-on-view"])
+    @Test func drainAllFeedsEveryQueuedEntryThroughTheRunnerUnderTheDrainedCategory() {
+        let container = throwawayContainer()
+        let defaults = throwawayDefaults()
+        let runner = FakeMDImportRunner()
+        SpotlightIndexQueue.enqueue(path: "/tmp/one.wsd", category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
+        SpotlightIndexQueue.enqueue(path: "/tmp/two.wsd", category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
+
+        SpotlightIndexQueue.drainAll(containerURL: container, runner: runner,
+                                     dedupe: SpotlightFileIndexer.DedupeWindow(), defaults: defaults,
+                                     perform: { $0() })
+
+        #expect(Set(runner.calls.flatMap { $0 }) == ["/tmp/one.wsd", "/tmp/two.wsd"])
+        let breadcrumbs = SpotlightTriggerBreadcrumbs.readEntries(defaults: defaults)
+        #expect(breadcrumbs.contains { $0.category == "index-on-view-drained" && $0.stage == "spawn" })
+    }
+
+    @Test func drainAllClearsTheQueueAfterDraining() {
+        let container = throwawayContainer()
+        let defaults = throwawayDefaults()
+        let runner = FakeMDImportRunner()
+        SpotlightIndexQueue.enqueue(path: "/tmp/one.wsd", category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
+
+        SpotlightIndexQueue.drainAll(containerURL: container, runner: runner,
+                                     dedupe: SpotlightFileIndexer.DedupeWindow(), defaults: defaults,
+                                     perform: { $0() })
+
+        #expect(SpotlightIndexQueue.peekAll(containerURL: container).isEmpty)
+    }
+
+    @Test func drainAllOnAnEmptyQueueCallsTheRunnerZeroTimes() {
+        let container = throwawayContainer()
+        let runner = FakeMDImportRunner()
+
+        SpotlightIndexQueue.drainAll(containerURL: container, runner: runner,
+                                     dedupe: SpotlightFileIndexer.DedupeWindow(), perform: { $0() })
+
+        #expect(runner.calls.isEmpty)
+    }
+
+    @Test func drainAllWithNoContainerIsANoOp() {
+        let runner = FakeMDImportRunner()
+
+        SpotlightIndexQueue.drainAll(containerURL: nil, runner: runner,
+                                     dedupe: SpotlightFileIndexer.DedupeWindow(), perform: { $0() })
+
+        #expect(runner.calls.isEmpty)
+    }
+
+    // MARK: - extension call sites (see this file's own doc comment on why this, not an import)
+
+    /// `ThumbnailProvider.provideThumbnail(for:_:)` and `PreviewProvider.providePreview(for:)` both
+    /// now read, verbatim: `SpotlightIndexQueue.enqueue(path: request.fileURL.path, category:
+    /// "index-on-view")`. This is that exact call, proving the shared code path both extensions
+    /// delegate to actually queues under the category they actually pass.
+    @Test func theCallBothViewExtensionsMakeEnqueuesUnderIndexOnView() {
+        let container = throwawayContainer()
+        let defaults = throwawayDefaults()
+        let requestFileURL = URL(fileURLWithPath: "/tmp/viewed-in-finder.wsd")
+
+        SpotlightIndexQueue.enqueue(path: requestFileURL.path, category: "index-on-view",
+                                    containerURL: container, defaults: defaults, perform: { $0() })
+
+        let entries = SpotlightIndexQueue.peekAll(containerURL: container)
+        #expect(entries.map(\.path) == [requestFileURL.path])
+        #expect(entries.map(\.category) == ["index-on-view"])
+    }
 }

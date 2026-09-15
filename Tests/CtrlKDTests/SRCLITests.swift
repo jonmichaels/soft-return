@@ -110,7 +110,11 @@ private func noFSEnvironment() -> CLIEnvironment {
 /// CLI is where those become Python's `"0x07"` keys.
 @Test func diagnoseFormatsUnknownCodesAsHexStrings() throws {
     // ^G (0x07) is not a WordStar formatting code, so `_decode_spans` records it as unknown.
-    let data = ws4Text("Alarm") + [0x07] + ws4Text(" bell") + HARD + makeProse()
+    var data = ws4Text("Alarm")
+    data += [0x07]
+    data += ws4Text(" bell")
+    data += HARD
+    data += makeProse()
     let value = diagnose(path: "/tmp/bell", data: data, environment: noFSEnvironment())
     let codes = try #require(normalize(value).object?["unknown_codes"]?.object)
     #expect(codes["0x07"] == .int(1))
@@ -219,7 +223,11 @@ private func noFSEnvironment() -> CLIEnvironment {
 }
 
 @Test func diagnoseReportsProducerOnlyWhenWordTsarCommandsAreSeen() throws {
-    let withProducer = bytes(".PT 1") + HARD + ws7Block(0x00) + bytes("Body one.") + HARD
+    var withProducer = bytes(".PT 1")
+    withProducer += HARD
+    withProducer += ws7Block(0x00)
+    withProducer += bytes("Body one.")
+    withProducer += HARD
     let value = diagnose(path: "/tmp/wordtsar", data: withProducer, environment: noFSEnvironment())
     let fields = try #require(normalize(value).object)
     #expect(fields["producer"] == .string("wordtsar"))
@@ -432,13 +440,13 @@ private func noFSEnvironment() -> CLIEnvironment {
     // This repo never carries a dev stamp (DevStamp.swift is nil here; the app's build
     // script injects real values into its own checkout) — so the committed shape is the
     // clean release string, and the dev shape is exercised through the split-out helper.
-    #expect(versionLine(devDate: srDevDate) == "sr v4.1.0")
-    #expect(versionLine(devDate: "2026-08-14") == "sr v4.1.0 (dev 2026-08-14)")
+    #expect(versionLine(devDate: srDevDate) == "sr v4.2.0")
+    #expect(versionLine(devDate: "2026-08-14") == "sr v4.2.0 (dev 2026-08-14)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
     #expect(recorder.out == [versionOutput])
-    #expect(versionOutput.hasSuffix("sr v4.1.0"))
+    #expect(versionOutput.hasSuffix("sr v4.2.0"))
     #expect(versionOutput.contains("_____       ______     ____"))  // the SOFT RETURN Slant banner leads
     #expect(recorder.written.isEmpty)
 

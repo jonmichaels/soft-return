@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -21,7 +22,7 @@ import Testing
 ///
 /// Writes into the drop box directory, the one place both sides of the fence can reach.
 /// Asserts nothing, so it cannot fail a run.
-@Suite(.serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
+@Suite(.tags(.corpus), .serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct Batch1PaginationProbe {
 
     static var dumpDirectory: URL {

@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 
 /// The Settings window: the classic Mac form idiom, fixed width.
 ///
@@ -26,7 +27,7 @@ import CtrlKD
 /// `buildForm`.
 ///
 /// Job 398 (Jon's correction to F10): Default Display belongs in that top group, directly
-/// below Default Style and above Default Page Size — its omission from job 397's list was a
+/// below Default View (Default Style until batch 30) and above Default Page Size — its omission from job 397's list was a
 /// mistake, not a ruling. Restored verbatim (`displayPopup`/`displayChanged(_:)`);
 /// `SettingsStore.defaultDisplay` was never touched by its removal either way.
 ///
@@ -119,11 +120,11 @@ final class SettingsWindowController: NSWindowController {
         restoreWindowsCheckbox.setAccessibilityLabel("Restore windows on launch")
 
         startingViewPopup = popup(StartingView.allCases.map(\.displayName), "starting-view-control",
-                                  "Starting view", #selector(startingViewChanged(_:)))
-        zoomPopup = popup(["Fit", "Actual"], "default-zoom-control",
+                                  "Open at launch", #selector(startingViewChanged(_:)))
+        zoomPopup = popup([ZoomSetting.fit, .actual].map(\.displayName), "default-zoom-control",
                           "Default zoom", #selector(zoomChanged(_:)))
         stylePopup = popup(ViewStyle.allCases.map(\.displayName), "default-style-control",
-                           "Default style", #selector(styleChanged(_:)))
+                           "Default view", #selector(styleChanged(_:)))
         displayPopup = popup(PageDisplay.allCases.map(\.displayName), "default-display-control",
                              "Default display", #selector(displayChanged(_:)))
         pageSizePopup = popup(NamedPageSize.allCases.map(\.displayName), "default-page-size-control",
@@ -161,11 +162,15 @@ final class SettingsWindowController: NSWindowController {
         // font/export cluster second, with the caption sitting exactly where the spec puts
         // it (right after the separator, before Font). `style(_:)` applies the same column
         // placement to both, so the two sections still read as one continuous form.
+        //
+        // #271 M11 (batch 30, ruled 2026-09-14): "Starting View:" reads "Open at Launch:" (Document Viewer / Batch
+        // Exporter) and "Default Style:" reads "Default View:" — Native, Printed and Modern are views everywhere a
+        // person reads them. The identifiers and the stored keys keep their old names.
         let topGrid = NSGridView(views: [
             [label("On Launch:"), restoreWindowsCheckbox],
-            [label("Starting View:"), startingViewPopup],
+            [label("Open at Launch:"), startingViewPopup],
             [label("Default Zoom:"), zoomPopup],
-            [label("Default Style:"), stylePopup],
+            [label("Default View:"), stylePopup],
             [label("Default Display:"), displayPopup],
             [label("Default Page Size:"), pageSizePopup],
             [label("Quick Look Margins:"), quickLookMarginsPopup],
@@ -180,7 +185,7 @@ final class SettingsWindowController: NSWindowController {
         // current style — the spec is explicit that these are preferences, not live state
         // (unlike the batch window, where the same two controls do grey out).
         let caption = NSTextField(wrappingLabelWithString:
-            "Font and size apply to Modern style — and to its RTF and PDF exports.")
+            "Font and size apply to the Modern view — and to its RTF and PDF exports.")
         caption.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         caption.textColor = .secondaryLabelColor
         caption.setAccessibilityIdentifier("settings-font-caption")
@@ -412,7 +417,7 @@ final class SettingsWindowController: NSWindowController {
 
     private func loadCurrentValues() {
         startingViewPopup.selectItem(withTitle: settings.startingView.displayName)
-        zoomPopup.selectItem(withTitle: settings.defaultZoom == .actual ? "Actual" : "Fit")
+        zoomPopup.selectItem(withTitle: (settings.defaultZoom == .actual ? ZoomSetting.actual : .fit).displayName)
         stylePopup.selectItem(withTitle: settings.defaultStyle.displayName)
         displayPopup.selectItem(withTitle: settings.defaultDisplay.displayName)
         fontPopup.selectItem(withTitle: settings.modernFontName)
@@ -450,7 +455,7 @@ final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func zoomChanged(_ sender: NSPopUpButton) {
-        settings.defaultZoom = sender.titleOfSelectedItem == "Actual" ? .actual : .fit
+        settings.defaultZoom = sender.titleOfSelectedItem == ZoomSetting.actual.displayName ? .actual : .fit
     }
 
     @objc private func styleChanged(_ sender: NSPopUpButton) {

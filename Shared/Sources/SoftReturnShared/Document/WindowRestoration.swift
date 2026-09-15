@@ -13,27 +13,27 @@ import Foundation
 /// that is what makes "encode/decode of the restorable state" testable headlessly, with no
 /// window and no real state-restoration machinery, and it is the one payload
 /// `DocumentWindowController` hands to `NSCoder` as a single blob.
-struct WindowRestorableState: Codable, Equatable {
-    var style: ViewStyle
-    var styleProvenance: SettingProvenance
-    var display: PageDisplay
-    var displayProvenance: SettingProvenance
-    var zoom: ZoomSetting
-    var zoomProvenance: SettingProvenance
-    var variant: Variant
-    var variantIsManual: Bool
-    var pageSize: NamedPageSize?
-    var pageSizeIsManual: Bool
-    var scrollX: Double
-    var scrollY: Double
+public struct WindowRestorableState: Codable, Equatable {
+    public var style: ViewStyle
+    public var styleProvenance: SettingProvenance
+    public var display: PageDisplay
+    public var displayProvenance: SettingProvenance
+    public var zoom: ZoomSetting
+    public var zoomProvenance: SettingProvenance
+    public var variant: Variant
+    public var variantIsManual: Bool
+    public var pageSize: NamedPageSize?
+    public var pageSizeIsManual: Bool
+    public var scrollX: Double
+    public var scrollY: Double
     /// Job 314: whether the Inspector (View ▸ Show Document Info) was open — restored panels
     /// follow the same "put it back the way it was" contract as everything else here.
     /// Defaulted so decoding a blob written before this job's field existed still succeeds
     /// (closed, the safe default) rather than failing the whole restore.
-    var showDocumentInfo: Bool = false
+    public var showDocumentInfo: Bool = false
 
     @MainActor
-    init(documentState: DocumentState, scrollOrigin: CGPoint, showDocumentInfo: Bool = false) {
+    public init(documentState: DocumentState, scrollOrigin: CGPoint, showDocumentInfo: Bool = false) {
         style = documentState.style.value
         styleProvenance = documentState.style.provenance
         display = documentState.display.value
@@ -54,7 +54,7 @@ struct WindowRestorableState: Codable, Equatable {
     /// `.manual`, which would misreport a merely-detected or default value as something the
     /// user picked.
     @MainActor
-    func apply(to documentState: DocumentState) {
+    public func apply(to documentState: DocumentState) {
         documentState.style = Resolved(style, styleProvenance)
         documentState.display = Resolved(display, displayProvenance)
         documentState.zoom = Resolved(zoom, zoomProvenance)
@@ -82,10 +82,10 @@ extension SettingProvenance: Codable {}
 
 /// One key, one JSON blob, gated by `SettingsStore.restoreWindowsOnLaunch` — see
 /// `DocumentWindowController.window(_:willEncodeRestorableState:)`.
-enum WindowRestorationCoding {
-    static let stateKey = "SR.documentWindowState"
+public enum WindowRestorationCoding {
+    public static let stateKey = "SR.documentWindowState"
 
-    static func encode(_ state: WindowRestorableState, into coder: NSCoder) {
+    public static func encode(_ state: WindowRestorableState, into coder: NSCoder) {
         // Restoration best-effort: a dropped view-state blob just means the reopened window
         // falls back to defaults, the same acceptable outcome as the system never restoring
         // the window at all (see this file's own doc comment on that being a real, normal path).
@@ -93,7 +93,7 @@ enum WindowRestorationCoding {
         coder.encode(data, forKey: stateKey)
     }
 
-    static func decode(from coder: NSCoder) -> WindowRestorableState? {
+    public static func decode(from coder: NSCoder) -> WindowRestorableState? {
         guard let data = coder.decodeObject(forKey: stateKey) as? Data else { return nil }
         // Same best-effort contract as `encode` above — a blob from an older/incompatible
         // build decodes to nil, which the caller already treats as "nothing to restore".

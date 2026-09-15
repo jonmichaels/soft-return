@@ -1,6 +1,312 @@
 # Known-Issues Register
 
+## 2026-09-14 (v4.2.0 release run): the Swift PCL-fidelity tier, enumerated
+
+Rewritten from the actual run on the bumped tree, as
+`docs/RELEASE-CHECKLIST.md` step 5(b) requires. It supersedes the
+2026-09-11 (v4.1.0) enumeration below, which is kept as history — the tier
+moved a long way between the two: 96 issues then, 62 now, and the
+74-document untriaged bucket is down to 35 after the 2026-09-12 triage
+(`vault WordStar/research/2026-09-12_pcl-v4-untriaged-triage.md`, rounds
+1-7).
+
+### 2026-09-14 — iOS 26: the home tab selection capsule jumps instead of sliding (`tabSelectionAnimation`, masked)
+
+- **Test:** `NativeScreenshotTests.tabSelectionAnimation(style:)` in `SoftReturnIOSTests`, iOS 26 branch, light and dark.
+  Its two sideways-slide expectations are wrapped in `withKnownIssue`. That is a masked failure, cited here, and not a
+  pass. Because the known issue is not intermittent, the test fails the day the slide starts working.
+- **What is wrong:** on iOS 26 the lighter selection capsule behind the selected home tab (Recent · Shared · Browse)
+  jumps to the newly chosen tab instead of sliding to it.
+  - Its placement at rest is correct.
+  - With Reduce Motion the change crossfades, as it should.
+  - iOS 16–18, where the selected glyph bounces instead, are not affected.
+- **Measured** (iPhone 17 / iOS 26.3 simulator, light and dark, on two separate runs):
+  - choosing Browse moves the capsule's model at once from midX 54 to 218 pt;
+  - summed over every animation on the capsule's layer, 0.0 of that 164 pt move is animated;
+  - the only spring is additive: position (0, 0.67) → (0, 0) and bounds.size (0, 1.33) → (0, 0), 0.5 s, damping ratio
+    0.7.
+- **Fix attempts, neither moved it:**
+  - f8dda3c laid out the glass view's content view, the capsule's superview, inside the spring.
+  - b3637ea animated the capsule's frame explicitly from its old frame to the new one.
+  - Both times the sideways move still took effect outside the animation.
+- **Status:** open — needs a diagnostic round; not a release blocker for the Mac 4.2.0 release (iOS is TestFlight-only);
+  Jon decides whether build 2 ships with the jump.
+
+### 2026-09-15 — Mac app: Native LJ6DTP exact-drift (`AppNativeFidelityTests`, parked)
+
+- **Test:** `AppNativeFidelityTests.appNativeViewMatchesTheWordStarCapture(doc:)` in `SoftReturnTests`, the LJ6DTP.WS
+  argument. The other 11 captured documents pass.
+- **Ruling:** LJ6DTP-only, parked on planning #210 by Jon's 2026-09-11 ruling (quoted under "The 1 hard failure"
+  below). In the 4.2.0 gate it counts the way the engine's own LJ6DTP hard failure does: not a pass, accounted for by
+  name (Athena, 2026-09-15).
+- **What fails:** unlicensed `exact-drift`. The Native view's horizontal word positions on page 7 are +0.24 to +2.48pt
+  from the capture, against a 0.2pt tolerance. counts_by_reason: exact-drift 49, word-unmatched 119,
+  extra-word-in-engine 273, line-start-shift 7, cgtimes-drift-exceeds-tolerance 85.
+- **Failing since 2026-09-11:** the armed app run at 17:59 on `b239ee2` that was the v4.1.0 release's step 5(c)
+  evidence (5513 passed, 1 failed: this one). The same five counts in every armed run since:
+  - b13-corpus, b14-corpus-a1, b14-corpus-a2 and b15-corpus (2026-09-12);
+  - b26-item2-proof (2026-09-14);
+  - b37-release-corpus2, the v4.2.0 release-gate run (2026-09-15).
+- **Status:** parked (#210); not fixed for 4.2.0.
+
+### 2026-09-15 — Mac app vs engine, LJ6DTP-shaped rows (parked #210)
+
+- **Ruling:** all three park on planning #210 under Jon's 2026-09-11 LJ6DTP ruling ("LJ6DTP-only problems: defer, add
+  to #210; corpus majority first"). -LASERJE.FNT is a printer font chart, parked with LJ6DTP under the same ruling
+  (2026-09-13: font charts go to #210). None is a pass; each is a ruled failure, named here (Athena, 2026-09-15).
+- **Run:** b37-s3-classes on `a188097`, after the engine's `.op` fix, with ctrl-kd at `cf7a8d9`; armed, `DOC` unset. All
+  three failure texts are identical to the v4.2.0 release-gate run's (b37-release-corpus2). The same run passed
+  `structuralParity` on LYING.WS and TESTING.WS.
+- **A. `GeometryOracleTests.everyLineStartsAtTheLibrarysLeftMargin()`, LJ6DTP.WS line 11 (listed twice), and
+  `NativeStructuralParityTests.structuralParity(fixtureName:)` "LJ6DTP.WS", page 1 body line 13 size.**
+  - Left margin: app first ink at 50.40, engine PDF 51.80. Size: engine 13.0, app 12.0.
+  - Both rows are one line, "WordStar PDF for LaserJet 4 originally modified by Robert J. Sawyer". The engine's layout
+    line starts with an empty `font7` + `tabhmi36` segment. The app draws an object-replacement glyph for it at 50.40,
+    then W at 51.84; the engine's PDF has W at 51.80.
+  - font7 is Antique Olive 13.0pt, and the app's 12.0 is the size the harness reads there. This reading comes from the
+    failure text and the layout JSON; it was not probed further.
+- **B. `structuralParity(fixtureName:)` "LJ6DTP.WS", page 6 body line 30 size and gray, and
+  `NativeStructuralParityTests.knockoutRunsClassifyTheSameWayTheEngineDoes()`, page 6 raw index 30.**
+  - Size: engine 10.0, app 0.0. Gray: engine 1.0 (knockout white), app 0.0.
+  - The line is the head of a three-line overprint chain. Lines 30 and 31 are bars (█ in font30, Univers 13.0pt, 24
+    graphic cells each). Line 32 is the caption "WordStar for DOS is a perfect word processor for touch typists…", in
+    colour15 + font31 (Garamond 10.0pt), bold.
+  - The engine side reports the caption's values at index 30. Job 405's `EngineTruth` group matching covered the
+    two-line "bar, then caption" chain, not this three-line one.
+- **C. `GeometryOracleTests.everyLineStartsAtTheLibrarysLeftMargin()`, -LASERJE.FNT line 9.**
+  - This is the 2026-09-07 OPEN tab-stop row below ("-LASERJE.FNT line 9 — tab stop 4.46pt left").
+  - Its numbers are now app 242.10 / engine PDF 234.50; they were app 237.24 / engine 241.70 then.
+  - The engine's line is 12 graphic cells (font6) from x=14.4, a `tabhmi4680` tab, then "Scalable" in font11 (Univers
+    10.0pt).
+- **Status:** parked (#210); not fixed for 4.2.0.
+- **The app-suite gate for 4.2.0, by method:**
+  - Of the release run's 11 failing methods, 7 are green as classes: AppAnswerKeyParityTests, AppPDFWordsProofTests,
+    the three TitleAscenderTests, ModernTitleAscenderTests' LJ6DTP shadow title, and RulingAssertionTests' zoom-fit.
+  - 4 are ruled, named failures: the three above, and the `AppNativeFidelityTests` LJ6DTP exact-drift entry above.
+
+### The run
+
+`swift test`, armed (`CTRLKD_SAWYER_ARCHIVE` + `CTRLKD_PRIVATE_CORPUS` +
+`CTRLKD_SRC`), 2026-09-14, on the v4.2.0 bump commit.
+
+- **XCTest half: `Executed 0 tests, with 0 failures`.** This package has no
+  XCTest cases at all; every test is swift-testing. Zero XCTest failures.
+- **swift-testing half: 1216 tests in 14 suites, 62 issues, 61 of them
+  known issues.** Thirteen suites passed outright —
+  `AnswerKeyParityTests`, `AnswerKeyParityPrivateTests`, `CorpusParityTests`,
+  `HeadFootModelPDFParityTests`, `PesetaEuroDriverTests`,
+  `LJ6DTPCharSubstitutionTests`, `DriverSubstitutionExportTests`,
+  `ModernRTFStructureRowTests`, `RTFPagedSurfaceTests`,
+  `RTFHeadStyleAttrsTests`, `DotCommentPrintsNothingTests`,
+  `TrailingPABreakTests`, `FormFeedLineMarksTests`. Every one of the 62
+  issues is inside `PCLFidelityTests.pclFidelity(doc:)`, which runs 194
+  documents.
+- **Two tests reported as skipped, and neither hides anything.**
+  `privateKnownNonConvertibleRefusedAsRecorded(id:)` and
+  `privateNonDocumentAssetHashOnly(id:)` (`AnswerKeyParityTests.swift:908`
+  and `:939`) are parameterised over two lists in the private answer key —
+  the documents the engines are recorded as REFUSING, and the files in the
+  private corpus that are not documents at all. Both lists are empty, so
+  swift-testing says "No test cases found." Nothing was suppressed; there
+  was nothing to run.
+
+### The 194 documents, split
+
+| | n |
+|---|---:|
+| clean — printed output agrees with the real WS7 capture | **132** |
+| excluded from the tier by Jon's ruling (recorded as known issues) | **26** |
+| divergent, softened to a known issue (v4 expansion bucket) | **35** |
+| **hard failure** | **1** |
+
+132 + 26 + 35 + 1 = 194, and 26 + 35 + 1 = 62 issues. That matches the
+09-12 triage doc's own final tally exactly — 132 clean / 36 divergent / 26
+excluded, where its 36 divergent is these 35 plus LJ6DTP.
+
+### The 1 hard failure
+
+`pclFidelity(doc:)` → **LJ6DTP** — `PCLFidelityTests.swift:836`.
+431 non-font-substitution divergences (`extra-word-in-engine` 270,
+`word-unmatched` 105, `exact-drift` 49, `line-start-shift` 7,
+`cgtimes-drift-exceeds-tolerance` 10).
+
+It fails hard rather than softly because it is one of the ORIGINAL 18
+capture documents, not part of the 2026-09-08 v4 expansion, and only v4
+documents get the `withKnownIssue` wrapper.
+
+**It is accounted for by ruling, and it does not block.** Jon, 2026-09-11
+10:0x (RULINGS-LEDGER.md): *"In this latest full run, if coder finds
+problems with LJ6DTP that are unique to it and not also an issue with
+other documents, then defer fixes on them. Add them in with the general
+#210 'LJ6DTP needs special attention because it's an interesting doc that
+pushes the boundaries'."* And, the same hour: *"it is just one document. I
+want to balance an appropriate amount of time on the one document. Right
+now it's better that the majority of the docs that never touch on its
+boundaries view, print, and export correctly, than getting every little
+part of LJ6DTP accurate."* LJ6DTP's remaining divergences are its printer
+hacks — the thing #210 exists to hold. The 09-12 triage doc's round-7
+"still open" list names it the same way: *"`LJ6DTP` parked on planning
+#210."*
+
+The Python tier agrees: ctrl-kd's own armed run fails the same single
+document and nothing else.
+
+### The 26 excluded by ruling, by class and by name
+
+These are documents Jon ruled out of the PCL tier. Each is still named in
+every run — the test records the exclusion and its reason rather than
+dropping the document silently.
+
+**duplicate (13)** — a byte-identical second copy of another corpus
+document, so the same content is not judged twice (Jon, 2026-09-08,
+planning #226):
+`DEFAULT/BOX`, `DEFAULT/DEFAULT.WS`, `DEFAULT/INSET/GRAPHICS.DOC`,
+`DEFAULT/LIST.DOC`, `DEFAULT/MAILING.DOC`, `DEFAULT/PLAYBILL.DOC`,
+`DEFAULT/PLAYS.DOC`, `DEFAULT/REVIEW.DOC`, `DEFAULT/SHAKE.DOC`,
+`DEFAULT/SPELL.DOC`, `PRINTERS/FONTCRIB.PS`, `REF/BOOKLET.RJS`,
+`TAGS/OK`.
+
+**font-chart (4)** — Sawyer's own printed charts of a printer-RESIDENT
+font (LaserJet Symbol/WingDings, PostScript Symbol/Zapf Dingbats). A chart
+OF a font nobody can obtain is not reproducible by construction, so the
+residual IS the chart's subject. Jon, 2026-09-13 (#270 item 28): *"Let's
+move them to the LJ6DTP category. Exclude them from tests for now… I'd
+rather support user's actual WordStar files, not font charts."*:
+`REF/SYMBOL.CHT`, `REF/WINGDING.CHT`, `PRINTERS/fontcrib.ws`,
+`PRINTER.PS`.
+
+**postscript (3)** — PostScript-targeted documents, outside a PCL tier
+(Jon, 2026-09-08, planning #224):
+`REF/PS.TST`, `PSPRINT.TST`, `RTF-RJS/NOVEL.WS`.
+
+**formfeed-off (2)** — `.xl 00` documents; real WS7 overprints several
+document pages onto one physical sheet, which has no PDF-page
+representation (Jon, 2026-09-08, standing planning #15):
+`ARTICLES/FORMFEED.WS`, `REF/ROUNDED.BRD`.
+
+**parked-lj6dtp (1)** — `LSRBOX/LSRBOX.WS`, the LaserJet box/shading
+demo. Jon, 2026-09-13 (#270 item 38), after opening it: *"it's not correct
+even in Printed. It looks like the boxes printed ON TOP of the text
+instead of the text showing up ON TOP of the boxes… Defer. Remove it from
+testing… Add it to the LJ6DTP category. We will look into fully
+supporting it later."*
+
+**parked (1)** — `LSRBOX/CHECKER.BRD`, an unexplained extra page with
+graphics overflow suspected; parked with LJ6DTP's mechanism (Jon,
+2026-09-08, and again 2026-09-13: *"I don't want to waste resources right
+now on a doc which I assume simply prints a checkerboard."*).
+
+**freeze (1)** — `OLDTIMES.WS`; WordStar 7 itself freezes printing it
+(Jon, 2026-09-08, planning #224).
+
+**degenerate (1)** — `REF/-PATCHES.WS`; the document declares `.pl0`, a
+zero-length page, so WS7's own behaviour is undefined (Jon, 2026-09-10,
+planning #261): *"Remove PATCHES from further work. Similar but different
+category to LJ6DTP."*
+
+### The 35 divergent documents, by name and by cause
+
+These print output that still differs from the real WordStar 7 printout.
+`withKnownIssue` softens only "check 1" (agreement with the WS7 capture)
+and only for a v4-expansion document; every divergence is printed by name
+in the run. The count after each name is that document's
+non-font-substitution divergence count from THIS run. Causes are the
+2026-09-12 triage doc's, updated through its round 7 (2026-09-14).
+
+**Font substitution — a face this machine cannot have, resolved to a
+different real one (5 documents, 75 divergences).** These are the
+checklist's one named non-blocking class. The printer's CG Times and
+Univers are not obtainable; the substitutes' widths differ, and the drift
+grows along a line.
+
+| document | n | what it is |
+|---|---:|---|
+| `REF/FONTS.REF` | 42 | triage cause 5 — CG Times / Univers drift past the modelled tolerance, plus the word-matching failures that drift causes |
+| `ARTICLES/YOURWAY.WS` | 16 | a right-aligned running head set in a proportional face, 4.4-6.4pt out (triage: cause 5's family) |
+| `REF/BOOKLET.HOW` | 4 | the same right-aligned-head mechanism as YOURWAY.WS |
+| `REF/WSFORMAT.WS` | 7 | 78 CG-Times drift divergences absorbed by tolerance; 7 fixed-pitch residuals over the 0.2pt bar remain |
+| `REF/-LASERJE.FNT` | 6 | 42 Univers drift divergences absorbed; 6 residuals remain |
+
+**Traced to a named mechanism, ruled open, not yet fixed (10 documents,
+1,428 divergences).** Each of these has a cause written down in the triage
+doc; none is unexplained.
+
+| document | n | mechanism |
+|---|---:|---|
+| `MICKEE/MICKEE.WS` | 793 | triage cause 15 — a newspaper-column region with an `.rm` change inside it; its two columns still overprint |
+| `PRINT.TST` | 193 | word segmentation at a style change, the part mechanism P-SPLIT cannot reconcile (Jon's "Both side alike" ruling, 2026-09-13, landed; this is the remainder the round-7 note names as still open) |
+| `DEFAULT/PRINT.TST` | 193 | same document, second corpus path, same 193 |
+| `REF/SUB-SUPE.TST` | 120 | sub/superscript digits inside a word; Q11's relative-dominance rise floor landed in round 7 and took it 121 → 120, the remainder is the measurement floor |
+| `MACROS/HOLYMAC/1-3MAC` | 43 | HOLYMAC residual, named in the triage's second pass and not reached since |
+| `INTERVU.WS` | 32 | triage cause 12 — baseline off by a fraction of a line in proportional text (1.9-4pt, never a whole line) |
+| `REF/CTRL-K.H1` | 28 | WS7's print-time microjustification: the file stores the line already justified with soft spaces and WS7 re-justifies from natural word spacing, placing every word at its own decipoint |
+| `ARTICLES/POWERUSE.WS` | 14 | real soft hyphenation WS7 applies and the engine does not (`Vari-`/`able"`), plus the drift that cascades from it |
+| `MACROS/HOLYMAC/-HOLYMAC.WS` | 8 | mechanism N's box rule fused to a word, pages 12-13 (round 7: 302/302 headers now correct; this is what is left) |
+| `REF/HIGHLIGH.WS` | 4 | a 12pt→9.25pt sub/superscript on its own vertical, word-segmentation family |
+
+**Measured and named every run, cause not yet traced to a mechanism (20
+documents, 1,471 divergences).** This is the honest remainder of the
+2026-09-08 v4 capture expansion. It is the bucket the 09-12 triage shrank
+from 74 documents to this, and it is NOT yet classified as font
+substitution or as a genuine placement defect. Each document's dominant
+divergence kind is given so the shape is visible rather than hidden behind
+a count.
+
+| document | n | dominant kind |
+|---|---:|---|
+| `REF/BOOKLET.WS` | 838 | fixed-pitch drift (814), plus a running head a whole line high on every page |
+| `RTF-RJS/LINKS.WS` | 151 | baseline shifts of a whole line and of two lines |
+| `TAGS/-README.WS` | 108 | baseline shifts of ~12pt on the note labels |
+| `REF/-HOW-TO.RJS` | 82 | baseline shifts (25 Univers drift divergences absorbed by tolerance) |
+| `RTF-RJS/1-SINGLE.WS` | 47 | words unmatched / extra words in the engine |
+| `RTF-RJS/2-DOUBLE.WS` | 47 | same shape as 1-SINGLE.WS |
+| `RTF-RJS/1-5LINES.WS` | 47 | same shape as 1-SINGLE.WS |
+| `REF/WIN7.ETC` | 35 | extra engine words past x=1000pt — the printer's right ceiling family (item 27 / Q1), residual after that fix took it 139 → 35 |
+| `REVIEW.DOC` | 30 | words unmatched / extra words |
+| `RTF-RJS/-README.WS` | 21 | fixed-pitch drift |
+| `WORDSTAR.WS` | 18 | baseline shifts of 4pt in a Univers running head |
+| `REF/PS-FONTS.REF` | 14 | mixed: baseline shifts, unmatched words |
+| `RTF-RJS/MARKUP.WS` | 13 | words unmatched / extra words |
+| `PRINTERS/PS/PSSAMPLE.WS` | 8 | words unmatched |
+| `FONTS/PS/ERROR.WS` | 3 | line-start shifts, one pristine-frame offset |
+| `WS-CON/SAMPLE.WS` | 3 | word-segmentation splits (Q3 family) |
+| `REF/-TOC-TAG.WS` | 2 | word-segmentation splits (Q3 family) |
+| `RJS.WS` | 2 | word-segmentation splits (Q3 family) |
+| `TAGS/DW` | 1 | triage cause 14 — sub-pixel rounding at the 0.2pt tolerance edge |
+| `TAGS/SHOW` | 1 | triage cause 14 — sub-pixel rounding at the 0.2pt tolerance edge |
+
+### What is NOT softened, and is green
+
+**"Check 2" — cross-engine identity, sr's printed PDF against ctrl-kd's own
+recorded manifest — is never wrapped, for any document.** Zero mismatches
+across all 194. That is the gate the two engines exist to hold and it is
+fully green on this cut. The softening above is only about how far either
+engine is from a real 1990s printout.
+
+### The honest statement for the release
+
+Thirty-five documents in the expanded capture set still print differently
+from the real WordStar 7 printout. Fifteen of them have a written-down
+cause (five are font substitution, ten are traced mechanisms waiting on
+work); twenty are measured and named but not yet traced. One document,
+LJ6DTP, is parked by Jon's own ruling on planning #210 and fails the tier
+outright. Twenty-six more documents are excluded by ruling and named in
+every run. That is a real, user-facing limitation of Printed fidelity and
+it belongs in the release notes' Known issues in plain English. It is not
+new breakage — the tier IMPROVED between v4.1.0 and v4.2.0, from 96 issues
+to 62.
+
+### Verdict for the checklist, step 5(b)
+
+Every failure in this run is accounted for by name in this register: 26
+ruled exclusions, 35 softened v4 divergences, and 1 hard failure (LJ6DTP)
+whose ruling is quoted above. There are zero XCTest failures and zero
+cross-engine identity mismatches. **The engine gate passes.**
+
 ## 2026-09-11 (v4.1.0 release run): the Swift PCL-fidelity tier, enumerated
+
+**SUPERSEDED by the 2026-09-14 (v4.2.0 release run) section above.** Kept as
+history: it is the measurement the 2026-09-12 triage started from.
 
 The release checklist's step 5(b) names "13 PCL-fidelity font-substitution
 divergences" as the one non-blocking exception. That sentence was written on

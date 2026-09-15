@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import SwiftUI
 
 /// The Batch Export window (⌥⌘E).
@@ -22,6 +23,11 @@ import SwiftUI
 /// SwiftUI column via `NSViewRepresentable` rather than hoisting the whole column to AppKit,
 /// the smaller diff of the two options the brief allowed.
 final class BatchWindowController: NSWindowController {
+    /// #271 M11, batch 31: the Mode row's label and the caption under Font and Size. Constants so a test can hold
+    /// the words: SwiftUI `Text` cannot be read back in a test process (ExportModeWordingTests).
+    static let modeLabel = "Mode:"
+    static let fontCaption = "Font and size apply to Modern mode — RTF and PDF exports."
+
     private let model = BatchModel()
 
     init() {
@@ -292,17 +298,17 @@ private struct BatchView: View {
                             accessibilityLabel: "Variant")
                     }
                     GridRow {
-                        Text("Style:")
+                        Text(BatchWindowController.modeLabel)
                             .frame(width: Self.labelColumnWidth, alignment: .trailing)
                             .fixedSize(horizontal: true, vertical: false)
                         BatchPopUpButton(
                             titles: ViewStyle.allCases.map { ($0, $0.displayName) },
                             selection: $model.style, width: Self.popupWidth,
                             accessibilityIdentifier: "batch-style-control",
-                            accessibilityLabel: "Style")
+                            accessibilityLabel: "Mode")
                     }
                     // Font and Size are LIVE STATE here, unlike Settings: they grey out
-                    // unless Style is Modern, because neither a literal typescript facsimile
+                    // unless Mode is Modern, because neither a literal typescript facsimile
                     // (Printed) nor the Mac-mapped facsimile (Native) has a font for the user
                     // to choose — only Modern's reflow uses `fontName`/`fontSize` at all. The
                     // spec draws the Printed distinction explicitly; Native shares its reason
@@ -330,7 +336,7 @@ private struct BatchView: View {
                         .disabled(model.style != .modern)
                     }
                 }
-                Text("Font and size apply to Modern style — RTF and PDF exports.")
+                Text(BatchWindowController.fontCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("batch-font-caption")

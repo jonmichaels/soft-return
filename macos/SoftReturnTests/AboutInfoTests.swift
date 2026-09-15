@@ -15,26 +15,28 @@ private var hostMarketingVersion: String {
     Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
 }
 
-@Test func aboutVersionStringCarriesMarketingVersionAndSoftReturnByte() {
-    #expect(AboutInfo.versionString.contains(hostMarketingVersion))
-    #expect(AboutInfo.versionString.contains("8D0A"))
-    #expect(AboutInfo.versionString == "Soft Return \(AboutInfo.displayVersion(for: hostMarketingVersion)) (8D0A)")
-}
+@Suite struct AboutInfoTests {
+    @Test func aboutVersionStringCarriesMarketingVersionAndSoftReturnByte() {
+        #expect(AboutInfo.versionString.contains(hostMarketingVersion))
+        #expect(AboutInfo.versionString.contains("8D0A"))
+        #expect(AboutInfo.versionString == "Soft Return \(AboutInfo.displayVersion(for: hostMarketingVersion)) (8D0A)")
+    }
 
-@Test func standardAboutPanelOptionsCarryTheSameVersionAndByte() {
-    let options = AboutInfo.standardAboutPanelOptions
-    #expect(options[.applicationVersion] as? String == AboutInfo.displayVersion(for: hostMarketingVersion))
-    #expect(options[.version] as? String == "8D0A")
-}
+    @Test func standardAboutPanelOptionsCarryTheSameVersionAndByte() {
+        let options = AboutInfo.standardAboutPanelOptions
+        #expect(options[.applicationVersion] as? String == AboutInfo.displayVersion(for: hostMarketingVersion))
+        #expect(options[.version] as? String == "8D0A")
+    }
 
-@Test func displayVersionDropsTheBetaWordWhenTheVersionAlreadyCarriesABetaSuffix() {
-    #expect(AboutInfo.displayVersion(for: "4.0.0b1") == "4.0.0b1")
-    #expect(AboutInfo.displayVersion(for: "4.0.0B3") == "4.0.0B3")
-    // The bN suffix already says "beta" — spelling it out too would be redundant.
-    #expect(!AboutInfo.displayVersion(for: "4.0.0b7").contains("beta"))
-}
+    @Test func displayVersionDropsTheBetaWordWhenTheVersionAlreadyCarriesABetaSuffix() {
+        #expect(AboutInfo.displayVersion(for: "4.0.0b1") == "4.0.0b1")
+        #expect(AboutInfo.displayVersion(for: "4.0.0B3") == "4.0.0B3")
+        // The bN suffix already says "beta" — spelling it out too would be redundant.
+        #expect(!AboutInfo.displayVersion(for: "4.0.0b7").contains("beta"))
+    }
 
-@Test func displayVersionAppendsTheBetaWordWhenTheVersionHasNoBetaSuffix() {
-    #expect(AboutInfo.displayVersion(for: "4.0.0") == "4.0.0 beta")
-    #expect(AboutInfo.displayVersion(for: "4.1.2") == "4.1.2 beta")
+    @Test func displayVersionAppendsTheBetaWordWhenTheVersionHasNoBetaSuffix() {
+        #expect(AboutInfo.displayVersion(for: "4.0.0") == "4.0.0 beta")
+        #expect(AboutInfo.displayVersion(for: "4.1.2") == "4.1.2 beta")
+    }
 }

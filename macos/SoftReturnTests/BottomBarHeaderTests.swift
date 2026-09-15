@@ -22,7 +22,7 @@ import Testing
 @Suite struct BottomBarHeaderTests {
     private static let expectedHeaders: [(identifier: String, title: String)] = [
         ("variant-control", "Variant"),
-        ("style-control", "Style"),
+        ("style-control", "View"),   // #271 M11 (batch 30): "Style" until then
         ("zoom-control", "Zoom"),
         ("page-size-control", "Page Size"),
         ("page-settings-control", "Margins"),

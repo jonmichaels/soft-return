@@ -67,6 +67,9 @@ public enum StructuralMark: Hashable, Sendable {
     /// resolve/decode, via `graphics[index]`) this way. Placeholder text itself
     /// (`"[image: NAME]"`) is unchanged — this only ADDS addressability. See `Span.pix`.
     case pix(index: Int, byteLen: Int)
+    /// A ^ONI INDEX ENTRY (type-0x0E) phrase, decoded as ONE span carrying its byte
+    /// length in the cleaned stream. See `Span.indexEntry`.
+    case ixentry(byteLen: Int)
     /// A TAB's real positioning fact: `content[2:4]`, "absolute tab size in HMIs", plus
     /// the leader byte and the placeholder column count this pass already expanded into
     /// the stream. It is ABSOLUTE FROM THE LEFT MARGIN, not relative to wherever the pen
@@ -395,7 +398,22 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 //
                 // Register C3. Deliberate for PDF, which is Courier by design; RTF/HTML
                 // can express a size change and now have the figures.
-                let content = blockContent(block)
+                //
+                // TYPE 15h IS NOT TYPE 2. WSFORMAT.TXT, verbatim: "15h Alternate/Normal
+                // font change. Byte: Normal = 0, Alternate = 1. The rest of the sequence
+                // is like a font symmetrical sequence, with the new font characteristics
+                // (Width, height, and typestyle), followed by the previous font
+                // characteristics." The flag is PAIRED the same way the font triples are
+                // — new state then previous state — so the two triples start at byte 2,
+                // not byte 0. All four 15h blocks in the archive
+                // (`sawyer/REF/CODES.WS`, `sawyer/REF/-TOC-TAG.WS`) carry 14 payload
+                // bytes and read `01 00` / `00 01` / `00 00` there, and only the 2-byte
+                // skip yields real fonts: 108 HMI x 170 VMI (8.5pt LinePrinter,
+                // WordStar's own default) and 180 x 240 (Courier 12). Read from byte 0
+                // they came out 1 HMI wide — one character every 1/1800 inch,
+                // "SB (Cordata)".
+                var content = blockContent(block)
+                if cmd == 0x15 { content = Array(content.dropFirst(2)) }
                 if content.count >= 6 {
                     fonts.append(FontChange(
                         offset: out.count,
@@ -596,13 +614,23 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                 marks[out.count, default: []].append(.pix(index: idx, byteLen: placeholder.count))
                 out += placeholder
             } else if cmd == 0x0E {                                // index item
-                // An inline indexed PHRASE. WordStar prints the phrase in the body —
-                // the index ENTRY is the non-printing part — so dropping the block
-                // risks losing text outright when the phrase is not duplicated in the
-                // visible stream.
-                out += blockContent(block)
+                // A ^ONI index ENTRY, stored as a symmetrical sequence. The phrase
+                // belongs to the index file (*._IX), not to the page: MEASURED against
+                // real WS7 (ws7-prints/v4, PRISTINE.EXE) on `sawyer/REF/-INDEX.HOW`,
+                // whose own prose introduces two of these blocks with "^ONI command —
+                // which creates a symmetrical sequence such as these:". WS7 gives each
+                // of the two lines its own row (the rows between "as these:" at 348.0pt
+                // and "Using .ix" at 408.0pt are spent) and puts NO INK on either. The
+                // bytes stay in the stream, tagged `indexEntry`, so every text/Markdown/
+                // HTML/RTF consumer keeps the phrase exactly as before and only the
+                // Printed facsimile — the one judged against paper — leaves it undrawn.
+                let phrase = blockContent(block)
                     .map { $0 & 0x7F }
                     .filter { $0 >= 0x20 && $0 < 0x7F }
+                if !phrase.isEmpty {
+                    marks[out.count, default: []].append(.ixentry(byteLen: phrase.count))
+                }
+                out += phrase
             } else if cmd == 0x11 && block.count >= 6 {            // paragraph style
                 // Four LE16 style HANDLES (WSFORMAT: new / previously selected /
                 // previous "modified" temp / previous-previous). All 1,727 blocks across
@@ -733,6 +761,18 @@ private func parseNote(kind: NoteKind, cmd: Int, content: [UInt8], offset: Int) 
     let remainder = Array(content.dropFirst(5))
 
     var textBytes: [UInt8] = []
+    // The note's marker is stored INLINE, wherever its nested sequence sits in the text
+    // stream -- so its LINE is however many breaks the text has already produced when
+    // that sequence is reached (see `Note.tagLine`).
+    var tagRawLine = 0
+    // 2026-09-12 (`sawyer/REF/NOTES.TST`): a note's own text stream can carry a TAB of
+    // its own -- a nested type-9 block, the same one a body line uses, whose second
+    // word is the absolute tab size in HMIs. Real WS7 honours it and starts the note's
+    // text in that column; this walk used to skip every nested block that was not the
+    // internal tag, so the number was thrown away and the note area imposed its own
+    // computed hang column instead. Keyed by RAW line index (breaks seen so far),
+    // which `stripDotCommands` maps onto the surviving physical lines.
+    var tabCols: [Int: Int] = [:]
     var i = 0
     while i < remainder.count {
         if remainder[i] == 0x1d && i + 3 <= remainder.count {
@@ -778,6 +818,15 @@ private func parseNote(kind: NoteKind, cmd: Int, content: [UInt8], offset: Int) 
                     let decoded = decodeCP437(Array(rawTag)).trimmed()
                     tag = decoded.isEmpty ? nil : decoded
                 }
+                tagRawLine = splitOnLineBreaks(textBytes).count - 1
+            } else if innerCmd == 0x09 {                           // the note's OWN tab
+                let innerContent = blockContent(inner)
+                if innerContent.count >= 4 {
+                    let absHMI = Int(innerContent[2]) | (Int(innerContent[3]) << 8)
+                    let cols = roundHalfToEven(absHMI, by: tabHMIPerCol)
+                    let li = splitOnLineBreaks(textBytes).count - 1
+                    tabCols[li] = Swift.max(tabCols[li] ?? 0, cols)
+                }
             }
             i += jump + 3                                          // skip the whole nested sequence
         } else {
@@ -786,7 +835,8 @@ private func parseNote(kind: NoteKind, cmd: Int, content: [UInt8], offset: Int) 
         }
     }
 
-    let (text, dots) = stripDotCommands(textBytes)
+    let (text, dots, textLines, tagLine, textIndents) =
+        stripDotCommands(textBytes, tagRawLine: tagRawLine, tabCols: tabCols)
     let numberFormat: Int
     let convertTo: Int
     if kind == .annotation || tag != nil {
@@ -802,7 +852,9 @@ private func parseNote(kind: NoteKind, cmd: Int, content: [UInt8], offset: Int) 
         convertTo = Int(convFlag & 0x0F)
     }
     return Note(
-        kind: kind, text: text, number: number, tag: tag, lineCount: lineCount,
+        kind: kind, text: text, textLines: textLines, tagLine: tagLine,
+        textIndents: textIndents,
+        number: number, tag: tag, lineCount: lineCount,
         numberFormat: numberFormat, convertTo: convertTo, dotCommands: dots, offset: offset
     )
 }
@@ -814,11 +866,30 @@ private func parseNote(kind: NoteKind, cmd: Int, content: [UInt8], offset: Int) 
 /// not dropped; surviving text lines are cleaned the same way note text always was and
 /// rejoined with a space (notes are short callouts, not reflowed prose). Direct port of
 /// `_strip_dot_commands`.
-private func stripDotCommands(_ raw: [UInt8]) -> (text: String, dots: [String]) {
+///
+/// `tabCols` (2026-09-12, `sawyer/REF/NOTES.TST`) is `[raw line index: column]` for the
+/// note's OWN tabs, which `parseNote` reads off the nested type-9 blocks in the note's
+/// text stream, and comes back out as the per-physical-line `indents`
+/// (`Note.textIndents`). A tab's column is ABSOLUTE -- measured from the note area's own
+/// left margin -- which is why it travels as a number rather than as whitespace: the
+/// text itself is still trimmed exactly as it always was, so no consumer reading
+/// `text`/`textLines` sees anything it did not see before.
+private func stripDotCommands(_ raw: [UInt8], tagRawLine: Int = 0,
+                              tabCols: [Int: Int] = [:])
+    -> (text: String, dots: [String], physical: [String], tagLine: Int, indents: [Int]) {
     let lines = splitOnLineBreaks(raw)
     var kept: [String] = []
     var dots: [String] = []
-    for line in lines {
+    var physical: [String] = []
+    var indents: [Int] = []
+    var tagLine = 0
+    for (idx, line) in lines.enumerated() {
+        if idx == tagRawLine {
+            // Where the marker lands AFTER dot-command lines are removed -- `physical`'s
+            // own index, which is what the note area renders from. Same line for the
+            // overwhelmingly common note with no dot commands of its own.
+            tagLine = physical.count
+        }
         let stripped = line.map { $0 & 0x7F }              // same masking the body uses
         if stripped.first == 0x2e {
             dots.append(decodeCP437(stripped).trimmed())
@@ -826,11 +897,33 @@ private func stripDotCommands(_ raw: [UInt8]) -> (text: String, dots: [String]) 
         }
         let clean = line.filter { c in (c >= 0x20 && c < 0x7F) || c >= 0x80 || c == 0x09 }
         let piece = decodeCP437(clean).trimmed()
+        // `physical` keeps EVERY surviving line, empty ones included, in order -- the
+        // note's own hard returns, which the page-bottom note area prints
+        // (`Note.textLines`). `kept` drops the empties, because `text` is the FLOWED
+        // form every other consumer reads.
+        physical.append(piece)
+        indents.append(piece.isEmpty ? 0 : (tabCols[idx] ?? 0))
         if !piece.isEmpty {
             kept.append(piece)
         }
     }
-    return (kept.joined(separator: " "), dots)
+    // A note's text block is stored with a trailing return, so the split above always
+    // yields ONE extra empty element after the last real line -- the terminator, not a
+    // line the author typed. Exactly one is dropped, never a run of them: a note that
+    // really does end in a blank line reserves that line on paper. Verified against
+    // `Note.lineCount` and against real WS7: `sawyer/TAGS/WHY` stores 2 lines and
+    // prints its note area 2 lines tall (tag at 672.0pt, text at 684.0pt);
+    // `sawyer/TAGS/SIMPLIFY` stores 3 -- the same two plus a trailing blank -- and
+    // prints 3, the whole area sitting one line HIGHER for it.
+    if physical.last == "" {
+        physical.removeLast()
+    }
+    if indents.count > physical.count {
+        indents.removeLast(indents.count - physical.count)
+    }
+    return (kept.joined(separator: " "), dots, physical,
+            Swift.min(tagLine, Swift.max(0, physical.count - 1)),
+            indents.contains(where: { $0 != 0 }) ? indents : [])
 }
 
 /// Non-overlapping split on any of WordStar's line-break tokens, matching
@@ -901,6 +994,16 @@ private func roundHalfToEven(_ numerator: Int, by divisor: Int) -> Int {
 /// types degrade to plain space padding, but of the CORRECT width (from the tab's own
 /// HMI size) rather than a guessed constant. Dot-leader tabs (any byte outside the
 /// documented/undocumented set) repeat their own leader character.
+///
+/// A tab can be ZERO columns wide, and that is not a degenerate case to guard against --
+/// it is what WordStar does whenever the pen has already reached the stop the tab aims
+/// at. The block's own width word says so: `sawyer/REF/FONT-TAG.CMP` types `Bit #:`, a
+/// tab, then `Usage:`, and the tab's width is 28 HMI -- under a sixth of a 10-CPI column
+/// -- while its absolute target (273.6pt from the page's left edge) is exactly where
+/// `Bit #:` already ends. Real WS7 prints `Bit #:Usage:`, one continuous run, with no
+/// column between them (measured, v4 capture, page 1). A `max(1, ...)` floor here spent a
+/// placeholder column anyway and pushed `Usage:` 7.2pt right of the paper on every
+/// surface at once -- printed, layout, RTF/HTML, plain text.
 private func tabColumns(_ content: [UInt8]) -> (cols: Int, leader: UInt8) {
     guard content.count >= 5 else {
         return (4, 0x20)            // malformed/short block: the old fixed-4-spaces
@@ -908,7 +1011,7 @@ private func tabColumns(_ content: [UInt8]) -> (cols: Int, leader: UInt8) {
     }
     let size = Int(content[0]) | (Int(content[1]) << 8)
     let tabType = content[4]
-    let cols = max(1, roundHalfToEven(size, by: tabHMIPerCol))
+    let cols = roundHalfToEven(size, by: tabHMIPerCol)
     let leader: UInt8
     if tabType == 0x20 || tabType == 0xA0 || tabType == UInt8(ascii: "#")
         || tabType == UInt8(ascii: "!") || tabRightTypes.contains(tabType) {

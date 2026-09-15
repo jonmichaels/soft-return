@@ -1,0 +1,33 @@
+{
+  "configurations" : [
+    {
+      "id" : "8C0A5B13-2620-4C0A-9E13-000000000262",
+      "name" : "Corpus",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : false,
+      "target" : {
+        "containerPath" : "container:SoftReturn.xcodeproj",
+        "identifier" : "SoftReturnTests",
+        "name" : "SoftReturnTests"
+      }
+    },
+    {
+      "parallelizable" : false,
+      "target" : {
+        "containerPath" : "container:SoftReturn.xcodeproj",
+        "identifier" : "SoftReturnUITests",
+        "name" : "SoftReturnUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

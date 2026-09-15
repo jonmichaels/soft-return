@@ -10,7 +10,11 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 4.1.0 is the v4.1.0 minor release: sr carries ctrl-kd
+/// CLI's user-visible contract. 4.2.0 is the v4.2.0 minor release: sr carries ctrl-kd
+/// 4.7.0's layout model — RTF/HTML catch-up (page numbers, facing heads, sections and
+/// columns, exact leading, print stylesheet), WS7-measured running-head/foot and
+/// auto-leading rules, `.pf on` re-wrap, column geometry, mail-merge page-number
+/// variables and data-file detection; 4.1.0 was the v4.1.0 minor release: sr carries ctrl-kd
 /// 4.6.0's layout model — newspaper columns (`.co`), full justification (`.oj on`),
 /// even/odd conditional running heads and feet plus the even/odd page offset, positional
 /// line numbering, landscape page sizes, the driver-keyed euro/peseta at code 158, the
@@ -79,7 +83,7 @@ import CtrlKD
 /// capacity/top/lead from `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose);
 /// 1.1.0 added the note-selection flags and the expanded --diagnose fields; 1.0.0 was the
 /// first CLI release.
-public let srVersion = "4.1.0"
+public let srVersion = "4.2.0"
 
 
 /// `sr v2.0.0`.

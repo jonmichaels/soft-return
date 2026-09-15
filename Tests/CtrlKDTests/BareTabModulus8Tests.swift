@@ -22,6 +22,19 @@
 /// Modern PDF) sees the bare, un-expanded tab byte now -- exactly its own pre-#237
 /// behavior, since #237's own evidence (the WS7 LaserJet PCL capture above) was
 /// Printed-PDF-only despite living in a function every mode shared.
+///
+/// THE TWO OTHER FIXED-PITCH SURFACES (planning #264 item 1, packet row B3, port of
+/// ctrl-kd 4b6caac). Printed RTF and the fixed-pitch HTML block reproduce the same
+/// physical line in the same monospaced face the Printed PDF does, so the same question
+/// has the same answer there: a column IS a character and expanding the tab to spaces is
+/// exact. They were emitting the raw byte instead -- measured on the archive's own
+/// WordStar file-format reference, 62 surviving tabs in each RTF and 103-107 in each
+/// HTML, where a browser usually collapses the tab to a single space. Both now call
+/// `expandBareTabsForPrintedLayout`, which moved to `EmitterRules.swift` so one function
+/// answers for all three surfaces. MODERN IS DELIBERATELY EXCLUDED (the packet's own
+/// "not for Modern"): a reflowed proportional document has no print columns for a tab to
+/// land on. Text and Markdown keep the raw byte in both modes -- unchanged, and not part
+/// of this row.
 import Testing
 @testable import CtrlKD
 
@@ -78,7 +91,12 @@ private func wordX(_ pdf: [UInt8], _ word: String) -> Double? {
     // and ZERO contain a bare 0x09 -- the two mechanisms never coexist, and a type-9
     // tab block's own padding bytes never reach the bare-0x09 branch at all.
     let tab = ws7Block(0x09, payload: [0x68, 0x01, 0x68, 0x01] + bytes(" ") + [0x02])
-    let doc = parseWS(ws5SeedLocal + tab + bytes("indented text") + HARD + [0x1A])
+    var parseWSArg81: [UInt8] = ws5SeedLocal
+    parseWSArg81 += tab
+    parseWSArg81 += bytes("indented text")
+    parseWSArg81 += HARD
+    parseWSArg81 += [0x1A]
+    let doc = parseWS(parseWSArg81)
     let text = doc.blocks[0].lines[0].text()
     #expect(!text.contains("\t"), "\(text)")
 }
@@ -119,14 +137,20 @@ private func wordX(_ pdf: [UInt8], _ word: String) -> Double? {
     // line one's ending column (16, not 0), and "ab" + a tab from there lands on
     // column 24, not 8 -- different trailing words ("WordOne."/"WordTwo.") disambiguate
     // `drawnLine`, which returns the FIRST matching Tj containing the needle.
-    let pdf = printedPDF(bytes("\tWordOne.") + HARD + bytes("ab\tWordTwo.") + HARD)
+    var printedPDFArg122: [UInt8] = bytes("\tWordOne.")
+    printedPDFArg122 += HARD
+    printedPDFArg122 += bytes("ab\tWordTwo.")
+    printedPDFArg122 += HARD
+    let pdf = printedPDF(printedPDFArg122)
     #expect(drawnLine(pdf, containing: "WordOne.") == String(repeating: " ", count: 8) + "WordOne.")
     #expect(drawnLine(pdf, containing: "WordTwo.") == "ab" + String(repeating: " ", count: 6) + "WordTwo.")
 }
 
 @Test func ojOffDefaultTextModeKeepsTheBareTabLiteral() throws {
-    // Every mode OTHER than Printed PDF sees the raw, un-expanded byte -- the pre-#237
-    // behavior, now deliberately restored rather than accidentally shared.
+    // TEXT sees the raw, un-expanded byte in both modes -- the pre-#237 behavior, now
+    // deliberately restored rather than accidentally shared, and NOT changed by
+    // planning #264 item 1 (which reaches Printed RTF and the fixed-pitch HTML block
+    // only; see this file's own header).
     let doc = parseWS(bytes("From:\tWordStar") + HARD)
     let out = emitText(doc, mode: .printed)
     #expect(out.contains("\t"), "\(out)")
@@ -168,7 +192,11 @@ private func wordX(_ pdf: [UInt8], _ word: String) -> Double? {
     // text, so it is indistinguishable from an author-typed space here -- and real WS7
     // printed output treats it identically: the probe (P6) landed on the same column as
     // the literal-space case at the same starting column.
-    let pdf = printedPDF(bytes("ABCDEF") + [0xA0] + bytes("\tWord.") + HARD)
+    var printedPDFArg171: [UInt8] = bytes("ABCDEF")
+    printedPDFArg171 += [0xA0]
+    printedPDFArg171 += bytes("\tWord.")
+    printedPDFArg171 += HARD
+    let pdf = printedPDF(printedPDFArg171)
     #expect(drawnLine(pdf, containing: "Word.") == "ABCDEF " + String(repeating: " ", count: 2) + "Word.")
 }
 
@@ -189,7 +217,79 @@ private func wordX(_ pdf: [UInt8], _ word: String) -> Double? {
     // justification) -- the tab expands the same way regardless of how many styles
     // surround it. "AB" (2 chars, plain) + tab (needed=6, to column 8) + "CD" (bold) +
     // "EF." (plain) -- "EF." lands at column 10 (8 + 2 for "CD").
-    let pdf = printedPDF(bytes("AB") + [0x02] + bytes("\tCD") + [0x02] + bytes("EF.") + HARD)
+    var printedPDFArg192: [UInt8] = bytes("AB")
+    printedPDFArg192 += [0x02]
+    printedPDFArg192 += bytes("\tCD")
+    printedPDFArg192 += [0x02]
+    printedPDFArg192 += bytes("EF.")
+    printedPDFArg192 += HARD
+    let pdf = printedPDF(printedPDFArg192)
     let x = try #require(wordX(pdf, "EF."))
     #expect(x == 10 * 7.2, "\(x)")
+}
+
+
+// MARK: - Printed RTF and the fixed-pitch HTML block (planning #264 item 1, row B3)
+
+@Test func printedRTFExpandsABareTabToTheModulus8Stop() throws {
+    // The WS7-verified line, in RTF: "00h ^@" is 6 characters, so the tab is 2 spaces
+    // and "Fix." starts at column 8 -- where the reference's own continuation lines are
+    // already typed.
+    let doc = parseWS(bytes(".po 0\"\r\n.lm 0\r\n") + bytes("00h ^@\tFix.") + HARD)
+    let out = emitRTF(doc, mode: .printed)
+    #expect(!out.contains("\t"))
+    #expect(out.contains("00h ^@  Fix."))
+}
+
+@Test func printedHTMLExpandsABareTabToTheModulus8Stop() throws {
+    // The same line in the fixed-pitch HTML block (`p.ws-native`), where a raw tab byte
+    // collapsed to a single space in a browser.
+    let doc = parseWS(bytes(".po 0\"\r\n.lm 0\r\n") + bytes("00h ^@\tFix.") + HARD)
+    let out = emitHTML(doc, mode: .printed)
+    #expect(!out.contains("\t"))
+    #expect(out.contains("00h ^@  Fix."))
+}
+
+@Test func modernRTFAndHTMLKeepTheBareTab() throws {
+    // The packet's own exclusion, pinned: Modern reflows into a proportional face with
+    // no print columns for a tab to land on, so the byte stays exactly as it was.
+    // Built as an IR document rather than parsed bytes on purpose -- the surrounding
+    // tests' own source carries print-CONTROL bytes, which `isPrinted` (correctly)
+    // forces into the printed path in either mode.
+    let doc = Document(blocks: [Block(kind: .para,
+                                      lines: [Line(spans: [Span(text: "00h\tFix.")])])])
+    #expect(emitRTF(doc, mode: .modern).contains("\t"))
+    #expect(emitHTML(doc, mode: .modern).contains("\t"))
+    #expect(!emitRTF(doc, mode: .printed).contains("\t"))
+    #expect(!emitHTML(doc, mode: .printed).contains("\t"))
+}
+
+@Test func printedRTFColumnCountResetsAtTheNextPhysicalLine() throws {
+    // One call is one physical line in RTF too -- line two's count starts at 0, so "ab"
+    // plus a tab lands on column 8, not on line one's 24.
+    var src: [UInt8] = bytes(".po 0\"\r\n.lm 0\r\n")
+    src += bytes("\tWordOne.")
+    src += HARD
+    src += bytes("ab\tWordTwo.")
+    src += HARD
+    let out = emitRTF(parseWS(src), mode: .printed)
+    #expect(out.contains(String(repeating: " ", count: 8) + "WordOne."))
+    #expect(out.contains("ab" + String(repeating: " ", count: 6) + "WordTwo."))
+}
+
+@Test func printedRTFHonoursThePrecedingSpaceRunShift() throws {
+    // Planning #237's measured remainder reaches RTF as well, because it is part of the
+    // one shared rule: " Subject: " (10 characters, the last a space) puts the next
+    // word at column 17, not 16.
+    let doc = parseWS(bytes(".po 0\"\r\n.lm 0\r\n") + bytes(" Subject: \tWord.") + HARD)
+    let out = emitRTF(doc, mode: .printed)
+    #expect(out.contains(" Subject: " + String(repeating: " ", count: 7) + "Word."))
+}
+
+@Test func printedTextAndMarkdownStillCarryTheRawByte() throws {
+    // Row B3 named two surfaces. Text and Markdown are not among them and do not move
+    // -- stated as a test so a later change to them is a deliberate one.
+    let doc = parseWS(bytes(".po 0\"\r\n.lm 0\r\n") + bytes("00h ^@\tFix.") + HARD)
+    #expect(emitText(doc, mode: .printed).contains("\t"))
+    #expect(emitMarkdown(doc, mode: .printed).contains("\t"))
 }

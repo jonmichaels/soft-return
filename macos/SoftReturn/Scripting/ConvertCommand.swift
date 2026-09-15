@@ -1,5 +1,6 @@
 import CoreServices
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// `convert {POSIX file "..."} to folder ... as {RTF, PDF} using style printed with

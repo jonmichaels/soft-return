@@ -22,7 +22,7 @@ struct ColumnsAreTextTests {
     private static func columns(of fixture: String, page: Int)
         throws -> (rendered: RenderedDocument, views: [NSTextView], ranges: [NSRange])
     {
-        let url = try #require(Oracle.fixtureURLs.first { $0.lastPathComponent == fixture },
+        let url = try #require(Oracle.allFixtureURLs.first { $0.lastPathComponent == fixture },
                                "\(fixture) is not in the fixture set")
         let state = try Oracle.state(for: url)
         let (rendered, view, _) = Oracle.layOut(state)
@@ -131,7 +131,7 @@ struct ColumnsAreTextTests {
     @Test @MainActor func showInvisiblesReachesALaterColumn() throws {
         let (rendered, _, ranges) = try Self.columns(of: "FORMFEED.WS", page: 6)
         try #require(ranges.count >= 2, "FORMFEED.WS page 7 lost its second column")
-        let url = try #require(Oracle.fixtureURLs.first { $0.lastPathComponent == "FORMFEED.WS" })
+        let url = try #require(Oracle.allFixtureURLs.first { $0.lastPathComponent == "FORMFEED.WS" })
         let state = try Oracle.state(for: url)
         let annotated = DocumentRenderer.renderWithInvisibles(state)
         let secondColumn = (rendered.text.string as NSString).substring(with: ranges[1])

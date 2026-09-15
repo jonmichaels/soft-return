@@ -18,7 +18,7 @@ import Foundation
 /// exactly as `soft-return`'s own CLAUDE.md rules divergence between the Python and Swift
 /// engines. Decoding itself (`pixDecode`/`pixToPNG`/`pixPhysicalSizeIn`) is NOT duplicated —
 /// those live in `CtrlKD` (Foundation-free, no real-filesystem need) and are called directly.
-enum DocumentPictures {
+public enum DocumentPictures {
 
     /// Fixed probe locations tried (each relative to the document's own directory, then each
     /// ancestor) once the DOS-path tail-suffix walk turns up nothing. Same order as
@@ -40,7 +40,7 @@ enum DocumentPictures {
     /// image is reported via `PixResult.error`, never thrown — the ruling this mirrors
     /// (2026-08-17: "proper error handling for missing/unreadable image files is required
     /// (report, never fail the conversion)") applies here exactly as it does in the CLI.
-    static func resolve(_ doc: CtrlKD.Document, docPath: String,
+    public static func resolve(_ doc: CtrlKD.Document, docPath: String,
                         fileManager: FileManager = .default) -> [PixResult] {
         guard !doc.graphics.isEmpty else { return [] }
         var results: [PixResult] = []

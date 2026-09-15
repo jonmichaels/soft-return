@@ -328,11 +328,58 @@ struct ResolvedHeadFoot {
 /// TEXT, never how to draw it). `fontIdx` is the same `Document.fonts` index
 /// `Document.headerFonts`/`footerFonts` already carry, or `nil` for the fontless/Courier
 /// default.
+/// A `^K` (0x0B) in a header/footer line suppresses the blanks that follow it, on
+/// EVEN-numbered pages only. Port of Python's `_ctrl_k_even_page`.
+///
+/// WordStar's own file-format document, quoted verbatim inside the corpus document
+/// that tests it (`sawyer/REF/CTRL-K.H1`): "0Bh ^K  Within the main text body, it is
+/// used around words or phrases to be indexed.  In a header or footer line, on even
+/// numbered pages all blanks following the ^K are suppressed." Every other view strips
+/// the 0x0B as an ordinary control byte (`hfRuns`) and keeps the blanks, which is what
+/// an ODD page does here too -- this is a PRINTED, page-parity rule.
+///
+/// MEASURED against real WS7 (ws7-prints/v4, PRISTINE.EXE) on that document, whose
+/// mid-document `.pn1` makes its sheets 7 and 9 even PRINTED pages 2 and 4 (the number
+/// the rule reads):
+///
+///   `.h1 ^K<55 blanks>Header / #`  odd  453.6pt (left 57.6 + 55 columns); even 64.8pt
+///   `.f1 ^K<55 blanks>Footer / #`  the same numbers, both parities
+///   `.h1 ^K<59 blanks>^YPage #^Y`  odd  482.4pt (left + 59 columns); even 64.8pt
+///
+/// 64.8pt is the left margin plus ONE column, not the left margin, so the blank run
+/// does not vanish entirely -- exactly one column survives it. The `^K` itself is what
+/// survives (it costs zero columns on an odd page, where 55 blanks account for 453.6pt
+/// to the decipoint), so it renders as that one blank and the run after it is dropped.
+/// A `^K` with NO blanks after it would tell this apart from "the run collapses to one
+/// blank"; no document in the corpus has one, and both readings give the identical
+/// answer on every page that does exist.
+func ctrlKEvenPage(_ txt: String, _ pageNo: Int) -> String {
+    guard pageNo % 2 == 0, txt.unicodeScalars.contains(where: { $0.value == 0x0B }) else {
+        return txt
+    }
+    var out = ""
+    var suppressing = false
+    for ch in txt {
+        if ch.unicodeScalars.first?.value == 0x0B {
+            out.append(" ")
+            suppressing = true
+            continue
+        }
+        if suppressing, ch == " " { continue }
+        suppressing = false
+        out.append(ch)
+    }
+    return out
+}
+
 func resolveHeadFootLines(
     _ doc: Document, pageNo: Int, pageHeight: Int, lead: Double, size: Int,
     left: Double, printed: Bool, headers: [Int: String]? = nil, footers: [Int: String]? = nil,
     autoPageNumber: Bool = false,
-    headHfOverride: [Int: HFOverride]? = nil, footHfOverride: [Int: HFOverride]? = nil
+    headHfOverride: [Int: HFOverride]? = nil, footHfOverride: [Int: HFOverride]? = nil,
+    footerInUse: Bool? = nil,
+    headersPcl: [Int: [HFPrintControl]]? = nil,
+    footersPcl: [Int: [HFPrintControl]]? = nil
 ) -> ResolvedHeadFoot? {
     // Planning #250: a document with NO real body blocks at all (GALLEYS.DOT/
     // ADVANCE.DOT -- pseudogalley templates) never builds a real per-page `Page` via
@@ -348,9 +395,39 @@ func resolveHeadFootLines(
     // before this feature existed.
     let headers = headers ?? doc.headers
     let footers = footers ?? doc.footers
-    let footerInUse = !footers.isEmpty && footers.values.contains { !$0.isEmpty }
+    // A `.fo` the author WROTE puts footers in use even when its text is EMPTY -- `.fo`
+    // with nothing after it is WordStar's own documented way to silence the automatic
+    // bottom-of-page number without `.op`, and it is how several real documents do it.
+    // This used to read `!footers.isEmpty && footers.values.contains { !$0.isEmpty }`,
+    // so a blank `.fo` counted as "no footer" and the automatic number printed anyway.
+    //
+    // MEASURED against real WS7 (ws7-prints/v4, PRISTINE.EXE): the Sawyer archive's
+    // LSRBOX.WS carries a bare `.fo` and NO `.op`/`.pn`/`.pg` at all, and real WS7
+    // prints no bottom-of-page number on any of its 7 pages -- the blank footer alone
+    // is what silences it. Four further documents (the HOLYMAC macro set's
+    // 4MAC2/4MAC3/7MAC2/7MAC3) pair a bare `.fo` with `.op` and then a later `.pn`,
+    // which `pgnumCheckpoints` reads as "numbering back on"; real WS7 prints no number
+    // on any of their 41/53/35/35 pages either. WSFORMAT.WS's own `.fo` carries real
+    // text and WS7 prints that footer, never the automatic number.
+    //
+    // The per-page `footers` dict a real page hands in has ALREADY had its empty slots
+    // dropped (`closePage`: `.filter { !$0.value.isEmpty }` -- there is no text to
+    // draw), so "did this page have a `.fo`" cannot be read back off it.
+    // `Page.footerInUse` carries that answer forward and arrives here as the
+    // `footerInUse` argument; `nil` means "no caller opinion, derive it from
+    // `footers`", which is what every call site passing an explicit dict (TOC/index:
+    // `[:]`) wants. Port of Python's `pdf._resolve_head_foot_lines`.
+    let footerInUse = footerInUse ?? !footers.isEmpty
     let showAutoNum = printed && autoPageNumber && !footerInUse
-    guard printed, !headers.isEmpty || !footers.isEmpty || showAutoNum else { return nil }
+    // 2026-09-12 (cause 10): a running head whose ENTIRE content was a 0x0F user print
+    // control has empty text and a real rule to draw -- `sawyer/LSRBOX/LSRBOX.WS`'s own
+    // `.h1` is exactly that. Only the PDF WRITER passes these (`runningOps`); the
+    // shared head/foot MODEL (`attachHeadFootLinesPrinted`, the `layout` JSON) does
+    // not, so its own resolved lines -- and that JSON -- stay byte-identical.
+    let headersPcl = headersPcl ?? [:]
+    let footersPcl = footersPcl ?? [:]
+    guard printed, !headers.isEmpty || !footers.isEmpty || showAutoNum
+            || !headersPcl.isEmpty || !footersPcl.isEmpty else { return nil }
     // `.op` does NOT suppress a `#` in a header or footer. WSFORMAT.TXT is explicit:
     // ".OP  Omit page number.  At print time no page numbers are printed UNLESS THE
     // '#' HAS BEEN USED IN FOOTERS OR HEADERS." It suppresses the AUTOMATIC page
@@ -443,7 +520,7 @@ func resolveHeadFootLines(
                 txt = String(chars[0..<charIdx]) + String(repeating: " ", count: newCols) + suffix
             }
         }
-        return render(txt)
+        return render(ctrlKEvenPage(txt, pageNo))
     }
 
     // The header block is anchored to the BODY, not the paper edge: its last line sits
@@ -534,7 +611,7 @@ func resolveHeadFootLines(
     // actually distinguished from this simpler rule until `-README`'s own
     // `ws7-prints/v3` PRISTINE.EXE recapture.
     let hm = doc.page?.hmLines ?? 2.0
-    let topHead = Double(headers.keys.max() ?? 1)
+    let topHead = Double(Set(headers.keys).union(headersPcl.keys).max() ?? 1)
     let headBase = max(0.0, mt - hm - topHead)
     // Planning #255: the print area's own right edge, once per page (every
     // header/footer line on it shares the same `.rm`) -- see `printedHfRight`'s own
@@ -545,8 +622,9 @@ func resolveHeadFootLines(
     let rightEdge = printedHfRight(doc, left: left)
 
     var resolvedHeaders: [(n: Int, text: String, y: Double, fontIdx: Int?, x: Double, styleAttrs: Style)] = []
-    for n in headers.keys.sorted() {
-        guard let txt = headers[n], !txt.isEmpty else { continue }
+    for n in Set(headers.keys).union(headersPcl.keys).sorted() {
+        let txt = headers[n] ?? ""
+        guard !txt.isEmpty || !(headersPcl[n] ?? []).isEmpty else { continue }
         let y = Double(pageHeight) - (headBase + Double(n - 1)) * Double(PDFMetrics.lead)
             - Double(size)
         guard y >= 0 else { continue }
@@ -583,8 +661,9 @@ func resolveHeadFootLines(
     // placement, unlike a default `.hm` in the header's. Reported, not acted on.
     let footLine = pl - mb + fm
     var resolvedFooters: [(n: Int, text: String, y: Double, fontIdx: Int?, x: Double, styleAttrs: Style)] = []
-    for n in footers.keys.sorted() {
-        guard let txt = footers[n], !txt.isEmpty else { continue }
+    for n in Set(footers.keys).union(footersPcl.keys).sorted() {
+        let txt = footers[n] ?? ""
+        guard !txt.isEmpty || !(footersPcl[n] ?? []).isEmpty else { continue }
         let y = Double(pageHeight) - Double(footLine + n - 1) * lead - Double(size)
         guard y >= 0 else { continue }
         let fontIdx: Int?
@@ -646,14 +725,20 @@ func runningOps(
     _ doc: Document, pageNo: Int, pageHeight: Int, lead: Double, size: Int,
     left: Double, printed: Bool, headers: [Int: String]? = nil, footers: [Int: String]? = nil,
     res: FontResources? = nil, autoPageNumber: Bool = false,
-    headHfOverride: [Int: HFOverride]? = nil, footHfOverride: [Int: HFOverride]? = nil
+    headHfOverride: [Int: HFOverride]? = nil, footHfOverride: [Int: HFOverride]? = nil,
+    footerInUse: Bool? = nil,
+    headersPcl: [Int: [HFPrintControl]]? = nil,
+    footersPcl: [Int: [HFPrintControl]]? = nil
 ) -> [[UInt8]] {
     guard let resolved = resolveHeadFootLines(doc, pageNo: pageNo, pageHeight: pageHeight,
                                               lead: lead, size: size, left: left,
                                               printed: printed, headers: headers,
                                               footers: footers, autoPageNumber: autoPageNumber,
                                               headHfOverride: headHfOverride,
-                                              footHfOverride: footHfOverride)
+                                              footHfOverride: footHfOverride,
+                                              footerInUse: footerInUse,
+                                              headersPcl: headersPcl,
+                                              footersPcl: footersPcl)
     else { return [] }
 
     /// One already-resolved header/footer LINE's ops (register C6). `fontIdx` is the
@@ -771,14 +856,55 @@ func runningOps(
     // deliberate exclusion. Applying it here is byte-identical across the corpus anyway: no
     // document's running head carries cp437 code 158.
     let euro = pesetaMeansEuro(doc)
-    var ops: [[UInt8]] = []
-    for (_, text, y, fontIdx, x0, styleAttrs) in resolved.headers {
-        ops += hfLineOps(euroText(text, euro), y: y, fontIdx: fontIdx, x0: x0,
-                         styleAttrs: styleAttrs)
+
+    /// The rectangles a running head/foot's own 0x0F USER PRINT CONTROLS draw, at this
+    /// line's own resolved position (2026-09-12, cause 10 of the ws7-prints/v4 triage).
+    ///
+    /// A print control's display string is SCREEN-ONLY -- `ParseWS.swift` excises it
+    /// from the header text (see `Document.headerPcl`) -- and what WS7 actually sends
+    /// is the control's raw printer payload. The body-text path has drawn these since
+    /// register C2 (`lineOpsPrinted`'s own `.pctl` branch); a running head drew nothing
+    /// at all and printed the string as words instead. MEASURED against real WS7
+    /// (`ws7-prints/v4`, PRISTINE.EXE): `sawyer/LSRBOX/LSRBOX.WS` -- whose `.h1` IS a
+    /// LaserJet box-drawing control -- has 38 rectangles on page 1 and 2 on every page
+    /// after it; this engine drew 17 and 0.
+    ///
+    /// The anchor, the frame correction and the gray restore are all the SAME ones the
+    /// body path uses. Every control in the corpus's running heads declares HMI 0 (a
+    /// rule-drawing control moves the print position not at all), so `x` never advances
+    /// here; the advance is applied anyway, from the control's own declared HMI.
+    func hfPclOps(_ controls: [HFPrintControl], y: Double, x0: Double) -> [[UInt8]] {
+        var out: [[UInt8]] = []
+        var x = x0
+        for control in controls {
+            if let idx = control.pcl, idx >= 0, idx < doc.pclPrograms.count {
+                let prog = parsePCLProgram(doc.pclPrograms[idx])
+                out += pclRectOps(prog,
+                                  anchorX: x + Double(pclAbsXOffsetUnits) * pclUnitPt,
+                                  anchorY: y - Double(pclAbsYOffsetUnits) * pclUnitPt,
+                                  pageHeight: Double(pageHeight), restoreGray: 0.0)
+            }
+            x += Double(control.hmi) / hmiPerPoint
+        }
+        return out
     }
-    for (_, text, y, fontIdx, x0, styleAttrs) in resolved.footers {
+
+    var ops: [[UInt8]] = []
+    let hdrPcl = headersPcl ?? [:]
+    let ftrPcl = footersPcl ?? [:]
+    for (n, text, y, fontIdx, x0, styleAttrs) in resolved.headers {
         ops += hfLineOps(euroText(text, euro), y: y, fontIdx: fontIdx, x0: x0,
                          styleAttrs: styleAttrs)
+        if printed, let controls = hdrPcl[n], !controls.isEmpty {
+            ops += hfPclOps(controls, y: y, x0: x0)
+        }
+    }
+    for (n, text, y, fontIdx, x0, styleAttrs) in resolved.footers {
+        ops += hfLineOps(euroText(text, euro), y: y, fontIdx: fontIdx, x0: x0,
+                         styleAttrs: styleAttrs)
+        if printed, let controls = ftrPcl[n], !controls.isEmpty {
+            ops += hfPclOps(controls, y: y, x0: x0)
+        }
     }
     if let auto = resolved.auto {
         var op = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
@@ -1576,11 +1702,15 @@ private func lineOpsPrinted(
             let targetX = left + Double(tabHMI) / hmiPerPoint
             let leaderByte = seg.tabLeader ?? 0x20
             if targetX <= x {
-                // Overrun guard, the standard degenerate tab case: the stop is at or
-                // behind the pen already. Never move backward -- advance by a single
-                // space width instead, the same document-column measure the fill branch
-                // below uses.
-                x += Double(size) * 0.6
+                // The stop is at or behind the pen already. WordStar collapses such a tab
+                // to ZERO width: it does not move the pen backward, and it does not spend
+                // a column either. MEASURED on sawyer/REF/FONT-TAG.CMP (v4 capture, page
+                // 1): `Bit #:` ends at exactly 273.6pt, which is exactly where its
+                // following tab aims, and WS7 prints `#:Usage:` as one continuous run with
+                // `Usage:` at 273.6 -- no gap at all. This used to advance by one document
+                // column (`size * 0.6`), which put every following word on the line 7.2pt
+                // too far right.
+                ()                               // no ink, no advance
             } else if leaderByte == 0x20 {
                 // A PLAIN tab (hard/soft/decimal/center/right types all degrade to space
                 // padding -- see `tabColumns`): WS7 prints NO ink here at all, only a
@@ -1880,21 +2010,44 @@ private func lineOpsPrinted(
         let want = hundredths(scale ?? tzDefault)
         let symbolBold = seg.family == .symbol && seg.styles.contains(.bold)
         let symbolItalic = seg.family == .symbol && seg.styles.contains(.italic)
-        if symbolBold || symbolItalic {
-            ops.append(symbolStyleOp(
-                font: font, pt: pt, rise: rise, want: want, tzState: &tzState,
-                x: x, y: y, textBytes: esc(seg.text), isBold: symbolBold,
-                isItalic: symbolItalic))
-        } else {
-            var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
-            if want != tzState {
-                op += Array("\(fixedTwoDecimal(hundredths: want)) Tz ".utf8)
-                tzState = want
+        // BLANKS PUT NO INK ON THE PAPER (planning #270 item 39 / triage Q6,
+        // 2026-09-14; port of ctrl-kd). A run that is all whitespace draws no glyph in
+        // any face, so it gets no text-showing op; it still moves the print position,
+        // which is why `x += w` below stays unconditional. This is not a new rule — it
+        // is the SAME test the justified branch above has always applied
+        // (`text.contains(where: { !$0.isWhitespace })`), finally asked here too, and
+        // `rules` has ALWAYS returned empty for a whitespace-only run. So the invisible
+        // `Tj` was the last and only thing such a run still put in the stream, and it is
+        // what goes. Continuous underlining across the blanks INSIDE a mixed run is
+        // untouched: that rule is drawn by the run carrying the letters, over its own
+        // full width, spaces included.
+        //
+        // It is a real fidelity defect, not tidiness. Real WS7 never sends blanks to the
+        // printer — a PCL stream moves the cursor instead — so a blank text op is ink no
+        // capture can contain. Measured on `-HOLYMAC.WS` pages 12-13: a WordStar SCREEN
+        // DIAGRAM whose text line ends in a bare CR (a real `^PM` overprint) and is
+        // overprinted by a line of 78 blanks carrying the box's right-hand rule. The
+        // engine's glyphs landed on WS7's own word positions to the decipoint, but the
+        // blanks drawn ACROSS them cut every word underneath into single letters for any
+        // reader that forms words from characters — 32 divergences reported as "WS7 word
+        // missing" for text that was on the page all along.
+        if seg.text.contains(where: { !$0.isWhitespace }) {
+            if symbolBold || symbolItalic {
+                ops.append(symbolStyleOp(
+                    font: font, pt: pt, rise: rise, want: want, tzState: &tzState,
+                    x: x, y: y, textBytes: esc(seg.text), isBold: symbolBold,
+                    isItalic: symbolItalic))
+            } else {
+                var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
+                if want != tzState {
+                    op += Array("\(fixedTwoDecimal(hundredths: want)) Tz ".utf8)
+                    tzState = want
+                }
+                op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                op += esc(seg.text)
+                op += Array(") Tj ET".utf8)
+                ops.append(op)
             }
-            op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-            op += esc(seg.text)
-            op += Array(") Tj ET".utf8)
-            ops.append(op)
         }
         ops += rules(seg.styles, seg.text, x: x, y: y, w: w, continuous: ulContinuous)
         x += w
@@ -1976,10 +2129,16 @@ func pageStream(
     // FIRST line is never treated as a "new column" -- it already got its correct
     // position from `y`'s initial assignment above.
     var prevCol = pagelines.first?.col
+    // planning #227 follow-up (2026-09-12): a new column restarts at the COLUMNAR
+    // REGION's own top on this sheet (`Page.columnTopOffsetPt`, the height of whatever
+    // non-columnar prefix the sheet opened with), not at the sheet's own first text
+    // line -- measured against real WS7, see `applyColumns`. 0.0 on a sheet the region
+    // owns outright, which is what the reset used to assume unconditionally.
+    let columnTopOffsetPt = pagelines.columnTopOffsetPt ?? 0.0
     for (n, line) in pagelines.enumerated() {
         if n > 0, !prevOverprint {
             if let curCol = line.col, curCol != prevCol {
-                y = Double(pageHeight - top) - (line.lead ?? lead)
+                y = Double(pageHeight - top) - columnTopOffsetPt - (line.lead ?? lead)
             } else {
                 y -= line.lead ?? lead
             }
@@ -2082,7 +2241,7 @@ func pageStream(
         // space-run, and each segment costs a text-showing operator. Merging runs that share
         // styles changes nothing on paper and divides the stream size by roughly ten.
         for span in coalesced {
-            if span.text.isEmpty {
+            if span.text.isEmpty && span.tabHMI == nil {
                 continue                       // no operator, and no advance either
             }
             let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
@@ -2166,7 +2325,13 @@ func attachJustifyWordXPrinted(_ doc: Document, _ pages: inout [Page], size: Int
             guard let justifyRightX = line.justifyRightX else { continue }
             var segs: [LineSegment] = []
             for span in coalesce(line) {
-                if span.text.isEmpty { continue }
+                // A tab whose own width rounds to no whole column contributes NO
+                // characters -- but it is still a positioning instruction, and the span
+                // carrying its target is the only thing that carries the stop. Real WS7
+                // moves the pen there and prints nothing (measured, sawyer/MICKEE/
+                // MICKEE.WS page 23: a 90-HMI leading tab, half a 10-CPI column, starts
+                // the line at 10.8pt where the margin alone is 7.2pt).
+                if span.text.isEmpty && span.tabHMI == nil { continue }
                 let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
                 segs.append(LineSegment(text: rendered.text, styles: span.styles,
                                         family: rendered.family, size: rendered.size,
@@ -2234,7 +2399,13 @@ func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int
             else { continue }
             var segs: [LineSegment] = []
             for span in coalesce(line) {
-                if span.text.isEmpty { continue }
+                // A tab whose own width rounds to no whole column contributes NO
+                // characters -- but it is still a positioning instruction, and the span
+                // carrying its target is the only thing that carries the stop. Real WS7
+                // moves the pen there and prints nothing (measured, sawyer/MICKEE/
+                // MICKEE.WS page 23: a 90-HMI leading tab, half a 10-CPI column, starts
+                // the line at 10.8pt where the margin alone is 7.2pt).
+                if span.text.isEmpty && span.tabHMI == nil { continue }
                 let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
                 segs.append(LineSegment(text: rendered.text, styles: span.styles,
                                         family: rendered.family, size: rendered.size,
@@ -2315,6 +2486,7 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
     let left = printedLeft(doc, size: size)
     let pageHeight = resolvedPageHeight(doc, printed: true)
     let pgnumCheckpointsList = pgnumCheckpoints(doc)
+    let pgnumOnPage = pgnumByPage(pgnumCheckpointsList, pages)
     let pageNumbers = resolvePageNumbers(pnCheckpoints(doc), pages)
     for pi in pages.indices {
         // planning #251 part d fix (found by the app coder, job 348 follow-up:
@@ -2380,8 +2552,8 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
             pageDoc.page = eff
         }
         let autoPageNumber: Bool
-        if let pageMaxBi = page.compactMap(\.bi).max() {
-            autoPageNumber = pgnumAt(pgnumCheckpointsList, pageMaxBi)
+        if page.compactMap(\.bi).max() != nil {
+            autoPageNumber = pgnumOnPage[pi]
         } else if let fallbackBi = page.explicitBreakBI {
             autoPageNumber = pgnumAt(pgnumCheckpointsList, fallbackBi)
         } else {
@@ -2391,7 +2563,8 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
             pageDoc, pageNo: pageNumbers[pi], pageHeight: pageHeight, lead: lead, size: size,
             left: pageLeft, printed: true, headers: headersIn, footers: footersIn,
             autoPageNumber: autoPageNumber,
-            headHfOverride: headHfOverrideIn, footHfOverride: footHfOverrideIn)
+            headHfOverride: headHfOverrideIn, footHfOverride: footHfOverrideIn,
+            footerInUse: page.footerInUse)
         else { continue }
         // Planning #255: `styleAttrs` is a PDF-render-time concern only, applied by
         // `runningOps`'s `hfLineOps` -- the page-lines MODEL keeps its pre-existing
@@ -2441,27 +2614,34 @@ private func joined(_ chunks: [[UInt8]], separator: UInt8) -> [UInt8] {
 @Sendable
 public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> [UInt8] {
-    var doc = doc
-    // `options.pageSettings`: replacement geometry for everything the document does not
-    // declare itself (a field is overridden only when its own resolved value is still
-    // this project's built-in default — a document's own dot commands always win). This
-    // exists because WordStar's stock defaults are not what a given machine printed:
-    // WSCHANGE patches them per installation. Applied to a local COPY of `doc` — a value
-    // type, so there is nothing to restore afterward, unlike Python's save/try/finally
-    // dance around a shared mutable `doc.meta['page']`. Shared with the CLI's own
-    // once-per-document application (`Run.swift`) via `effectivePage` (EmitOptions.swift).
-    if let pageSettings = options.pageSettings, let page = doc.page {
-        doc.page = effectivePage(page, settings: pageSettings)
-    }
+    // `mode == .printed || isPrinted(doc)` used to be resolved BETWEEN the two geometry
+    // steps below; it now precedes both, which changes nothing — `isPrinted` reads
+    // `detection`/`columnar`, never `page`, and neither step touches either.
     let printed = mode == .printed || isPrinted(doc)
+    // The page geometry this emitter actually lays out: `options.pageSettings` folded in,
+    // then Printed's `.pr or=l` rotation on top of it. BOTH steps, and their order, now
+    // live in `resolvedGeometryDocument` (PDFLayout.swift) — they were written inline here
+    // and `printedMetrics` (PrintedGeometry.swift), the façade the app draws the Printed
+    // page from, did neither. See that function's own comment for the whole account.
+    var doc = resolvedGeometryDocument(doc, printed: printed, options: options)
+    // planning #270 item 42 (ruled 2026-09-14): "The page number merge variable should be
+    // substituted for page numbers in Modern PDF and RTF. And it should be controlled by
+    // the page number flag."
+    //
+    // `off` REMOVES it, on both paged paths: with no number to show there is nothing left
+    // for the variable to say, so it goes exactly the way it goes on a page-less surface
+    // (`mergePagenoDropped`, the same function HTML/Markdown/text call). `auto`/`on`
+    // substitute -- Printed after pagination, where it is exact by construction, and
+    // Modern before the flow is built, which is what `mergePagenoModern` is for. `.op`
+    // does NOT enter into it: a variable the author TYPED is an explicit request, the
+    // same exemption WSFORMAT.TXT records for a `#` in a running head.
+    if options.pageNumbers == .off {
+        doc = mergePagenoDropped(doc)
+    } else if !printed {
+        doc = mergePagenoModern(doc, options: options)
+    }
     // N9 (b33 field notes): mode-aware default, flag overrides either way.
     let ssOn = resolveSentenceSpacing(options.sentenceSpacing, printed: printed)
-    // b24 round 17 (RULINGS-LEDGER row 2): `.pr or=l` — Printed only, same doctrine as
-    // every other Printed-only geometry item. Applied AFTER `pageSettings` (matches
-    // ctrl-kd: page-settings replacement geometry, then orientation swap on top of it).
-    if printed, doc.formatting.orientation == .landscape, let page = doc.page {
-        doc.page = landscapePage(page)
-    }
     // THE STREAMS ARE WRITTEN FIRST: which base-14 fonts the document actually uses is only
     // known once every span has been laid out, and the resource table has to name them all.
     // `res` is a class (reference semantics), shared by every page, so `/Fn` numbering is
@@ -2548,6 +2728,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         // regardless of this option.
         let pageNumbersMode = options.pageNumbers
         let pgnumCheckpointsList = pageNumbersMode == .auto ? pgnumCheckpoints(doc) : nil
+        let pgnumOnPage = pgnumCheckpointsList.map { pgnumByPage($0, pages) }
         var built: [[UInt8]] = []
         for (i, page) in pages.enumerated() {
             // Per-page header/footer state, replayed from `doc.hfEvents` through
@@ -2647,17 +2828,20 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
             let pageLeft = ((pageGeomChanged || page.poParity) ? page.poCols : nil)
                 .map { resolveLeftPt($0, size: size) } ?? left
             // Register b31, E3 item 2: resolve THIS page's own automatic-number state.
-            // `--headers off` already suppresses page numbers per its own documented
-            // scope ("headers, footers, and page numbers"); `.on`/`.off` need no
-            // page-level lookup at all, `.auto` resolves from the SAME block-index range
-            // `resolvePageNumbers` uses.
+            // The two flags are SEPARATE (planning #264 R7, ruled 2026-09-14):
+            // `--headers` governs running heads and feet — and therefore a `#` the
+            // author typed INSIDE one, which is part of that head's text — while
+            // `--page-numbers` governs WordStar's own automatic number, the one `.pc`
+            // positions, alone. `--headers off` no longer suppresses it. `.on`/`.off`
+            // need no page-level lookup at all, `.auto` resolves from the SAME
+            // block-index range `resolvePageNumbers` uses.
             let autoPageNumber: Bool
-            if !options.headers || pageNumbersMode == .off {
+            if pageNumbersMode == .off {
                 autoPageNumber = false
             } else if pageNumbersMode == .on {
                 autoPageNumber = true
-            } else if let checkpoints = pgnumCheckpointsList, let pageMaxBi = page.compactMap(\.bi).max() {
-                autoPageNumber = pgnumAt(checkpoints, pageMaxBi)
+            } else if let onPage = pgnumOnPage, page.compactMap(\.bi).max() != nil {
+                autoPageNumber = onPage[i]
             } else if let checkpoints = pgnumCheckpointsList, let fallbackBi = page.explicitBreakBI {
                 // #228: a page with no lines at all has no `.bi` to read -- true
                 // of both an ordinary degenerate page (kept `false`, as before)
@@ -2676,7 +2860,18 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                      footers: options.headers ? page.footers : [:],
                                      res: res, autoPageNumber: autoPageNumber,
                                      headHfOverride: options.headers ? page.headHfOverride : nil,
-                                     footHfOverride: options.headers ? page.footHfOverride : nil)
+                                     footHfOverride: options.headers ? page.footHfOverride : nil,
+                                     // "Is a footer in use" is a property of the
+                                     // DOCUMENT, never of the `--headers` flag
+                                     // (planning #264 R7): WordStar's automatic number
+                                     // is off whenever the file declares a `.fo`,
+                                     // whether or not we are drawing that footer. So it
+                                     // is handed over unconditionally — byte-identical
+                                     // under `--headers on`, where `nil` already meant
+                                     // exactly `!footers.isEmpty` to `runningOps`.
+                                     footerInUse: page.footerInUse ?? !page.footers.isEmpty,
+                                     headersPcl: options.headers ? page.headerPcl : nil,
+                                     footersPcl: options.headers ? page.footerPcl : nil)
             built.append(pageStream(page, top: pageTop, pageHeight: pageHeight, lead: lead,
                                     size: size, left: left, running: running,
                                     fonts: fonts, res: res, colourMap: colourMap,

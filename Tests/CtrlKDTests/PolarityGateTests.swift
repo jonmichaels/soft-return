@@ -78,7 +78,11 @@ func violatingTags(rawStyles: Style, cleanedStream: [UInt8]) -> [(style: Style, 
 @Test func ordinaryToggleProducesNoViolation() throws {
     // ^S...^S (0x13, underline) really is in the text stream -- the style it produces
     // is legitimately explained, not a violation.
-    let data = bytes("plain ") + [0x13] + bytes("underlined") + [0x13] + bytes(" text\r\n")
+    var data = bytes("plain ")
+    data += [0x13]
+    data += bytes("underlined")
+    data += [0x13]
+    data += bytes(" text\r\n")
     #expect(inlinePolarityViolations(data).isEmpty)
 }
 

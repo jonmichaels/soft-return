@@ -241,14 +241,18 @@ private func manyWords(_ n: Int) -> String {
     }
     var lines: [Line] = []
     // Line 1 carries the first 12 references; their notes all fit the page-1 area.
+    // A mark's TEXT IS ITS REFERENCE NUMBER, 1-based into `doc.notes` — the printed
+    // body resolves marks by that number (ctrl-kd's `k = int(s.text)`), so a fixture
+    // has to number them the way the parser does. These used to all read "0", which
+    // only worked while the resolver walked the note list positionally instead.
     lines.append(Line(spans: [Span(text: "Line 1")]
-        + (1...12).map { _ in Span(text: "0", styles: [.sup, .fnref]) }))
+        + (1...12).map { Span(text: "\($0)", styles: [.sup, .fnref]) }))
     for k in 2...24 {
         lines.append(Line(spans: [Span(text: "Line \(k)")]))
     }
     // The divergent line: 3 more references, of which only 2 notes still fit below.
     lines.append(Line(spans: [Span(text: "Tail")]
-        + (1...3).map { _ in Span(text: "0", styles: [.sup, .fnref]) }))
+        + (13...15).map { Span(text: "\($0)", styles: [.sup, .fnref]) }))
     lines.append(Line(spans: [Span(text: "After")]))
     doc.blocks = [Block(kind: .para, lines: lines)]
 

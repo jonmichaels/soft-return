@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Testing
 @testable import SoftReturn
 
@@ -19,6 +20,10 @@ import Testing
 ///   style-control             94    "Modern"                  40.26       53.74
 ///   page-size-control         94    "Custom"                  40.37       53.63
 ///   zoom-control               88    "Actual"                  33.01       54.99
+///
+/// Batch 20 (#271 M4): "Actual" became "Actual Size", the zoom control's widest candidate, and its
+/// `fixedWidth` went from 88 to 107pt (measured: 102pt after the 5pt reduction). The other four
+/// controls are unchanged.
 ///
 /// Jon's "Embedded" is the second-tightest, not the tightest — `variant-control`'s
 /// "Printstream" edges it out by about 1.3pt. Both, and everything else, carry 48pt+ of slack,
@@ -57,7 +62,7 @@ import Testing
     private static let candidatesByControl: [(identifier: String, titles: [String])] = [
         ("variant-control", ["WS4", "WS5+", "Printstream", "Text"]),
         ("style-control", ViewStyle.allCases.map(\.displayName)),
-        ("zoom-control", ["Fit", "Actual"] + ZoomSetting.steps.map { "\($0)%" }),
+        ("zoom-control", ["Fit", "Actual Size"] + ZoomSetting.steps.map { "\($0)%" }),
         ("page-size-control", NamedPageSize.allCases.map(\.shortName) + ["Custom"]),
         ("page-settings-control",
          [DocumentOperations.PageSettingsPreset.embeddedChoiceName]
@@ -67,12 +72,13 @@ import Testing
     // MARK: - The reduction actually applied: each button is exactly 5pt narrower than before
 
     /// Pinned to the pre-job-454 widths themselves (109/94/88/94/106 — this suite's own
-    /// measurement, taken before `buttonWidthReduction` existed) so this fails if the
-    /// reduction ever drifts from Jon's "same amount lost on each, 5pt."
+    /// measurement, taken before `buttonWidthReduction` existed; zoom is 107 since batch 20's
+    /// "Actual Size") so this fails if the reduction ever drifts from Jon's "same amount lost on
+    /// each, 5pt."
     @Test @MainActor func everyButtonLostExactlyFivePointsUniformly() throws {
         let bar = try Self.makeBar()
         let beforeWidths: [String: CGFloat] = [
-            "variant-control": 109, "style-control": 94, "zoom-control": 88,
+            "variant-control": 109, "style-control": 94, "zoom-control": 107,
             "page-size-control": 94, "page-settings-control": 106,
         ]
         for (identifier, before) in beforeWidths.sorted(by: { $0.key < $1.key }) {

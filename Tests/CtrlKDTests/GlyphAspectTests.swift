@@ -126,7 +126,11 @@ private func curveBBox(_ ops: String) -> (w: Double, h: Double)? {
 @Test func convertWSBulletSquareEndToEnd() throws {
     // CONVERT.WS's own '■' bullet, through the real parse+emit pipeline (not a
     // synthetic graphicOps call) -- the exact document the round-20 brief named.
-    let font = ws7Block(0x02, payload: le16(240) + le16(480) + le16(0) + [UInt8](repeating: 0, count: 6))
+    var payload129: [UInt8] = le16(240)
+    payload129 += le16(480)
+    payload129 += le16(0)
+    payload129 += [UInt8](repeating: 0, count: 6)
+    let font = ws7Block(0x02, payload:payload129)
     let data = font + [0x1B, 0xFE, 0x1C] + bytes(" bullet line\r\n")
     let doc = parseWS(data)
     let out = emitPDF(doc, mode: .printed)

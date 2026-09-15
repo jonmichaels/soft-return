@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// `export document 1 to file ... as RTF using style modern with footnotes ...` —

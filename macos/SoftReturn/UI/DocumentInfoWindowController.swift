@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 
 /// View ▸ Show Document Info, ⌘I (job 314) — the per-document Inspector.
 ///
@@ -248,7 +249,7 @@ final class DocumentInfoWindowController: NSWindowController {
                 .map { ($0, "—") }
         }
         let style = controller.documentState.style.value.renderStyle
-        return PagePreviewRenderer.info(for: url, style: style, variant: controller.documentState.variant.value)
+        return PagePreviewRenderer.info(for: url, state: controller.documentState, style: style)
     }
 
     /// Job 324's four new fields — word/character counts, declared fonts, note counts, and
@@ -306,25 +307,12 @@ final class DocumentInfoWindowController: NSWindowController {
             + "Annotations \(count(.annotation)) · Comments \(count(.comment))"
     }
 
-    /// Top/left from `printedMetrics`, the SAME façade `DocumentRenderer.renderNative`
-    /// (screen) and `ExportEngine.render`'s Printed-mode PDF export already use — resolved
-    /// through `effectivePage` against the Margins control's current preset first, exactly
-    /// as `renderNative` does, so this can never disagree with what the page actually shows.
-    /// Bottom comes from the same resolved geometry's `mbLines` (a line count) converted with
-    /// `lh48` (WordStar's own 1/48-inch leading unit) — no re-derivation of `printedMetrics`'
-    /// internal arithmetic, which the library keeps deliberately private. WordStar has no
-    /// right-margin dot command (page width is always 8.5in), so there is no fourth figure to
-    /// report.
+    /// Top/left from `printedMetrics` with the document's `printedOptions` — the SAME options
+    /// `DocumentRenderer.renderNative` (screen) and the Printed-mode PDF export lay the page out
+    /// with, the Margins choice and a `.pr or=l` rotation included (#271 M9) — so this can never
+    /// disagree with what the page actually shows. Shared with the iPhone's Document Info.
     @MainActor
     private static func margins(for state: DocumentState) -> String {
-        guard let declaredPage = state.document.page else { return "—" }
-        let page = state.pageSettingsPreset.value.map { effectivePage(declaredPage, settings: $0.settings) } ?? declaredPage
-        var doc = state.document
-        doc.page = page
-        let metrics = printedMetrics(doc)
-        let topIn = metrics.top / 72.0
-        let leftIn = metrics.left / 72.0
-        let bottomIn = page.mbLines * page.lh48 / 48.0
-        return String(format: "Top %.1fin  Bottom %.1fin  Left %.1fin", topIn, bottomIn, leftIn)
+        state.marginsDescription
     }
 }

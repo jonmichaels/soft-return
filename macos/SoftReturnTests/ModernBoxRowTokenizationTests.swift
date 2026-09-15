@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 @testable import SoftReturn
+import SoftReturnShared
 
 /// b27 item 8 — `BOXES.WS`'s box-drawing rows in Modern rendered "completely wrong":
 /// open top-right corner, a stray interior vertical, missing right side, character-array

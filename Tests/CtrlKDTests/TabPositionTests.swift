@@ -38,6 +38,7 @@ import Testing
     func ys(leadIn: [UInt8]) -> [String: Double] {
         // staged: the one-expression form times out the 6.2.4 type-checker
         var data = ws7Block(0x00)
+        data += bytes(".lh a") + HARD          // auto-leading: `fontLeadPt`'s own gate
         data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
         data += fontBlock(helv, points: 18.0, styleBits: 0x8000, width: 250)
         data += bytes("Title") + HARD

@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 
 /// The `document` class's scripting properties — `SoftReturn.sdef`'s `<cocoa key="...">`
 /// targets, one per row of the dictionary's property table. Every property reads and
@@ -23,16 +24,24 @@ extension WSDocument {
         windowControllers.first as? DocumentWindowController
     }
 
+    /// Batch 27: the state a script reads and writes — parsed. A long document a script reaches before its
+    /// background parse returns (a window-less `open`, or simply quickly) is parsed on the spot
+    /// (`ensureParsed`); a script never reads the empty placeholder. A document that cannot be parsed keeps
+    /// answering from the placeholder, as it did before it was read.
+    private var scriptingState: DocumentState {
+        (try? ensureParsed()) ?? state
+    }
+
     // MARK: - variant
 
     @objc dynamic var scriptingVariant: NSNumber {
-        get { ScriptingCodes.nsNumber(ScriptingEnumCoding.variantCodes[state.variant.value] ?? "") }
+        get { ScriptingCodes.nsNumber(ScriptingEnumCoding.variantCodes[scriptingState.variant.value] ?? "") }
         set {
             guard let variant = ScriptingEnumCoding.variant(forCode: newValue.uint32Value) else { return }
             if let controller = scriptingWindowController {
                 controller.setVariant(variant)
             } else {
-                state.setVariant(variant)
+                scriptingState.setVariant(variant)
             }
         }
     }
@@ -46,13 +55,13 @@ extension WSDocument {
     /// window actually shows, honestly, and setting `native` switches the view exactly like
     /// View ▸ Native does, the same path `controller.setStyle` already gives the View menu.
     @objc dynamic var scriptingStyle: NSNumber {
-        get { ScriptingCodes.nsNumber(ScriptingEnumCoding.styleCodes[state.style.value] ?? "") }
+        get { ScriptingCodes.nsNumber(ScriptingEnumCoding.styleCodes[scriptingState.style.value] ?? "") }
         set {
             guard let style = ScriptingEnumCoding.style(forCode: newValue.uint32Value) else { return }
             if let controller = scriptingWindowController {
                 controller.setStyle(style)
             } else {
-                state.style.setManually(style)
+                scriptingState.style.setManually(style)
             }
         }
     }
@@ -66,7 +75,7 @@ extension WSDocument {
         // successfully once to exist at all, so a re-pagination failure here is an edge case
         // with nothing better to report than the same sound default `DiagnosisResult`'s own
         // (nil-tolerant) page count uses.
-        return (try? DocumentOperations.pageCount(data: state.data, variant: state.variant.value)) ?? 1
+        return (try? DocumentOperations.pageCount(data: scriptingState.data, variant: scriptingState.variant.value)) ?? 1
     }
 
     // MARK: - current page
@@ -86,7 +95,7 @@ extension WSDocument {
     /// practice — see `ScriptingEnumCoding.namedZoom(forCode:)`.
     @objc dynamic var scriptingZoom: NSNumber {
         get {
-            switch state.zoom.value {
+            switch scriptingState.zoom.value {
             case .fit: return ScriptingCodes.nsNumber("SRzf")
             case .actual: return ScriptingCodes.nsNumber("SRza")
             case .percent(let pct): return NSNumber(value: pct)
@@ -102,7 +111,7 @@ extension WSDocument {
             if let controller = scriptingWindowController {
                 controller.setZoom(setting)
             } else {
-                state.zoom.setManually(setting)
+                scriptingState.zoom.setManually(setting)
             }
         }
     }
@@ -111,7 +120,7 @@ extension WSDocument {
 
     @objc dynamic var scriptingPageSize: NSNumber {
         get {
-            guard let size = state.pageSize.value,
+            guard let size = scriptingState.pageSize.value,
                   let code = ScriptingEnumCoding.pageSizeCodes[size]
             else { return NSNumber(value: 0) }
             return ScriptingCodes.nsNumber(code)
@@ -121,7 +130,7 @@ extension WSDocument {
             if let controller = scriptingWindowController {
                 controller.setPageSize(size)
             } else {
-                state.setPageSize(size)
+                scriptingState.setPageSize(size)
             }
         }
     }
@@ -129,17 +138,17 @@ extension WSDocument {
     // MARK: - modern font / modern size
 
     @objc dynamic var scriptingModernFont: String {
-        get { state.modernFontName }
+        get { scriptingState.modernFontName }
         set {
-            state.modernFontName = newValue
+            scriptingState.modernFontName = newValue
             scriptingWindowController?.rerender()
         }
     }
 
     @objc dynamic var scriptingModernSize: NSNumber {
-        get { NSNumber(value: state.modernFontSize) }
+        get { NSNumber(value: scriptingState.modernFontSize) }
         set {
-            state.modernFontSize = newValue.intValue
+            scriptingState.modernFontSize = newValue.intValue
             scriptingWindowController?.rerender()
         }
     }
@@ -147,9 +156,9 @@ extension WSDocument {
     // MARK: - show invisibles
 
     @objc dynamic var scriptingShowInvisibles: Bool {
-        get { state.showInvisibles }
+        get { scriptingState.showInvisibles }
         set {
-            state.showInvisibles = newValue
+            scriptingState.showInvisibles = newValue
             scriptingWindowController?.rerender()
         }
     }
@@ -164,6 +173,8 @@ extension WSDocument {
     /// receiver already IS the document.
     @objc func handleExportScriptCommand(_ command: NSScriptCommand) -> Any? {
         do {
+            // Batch 27: the document parsed, even when no window has waited for it.
+            let state = try ensureParsed()
             let settings = SettingsStore.shared
             let args = try ExportCommand.decode(
                 arguments: command.evaluatedArguments ?? [:],

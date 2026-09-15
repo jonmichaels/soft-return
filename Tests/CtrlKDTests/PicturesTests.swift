@@ -675,7 +675,14 @@ private enum TestFSError: Error { case notFound }
 }
 
 @Test func diagnoseOmitsPixKeyWhenNoGraphics() throws {
-    let data = bytes("word") + SOFT + bytes("word") + SOFT + bytes("word") + SOFT + bytes("Plain.") + HARD
+    var data = bytes("word")
+    data += SOFT
+    data += bytes("word")
+    data += SOFT
+    data += bytes("word")
+    data += SOFT
+    data += bytes("Plain.")
+    data += HARD
     let value = diagnose(path: "/doc/LETTER.WS", data: data,
                          environment: fakeFSEnvironment(dirs: [:], files: [:]))
     guard case .object(let obj) = value else {

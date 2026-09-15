@@ -14,13 +14,21 @@
 /// (PDFLayout.swift). Nothing in this file is modified when the emitter's arithmetic
 /// changes — it re-exports whatever the emitter now says.
 ///
-/// Pair it with `docToPagelines(doc, printed: true)` (already public), which supplies the
-/// laid-out lines this describes the geometry for.
+/// Pair it with `docToPagelines(printedDocument(doc, options: options), printed: true)`
+/// (both public), which supplies the laid-out lines this describes the geometry for —
+/// `printedDocument` because a `.pr or=l` document is laid out on its ROTATED page, and
+/// handing `docToPagelines` the raw `doc` anchors its running content to the wrong sheet.
 public struct PrintedPageMetrics: Hashable, Sendable {
-    /// Paper width. Constant at 612pt (8.5in): WordStar has no page-WIDTH dot command, so
-    /// every named size the library resolves shares 8.5in — see `namedPageHeights`
-    /// (ParseWS.swift). Exposed anyway so callers size a page from one struct rather than
-    /// reaching for `PDFMetrics.pageWidth` separately and assuming they match.
+    /// Paper width, in points — the file's own `.pl`-derived `pwIn`, which is 612 (8.5in)
+    /// for every PORTRAIT document, because WordStar has no page-WIDTH dot command and
+    /// every named size it resolves shares an 8.5in width (see `namedPageSizes`,
+    /// ParseWS.swift).
+    ///
+    /// ⚠️ NOT a constant. A document that declares `.pr or=l` is rotated for Printed
+    /// (`landscapePage`, PDFLayout.swift): sawyer/REF/BOOKLET.RJS (`.pr or=l`, `.pl 8.5"`)
+    /// is a 792x612 page, and its `pageHeight`/`capacity` are the SHORT edge's. This field
+    /// hard-coded `PDFMetrics.pageWidth` until planning #271 M2 (2026-09-13) and the app's
+    /// Native view drew every landscape document on a portrait sheet because of it.
     public let pageWidth: Double
     /// Paper height, from the file's `.pl` (via `heightIn`), or 11in when it declared none.
     public let pageHeight: Double
@@ -83,14 +91,47 @@ public struct PrintedPageMetrics: Hashable, Sendable {
     public var charWidth: Double { Double(size) * 0.6 }
 }
 
+/// The document `emitPDF` lays out in Printed mode: `options.pageSettings` folded in, then
+/// the `.pr or=l` landscape rotation on top of it — exactly the two steps, in exactly the
+/// order, `emitPDF` opens with (they share one implementation, `resolvedGeometryDocument`
+/// in PDFLayout.swift; neither this file nor the emitter writes that order down twice).
+///
+/// A caller that lays out pages itself must paginate THIS document, not the one it parsed:
+/// `docToPagelines(printedDocument(doc), printed: true)`. Line CAPACITY does not move with
+/// the rotation (it is `.pl` - `.mt` - `.mb`, a line count), but everything anchored off
+/// the page's own HEIGHT does: the running head/foot and automatic page number
+/// (`attachHeadFootLinesPrinted`), the note area's bottom-anchor arithmetic
+/// (`layoutPrintedPages`), and the text measure a `.PIX` is fitted to (`printedTextWidthPt`,
+/// off `pwIn`). Handing `docToPagelines` the parsed document instead puts those in the
+/// wrong place — measurably, and in the same direction, for every landscape document.
+///
+/// `printedMetrics` below describes this same document's geometry; the two always agree
+/// because both start here. Modern mode does not rotate (ruled 2026-08-06, "the page is the
+/// document's declared size") — see `landscapePage`'s own comment — so there is no
+/// `modernDocument` companion: Modern reads `doc` as parsed.
+public func printedDocument(_ doc: Document,
+                            options: EmitOptions = EmitOptions()) -> Document {
+    resolvedGeometryDocument(doc, printed: true, options: options)
+}
+
 /// The Printed-mode geometry `emitPDF` would use for this document.
 ///
-/// Every value delegates to the emitter's own helper — see the type's doc comment for why
-/// this file recomputes nothing.
-public func printedMetrics(_ doc: Document) -> PrintedPageMetrics {
+/// Every value delegates to the emitter's own helper, over `printedDocument(doc,
+/// options:)` — the same rotated/overridden document the emitter lays out (planning #271
+/// M2). See the type's doc comment for why this file recomputes nothing.
+///
+/// `options` defaults to `EmitOptions()`, so an existing call site that passes nothing
+/// keeps the geometry it had for every document that declares no `.pr or=l`; pass the SAME
+/// options the export will use, or a `--page-settings` preset moves the exported page out
+/// from under the screen's.
+public func printedMetrics(_ doc: Document,
+                           options: EmitOptions = EmitOptions()) -> PrintedPageMetrics {
+    let doc = printedDocument(doc, options: options)
     let typeSize = printedSize(doc)
     return PrintedPageMetrics(
-        pageWidth: Double(PDFMetrics.pageWidth),
+        // `emitPDF`'s own MediaBox width, verbatim (PDFWriter.swift): the page's resolved
+        // `pwIn`, which `landscapePage` has already swapped for a landscape document.
+        pageWidth: Double(roundHalfToEven((doc.page?.pwIn ?? 8.5) * 72.0)),
         pageHeight: Double(resolvedPageHeight(doc, printed: true)),
         top: Double(printedTop(doc)),
         lead: printedLead(doc),

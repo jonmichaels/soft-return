@@ -20,31 +20,33 @@ import Testing
 
 // MARK: - 1. Info.plist: the exact values, verbatim
 
-@Test func infoPlistDeclaresTheExactSparkleFeedAndKey() {
-    // v4-assembly merge (job 537, rulings 20-21): ONE public appcast on the public repo's
-    // `main` branch, not a separate per-branch feed -- beta releases live in the same appcast,
-    // tagged <sparkle:channel>beta</sparkle:channel>, admitted via AppDelegate's
-    // allowedChannels(for:) delegate. Was `.../beta/appcast.xml` under job 532 alone.
-    #expect(Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ==
-        "https://raw.githubusercontent.com/jonmichaels/soft-return/main/appcast.xml")
-    #expect(Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ==
-        "kr6g0tYp6dxnphj1ALl88fhaVn2VWho+OAZpK239GB4=")
-}
+@Suite struct SparkleUpdateWiringTests {
+    @Test func infoPlistDeclaresTheExactSparkleFeedAndKey() {
+        // v4-assembly merge (job 537, rulings 20-21): ONE public appcast on the public repo's
+        // `main` branch, not a separate per-branch feed -- beta releases live in the same appcast,
+        // tagged <sparkle:channel>beta</sparkle:channel>, admitted via AppDelegate's
+        // allowedChannels(for:) delegate. Was `.../beta/appcast.xml` under job 532 alone.
+        #expect(Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ==
+            "https://raw.githubusercontent.com/jonmichaels/soft-return/main/appcast.xml")
+        #expect(Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ==
+            "kr6g0tYp6dxnphj1ALl88fhaVn2VWho+OAZpK239GB4=")
+    }
 
-// MARK: - 2. State: the real launch built a controller wired to that same feed, dormant under test
+    // MARK: - 2. State: the real launch built a controller wired to that same feed, dormant under test
 
-@Test @MainActor func sparkleUpdaterResolvesTheDeclaredFeedButStaysDormantUnderTest() throws {
-    let delegate = try #require(
-        NSApp.delegate as? AppDelegate,
-        "NSApp.delegate is not the real AppDelegate -- this test must run hosted inside the real app launch to mean anything")
-    #expect(delegate.sparkleUpdaterExistsForTesting,
-            "AppDelegate's real launch never constructed the Sparkle updater controller")
-    #expect(delegate.sparkleFeedURLForTesting ==
-        URL(string: "https://raw.githubusercontent.com/jonmichaels/soft-return/main/appcast.xml"),
-            "the updater's own feedURL must resolve from Info.plist's SUFeedURL, not just exist there")
-    // `XCTestConfigurationFilePath` is set for this very process, so `AppDelegate`'s own
-    // `isTestHost` check must have kept `startingUpdater: false` here -- an unstarted updater
-    // never reports itself checkable, regardless of how a real (non-test) launch would behave.
-    #expect(!delegate.sparkleCanCheckForUpdatesForTesting,
-            "an unstarted-under-test updater should not report itself checkable")
+    @Test @MainActor func sparkleUpdaterResolvesTheDeclaredFeedButStaysDormantUnderTest() throws {
+        let delegate = try #require(
+            NSApp.delegate as? AppDelegate,
+            "NSApp.delegate is not the real AppDelegate -- this test must run hosted inside the real app launch to mean anything")
+        #expect(delegate.sparkleUpdaterExistsForTesting,
+                "AppDelegate's real launch never constructed the Sparkle updater controller")
+        #expect(delegate.sparkleFeedURLForTesting ==
+            URL(string: "https://raw.githubusercontent.com/jonmichaels/soft-return/main/appcast.xml"),
+                "the updater's own feedURL must resolve from Info.plist's SUFeedURL, not just exist there")
+        // `XCTestConfigurationFilePath` is set for this very process, so `AppDelegate`'s own
+        // `isTestHost` check must have kept `startingUpdater: false` here -- an unstarted updater
+        // never reports itself checkable, regardless of how a real (non-test) launch would behave.
+        #expect(!delegate.sparkleCanCheckForUpdatesForTesting,
+                "an unstarted-under-test updater should not report itself checkable")
+    }
 }

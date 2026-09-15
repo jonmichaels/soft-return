@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Testing
 @testable import SoftReturn
 
@@ -79,7 +80,12 @@ enum Oracle {
         return pages.isEmpty || pages.contains(page)
     }
 
-    static var fixtureURLs: [URL] {
+    /// The fixtures a walk measures: every one, narrowed by `SR_DOC` when it is set
+    /// (`CorpusDocumentFilter`).
+    static var fixtureURLs: [URL] { CorpusDocumentFilter.apply(allFixtureURLs) }
+
+    /// Every fixture, unfiltered: for a test that looks one document up by name.
+    static var allFixtureURLs: [URL] {
         let names = ["report.ps", "report-no-extension", "boundary.ws4", "narrow.ws4",
                      "no-dot-commands.ws4", "dropped-chapter.ws4"]
         var urls = names
@@ -770,17 +776,23 @@ enum Oracle {
 /// and with the suites that drive real windows, QuickLook and the UI target. Serializing
 /// them costs nothing when they are the only thing running and stops the full suite from
 /// thrashing.
-@Suite(.serialized) struct GeometryOracleTests {
+@Suite(.tags(.corpus), .serialized) struct GeometryOracleTests {
 
 
 /// An oracle that measures nothing is worse than no oracle: it reports success forever.
 /// If the fixtures cannot be found, every loop below iterates zero times and every assertion
 /// holds vacuously — so this runs first and says the count out loud.
+///
+/// The count is of every fixture, whatever `SR_DOC` says: narrowed to one document, the walks
+/// hold one fixture and that is correct (batch 16). The narrowed walk only has to be non-empty,
+/// and a name matching nothing already fails by name in `CorpusDocumentFilter`.
 @Test @MainActor func theOracleActuallyHasFixturesToMeasure() throws {
-    let urls = Oracle.fixtureURLs
-    #expect(urls.count >= 6,
-            "the oracle found \(urls.count) fixtures — it is measuring nothing")
-    for url in urls {
+    let all = Oracle.allFixtureURLs
+    #expect(all.count >= 6,
+            "the oracle found \(all.count) fixtures — it is measuring nothing")
+    #expect(!Oracle.fixtureURLs.isEmpty,
+            "SR_DOC left this oracle's walks no fixtures — they are measuring nothing")
+    for url in all {
         let bytes = [UInt8]((try? Data(contentsOf: url)) ?? Data())
         #expect(bytes.count > 0, "\(url.lastPathComponent) is empty")
     }
@@ -1198,25 +1210,68 @@ enum Oracle {
 /// Athena's ruling, 2026-09-07: "correct in principle is not enough to land in a release".
 /// A renderer change with no test that observes it is an untested renderer change, whatever
 /// its reasoning. This asserts the behaviour directly against the engine's own numbers.
+///
+/// THE DOCUMENT ARMS AUTO-LEADING (batch 26). MARKUP.WS was this test's document until its
+/// premise stopped holding (b25-filter-geometry). The engine agent measured MARKUP.WS page 1
+/// against its WS7 capture: a flat 12pt grid, all 14 baselines matching. Its first line carries
+/// the document default because auto-leading is a MODE a document turns on (`.lh a` / `.lh
+/// auto`), and MARKUP declares none. So the document is built here, framed like the engine's own
+/// `PDFFontsTests`/`TabPositionTests` fixtures (`Tests/CtrlKDTests/Fixtures.swift`): `.lh a`,
+/// then a first line set in a 20pt proportional face over a 12pt document, which gives page 1's
+/// line 0 a lead of its own.
 @Test @MainActor func aPagesFirstLineConsumesItsOwnLead() throws {
-    let fixture = Oracle.fixtureURLs.first { $0.lastPathComponent == "MARKUP.WS" }
-    let missing = "MARKUP.WS is not in the fixture set — this test needs a document whose "
-        + "page 1 opens on its own `.lh`"
-    let url = try #require(fixture, "\(missing)")
-    let state = try Oracle.state(for: url)
+    func le16(_ value: Int) -> [UInt8] { [UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF)] }
+    /// A WS5+ symmetric sequence: 1D, its length, the command, the payload, the length, 1D.
+    func block(_ command: UInt8, _ payload: [UInt8]) -> [UInt8] {
+        let length = le16(payload.count + 4)
+        var framed: [UInt8] = [0x1D]
+        framed += length
+        framed += [command]
+        framed += payload
+        framed += length
+        framed += [0x1D]
+        return framed
+    }
+    /// A font block: HMI 180, the size in twentieths of a point, and typestyle 5 ("Tms Rmn", the
+    /// engine's `timesTypestyle()`) with the proportional bit.
+    func proportionalTimes(points: Int) -> [UInt8] {
+        var payload = le16(180)
+        payload += le16(points * 20)
+        payload += le16(5 | 0x8000)
+        payload += [UInt8](repeating: 0, count: 6)
+        return block(0x02, payload)
+    }
+    let hard: [UInt8] = [0x0D, 0x0A]
+    // A real WS7 header (release byte 0x60), so the detector reads the fixture as WS7 and parses
+    // its font blocks (the engine's `ws7HeaderBlock()`).
+    var data = block(0x00, [0x60] + [UInt8](repeating: 0, count: 20))
+    data += Array(".lh a".utf8)
+    data += hard
+    data += proportionalTimes(points: 20)
+    data += Array("A first line set large.".utf8)
+    data += hard
+    data += proportionalTimes(points: 12)
+    for number in 1...6 {
+        data += Array("Body line \(number), set at the document's own twelve points.".utf8)
+        data += hard
+    }
+    data += [0x1A]
+    let defaults = UserDefaults(suiteName: "AutoLeadingFirstLine.\(UUID().uuidString)")!
+    let state = try DocumentState(data: data, settings: SettingsStore(defaults: defaults))
+
     let metrics = printedMetrics(state.document)
     let (rendered, _, pages) = Oracle.layOut(state)
     let first = try #require(pages.first)
     let engineLines = Oracle.pagelines(of: state).first?.lines ?? []
-    try #require(engineLines.count > 1, "MARKUP.WS page 1 has fewer than two lines")
+    try #require(engineLines.count > 1, "the auto-leading fixture's page 1 has fewer than two lines")
 
     let ownLead = engineLines[0].lead ?? metrics.lead
     // THE PREMISE, checked rather than assumed: if this document ever stops opening on its
     // own lead, the test below would pass for the wrong reason — every line agreeing with the
     // default proves nothing about whether the first one is allowed its own.
-    let premise = "MARKUP.WS page 1 line 0 no longer carries its own lead (own \(ownLead), "
-        + "document default \(metrics.lead)) — this test can no longer observe the behaviour "
-        + "it exists for and needs a different fixture"
+    let premise = "the auto-leading fixture's page 1 line 0 does not carry its own lead (own "
+        + "\(ownLead), document default \(metrics.lead)) — `.lh a` no longer raises a line to its "
+        + "own face, so this test cannot observe the behaviour it exists for"
     try #require(abs(ownLead - metrics.lead) > 0.5, "\(premise)")
 
     let fragment = first.manager.lineFragmentRect(
@@ -1255,7 +1310,7 @@ enum Oracle {
 /// it fails on the line count AND on the heights. No font change can substitute — coverage-
 /// aware resolution was wired and measured, and made the fragment 14.39.
 @Test @MainActor func everyFragmentIsExactlyItsLeadTall() throws {
-    let fixture = Oracle.fixtureURLs.first { $0.lastPathComponent == "WINGDING.CHT" }
+    let fixture = Oracle.allFixtureURLs.first { $0.lastPathComponent == "WINGDING.CHT" }
     let missing = "WINGDING.CHT is not in the fixture set — this test needs a document whose "
         + "pages are dense with runs in faces taller than the document lead"
     let url = try #require(fixture, "\(missing)")
@@ -1336,7 +1391,7 @@ enum Oracle {
 /// those 4 the way the renderer does, the engine's own leads sum to 741.04 against a usedRect
 /// of 741.00 — four hundredths of a point. The app was right; the comparison was not.
 @Test @MainActor func anOverprintChainIsOneFragment() throws {
-    let fixture = Oracle.fixtureURLs.first { $0.lastPathComponent == "FONTS.REF" }
+    let fixture = Oracle.allFixtureURLs.first { $0.lastPathComponent == "FONTS.REF" }
     let missing = "FONTS.REF is not in the fixture set — this test needs a document with an "
         + "overprint chain on a page"
     let url = try #require(fixture, "\(missing)")
@@ -1759,8 +1814,20 @@ let noTextInkDocuments: [String: String] = [
                                 options: EmitOptions(pixResults: DocumentPictures.resolve(
                                     state.document, docPath: url.path)))
         let appPDF = try Oracle.appNativePDF(for: url, state: state)
+        // A RAISED MARK IS READ ONTO THE LINE IT WAS RAISED FROM, AT THE ROLL IT IS DRAWN AT
+        // (#271 M1). Native draws a superscript or subscript by Printed's own `.sr` roll — a whole
+        // point, `roundHalfToEven(roll48 × 1.5)` — and the app's PDF bakes that into the text
+        // matrix, where the engine's `y` never carries it. The reader's 6pt `riseWindow` covers
+        // the default 4pt; a private test document that sets `.sr 6` draws its "2" 9pt up, and
+        // read at 6pt that mark came back as a line of its own (page 2 at 33 lines against 32),
+        // its layout unchanged. Widening the window instead snapped a 4pt mark on page 1 onto the
+        // heavier line above it, so the app's side is told the rolls themselves; the engine's
+        // side, with no rise in `y`, keeps the plain rule.
+        let rolls48 = [state.document.formatting.subSuperRoll48 ?? 3.0]
+            + state.document.blocks.flatMap { $0.lines.compactMap(\.roll48) }
+        let rises = Set(rolls48.map { ($0 * 1.5).rounded(.toNearestOrEven) }).sorted()
         let engineLines = try AppModernFidelityTests.lines(of: enginePDF)
-        let appLines = try AppModernFidelityTests.lines(of: appPDF)
+        let appLines = try AppModernFidelityTests.lines(of: appPDF, rises: rises)
 
         // COMPARED WITHOUT THE READER'S OWN INVENTIONS, and in the ENGINE'S OWN ALPHABET —
         // see `Oracle.EngineText` for the whole rule and the rows each half of it answers.
@@ -1838,7 +1905,7 @@ let noTextInkDocuments: [String: String] = [
 ///   4.0.3 rather than wait.
 ///
 /// The line count tells them apart, so this prints both and lets the numbers choose.
-@Suite(.serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
+@Suite(.tags(.corpus), .serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct PaginationShiftProbe {
     @Test @MainActor func whyDoBoxChartsPushALineAcrossThePageBreak() throws {
         let wanted: Set<String> = ["WINGDING.CHT", "SYMBOL.CHT", "FONTS.REF",
@@ -2004,11 +2071,11 @@ struct PaginationShiftProbe {
 /// Prints the ENGINE's own spans for the line with their exact texts, and the app's laid-out
 /// storage, with space counts, so "the app drops three" and "the oracle collapses three" can
 /// be told apart. The first is a Native defect; the second is the harness.
-@Suite(.serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
+@Suite(.tags(.corpus), .serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct GraphicRunSpaceProbe {
     @Test @MainActor func whereDoTheSpacesAfterAGraphicRunGo() throws {
         for name in ["FONTS.REF", "-LASERJE.FNT"] {
-            guard let url = Oracle.fixtureURLs.first(where: { $0.lastPathComponent == name })
+            guard let url = Oracle.allFixtureURLs.first(where: { $0.lastPathComponent == name })
             else { continue }
             let state = try Oracle.state(for: url)
             let expected = Oracle.pagelines(of: state)

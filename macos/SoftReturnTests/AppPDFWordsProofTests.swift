@@ -18,7 +18,7 @@ import Testing
 /// Running this the other way round — trusting the extractor because the app's numbers look
 /// plausible — is exactly how a coordinate gate goes quietly wrong, which is why the tier
 /// this feeds is not switched over until this passes.
-@Suite struct AppPDFWordsProofTests {
+@Suite(.tags(.corpus)) struct AppPDFWordsProofTests {
 
     /// Documents to prove against. BOXES is the canonical clean fixed-pitch case; LYING and
     /// -README add a proportional face (Tz-scaled runs) and a picture-bearing page, so the
@@ -30,7 +30,7 @@ import Testing
     /// XObject blind spot already caused once, reported as three app picture bugs that were
     /// mine. PDFKit sees the page independently, so if the glyphs are on it and not in this
     /// extraction, the character-coverage floor fails and names it.
-    static let documents = ["BOXES", "LYING", "-README", "-SCREEN"]
+    static let documents = CorpusDocumentFilter.apply(["BOXES", "LYING", "-README", "-SCREEN"])
 
     static var isArmed: Bool {
         AppNativeFidelityTests.isArmed
@@ -97,6 +97,7 @@ import Testing
 
     @Test(.enabled(if: isArmed, skipReason), arguments: documents)
     @MainActor func ourExtractorAgreesWithCtrlKDsOwn(doc: String) throws {
+        if CorpusDocumentFilter.recordIfUnmatched(doc) { return }
         let pdf = try Self.enginePDF(doc: doc)
         let theirs = try Self.ctrlkdDump(doc: doc)
         let ours = try AppPDFWords.payload(from: pdf)
@@ -180,6 +181,7 @@ import Testing
     /// words.
     @Test(.enabled(if: isArmed, skipReason), arguments: documents)
     @MainActor func ourExtractorAgreesWithPDFKitOnTheAppsOwnQuartzPDF(doc: String) throws {
+        if CorpusDocumentFilter.recordIfUnmatched(doc) { return }
         let pdf = try AppNativeFidelityTests.appNativePDF(forDocumentNamed: doc)
         let ours = try AppPDFWords.payload(from: pdf)
         let document = try #require(PDFDocument(data: Data(pdf)),

@@ -43,7 +43,11 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
 @Test func ws4HighbitToggleRoundtrips() throws {
     // a word ending at a style boundary flags the TOGGLE byte (0x93 = ^S|80)
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = bytes("plain ") + [0x93] + bytes("under") + [0x93] + bytes(" word")
+    var data = bytes("plain ")
+    data += [0x93]
+    data += bytes("under")
+    data += [0x93]
+    data += bytes(" word")
     data += HARD + [0x1A]
     #expect(try rt(data) == data)
 }
@@ -53,14 +57,24 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
 @Test func ws5ProseAndSoftReturns() throws {
     // staged: 6.2.4's type-checker times out on the one-expression form
     var data = bytes("This paragraph wraps at the usual column and keeps going")
-    data += SOFT + bytes("until the author presses Return.") + HARD + HARD
-    data += bytes("Second paragraph.") + HARD + ws5Seed + [0x1A]
+    data += SOFT
+    data += bytes("until the author presses Return.")
+    data += HARD
+    data += HARD
+    data += bytes("Second paragraph.")
+    data += HARD
+    data += ws5Seed
+    data += [0x1A]
     #expect(try rt(data) == data)
 }
 
 @Test func ws5NoteBlockReserializedVerbatim() throws {
     let note = ws7Note(bytes("A footnote body."), cmd: 0x03)
-    let data = bytes("Text before") + note + bytes(" and after.") + HARD + [0x1A]
+    var data = bytes("Text before")
+    data += note
+    data += bytes(" and after.")
+    data += HARD
+    data += [0x1A]
     let doc = parseWS(data)
     #expect(doc.notes.first?.kind == .footnote)
     #expect(try emitWS(doc) == data)
@@ -69,7 +83,11 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
 @Test func ws5TabBlockAndExpansion() throws {
     // type 9 tab: 2 columns (360 HMI), hard tab type ' '
     let tab = ws7Block(0x09, payload: [0x68, 0x01, 0x68, 0x01] + bytes(" ") + [0x02])
-    let data = ws5Seed + tab + bytes("indented text") + HARD + [0x1A]
+    var data = ws5Seed
+    data += tab
+    data += bytes("indented text")
+    data += HARD
+    data += [0x1A]
     #expect(try rt(data) == data)
 }
 
@@ -87,7 +105,10 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // WINDOWS7.WS, sawyer/REF/wordstar-file-format.ws) before this fix --
     // this is the synthetic regression guard for that gap; the corpus
     // gauntlet below is the real-file coverage.
-    let data = ws5Seed + bytes("From:\tWordStar") + HARD + [0x1A]
+    var data = ws5Seed
+    data += bytes("From:\tWordStar")
+    data += HARD
+    data += [0x1A]
     #expect(try rt(data) == data)
 }
 
@@ -96,9 +117,15 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // style), and a bare extended byte — four different escape economies, each of which
     // must come back in its own original form
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws5Seed + bytes("caf") + [0x1B, 0x82, 0x1C] + bytes(" glyph ")
+    var data = ws5Seed
+    data += bytes("caf")
+    data += [0x1B, 0x82, 0x1C]
+    data += bytes(" glyph ")
     data += [0x1B, 0x01, 0x1C] + HARD
-    data += bytes("wrapped ") + [0x1B] + bytes("A") + [0x1C]
+    data += bytes("wrapped ")
+    data += [0x1B]
+    data += bytes("A")
+    data += [0x1C]
     data += bytes(" bare ") + [0xE1]
     data += HARD + [0x1A]
     #expect(try rt(data) == data)
@@ -108,8 +135,15 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // WordStar writes the toggle BEFORE the separator; the style lands on the next
     // line's spans. 40+ archive files diverged on exactly this.
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws5Seed + bytes("next line is bold") + [0x02] + HARD
-    data += bytes("bold on") + [0x02] + bytes(" then off") + HARD + [0x1A]
+    var data = ws5Seed
+    data += bytes("next line is bold")
+    data += [0x02]
+    data += HARD
+    data += bytes("bold on")
+    data += [0x02]
+    data += bytes(" then off")
+    data += HARD
+    data += [0x1A]
     #expect(try rt(data) == data)
 }
 
@@ -117,8 +151,15 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // ^D toggles the same bold tag as ^B (fixup restores the byte), and a <14 14>
     // on/off pair leaves no span behind at all
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws5Seed + [0x04] + bytes("double") + [0x04] + bytes(" and ")
-    data += [0x14, 0x14] + bytes(" nothing") + HARD + [0x1A]
+    var data = ws5Seed
+    data += [0x04]
+    data += bytes("double")
+    data += [0x04]
+    data += bytes(" and ")
+    data += [0x14, 0x14]
+    data += bytes(" nothing")
+    data += HARD
+    data += [0x1A]
     #expect(try rt(data) == data)
 }
 
@@ -126,7 +167,10 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // the writer's span diff emits sorted removals-then-additions; the file's own order
     // <19 02> must come back via the cluster fixup
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws5Seed + [0x19] + bytes("ital") + [0x02, 0x19]
+    var data = ws5Seed
+    data += [0x19]
+    data += bytes("ital")
+    data += [0x02, 0x19]
     data += bytes("bold") + [0x02]
     data += HARD + [0x1A]
     #expect(try rt(data) == data)
@@ -134,16 +178,31 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
 
 @Test func bindingSpaceSoftHyphensAndDroppedControls() throws {
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws5Seed + bytes("bind") + [0x0F] + bytes("here soft") + [0x1F]
-    data += bytes("hyphen in") + [0x1E] + bytes("active") + HARD
-    data += bytes("phantom ") + [0x08] + bytes(" rubout ") + [0x00] + bytes(" fix")
+    var data = ws5Seed
+    data += bytes("bind")
+    data += [0x0F]
+    data += bytes("here soft")
+    data += [0x1F]
+    data += bytes("hyphen in")
+    data += [0x1E]
+    data += bytes("active")
+    data += HARD
+    data += bytes("phantom ")
+    data += [0x08]
+    data += bytes(" rubout ")
+    data += [0x00]
+    data += bytes(" fix")
     data += HARD + [0x1A]
     #expect(try rt(data) == data)
 }
 
 @Test func softSpaceA0ComesBack() throws {
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws5Seed + bytes("five ") + [0xA0] + bytes("year mission") + SOFT
+    var data = ws5Seed
+    data += bytes("five ")
+    data += [0xA0]
+    data += bytes("year mission")
+    data += SOFT
     data += bytes("ends.") + HARD + [0x1A]
     #expect(try rt(data) == data)
 }
@@ -160,7 +219,10 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     data += bytes(".df DATA.LST\r\n")
     data += bytes(".rv name, street \r\n")
     data += bytes("Dear &name&,") + HARD + bytes(".pa\r\n")
-    data += bytes("Page two.") + HARD + ws5Seed + [0x1A]
+    data += bytes("Page two.")
+    data += HARD
+    data += ws5Seed
+    data += [0x1A]
     #expect(try rt(data) == data)
 }
 
@@ -168,7 +230,10 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // staged: 6.2.4's type-checker times out on the one-expression form
     var data = bytes("First paragraph.") + HARD + HARD
     data += bytes(".lm 8\r\n.rm 65\r\n")
-    data += bytes("Indented paragraph.") + HARD + ws5Seed + [0x1A]
+    data += bytes("Indented paragraph.")
+    data += HARD
+    data += ws5Seed
+    data += [0x1A]
     #expect(try rt(data) == data)
 }
 
@@ -177,7 +242,10 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     var data = bytes(".he Running head with #  \r\n")
     data += bytes(".. a comment the printer never sees\r\n")
     data += bytes(".ig another comment form\r\n")
-    data += bytes("Body text here.") + HARD + ws5Seed + [0x1A]
+    data += bytes("Body text here.")
+    data += HARD
+    data += ws5Seed
+    data += [0x1A]
     #expect(try rt(data) == data)
 }
 
@@ -185,7 +253,11 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
 
 @Test func formfeedPagebreakByteSurvives() throws {
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws5Seed + bytes("Page one.") + HARD + [0x0C] + bytes("Page two.")
+    var data = ws5Seed
+    data += bytes("Page one.")
+    data += HARD
+    data += [0x0C]
+    data += bytes("Page two.")
     data += HARD + [0x1A]
     #expect(try rt(data) == data)
 }
@@ -224,7 +296,11 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // tail, verbatim
     // staged: 6.2.4's type-checker times out on the one-expression form
     var data = bytes("Text body line one here to make this look like prose ok")
-    data += SOFT + bytes("and its continuation.") + HARD + HARD + HARD
+    data += SOFT
+    data += bytes("and its continuation.")
+    data += HARD
+    data += HARD
+    data += HARD
     data += ws5Seed + [0x1A, 0x1A, 0x1A, 0x00]
     #expect(try rt(data) == data)
 }
@@ -233,14 +309,21 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // a spaces-only physical line parses to a content Line plus a phantom blank that
     // owns the separator; the writer merges them back to ONE line
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws5Seed + bytes("Above.") + HARD + bytes("   ") + HARD
+    var data = ws5Seed
+    data += bytes("Above.")
+    data += HARD
+    data += bytes("   ")
+    data += HARD
     data += bytes("Below.") + HARD + [0x1A]
     #expect(try rt(data) == data)
 }
 
 @Test func overprintBareCR() throws {
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws5Seed + bytes("BASE LINE") + [0x0D] + bytes("OVERPRINT")
+    var data = ws5Seed
+    data += bytes("BASE LINE")
+    data += [0x0D]
+    data += bytes("OVERPRINT")
     data += HARD + [0x1A]
     #expect(try rt(data) == data)
 }
@@ -251,7 +334,10 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // into the ruler's own round-trip ledger (rtDots, same tally anchor)
     // rather than dropped -- its bytes (here, just the bare entry's own
     // CRLF; the entry's text is empty) must still come back.
-    var data = ws5Seed + bytes("Line ending before the rulers.") + HARD + HARD
+    var data = ws5Seed
+    data += bytes("Line ending before the rulers.")
+    data += HARD
+    data += HARD
     data += bytes(".rr\rL----P----R") + [0x0D] + HARD
     data += bytes(".rr\rL----R") + HARD
     data += HARD
@@ -265,7 +351,10 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // the reason the writer serializes from the IR: mutate a span, save, and the
     // mutation is in the bytes (guarded fixups degrade, never corrupt). This is the
     // anti-"keep a copy of the input" test.
-    let data = ws5Seed + bytes("The quick brown fox.") + HARD + [0x1A]
+    var data = ws5Seed
+    data += bytes("The quick brown fox.")
+    data += HARD
+    data += [0x1A]
     var doc = parseWS(data)
     let old = doc.blocks[0].lines[0].spans[0]
     doc.blocks[0].lines[0].spans[0] = Span(text: old.text.replacingAll("q", with: "q")
@@ -288,7 +377,10 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
     // the span diff closes bold at the next span boundary — the head of line two —
     // because a ledger-less doc has no togEnd to say otherwise
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var want = bytes("Hello ") + [0x02] + bytes("bold") + [0x0D, 0x0A]
+    var want = bytes("Hello ")
+    want += [0x02]
+    want += bytes("bold")
+    want += [0x0D, 0x0A]
     want += [0x02] + bytes("second line") + [0x0D, 0x0A, 0x1A]
     #expect(try emitWS(doc) == want)
 }

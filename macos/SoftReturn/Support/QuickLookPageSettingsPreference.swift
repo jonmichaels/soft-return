@@ -1,4 +1,5 @@
 import Foundation
+import SoftReturnShared
 
 /// Job 203 (b10 leg 4): the app-group channel that lets the document window's footer "Use
 /// as Default for Quick Look" item reach the two extensions (`SoftReturnQuickLook`,

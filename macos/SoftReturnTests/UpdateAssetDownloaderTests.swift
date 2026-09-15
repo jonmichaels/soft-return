@@ -10,57 +10,59 @@ private struct FakeTokenProvider: UpdateTokenProvider {
     func token() -> String? { value }
 }
 
-@Test func downloadAttachesTheBearerTokenExactlyOnce() async throws {
-    AssetHeaderRecordingURLProtocol.authorizationHeaderCounts = [:]
-    let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [AssetHeaderRecordingURLProtocol.self]
-    let session = URLSession(configuration: config)
+@Suite struct UpdateAssetDownloaderTests {
+    @Test func downloadAttachesTheBearerTokenExactlyOnce() async throws {
+        AssetHeaderRecordingURLProtocol.authorizationHeaderCounts = [:]
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [AssetHeaderRecordingURLProtocol.self]
+        let session = URLSession(configuration: config)
 
-    let downloader = GitHubAssetDownloader(session: session, tokenProvider: FakeTokenProvider(value: "abc123"))
-    let asset = UpdateFeedAsset(id: 7, name: "Soft-Return-4.0.0b20.dmg", size: 4)
-    let tempURL = try await downloader.download(asset: asset) { _ in }
-    defer { try? FileManager.default.removeItem(at: tempURL) }
+        let downloader = GitHubAssetDownloader(session: session, tokenProvider: FakeTokenProvider(value: "abc123"))
+        let asset = UpdateFeedAsset(id: 7, name: "Soft-Return-4.0.0b20.dmg", size: 4)
+        let tempURL = try await downloader.download(asset: asset) { _ in }
+        defer { try? FileManager.default.removeItem(at: tempURL) }
 
-    #expect(AssetHeaderRecordingURLProtocol.authorizationHeaderCounts["Bearer abc123"] == 1)
-}
-
-@Test func downloadSendsNoAuthorizationHeaderWhenThereIsNoToken() async throws {
-    AssetHeaderRecordingURLProtocol.authorizationHeaderCounts = [:]
-    let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [AssetHeaderRecordingURLProtocol.self]
-    let session = URLSession(configuration: config)
-
-    let downloader = GitHubAssetDownloader(session: session, tokenProvider: FakeTokenProvider(value: nil))
-    let asset = UpdateFeedAsset(id: 7, name: "Soft-Return-4.0.0b20.dmg", size: 4)
-    let tempURL = try await downloader.download(asset: asset) { _ in }
-    defer { try? FileManager.default.removeItem(at: tempURL) }
-
-    #expect(AssetHeaderRecordingURLProtocol.authorizationHeaderCounts.isEmpty)
-}
-
-@Test func downloadThrowsUnauthorizedOnHTTP401() async {
-    let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [AssetUnauthorizedURLProtocol.self]
-    let session = URLSession(configuration: config)
-
-    let downloader = GitHubAssetDownloader(session: session, tokenProvider: FakeTokenProvider(value: "expired"))
-    let asset = UpdateFeedAsset(id: 7, name: "Soft-Return-4.0.0b20.dmg", size: 4)
-
-    await #expect(throws: UpdateFeedError.unauthorized) {
-        _ = try await downloader.download(asset: asset) { _ in }
+        #expect(AssetHeaderRecordingURLProtocol.authorizationHeaderCounts["Bearer abc123"] == 1)
     }
-}
 
-@Test func downloadThrowsNotFoundOnHTTP404() async {
-    let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [AssetNotFoundURLProtocol.self]
-    let session = URLSession(configuration: config)
+    @Test func downloadSendsNoAuthorizationHeaderWhenThereIsNoToken() async throws {
+        AssetHeaderRecordingURLProtocol.authorizationHeaderCounts = [:]
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [AssetHeaderRecordingURLProtocol.self]
+        let session = URLSession(configuration: config)
 
-    let downloader = GitHubAssetDownloader(session: session, tokenProvider: FakeTokenProvider(value: nil))
-    let asset = UpdateFeedAsset(id: 7, name: "Soft-Return-4.0.0b20.dmg", size: 4)
+        let downloader = GitHubAssetDownloader(session: session, tokenProvider: FakeTokenProvider(value: nil))
+        let asset = UpdateFeedAsset(id: 7, name: "Soft-Return-4.0.0b20.dmg", size: 4)
+        let tempURL = try await downloader.download(asset: asset) { _ in }
+        defer { try? FileManager.default.removeItem(at: tempURL) }
 
-    await #expect(throws: UpdateFeedError.notFound) {
-        _ = try await downloader.download(asset: asset) { _ in }
+        #expect(AssetHeaderRecordingURLProtocol.authorizationHeaderCounts.isEmpty)
+    }
+
+    @Test func downloadThrowsUnauthorizedOnHTTP401() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [AssetUnauthorizedURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let downloader = GitHubAssetDownloader(session: session, tokenProvider: FakeTokenProvider(value: "expired"))
+        let asset = UpdateFeedAsset(id: 7, name: "Soft-Return-4.0.0b20.dmg", size: 4)
+
+        await #expect(throws: UpdateFeedError.unauthorized) {
+            _ = try await downloader.download(asset: asset) { _ in }
+        }
+    }
+
+    @Test func downloadThrowsNotFoundOnHTTP404() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [AssetNotFoundURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let downloader = GitHubAssetDownloader(session: session, tokenProvider: FakeTokenProvider(value: nil))
+        let asset = UpdateFeedAsset(id: 7, name: "Soft-Return-4.0.0b20.dmg", size: 4)
+
+        await #expect(throws: UpdateFeedError.notFound) {
+            _ = try await downloader.download(asset: asset) { _ in }
+        }
     }
 }
 

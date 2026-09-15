@@ -14,8 +14,14 @@ import Testing
 
 @Test func emitMarkdownStyles() {
     // Mirrors test_emit_markdown_styles.
-    var data: [UInt8] = boldOn + ws4Text("Bold") + boldOn + bytes(" ")
-    data += italicOn + ws4Text("ital") + italicOn + HARD
+    var data: [UInt8] = boldOn
+    data += ws4Text("Bold")
+    data += boldOn
+    data += bytes(" ")
+    data += italicOn
+    data += ws4Text("ital")
+    data += italicOn
+    data += HARD
     let md = emitMarkdown(parseWS(data))
     #expect(md.contains("**Bold**"))
     #expect(md.contains("*ital*"))

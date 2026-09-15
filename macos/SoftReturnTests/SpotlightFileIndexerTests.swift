@@ -16,56 +16,58 @@ private final class FakeMDImportRunner: MDImportRunning {
     }
 }
 
-@Test func requestIndexSpawnsMdimportWithTheFilePathOnOpen() {
-    let runner = FakeMDImportRunner()
-    let url = URL(fileURLWithPath: "/tmp/some-document.wsd")
+@Suite struct SpotlightFileIndexerTests {
+    @Test func requestIndexSpawnsMdimportWithTheFilePathOnOpen() {
+        let runner = FakeMDImportRunner()
+        let url = URL(fileURLWithPath: "/tmp/some-document.wsd")
 
-    SpotlightFileIndexer.requestIndex(for: url, category: "index-on-open", runner: runner,
-                                      dedupe: SpotlightFileIndexer.DedupeWindow(), perform: { $0() })
+        SpotlightFileIndexer.requestIndex(for: url, category: "index-on-open", runner: runner,
+                                          dedupe: SpotlightFileIndexer.DedupeWindow(), perform: { $0() })
 
-    #expect(runner.calls == [[url.path]])
-}
+        #expect(runner.calls == [[url.path]])
+    }
 
-@Test func requestIndexNeverCalledForNilFileURL() {
-    let runner = FakeMDImportRunner()
+    @Test func requestIndexNeverCalledForNilFileURL() {
+        let runner = FakeMDImportRunner()
 
-    SpotlightFileIndexer.requestIndex(for: nil, category: "index-on-open", runner: runner,
-                                      dedupe: SpotlightFileIndexer.DedupeWindow(), perform: { $0() })
+        SpotlightFileIndexer.requestIndex(for: nil, category: "index-on-open", runner: runner,
+                                          dedupe: SpotlightFileIndexer.DedupeWindow(), perform: { $0() })
 
-    #expect(runner.calls.isEmpty)
-}
+        #expect(runner.calls.isEmpty)
+    }
 
-@Test func rapidReOpenOfTheSameFileIsDedupedWithinTheWindow() {
-    let runner = FakeMDImportRunner()
-    let url = URL(fileURLWithPath: "/tmp/reopened.wsd")
-    let dedupe = SpotlightFileIndexer.DedupeWindow()
+    @Test func rapidReOpenOfTheSameFileIsDedupedWithinTheWindow() {
+        let runner = FakeMDImportRunner()
+        let url = URL(fileURLWithPath: "/tmp/reopened.wsd")
+        let dedupe = SpotlightFileIndexer.DedupeWindow()
 
-    SpotlightFileIndexer.requestIndex(for: url, category: "index-on-open", runner: runner,
-                                      dedupe: dedupe, perform: { $0() })
-    SpotlightFileIndexer.requestIndex(for: url, category: "index-on-open", runner: runner,
-                                      dedupe: dedupe, perform: { $0() })
+        SpotlightFileIndexer.requestIndex(for: url, category: "index-on-open", runner: runner,
+                                          dedupe: dedupe, perform: { $0() })
+        SpotlightFileIndexer.requestIndex(for: url, category: "index-on-open", runner: runner,
+                                          dedupe: dedupe, perform: { $0() })
 
-    #expect(runner.calls.count == 1)
-}
+        #expect(runner.calls.count == 1)
+    }
 
-@Test func differentFilesAreNeverDedupedAgainstEachOther() {
-    let runner = FakeMDImportRunner()
-    let dedupe = SpotlightFileIndexer.DedupeWindow()
+    @Test func differentFilesAreNeverDedupedAgainstEachOther() {
+        let runner = FakeMDImportRunner()
+        let dedupe = SpotlightFileIndexer.DedupeWindow()
 
-    SpotlightFileIndexer.requestIndex(for: URL(fileURLWithPath: "/tmp/a.wsd"), category: "index-on-open",
-                                      runner: runner, dedupe: dedupe, perform: { $0() })
-    SpotlightFileIndexer.requestIndex(for: URL(fileURLWithPath: "/tmp/b.wsd"), category: "index-on-open",
-                                      runner: runner, dedupe: dedupe, perform: { $0() })
+        SpotlightFileIndexer.requestIndex(for: URL(fileURLWithPath: "/tmp/a.wsd"), category: "index-on-open",
+                                          runner: runner, dedupe: dedupe, perform: { $0() })
+        SpotlightFileIndexer.requestIndex(for: URL(fileURLWithPath: "/tmp/b.wsd"), category: "index-on-open",
+                                          runner: runner, dedupe: dedupe, perform: { $0() })
 
-    #expect(runner.calls.count == 2)
-}
+        #expect(runner.calls.count == 2)
+    }
 
-@Test func reopenAfterTheWindowElapsesRequestsAgain() {
-    let dedupe = SpotlightFileIndexer.DedupeWindow(window: 60)
-    let path = "/tmp/stale-reopen.wsd"
-    let first = Date(timeIntervalSince1970: 1_000_000)
+    @Test func reopenAfterTheWindowElapsesRequestsAgain() {
+        let dedupe = SpotlightFileIndexer.DedupeWindow(window: 60)
+        let path = "/tmp/stale-reopen.wsd"
+        let first = Date(timeIntervalSince1970: 1_000_000)
 
-    #expect(dedupe.shouldRequest(path, now: first))
-    #expect(!dedupe.shouldRequest(path, now: first.addingTimeInterval(30)))
-    #expect(dedupe.shouldRequest(path, now: first.addingTimeInterval(61)))
+        #expect(dedupe.shouldRequest(path, now: first))
+        #expect(!dedupe.shouldRequest(path, now: first.addingTimeInterval(30)))
+        #expect(dedupe.shouldRequest(path, now: first.addingTimeInterval(61)))
+    }
 }

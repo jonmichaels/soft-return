@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#else
+import UIKit
+#endif
 import CtrlKD
 
 /// job-489 (C1): the `Int` LJ6DTP HP1-HP6 pattern-colour index (9-14) a span's
@@ -15,6 +19,11 @@ extension NSAttributedString.Key {
     /// colour15/white knockouts and plain colourless black text never get it). Absent for
     /// those, exactly like `.lj6dtpPatternIndex` above is absent for plain text.
     static let lj6dtpDarkenColour = NSAttributedString.Key("SoftReturn.lj6dtpDarkenColour")
+    /// #271 M1: the `CGFloat` points a Native superscript (positive) or subscript (negative) run
+    /// is moved by when its glyphs are DRAWN, on top of the `.baselineOffset` it is laid out with
+    /// — the difference between the envelope fit that keeps pagination the engine's and the
+    /// `.sr` roll Printed moves it by. `ScriptRiseLayoutManager` applies it; layout never reads it.
+    static let nativeScriptRise = NSAttributedString.Key("SoftReturn.nativeScriptRise")
 }
 
 /// Job 211 (b11 leg 3b): cp437 box/shade/block glyphs drawn as vector fills — the visible
@@ -243,6 +252,7 @@ enum LJ6DTPPattern {
     static func tileImage(for index: Int) -> NSImage {
         if let cached = cache[index] { return cached }
         let spec = specs[index] ?? Spec(w: 1, h: 1, lines: [])
+        #if canImport(AppKit)
         let image = NSImage(size: CGSize(width: spec.w, height: spec.h))
         image.lockFocus()
         NSColor.white.setFill()
@@ -259,6 +269,22 @@ enum LJ6DTPPattern {
             path.stroke()
         }
         image.unlockFocus()
+        #else
+        // UIKit draws top-down and `UIColor(patternImage:)` does not mirror the tile, so the
+        // pre-flip AppKit needs has no counterpart here.
+        let image = UIGraphicsImageRenderer(size: CGSize(width: spec.w, height: spec.h)).image { _ in
+            UIColor.white.setFill()
+            UIRectFill(CGRect(x: 0, y: 0, width: spec.w, height: spec.h))
+            UIColor.black.setStroke()
+            for line in spec.lines {
+                let path = UIBezierPath()
+                path.lineWidth = line.width
+                path.move(to: line.from)
+                path.addLine(to: line.to)
+                path.stroke()
+            }
+        }
+        #endif
         cache[index] = image
         return image
     }
@@ -753,9 +779,43 @@ private func graphicAdvance(
 /// library does not have, and it moves every line after it. Stated once here rather than at
 /// each of the eight construction sites, so a ninth cannot quietly reintroduce it.
 func softReturnLayoutManager() -> NSLayoutManager {
-    let manager = NSLayoutManager()
+    let manager = ScriptRiseLayoutManager()
     manager.usesDefaultHyphenation = false
     return manager
+}
+
+/// Draws a `.nativeScriptRise` run that many points above (or below) where it was laid out
+/// (#271 M1), on the Mac and on iOS alike.
+///
+/// A superscript laid out at Printed's full roll grows its line fragment and changes pagination,
+/// so the run is laid out inside the envelope (`.baselineOffset`) and only its drawing moves:
+/// every fragment, caret, selection and hit test stays where layout put it. Both platforms draw
+/// pages in flipped coordinates, so a rise is a smaller y.
+final class ScriptRiseLayoutManager: NSLayoutManager {
+    override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+        guard glyphsToShow.length > 0, let storage = textStorage else {
+            super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+            return
+        }
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        var risen = false
+        storage.enumerateAttribute(.nativeScriptRise, in: characters, options: []) { value, _, stop in
+            if value != nil {
+                risen = true
+                stop.pointee = true
+            }
+        }
+        guard risen else {
+            super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+            return
+        }
+        storage.enumerateAttribute(.nativeScriptRise, in: characters, options: []) { value, range, _ in
+            let glyphs = NSIntersectionRange(glyphRange(forCharacterRange: range, actualCharacterRange: nil), glyphsToShow)
+            guard glyphs.length > 0 else { return }
+            let rise = (value as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0
+            super.drawGlyphs(forGlyphRange: glyphs, at: CGPoint(x: origin.x, y: origin.y - rise))
+        }
+    }
 }
 
 /// One line, laid out on its own — same technique `DocumentRenderer.measuredHeight` already

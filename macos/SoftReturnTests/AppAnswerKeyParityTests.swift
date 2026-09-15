@@ -1,5 +1,6 @@
 import CryptoKit
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -31,7 +32,7 @@ import Testing
 /// `~/projects/ctrl-kd` is the default. When the file is not there this suite SKIPS BY NAME
 /// with that exact reason. It never passes vacuously: a skip says which variable to set and
 /// which path it looked at.
-@Suite struct AppAnswerKeyParityTests {
+@Suite(.tags(.corpus)) struct AppAnswerKeyParityTests {
 
     // MARK: - Locating the key
 

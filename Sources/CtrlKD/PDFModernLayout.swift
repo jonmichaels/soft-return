@@ -443,6 +443,50 @@ func modernLeadingSpacer(_ toks: [ModernToken], _ family: PDFFamily, _ pt: Int) 
     return deficit > 0 ? deficit + modernSpacerPad : 0.0
 }
 
+/// The vertical advance Modern actually spends on ONE tightened (verse/centred) line
+/// built from `spans` — its compressed box plus the headroom reserved above it — in
+/// points.
+///
+/// PUBLIC because Modern RTF needs the same number (planning #264 R3, Jon's ruling
+/// 2026-09-14). `rtfVerseTightSlTwips` used to state the tightening as one fixed
+/// multiple of the body size, which reproduced neither this engine's own Modern PDF nor
+/// the app the PDF was backported from; measured through LibreOffice it also did
+/// nothing at all, because a POSITIVE `\sl` is only a minimum and 1.15 × 14pt sits
+/// under the reader's own single spacing for the face. An EXACT `\sl` has to carry a
+/// real number, and the only real number is the one the page uses.
+///
+/// TWO PARTS, both of them `modernStreams`' own (see the `h` it stacks):
+///
+///   `modernTightHeight`    the compressed line box itself — the face's natural line
+///                          height times `modernVerseTight`.
+///   `modernLeadingSpacer`  job 434's headroom, spent as part of the line's own advance,
+///                          which is why it belongs in the pitch a reader reproduces
+///                          rather than beside it.
+///
+/// On STRENGTH.WS's title block (Times 14) that is 11.50 + 3.59 = 15.09pt, and 15.1pt is
+/// exactly what the Modern PDF measures between that document's byline and its email
+/// line. A reader honouring `\sl-302\slmult0` lands on the same pitch.
+///
+/// The spacer is ink-dependent, so two lines of the same face can differ by a fraction
+/// of a point — that is the PDF's own behaviour, reproduced, not noise introduced here.
+/// The C2 boundary is NOT part of this number: a blank line after a tightened block
+/// advances by the body's ordinary leading (`modernStreams`' `lastH = lead`), and Modern
+/// RTF resets `\sl` to 0 for exactly that reason. Port of
+/// `pdf.modern_tight_line_advance_pt`.
+public func modernTightLineAdvancePt(_ spans: [Span], fonts: [FontChange],
+                                     nonpropFallback: Bool = false) -> Double {
+    var toks: [ModernToken] = []
+    for sp in spans {
+        let f = modernTokFont(sp.text, font: sp.font, fonts: fonts,
+                              nonpropFallback: nonpropFallback)
+        toks.append(ModernToken(text: f.written, styles: sp.styles, family: f.family,
+                                pt: f.pt, entry: f.entry, width: 0.0))
+    }
+    let face = modernLineFace(toks)
+    return modernTightHeight(face.family, face.pt)
+        + modernLeadingSpacer(toks, face.family, face.pt)
+}
+
 /// Is this flow entry a paragraph that draws at least one cp437 box/block/shade character?
 /// (`modernStreams`' own suppression test — a box's vertical rule must read as one continuous
 /// stroke, not a dashed one, so two graphic rows in a row get no spacer between them.) Port of
@@ -452,41 +496,19 @@ func modernParaIsGraphic(_ item: ModernFlowItem) -> Bool {
     return toks.contains { $0.text.contains(where: { graphicChars.contains($0) }) }
 }
 
-/// WHICH MODERN ROWS REFUSE TO WRAP (job 456, and the app's own b28 follow-up on it — ported
-/// here, the app is the reference). Port of `_modern_clips_row`.
+/// Whether this row refuses to wrap — job 456, the app's own rule.
 ///
-/// A row of box-drawing or block characters is a picture, not a sentence: broken across two
-/// visual lines it stops being the thing it draws. Three shapes qualify, read off the row's own
-/// final rendered text:
-///
-///   wholly graphic    at least one graphic character, and nothing else on the row but graphic
-///                     characters and spaces (a box border, a rule).
-///   2+ graphic chars  job 456's own rule and the field report behind it ("I don't understand
-///                     what happened in Modern. They have line returns in the middle"). A MIXED
-///                     row — a real prose label plus its glyphs — is the case: a legend row
-///                     ("LL: └ LR: ┘ … Joins: … Mixed: …") or a substitution-table row, which
-///                     ordinary word wrapping folds at the perfectly legal space between label
-///                     and glyph. The threshold is TWO, not one, so an ordinary paragraph
-///                     carrying a single incidental symbol (a list marker) still wraps like the
-///                     prose it is.
-///   nowhere to break  a row with no space in it at all. This engine's greedy wrap never breaks
-///                     inside a token, so such a row already sets as one line; stated anyway,
-///                     because it is part of the rule being ported and a renderer that CAN break
-///                     a word must not.
-///
-/// A clipped row is set as ONE line and runs past the measure rather than reflowing
-/// (`modernStreams` gives it an unbounded wrap width) — the app's `.byClipping`. Read the row's
-/// FINAL tokens, after a centred row's padding has come off and a def row's label/gap prefix has
-/// gone on.
+/// The rule and its evidence are `graphicRowClips` (EmitterRules.swift), where planning
+/// #264 item 3 (packet row B4) moved them so HTML can ask the same question — but NOT
+/// with the same character set: THIS side asks the PDF's own `graphicChars` (the union of
+/// the per-glyph drawing tables, arc corners and the peseta included), exactly as before
+/// the move, while HTML asks `contentGraphicChars`. This is the token-shaped adapter:
+/// read the row's FINAL tokens, after a centred row's padding has come off and a def
+/// row's label/gap prefix has gone on. A clipped row is set as ONE line and runs past the
+/// measure rather than reflowing (`modernStreams` gives it an unbounded wrap width) — the
+/// app's `.byClipping`.
 func modernClipsRow(_ toks: [ModernToken]) -> Bool {
-    let text = toks.map(\.text).joined()
-    let graphicCount = text.reduce(0) { $0 + (graphicChars.contains($1) ? 1 : 0) }
-    if graphicCount > 0,
-       text.allSatisfy({ graphicChars.contains($0) || $0 == " " || $0 == "\u{00a0}" || $0 == "\u{2060}" }) {
-        return true
-    }
-    if graphicCount > 1 { return true }
-    return !text.isEmpty && !text.contains(" ")
+    graphicRowClips(toks.map(\.text).joined(), graphicChars)
 }
 
 /// The sub-list of `runs` covering characters `[start, end)` of their own concatenated text,
@@ -614,7 +636,8 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 noteRefs: NoteRefs = .word, pixResults: [PixResult] = [],
                 pictures: EmitOptions.PixMode = .off,
                 textWidthPt: Double = 0.0, sentenceSpacing: Bool = false,
-                semIndexOfItem: inout [Int]?) -> [ModernFlowItem] {
+                semIndexOfItem: inout [Int]?,
+                semCached: SemanticFlow? = nil) -> [ModernFlowItem] {
     let embedImages = pictures != .off && !pixResults.isEmpty
     let pixMap: [Int: PixResult] = embedImages
         ? Dictionary(uniqueKeysWithValues: pixResults.map { ($0.index, $0) }) : [:]
@@ -622,7 +645,15 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
     // advance ONLY (`modernTokenWidth`'s own `printedPt` doc comment) -- never the Modern
     // reading size.
     let printedPt = printedSize(doc)
-    let sem = modernSemanticFlow(doc, notes: keep, noteRefs: noteRefs)
+    // `semCached` (perf, planning #271 M7): the caller already ran
+    // `modernSemanticFlow` with the SAME `keep`/`noteRefs` and kept its answer —
+    // `emitLayout` does, for the JSON's own `modern.items`, one call before it asks
+    // `attachGraphicCellsModern` for the cells. Re-deriving the whole semantic flow
+    // there is the single largest avoidable cost in the `layout` format on a
+    // novel-length document (-HOLYMAC.WS, 302 pages: 0.45s of 2.09s). The flow is
+    // READ here, never mutated, so sharing one is exact, not approximate; a caller
+    // that cannot promise the same arguments passes nothing and gets a fresh call.
+    let sem = semCached ?? modernSemanticFlow(doc, notes: keep, noteRefs: noteRefs)
     // one WordStar column in points, at the document's own `.cw`
     let colPt = (doc.page?.cw120 ?? 12.0) * 0.6
     let blankH = modernLine * Double(modernBodyPt)
@@ -1152,8 +1183,76 @@ func modernLineOps(
 /// JSON's own existing choice to leave raw `headers`/`footers` unresolved onto
 /// `PageLine` (`header_lines`/`footer_lines`, planning #251(d), are the separate,
 /// already-resolved answer for those).
+/// `doc` with its MailMerge page-number variables replaced by the Modern PDF page
+/// numbers they land on — the SAME document for the documents that carry none.
+///
+/// THE APPROACH, and why it is not the printed one. Printed physical lines are never
+/// re-wrapped, so `substituteMergePageNumbersPrinted` can edit a composed page's own line
+/// segments and be exact by construction. Modern REFLOWS, and a Modern token carries its
+/// advance (`ModernToken.width`) baked at flow-build time, so the same post-pagination
+/// edit would leave every token after it on the line drawing at the VARIABLE's width —
+/// `&#&` is about three characters wider than the number that replaces it. The numbers
+/// therefore have to be in the text before it is wrapped.
+///
+/// So: MEASURE, then RENDER. One throwaway Modern composition with the variables still as
+/// typed says which page each one falls on (`modernStreams`' `recordMergePages`); those
+/// numbers go into the document's own text (`mergePagenoNumbered`); the real render then
+/// wraps, paginates and draws text that is already final. Nothing downstream knows this
+/// happened.
+///
+/// THE RESIDUAL, stated rather than hidden: substituting SHORTENS the text, so the
+/// measuring pass and the rendering pass are not guaranteed to paginate identically — an
+/// occurrence sitting within a few characters of a page's last line could in principle
+/// move up one page and then name the page it left. It is not iterated to a fixed point
+/// because a fixed point need not exist (a shorter line can pull the variable back, which
+/// lengthens it again). What is done instead is a real check:
+/// `MergePageNumberVariableTests` renders the Modern PDF of every corpus document that
+/// prints one and compares the two compositions page by page, so a drift would fail by
+/// name rather than ship.
+///
+/// The measuring pass is paid ONLY by a document that actually carries the variable —
+/// four in the whole archive, and `-HOLYMAC.WS`, the speed benchmark, is not one of them.
+/// Port of `pdf._merge_pageno_modern`.
+func mergePagenoModern(_ doc: Document, options: EmitOptions) -> Document {
+    var carries = false
+    outer: for block in doc.blocks {
+        for line in block.lines where line.spans.contains(where: {
+            containsMergePageNumberOpener($0.text)
+        }) {
+            carries = true
+            break outer
+        }
+    }
+    if !carries {
+        carries = doc.notes.contains { containsMergePageNumberOpener($0.text) }
+    }
+    if !carries { return doc }
+    var record = MergePagenoRecord()
+    var noCells: [Int: [PageLine.GraphicCellPlacement]]? = nil
+    withUnsafeMutablePointer(to: &record) { ptr in
+        _ = modernStreams(doc, options: options, res: FontResources(),
+                          attachGraphicCells: &noCells, recordMergePages: ptr)
+    }
+    let startNo = doc.page?.pnStart ?? 1
+    return mergePagenoNumbered(doc,
+                               body: record.body.map { startNo + $0 },
+                               notes: record.notes.map { startNo + $0 })
+}
+
+/// Where each surviving MailMerge page-number variable lands, filled by
+/// `modernStreams`' measuring pass. Planning #270 item 42 — see `mergePagenoModern`.
+struct MergePagenoRecord {
+    /// Page INDEX (not number) per body occurrence, in document order.
+    var body: [Int] = []
+    /// Page INDEX per note-text occurrence, in document order.
+    var notes: [Int] = []
+}
+
 func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
-                   attachGraphicCells: inout [Int: [PageLine.GraphicCellPlacement]]?) -> [[UInt8]] {
+                   attachGraphicCells: inout [Int: [PageLine.GraphicCellPlacement]]?,
+                   semCached: SemanticFlow? = nil,
+                   recordMergePages: UnsafeMutablePointer<MergePagenoRecord>? = nil)
+    -> [[UInt8]] {
     // Python: `frozenset(options.get('notes', ())) or frozenset((...))` — an EMPTY set
     // (however it got that way, `--no-notes` included) falls back to the default three.
     // A real quirk in the reference, reproduced rather than "fixed": confirmed against
@@ -1182,7 +1281,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     let flow = modernFlow(doc, keep: keep, noteRefs: options.noteRefs,
                           pixResults: options.pixResults, pictures: options.pictures,
                           textWidthPt: width, sentenceSpacing: ssOn,
-                          semIndexOfItem: &semIndexOfItem)
+                          semIndexOfItem: &semIndexOfItem, semCached: semCached)
     let noteLead = modernLine * Double(modernNotePt)
     let sepH = noteLead
 
@@ -1373,7 +1472,11 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                 spacer = modernLeadingSpacer(toks, face.family, face.pt)
             }
             var newNoteLines: [[ModernToken]] = []
+            var newNoteMerges = 0
             for entry in notes where !seenNotes.contains(entry.index) {
+                if recordMergePages != nil {
+                    newNoteMerges += mergePagenoCount(entry.text)
+                }
                 newNoteLines += modernNoteLines(label: entry.label, text: entry.text, width: width)
             }
             for (vi, vline) in vis.enumerated() {
@@ -1415,9 +1518,31 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                 // DESCENT above it, never on it. See the note at the head of this function.
                 body.append((y + modernDescent(face.family, face.pt), vline, align,
                              indent + (vi > 0 ? hang : 0.0), cut, nil, semI))
+                if let record = recordMergePages {
+                    // planning #270 item 42: this visual line is now ON the page being
+                    // composed (`pages.count` is its index -- the page is appended by
+                    // `close()`), so every variable in it is answered by that page's own
+                    // number. Token order inside the line is document order, and the
+                    // lines are appended in document order, so the list needs no other
+                    // key than its position.
+                    for tok in vline {
+                        for _ in 0..<mergePagenoCount(tok.text) {
+                            record.pointee.body.append(pages.count)
+                        }
+                    }
+                }
                 if vi == 0, !newNoteLines.isEmpty {
                     notesLines.append(contentsOf: newNoteLines)
                     for entry in notes { seenNotes.insert(entry.index) }
+                    if let record = recordMergePages, newNoteMerges > 0 {
+                        // Recorded HERE, not where the note's lines were built: a note
+                        // block is committed to the page its reference's own first visual
+                        // line actually landed on, which is one `close()` later whenever
+                        // that line did not fit.
+                        record.pointee.notes.append(
+                            contentsOf: Array(repeating: pages.count, count: newNoteMerges))
+                        newNoteMerges = 0
+                    }
                     newNoteLines = []
                 }
             }
@@ -1533,20 +1658,38 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
 /// Printed. ctrl-kd's own twin, `pdf.attach_graphic_cells_modern` (no leading
 /// underscore -- that module's own "public" convention), was never module-private to
 /// begin with; this brings Swift's visibility to the same place.
-public func attachGraphicCellsModern(_ doc: Document, notes: Set<NoteKind>, noteRefs: NoteRefs)
-    -> [Int: [PageLine.GraphicCellPlacement]]
-{
-    let hasGraphicContent = doc.blocks.contains { block in
+/// True when ANY span anywhere in the document carries a cp437 graphic character — the
+/// necessary condition for `attachGraphicCellsModern` to attach anything at all, and
+/// therefore for its throwaway Modern-PDF pass to be worth running.
+///
+/// `public` (perf, planning #271 M7) so `emitLayout` can ask the same question BEFORE it
+/// decides whether to share its own semantic flow with that pass. Port of ctrl-kd
+/// `pdf.has_modern_graphic_content`.
+public func hasModernGraphicContent(_ doc: Document) -> Bool {
+    doc.blocks.contains { block in
         block.lines.contains { line in
             line.spans.contains { span in
                 span.text.contains { graphicChars.contains($0) }
             }
         }
     }
-    guard hasGraphicContent else { return [:] }
+}
+
+public func attachGraphicCellsModern(_ doc: Document, notes: Set<NoteKind>, noteRefs: NoteRefs,
+                                     semCached: SemanticFlow? = nil)
+    -> [Int: [PageLine.GraphicCellPlacement]]
+{
+    guard hasModernGraphicContent(doc) else { return [:] }
     var cells: [Int: [PageLine.GraphicCellPlacement]]? = [:]
     let options = EmitOptions(notes: notes, noteRefs: noteRefs)
-    _ = modernStreams(doc, options: options, res: FontResources(), attachGraphicCells: &cells)
+    // `semCached` (perf, planning #271 M7): `emitLayout`'s own already-run
+    // `modernSemanticFlow` answer, shared rather than re-derived — see `modernFlow`'s
+    // own note. Dropped on the floor when `notes` is EMPTY, because `modernStreams`'
+    // own documented quirk then resolves `keep` to the default three instead: the
+    // caller's flow and this pass's flow would be two different flows, and a shared
+    // one would silently change what this function attaches.
+    _ = modernStreams(doc, options: options, res: FontResources(), attachGraphicCells: &cells,
+                      semCached: notes.isEmpty ? nil : semCached)
     return cells ?? [:]
 }
 

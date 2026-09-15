@@ -10,7 +10,7 @@ import Foundation
 /// `BatchModel`'s own Style pulldowns speak directly (job 323, b20 item 3) — each maps its
 /// chosen `ViewStyle` down to `RenderStyle` via `.renderStyle` only where a format actually
 /// needs the two-case axis.
-enum RenderStyle: String, Hashable, CaseIterable, Sendable {
+public enum RenderStyle: String, Hashable, CaseIterable, Sendable {
     /// Line-for-line typescript reproduction: Courier, the file's own page geometry.
     ///
     /// Called `printed` until planning #265 (Jon: "Native view should be referenced with
@@ -23,7 +23,7 @@ enum RenderStyle: String, Hashable, CaseIterable, Sendable {
     /// Reflowed to a modern page: fixed 1in margins, the user's font and size.
     case modern
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .native: return "Native"
         case .modern: return "Modern"
@@ -31,7 +31,7 @@ enum RenderStyle: String, Hashable, CaseIterable, Sendable {
     }
 
     /// The library's own mode enum, for handing to emitters.
-    var emitMode: EmitMode {
+    public var emitMode: EmitMode {
         switch self {
         case .native:  return .printed
         case .modern:  return .modern
@@ -41,7 +41,7 @@ enum RenderStyle: String, Hashable, CaseIterable, Sendable {
     /// This export style, projected onto the window's three-case view axis — the mapping
     /// `PagePreviewRenderer` uses to keep a batch preview's `DocumentState.style` honest
     /// about what it is a preview OF, even though a preview is never shown in Native.
-    var viewStyle: ViewStyle {
+    public var viewStyle: ViewStyle {
         switch self {
         case .native: return .native
         case .modern: return .modern
@@ -53,7 +53,7 @@ enum RenderStyle: String, Hashable, CaseIterable, Sendable {
 /// bottom bar's Style popup, and Settings' Default Style all use (job 265, decision register
 /// 2026-08-12). Three cases, not two: `RenderStyle` above (unchanged) is what export/convert
 /// still speaks, because Native has no export meaning.
-enum ViewStyle: String, Hashable, CaseIterable, Sendable {
+public enum ViewStyle: String, Hashable, CaseIterable, Sendable {
     /// Today's on-screen renderer: AppKit, Mac-mapped fonts, selectable text, Show
     /// Invisibles' reflow. Was called "Printed" before job 265 — RENAMED, not changed in
     /// substance: it is still `DocumentRenderer.renderNative`'s facsimile layout, just
@@ -66,7 +66,7 @@ enum ViewStyle: String, Hashable, CaseIterable, Sendable {
     /// Reflowed for a modern audience — unchanged by this job.
     case modern
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .native:  return "Native"
         case .printed: return "Printed"
@@ -77,7 +77,7 @@ enum ViewStyle: String, Hashable, CaseIterable, Sendable {
     /// What this view corresponds to for "export what you see": Native and Printed both mean
     /// the facsimile (one shows it via AppKit, the other via the engine's literal PDF, but
     /// exporting either one means a facsimile export), Modern maps straight across.
-    var renderStyle: RenderStyle {
+    public var renderStyle: RenderStyle {
         switch self {
         case .native, .printed: return .native
         case .modern:           return .modern
@@ -86,11 +86,11 @@ enum ViewStyle: String, Hashable, CaseIterable, Sendable {
 }
 
 /// Single Page or Continuous Scroll — how many pages are on screen at once.
-enum PageDisplay: String, Hashable, CaseIterable, Sendable {
+public enum PageDisplay: String, Hashable, CaseIterable, Sendable {
     case singlePage
     case continuousScroll
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .singlePage:       return "Single Page"
         case .continuousScroll: return "Continuous Scroll"
@@ -101,19 +101,21 @@ enum PageDisplay: String, Hashable, CaseIterable, Sendable {
 /// The zoom control's value. `fit` and `actual` are named states rather than percentages
 /// because they must survive a window resize — "Fit" stays fit when the window changes
 /// size, where a frozen 87% would not.
-enum ZoomSetting: Hashable, Sendable {
+public enum ZoomSetting: Hashable, Sendable {
     case fit
     case actual
     case percent(Int)
 
     /// The steps the bottom-bar menu and View ▸ Zoom In/Out walk through, per the spec's
     /// "50–200% steps".
-    static let steps = [50, 75, 100, 125, 150, 175, 200]
+    public static let steps = [50, 75, 100, 125, 150, 175, 200]
 
-    var displayName: String {
+    /// The one place a zoom's name is written, on both platforms (#271 M4: "Actual Size", as the
+    /// iPhone already read). The iPhone's own word for Fit is "Fit Width".
+    public var displayName: String {
         switch self {
         case .fit:              return "Fit"
-        case .actual:           return "Actual"
+        case .actual:           return "Actual Size"
         case .percent(let pct): return "\(pct)%"
         }
     }
@@ -124,7 +126,7 @@ enum ZoomSetting: Hashable, Sendable {
     /// true size against a ruler (see `ActualSizeMagnification`) — because Jon's spec makes
     /// "Actual Size" the 100% mark, not a screen that happens to run at exactly 72 real
     /// points per inch. `.actual` is exactly `.percent(100)`: one path, two labels.
-    func scale(fitScale: Double, actualScale: Double = 1.0) -> Double {
+    public func scale(fitScale: Double, actualScale: Double = 1.0) -> Double {
         switch self {
         case .fit:              return fitScale
         case .actual:           return ZoomSetting.percent(100).scale(fitScale: fitScale, actualScale: actualScale)
@@ -140,12 +142,12 @@ enum ZoomSetting: Hashable, Sendable {
 /// therefore an app-level concept: it can be chosen in Settings as the fallback for
 /// silent files, but no file can ever be *detected* as A4. See the job response's
 /// library-change proposals.
-enum NamedPageSize: String, Hashable, CaseIterable, Sendable {
+public enum NamedPageSize: String, Hashable, CaseIterable, Sendable {
     case usLetter
     case usLegal
     case a4
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .usLetter: return "US Letter"
         case .usLegal:  return "US Legal"
@@ -155,7 +157,7 @@ enum NamedPageSize: String, Hashable, CaseIterable, Sendable {
 
     /// Short form for the bottom bar, where the spec's examples read "Legal (Detected)"
     /// and "Letter (Default)" — no "US".
-    var shortName: String {
+    public var shortName: String {
         switch self {
         case .usLetter: return "Letter"
         case .usLegal:  return "Legal"
@@ -164,7 +166,7 @@ enum NamedPageSize: String, Hashable, CaseIterable, Sendable {
     }
 
     /// Physical size in points.
-    var sizeInPoints: CGSize {
+    public var sizeInPoints: CGSize {
         switch self {
         case .usLetter: return CGSize(width: 612, height: 792)
         case .usLegal:  return CGSize(width: 612, height: 1008)
@@ -173,7 +175,7 @@ enum NamedPageSize: String, Hashable, CaseIterable, Sendable {
     }
 
     /// The Get-Info-style one-liner the batch window's info panel shows.
-    var dimensionDescription: String {
+    public var dimensionDescription: String {
         switch self {
         case .usLetter: return "US Letter (8.5 × 11 in)"
         case .usLegal:  return "US Legal (8.5 × 14 in)"
@@ -186,7 +188,7 @@ enum NamedPageSize: String, Hashable, CaseIterable, Sendable {
     /// the app's vocabulary and returns nil for anything with no app-side name — a
     /// Foolscap Folio document keeps its real geometry and simply has no named size to
     /// show, which is the honest answer.
-    static func matching(libraryName: String) -> NamedPageSize? {
+    public static func matching(libraryName: String) -> NamedPageSize? {
         switch libraryName {
         case "Letter": return .usLetter
         case "Legal":  return .usLegal
@@ -207,42 +209,66 @@ enum NamedPageSize: String, Hashable, CaseIterable, Sendable {
 /// `update(from:)`/one-shot parameter passing, never SwiftUI's `@Bindable`/`@Environment`
 /// reactive tracking, so dropping the macro changes no observable behavior.
 @MainActor
-final class DocumentState {
+public final class DocumentState {
     /// The bytes as they arrived. Kept because changing the variant re-parses from scratch
     /// — WordStar variants are different enough that there is no cheap conversion between
     /// two parses of the same file.
-    let data: [UInt8]
+    public let data: [UInt8]
 
     /// What the detector said when the file was opened, before any override. Kept so the
-    /// Variant control can offer "Auto" as a way back.
-    let detection: Detection
+    /// Variant control can offer "Auto" as a way back. A document still awaiting its parse
+    /// (`init(awaitingParseOf:)`) holds a placeholder until `adopt(_:)`.
+    public private(set) var detection: Detection
+
+    /// Batch 26 (#271 M7): true from `init(awaitingParseOf:)` until `adopt(_:)` or a variant
+    /// change parses the bytes — the window is on screen, and `document` is an empty placeholder.
+    public private(set) var isAwaitingParse = false
+
+    /// What reading a document's bytes produces: the detector's answer, the parse, and the
+    /// pictures resolved against its path. `Sendable`, so it can be made off the main thread
+    /// (`parsed(from:docPath:)`) and handed to `adopt(_:)`.
+    public struct Parsed: Sendable {
+        public let detection: Detection
+        public let document: CtrlKD.Document
+        public let pixResults: [PixResult]
+    }
+
+    /// `init(data:settings:docPath:)`'s engine work — detect, parse, resolve the pictures — with
+    /// no state of its own, so a large file can be read on another thread while its window shows.
+    /// - Throws: whatever `init(data:settings:docPath:)` would.
+    public nonisolated static func parsed(from data: [UInt8], docPath: String) throws -> Parsed {
+        let detection = detect(data)
+        let document = try CtrlKD.parse(data, variant: detection.variant)
+        return Parsed(detection: detection, document: document,
+                      pixResults: DocumentPictures.resolve(document, docPath: docPath))
+    }
 
     /// The parse currently on screen. Recomputed whenever `variant` changes.
-    private(set) var document: CtrlKD.Document
+    public private(set) var document: CtrlKD.Document
 
     /// Job 371 item 1 (PIX IN VIEWS): the source document's own path, empty when there is
     /// none (bytes-only construction — a synthetic/test `DocumentState`, or a caller that
     /// never had a real file). Same role as `DocumentOperations.ConversionOptions.docPath` —
     /// see that field's own doc comment for why `.PIX` resolution needs it.
-    let docPath: String
+    public let docPath: String
     /// `.PIX` tags resolved against `docPath`, once per parse — reused by every view
     /// (`DocumentRenderer`'s Printed/Native/Modern paths, `DocumentWindowController`'s
     /// `pdfView`) so decoding an image never repeats per render call. Recomputed alongside
     /// `document` whenever the variant changes (`setVariant`/`resetVariantToAuto`) — a
     /// different variant is a different parse, so `doc.graphics` is re-read from it, not
     /// assumed unchanged.
-    private(set) var pixResults: [PixResult]
+    public private(set) var pixResults: [PixResult]
 
     /// Which parser produced `document`, and whether the user picked it.
-    private(set) var variant: Resolved<Variant>
+    public private(set) var variant: Resolved<Variant>
 
-    var style: Resolved<ViewStyle>
-    var zoom: Resolved<ZoomSetting>
-    var display: Resolved<PageDisplay>
+    public var style: Resolved<ViewStyle>
+    public var zoom: Resolved<ZoomSetting>
+    public var display: Resolved<PageDisplay>
 
     /// The paper the document is shown on. Detected from the file's own geometry where it
     /// declared any; otherwise the Settings fallback.
-    private(set) var pageSize: Resolved<NamedPageSize?>
+    public private(set) var pageSize: Resolved<NamedPageSize?>
 
     /// Printed-mode page-geometry override — the footer's Margins control (job 203).
     /// `nil` is "Embedded" (job 315: was "From Document"), the app's long-standing, unchanged
@@ -255,21 +281,21 @@ final class DocumentState {
     /// the same file. Jon's ruling (2026-08-10): no corpus gets a hardcoded default of its
     /// own — a document with no set margins keeps showing WordStar standard unless a person
     /// picks something else, here, by hand.
-    private(set) var pageSettingsPreset: Resolved<DocumentOperations.PageSettingsPreset?> = Resolved(nil, .default)
+    public private(set) var pageSettingsPreset: Resolved<DocumentOperations.PageSettingsPreset?> = Resolved(nil, .default)
 
     /// View ▸ Show Invisibles. One switch for all of WordStar's own marks — the spec is
     /// explicit that there are no per-kind toggles.
-    var showInvisibles: Bool = false
+    public var showInvisibles: Bool = false
 
     /// Modern style's typeface, from Settings. Native and Printed ignore both (each is
     /// Courier at the file's own `.cw` size, by definition).
-    var modernFontName: String
-    var modernFontSize: Int
+    public var modernFontName: String
+    public var modernFontSize: Int
 
     /// - Throws: `ParseError.notConvertible` when the bytes aren't a document the library
     ///   can read — the app turns that into the standard "can't open" alert rather than
     ///   showing an empty window.
-    init(data: [UInt8], settings: SettingsStore, docPath: String = "") throws {
+    public init(data: [UInt8], settings: SettingsStore, docPath: String = "") throws {
         self.data = data
         self.docPath = docPath
         let detection = detect(data)
@@ -295,6 +321,40 @@ final class DocumentState {
         }
     }
 
+    /// Batch 26 (#271 M7): a document whose bytes are read and whose parse is still to come —
+    /// `WSDocument` opens a large file's window on this at once and parses off the main thread
+    /// (`parsed(from:docPath:)`), then calls `adopt(_:)`. Until then `document` is an empty
+    /// placeholder, the variant and page size are the defaults, and `isAwaitingParse` is true.
+    public init(awaitingParseOf data: [UInt8], settings: SettingsStore, docPath: String = "") {
+        self.data = data
+        self.docPath = docPath
+        self.detection = Detection(variant: .ws4)
+        self.variant = Resolved(.ws4, .detected)
+        self.document = CtrlKD.Document()
+        self.pixResults = []
+        self.style = Resolved(settings.defaultStyle, .default)
+        self.zoom = Resolved(settings.defaultZoom, .default)
+        self.display = Resolved(settings.defaultDisplay, .default)
+        self.modernFontName = settings.modernFontName
+        self.modernFontSize = settings.modernFontSize
+        self.pageSize = Resolved(settings.defaultPageSize, .default)
+        self.isAwaitingParse = true
+    }
+
+    /// The parse a document awaiting one was opened for: detection, variant, parse, pictures and
+    /// the file's own page size, exactly as `init(data:settings:docPath:)` sets them. A style,
+    /// zoom or display chosen meanwhile is kept, and so is a page size chosen by hand. Nothing
+    /// happens once the document is parsed — a variant change may have parsed it first.
+    public func adopt(_ parsed: Parsed) {
+        guard isAwaitingParse else { return }
+        isAwaitingParse = false
+        detection = parsed.detection
+        variant = Resolved(parsed.detection.variant, .detected)
+        document = parsed.document
+        pixResults = parsed.pixResults
+        refreshPageSizeAfterReparse()
+    }
+
     /// Job 459 (b28 note 11): construct directly from an already-built `CtrlKD.Document`,
     /// bypassing `parse(data:variant:)` entirely — the "documents built by hand (tests,
     /// fixtures)" provenance `Document.detection`'s own doc comment already names as a real,
@@ -307,7 +367,7 @@ final class DocumentState {
     /// Jon's screenplay-scope ruling ("only supposed to apply when our code detects a
     /// screenplay") can hand-build an ordinary document with no slugline anywhere, rather
     /// than fighting a real WordStar byte stream's own binary font/style blocks to get one.
-    init(document: CtrlKD.Document, settings: SettingsStore, docPath: String = "") {
+    public init(document: CtrlKD.Document, settings: SettingsStore, docPath: String = "") {
         self.data = []
         self.docPath = docPath
         self.detection = Detection(variant: .ws4)
@@ -329,10 +389,13 @@ final class DocumentState {
     /// user asked "show me this as WS4", and "that isn't WS4" is an answer, not a reason to
     /// blank the window they were already reading.
     @discardableResult
-    func setVariant(_ newVariant: Variant) -> Error? {
+    public func setVariant(_ newVariant: Variant) -> Error? {
         do {
             let reparsed = try parse(data, variant: newVariant)
             variant.setManually(newVariant)
+            // A variant chosen before the background parse returned (restoration) parses the bytes
+            // itself; that parse then has nothing to adopt.
+            isAwaitingParse = false
             document = reparsed
             pixResults = DocumentPictures.resolve(reparsed, docPath: docPath)
             refreshPageSizeAfterReparse()
@@ -344,12 +407,61 @@ final class DocumentState {
 
     /// Return to the detector's own answer. Cannot fail: this parse already succeeded once,
     /// in `init`, or the document would never have opened.
-    func resetVariantToAuto() {
+    public func resetVariantToAuto() {
+        // Auto is what a parse still under way is already doing; the detection is a placeholder until it returns.
+        guard !isAwaitingParse else { return }
         guard let reparsed = try? parse(data, variant: detection.variant) else { return }
         variant = Resolved(detection.variant, .detected)
         document = reparsed
         pixResults = DocumentPictures.resolve(reparsed, docPath: docPath)
         refreshPageSizeAfterReparse()
+    }
+
+    /// `.PIX` tags naming a picture the app could not find or read — a picture beside the document
+    /// in a folder the app has not been given (#272 I8), or one that is really missing.
+    public var unreadablePictureCount: Int {
+        pixResults.filter { $0.error == .unresolved || $0.error == .unreadable }.count
+    }
+
+    /// Resolves the `.PIX` tags again against `docPath` — after the app has been given the folder
+    /// the pictures live in (#272 I8). The parse is unchanged; only `pixResults` is recomputed.
+    public func resolvePictures() {
+        pixResults = DocumentPictures.resolve(document, docPath: docPath)
+    }
+
+    /// The options Printed is laid out with for this document — the Margins choice and the
+    /// resolved pictures — the same ones the Native renderer, the Printed view and Print build.
+    public var printedOptions: EmitOptions {
+        EmitOptions(pageSettings: pageSettingsPreset.value?.settings, pixResults: pixResults)
+    }
+
+    /// Document Info's Page Size, measured on the sheet Printed lays out (#271 M9): a `.pr or=l`
+    /// document is rotated before anything is measured, so REF/BOOKLET.RJS (`.pl 8.5"`) reads
+    /// "US Letter, landscape (11 × 8.5 in)" rather than a portrait sheet 8.5 in tall. A portrait
+    /// sheet keeps its named size, or its height when it has no app-side name.
+    public var pageSizeDescription: String {
+        let metrics = printedMetrics(document, options: printedOptions)
+        if metrics.pageWidth > metrics.pageHeight {
+            let inches = String(format: "%g × %g in", metrics.pageWidth / 72, metrics.pageHeight / 72)
+            let named = NamedPageSize.allCases.first {
+                abs($0.sizeInPoints.width - metrics.pageHeight) <= 1 && abs($0.sizeInPoints.height - metrics.pageWidth) <= 1
+            }
+            return named.map { "\($0.displayName), landscape (\(inches))" } ?? "\(inches), landscape"
+        }
+        if let named = pageSize.value { return named.dimensionDescription }
+        if let page = document.page { return String(format: "%.2f in tall (custom)", page.heightIn) }
+        return "—"
+    }
+
+    /// Document Info's Margins: top and left from the Printed geometry, bottom from the page's
+    /// `.mb` line count in WordStar's 1/48-inch leading — on the same rotated, preset-applied page
+    /// the Page Size row reads (#271 M9). WordStar has no right-margin command, so there is no
+    /// fourth figure.
+    public var marginsDescription: String {
+        guard document.page != nil, let page = printedDocument(document, options: printedOptions).page else { return "—" }
+        let metrics = printedMetrics(document, options: printedOptions)
+        return String(format: "Top %.1fin  Bottom %.1fin  Left %.1fin",
+                      metrics.top / 72.0, page.mbLines * page.lh48 / 48.0, metrics.left / 72.0)
     }
 
     /// A different variant means different (or absent) dot commands, so the resolved page
@@ -364,14 +476,14 @@ final class DocumentState {
         }
     }
 
-    func setPageSize(_ newSize: NamedPageSize) {
+    public func setPageSize(_ newSize: NamedPageSize) {
         pageSize.setManually(newSize)
     }
 
     /// `nil` returns to "Embedded" — the app's default, not a manual choice of "no
     /// override" (mirrors `resetVariantToAuto()`'s use of `.detected` rather than `.manual`
     /// for going back to the detector's own answer).
-    func setPageSettingsPreset(_ preset: DocumentOperations.PageSettingsPreset?) {
+    public func setPageSettingsPreset(_ preset: DocumentOperations.PageSettingsPreset?) {
         if let preset {
             pageSettingsPreset.setManually(preset)
         } else {

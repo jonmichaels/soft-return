@@ -434,6 +434,61 @@ CTRLKD_PRIVATE_CORPUS=/path/to/the/corpus CTRLKD_SRC=/path/to/ctrl-kd/src \
     python3 tools/answer_key_private.py --check    # verify it's still current, no rewrite
 ```
 
+## Test plans, `SR_DOC` and the corpus tag (planning #262)
+
+**Two test plans** for the Mac scheme, in `macos/TestPlans/`:
+
+- **Corpus** (the scheme default): everything the scheme ran before, both test targets. Armed,
+  `SoftReturnTests` under Corpus is the release gate (`docs/RELEASE-CHECKLIST.md` step 5):
+  `xcodebuild test … -testPlan Corpus`, or the app-test runner's `TESTPLAN=Corpus`.
+- **Fast**: `SoftReturnTests` without the tests tagged `corpus`. That means unit tests and
+  single-document tests, and no document walks. For batch work: `-testPlan Fast` / `TESTPLAN=Fast`.
+
+**The `corpus` tag** (`Tag.corpus`, `macos/SoftReturnTests/CorpusDocumentFilter.swift`) marks
+every suite or test that walks the corpus, one document after another. The Native, Modern, pixel,
+structural and pagination oracles all carry it. A new walk takes `.tags(.corpus)`, or Fast starts
+paying for it.
+
+**`SR_DOC` narrows every walk** to one document or a comma list: `SR_DOC=LYING.WS`, or the
+runner's `DOC=LYING.WS,-README`. Names match case-insensitively, with or without their extension.
+Only walks are filtered. A test that looks a document up by name (`Oracle.allFixtureURLs`) still
+finds it. The iPhone test target honours the same variable over its four bundled samples. A
+release run leaves `SR_DOC` unset.
+
+**A name that matches nothing fails the walk that misses it** (batch 14; batch 25). Filtered to
+nothing, a walk would measure nothing and pass: `arguments:` generates zero cases, and a `for` loop
+never runs. So when `SR_DOC` names a document that is not in the list a walk filters, the unmatched
+names and that list are reported on that walk, and on no other.
+- Inside a running test, the report is an issue on that test.
+- A test's `arguments:` are built before any test runs, for every parameterized test in the target,
+  selected or not. There the list keeps what matched and gains one sentinel argument carrying the
+  message. The test that receives it starts with `CorpusDocumentFilter.recordIfUnmatched(_:)`, which
+  records the issue and returns without measuring. A new test fed a filtered `arguments:` list starts
+  the same way.
+- Nothing stops the run. A document that exists in the corpus but not in a particular walk's list
+  (`DOC=-HOLYMAC.WS` against the 22-document `ws7Fixtures`) fails only the walks that lack it: narrow
+  `ONLY_TESTING` to the walks that hold it, and the run is green.
+
+**Every test is selectable.** The file-scope `@Test` functions that used to be unselectable by
+name now sit in suites named after their files, so `SoftReturnTests/WiringTests` selects that
+file's tests.
+
+**The render cache** (`macos/SoftReturnTests/RenderCache.swift`) serves the pixel gates' renders
+of an unchanged document back from disk.
+- **The key:** the document's SHA-256, the renderer version, the view, the scale, the resolved
+  pictures' bytes, and the macOS build.
+- **The renderer version:** `macos/scripts/render-cache-stamp.sh` stamps a digest of the render
+  sources' committed trees (Package.swift, Sources, Shared, and the app, tests, vendored code and
+  Tuist manifests under macos/) plus a digest of their uncommitted changes into the test bundle on
+  each build. So an edited renderer never gets a stale page back, committed or not, and a commit
+  that touches none of those paths (an outbox report) keeps every entry.
+- **Where entries live:** the test host's Caches folder, `SoftReturnTestRenderCache/`; never the
+  checkout or the corpus. Other renderer versions are pruned on first use.
+- **Off switch:** `SR_RENDER_CACHE=off` turns it off, as does a build with no git. Each lookup logs
+  `RENDER-CACHE hit|miss|off <view> <document>`.
+- **Safety proof:** `RenderCacheTests` shows a stale key renders again and a cached page is pixel
+  for pixel the render it replaced.
+
 ## Test isolation guard (planning #191)
 
 Planning issue #191: a real recorded Apple Event fixture, replayed through

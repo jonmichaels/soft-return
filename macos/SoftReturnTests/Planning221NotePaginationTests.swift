@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Testing
 @testable import SoftReturn
 
@@ -23,7 +24,7 @@ import Testing
 /// `PagedDocumentView.buildPages`' own citation, and `RenderedDocument
 /// .modernEndnoteAppendixStart` for why the app can only apply it one real page at a time
 /// where the engine applies it up front.
-@Suite struct Planning221NotePaginationTests {
+@Suite(.tags(.corpus)) struct Planning221NotePaginationTests {
 
     static var fixturesDirectory: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures")

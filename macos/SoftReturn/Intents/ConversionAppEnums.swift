@@ -31,7 +31,8 @@ enum ConversionStyle: String, AppEnum, CaseIterable, Sendable {
     case modern
     case printed
 
-    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Style"
+    // #271 M11, batch 31: an export's Mode, as the CLI's --mode names it.
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Mode"
     static let caseDisplayRepresentations: [ConversionStyle: DisplayRepresentation] = [
         .modern: "Modern — reflowed for reading",
         .printed: "Printed — typescript facsimile",

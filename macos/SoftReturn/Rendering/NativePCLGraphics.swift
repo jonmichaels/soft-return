@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#else
+import UIKit
+#endif
 
 /// Job 490 (item 1, closing the b29 LJ6DTP title-top divergence): a 0x0F user print
 /// control's raw printer payload (`Document.pclPrograms`, indexed by `Span.pcl`) is real

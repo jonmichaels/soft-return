@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import PDFKit
 
 /// Job 247 (b13, ql-native) — MAC VIEWING RULING (decision register 2026-08-11, restated and
@@ -104,20 +105,28 @@ enum QuickLookNativeRenderer {
     }
 
     /// The multi-page Preview PDF — pages of the NATIVE renderer's own drawing, not
-    /// `emitPDF`. Serializes one page at a time (`dataWithPDF(inside:)` for that page's own
-    /// rect alone, immediately folded into `combined` and discarded via `autoreleasepool`)
-    /// rather than holding every page's rendering live at once — the appex memory ceiling
-    /// this job's brief calls out. The page CHAIN itself (`layoutPagedView`'s `NSTextView`s)
-    /// still builds every page up front — an inherent property of the one-`NSTextStorage`
-    /// cross-page-selection architecture `PagedDocumentView`'s own doc comment explains, not
-    /// something this function can avoid without a second, divergent renderer — but that
-    /// object graph is far cheaper than N rasterized/PDF-serialized pages, which is the
-    /// actual memory cost this function avoids paying all at once.
+    /// `emitPDF`. Each page is captured on its own (`dataWithPDF(inside:)` for that page's rect
+    /// alone, `capturingPageIndex` naming it) and written straight into ONE PDF context, then let
+    /// go (`autoreleasepool`) — never every page's rendering live at once, the appex memory ceiling
+    /// this job's brief calls out. The page CHAIN itself (`layoutPagedView`'s `NSTextView`s) still
+    /// builds every page up front — an inherent property of the one-`NSTextStorage`
+    /// cross-page-selection architecture `PagedDocumentView`'s own doc comment explains.
+    ///
+    /// Batch 28 (#271 M10): written into a `CGContext` PDF as each page is captured. Until then each
+    /// page's PDF was opened by PDFKit and its page inserted into one `PDFDocument`, whose
+    /// `dataRepresentation` wrote them out at the end: every one-page document stayed alive until
+    /// then, and the join cost -HOLYMAC.WS 1.4 s and most of a 245 MB peak (b28-ql-measure).
+    /// `QuickLookRequestIdentityTests` compares every page's pixels with that join.
     static func multiPagePDF(for rendered: RenderedDocument) throws -> Data {
         let pagedView = layoutPagedView(rendered)
         guard pagedView.pageCount > 0 else { throw RenderError.emptyDocument }
 
-        let combined = PDFDocument()
+        let output = NSMutableData()
+        guard let consumer = CGDataConsumer(data: output as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: nil, nil) else {
+            throw RenderError.emptyDocument
+        }
+        var pagesWritten = 0
         for index in 0..<pagedView.pageCount {
             let rect = pagedView.rect(ofPage: index)
             guard rect.width > 0, rect.height > 0 else { continue }
@@ -125,15 +134,18 @@ enum QuickLookNativeRenderer {
                 pagedView.capturingPageIndex = index
                 let onePageData = pagedView.dataWithPDF(inside: rect)
                 pagedView.capturingPageIndex = nil
-                if let onePagePDF = PDFDocument(data: onePageData), let page = onePagePDF.page(at: 0) {
-                    combined.insert(page, at: combined.pageCount)
-                }
+                guard let provider = CGDataProvider(data: onePageData as CFData),
+                      let onePage = CGPDFDocument(provider)?.page(at: 1) else { return }
+                var mediaBox = onePage.getBoxRect(.mediaBox)
+                context.beginPage(mediaBox: &mediaBox)
+                context.drawPDFPage(onePage)
+                context.endPage()
+                pagesWritten += 1
             }
         }
-        guard combined.pageCount > 0, let data = combined.dataRepresentation() else {
-            throw RenderError.emptyDocument
-        }
-        return data
+        context.closePDF()
+        guard pagesWritten > 0 else { throw RenderError.emptyDocument }
+        return output as Data
     }
 
     /// Page 1 alone, as a `PDFPage` — the Thumbnail extension's own need (Finder's grid icon
@@ -150,68 +162,75 @@ enum QuickLookNativeRenderer {
         }
         return page
     }
-}
 
-/// Job 374 (QL-PIX): standalone `.PIX` images, mirrored into the same three targets as
-/// `QuickLookNativeRenderer` above (Project.swift's `sources` list — see that type's own
-/// doc comment for the mirroring mechanism). Deliberately its OWN enum, not folded into
-/// `QuickLookNativeRenderer`: a `.PIX` is a raw raster image, not a `DocumentState`/
-/// `PagedDocumentView` document, so it has no `RenderedDocument` to produce and needs no
-/// `@MainActor` at all — `CtrlKD.pixDecode`/`pixToPNG` are plain, Foundation-free, actor-
-/// agnostic functions (see `Pix.swift`'s own header), and `CGImage`/`CGContext` construction
-/// below needs no AppKit view or window. That absence of any actor hop is itself how this
-/// type "minds job 369's SE-0420 lesson": there is no dispatched/MainActor closure for a
-/// reply to end up nested inside in the first place.
-enum QuickLookPixRenderer {
-    enum RenderError: Error {
-        case emptyImage
+    // MARK: - The two extensions' requests (batch 28, #271 M10)
+
+    /// `PreviewProvider`'s reply for a WordStar document: every page as one PDF, and the page size Quick Look lays
+    /// its window out around. The engine's half is `work`, made before this is called — off the main thread, by the
+    /// extension; the text, the layout and the PDF are made here.
+    static func previewPDF(for work: QuickLookEngineWork) throws -> (pdf: Data, pageSize: CGSize) {
+        let rendered = QuickLookRender.whole(for: work)
+        return (try multiPagePDF(for: rendered), rendered.pageSize)
     }
 
-    /// The Preview extension's shape: PNG bytes (`CtrlKD.pixToPNG`, already validated against
-    /// real Inset renders — see `Pix.swift`) plus the size QuickLookUI should lay its preview
-    /// window out around. Physical size (`pixPhysicalSizeIn`'s decipoints-derived inches, *72
-    /// for points) when the file's own print-options record carries one — the same size
-    /// `DocumentPictures`/`ExportAccessoryView` already trust for an EMBEDDED `.PIX`'s point
-    /// size — falling back to the raw pixel dimensions 1:1 when it doesn't (no worse a
-    /// default than what an untagged image would get anywhere else).
-    struct RenderedPix {
-        let png: Data
-        let sizeInPoints: CGSize
+    /// `previewPDF(for:)` with the engine's half made here too, on the caller's thread — one call for
+    /// `QuickLookTimingTests` and `QuickLookRequestIdentityTests`.
+    static func previewPDF(
+        fromFileBytes bytes: [UInt8],
+        docPath: String,
+        pageSettingsPreset: DocumentOperations.PageSettingsPreset? = QuickLookPageSettingsPreference
+            .resolvedDefault()
+    ) throws -> (pdf: Data, pageSize: CGSize) {
+        try previewPDF(for: try QuickLookEngineWork.make(bytes: bytes, docPath: docPath,
+                                                         pageSettingsPreset: pageSettingsPreset))
     }
 
-    static func renderedPix(fromFileBytes bytes: [UInt8]) throws -> RenderedPix {
-        let (width, height, _) = try pixDecode(bytes)
-        guard width > 0, height > 0 else { throw RenderError.emptyImage }
-        let png = try Data(pixToPNG(bytes))
-        let sizeInPoints: CGSize
-        if let physical = pixPhysicalSizeIn(bytes) {
-            sizeInPoints = CGSize(width: physical.widthIn * 72, height: physical.heightIn * 72)
-        } else {
-            sizeInPoints = CGSize(width: width, height: height)
-        }
-        return RenderedPix(png: png, sizeInPoints: sizeInPoints)
+    /// `ThumbnailProvider`'s drawing for a WordStar document: page 1, fitted to `maximumSize` and never larger than
+    /// `maxDimension`, on white.
+    ///
+    /// Page 1 ONLY. The engine paginated the whole document (`work`), but the session builds page 1's text and one
+    /// page is laid out — a thumbnail never builds a long document's other pages (b28-ql-measure: -HOLYMAC.WS spent
+    /// 2.0 s on the text and 0.7 s on the layout of 302 pages to draw one). `QuickLookRequestIdentityTests` compares
+    /// every byte with the thumbnail of the whole render's page 1.
+    static func thumbnail(for work: QuickLookEngineWork, maximumSize: CGSize) throws -> (image: CGImage, size: CGSize) {
+        return try thumbnailImage(of: try firstPage(for: QuickLookRender.pageOne(for: work)), maximumSize: maximumSize)
     }
 
-    /// The Thumbnail extension's shape: a `CGImage` already scaled to fit `maximumSize` (never
-    /// past `maxDimension`, same reasoning and same cap `ThumbnailProvider`'s WordStar path
-    /// already applies to its own `PDFPage`) plus that scaled size, ready to hand straight to
-    /// `QLThumbnailReply`'s `contextSize`/`drawing:`.
-    static func thumbnailImage(
-        fromFileBytes bytes: [UInt8], maximumSize: CGSize, maxDimension: CGFloat = 1024
+    /// `thumbnail(for:maximumSize:)` with the engine's half made here too — for the tests, as `previewPDF`'s.
+    static func thumbnail(
+        fromFileBytes bytes: [UInt8],
+        docPath: String,
+        maximumSize: CGSize,
+        pageSettingsPreset: DocumentOperations.PageSettingsPreset? = QuickLookPageSettingsPreference
+            .resolvedDefault()
     ) throws -> (image: CGImage, size: CGSize) {
-        let (width, height, rgbRows) = try pixDecode(bytes)
-        guard width > 0, height > 0 else { throw RenderError.emptyImage }
-        guard let source = cgImage(width: width, height: height, rgbRows: rgbRows) else {
-            throw RenderError.emptyImage
+        try thumbnail(for: try QuickLookEngineWork.make(bytes: bytes, docPath: docPath,
+                                                        pageSettingsPreset: pageSettingsPreset),
+                      maximumSize: maximumSize)
+    }
+
+    /// A page drawn as a thumbnail: fitted to `maximumSize`, capped at `maxDimension`, on white.
+    static func thumbnailImage(of page: PDFPage, maximumSize: CGSize) throws -> (image: CGImage, size: CGSize) {
+        let pageBounds = page.bounds(for: .mediaBox)
+        guard pageBounds.width > 0, pageBounds.height > 0 else {
+            throw RenderError.emptyDocument
         }
 
+        // Fit within the requested size, aspect preserved, but never past `maxDimension`
+        // regardless of how large `maximumSize` asks for — Finder never actually shows a
+        // THUMBNAIL representation anywhere near this large (the preview panel's own extension
+        // point, `.preview`/`SoftReturnQuickLook`, is what serves full-size views). Capping our
+        // OWN output is the documented, accepted pattern regardless of what a caller asks for:
+        // QuickLookUI scales a smaller-than-requested thumbnail up rather than showing nothing.
+        let maxDimension: CGFloat = 1024
         let requestedSize = CGSize(
             width: min(maximumSize.width, maxDimension),
             height: min(maximumSize.height, maxDimension))
-        let scale = min(requestedSize.width / CGFloat(width), requestedSize.height / CGFloat(height))
-        let thumbnailSize = CGSize(width: CGFloat(width) * scale, height: CGFloat(height) * scale)
+        let scale = min(requestedSize.width / pageBounds.width,
+                        requestedSize.height / pageBounds.height)
+        let thumbnailSize = CGSize(width: pageBounds.width * scale, height: pageBounds.height * scale)
 
-        guard let context = CGContext(
+        guard let bitmapContext = CGContext(
             data: nil,
             width: max(1, Int(thumbnailSize.width.rounded(.up))),
             height: max(1, Int(thumbnailSize.height.rounded(.up))),
@@ -220,37 +239,19 @@ enum QuickLookPixRenderer {
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else {
-            throw RenderError.emptyImage
+            throw RenderError.emptyDocument
         }
-        context.interpolationQuality = .high
-        context.draw(source, in: CGRect(origin: .zero, size: thumbnailSize))
-        guard let image = context.makeImage() else { throw RenderError.emptyImage }
+        // PAPER IS WHITE — same reasoning as `PagedDocumentView.draw(_:)`: a page with any
+        // transparent region must not pick up Finder's own background.
+        bitmapContext.setFillColor(NSColor.white.cgColor)
+        bitmapContext.fill(CGRect(origin: .zero, size: thumbnailSize))
+        bitmapContext.scaleBy(x: scale, y: scale)
+        // Our own bitmap context, origin bottom-left — the same convention
+        // `PDFPage.draw(with:to:)` expects, no extra flip.
+        page.draw(with: .mediaBox, to: bitmapContext)
+        guard let image = bitmapContext.makeImage() else {
+            throw RenderError.emptyDocument
+        }
         return (image, thumbnailSize)
-    }
-
-    /// `pixDecode`'s row-major `(r,g,b)` triples -> a real `CGImage`, opaque (alpha 255
-    /// throughout — a decoded `.PIX` has no transparency concept, same as the WordStar
-    /// thumbnail path's own "paper is white" full-coverage assumption).
-    private static func cgImage(
-        width: Int, height: Int, rgbRows: [[(r: UInt8, g: UInt8, b: UInt8)]]
-    ) -> CGImage? {
-        var raw = [UInt8](repeating: 0, count: width * height * 4)
-        for y in 0..<height {
-            let row = rgbRows[y]
-            for x in 0..<width {
-                let pixel = row[x]
-                let offset = (y * width + x) * 4
-                raw[offset] = pixel.r
-                raw[offset + 1] = pixel.g
-                raw[offset + 2] = pixel.b
-                raw[offset + 3] = 255
-            }
-        }
-        guard let provider = CGDataProvider(data: Data(raw) as CFData) else { return nil }
-        return CGImage(
-            width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
-            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 }

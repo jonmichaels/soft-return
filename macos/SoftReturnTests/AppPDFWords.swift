@@ -215,19 +215,28 @@ enum AppPDFWords {
     ///
     /// Weight still decides where the sizes are equal or unknown — MARKUP.WS's whole 2pt-lead
     /// page is one size, and the engine's own side carries no sup/sub reduction at all.
+    /// `rises` are the whole-point rolls the document draws a raised or lowered run at, when the
+    /// reader knows them (`GeometryOracleTests.theAppPaginatesExactlyLikeTheLibrary`). A mark
+    /// exactly one of them away from a line belongs to THAT line, even past `riseWindow`, and ahead
+    /// of a heavier line nearer by: a `.sr 6` document draws its "2" 9pt above its own line, which is
+    /// 3pt below the line before it. Empty, the rule is unchanged.
     static func snappedBaselines(_ weights: [Double: Int],
-                                 sizes: [Double: Double] = [:]) -> [Double: Double] {
+                                 sizes: [Double: Double] = [:],
+                                 rises: [Double] = []) -> [Double: Double] {
         var mapping: [Double: Double] = [:]
         let sorted = weights.keys.sorted()
         let typical = typicalWeight(weights)
         let ceiling = typical * raisedRunShare
         for baseline in sorted {
             let own = weights[baseline] ?? 0
+            func atRoll(_ other: Double) -> Bool {
+                rises.contains { abs(abs(other - baseline) - $0) <= 0.5 }
+            }
             // ONLY A FRAGMENT SNAPS, and there are two ways to be one: light against this
             // page's own typical line, or light ENOUGH that the pair adds up to a single one.
             // See `raisedRunShare` and `mergedLineAllowance`.
             let candidates = sorted.filter {
-                guard $0 != baseline, abs($0 - baseline) <= riseWindow else { return false }
+                guard $0 != baseline, abs($0 - baseline) <= riseWindow || atRoll($0) else { return false }
                 let other = weights[$0] ?? 0
                 // SIZE FIRST, where both baselines have one: smaller type is a reduced run
                 // and joins the full-size line beside it; full-size type never joins smaller.
@@ -247,6 +256,8 @@ enum AppPDFWords {
                     || Double(own + other) <= typical * mergedLineAllowance
             }
             let best = candidates.min {
+                // A line exactly a drawn roll away is the one the mark was raised from.
+                if atRoll($0) != atRoll($1) { return atRoll($0) }
                 let left = (weights[$0] ?? 0, -abs($0 - baseline))
                 let right = (weights[$1] ?? 0, -abs($1 - baseline))
                 return left.0 != right.0 ? left.0 > right.0 : left.1 > right.1
@@ -256,7 +267,7 @@ enum AppPDFWords {
         return mapping
     }
 
-    static func payload(from pdf: [UInt8]) throws -> Payload {
+    static func payload(from pdf: [UInt8], rises: [Double] = []) throws -> Payload {
         let data = Data(pdf) as CFData
         guard let provider = CGDataProvider(data: data),
               let document = CGPDFDocument(provider)
@@ -281,7 +292,7 @@ enum AppPDFWords {
                 weights[word.y_top_pt, default: 0] += word.text.count
                 sizes[word.y_top_pt] = max(sizes[word.y_top_pt] ?? 0, word.size_pt)
             }
-            let snapped = snappedBaselines(weights, sizes: sizes)
+            let snapped = snappedBaselines(weights, sizes: sizes, rises: rises)
             // A WORD THAT STAYS PUT KEEPS ITS PLACE IN THE DRAWING ORDER; A WORD THAT MOVES
             // TAKES ITS PLACE BY X.
             //

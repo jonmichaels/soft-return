@@ -10,7 +10,10 @@ import Testing
 /// (Jon's own framing: "single-spaced default BUT parameterize it").
 
 @Test func htmlVerseUnitGetsTightLineHeight() throws {
-    let poem = bytes("     line one --") + SOFT + bytes("     line two --") + HARD
+    var poem = bytes("     line one --")
+    poem += SOFT
+    poem += bytes("     line two --")
+    poem += HARD
     let html = emitHTML(parseWS(poem), mode: .modern)
     #expect(html.contains("line-height:\(verseLineHeight)"))
     #expect(html.contains("<br>"))
@@ -55,12 +58,24 @@ import Testing
     #expect(!html[tagStart.lowerBound..<idx.lowerBound].contains("line-height"))
 }
 
-@Test func rtfVerseUnitGetsPositiveSl() throws {
-    let poem = bytes("     line one --") + SOFT + bytes("     line two --") + HARD
-    let rtf = emitRTF(parseWS(poem), mode: .modern)
+/// R3, Jon's ruling 2026-09-14. The value is NEGATIVE (RTF's EXACT form) because the
+/// positive/at-least form measurably did nothing -- LibreOffice laid the reader's own
+/// 16.10pt for `\sl280` and for no `\sl` alike, and only the exact form tightened
+/// anything. And it is the BLOCK's own figure, the same advance the Modern PDF spends on
+/// that line, not a document-independent constant.
+@Test func rtfVerseUnitGetsAnExactSlCarryingItsOwnTightenedLeading() throws {
+    var poem = bytes("     line one --")
+    poem += SOFT
+    poem += bytes("     line two --")
+    poem += HARD
+    let doc = parseWS(poem)
+    let rtf = emitRTF(doc, mode: .modern)
     #expect(rtf.contains(#"\sl"#))
     let value = try #require(firstSlValue(rtf), "\(rtf)")
-    #expect(value > 0, "Modern verse spacing must be a MINIMUM (positive), not EXACT")
+    #expect(value < 0, "Modern verse spacing must be EXACT (negative), not a minimum")
+    let first = try #require(doc.blocks.first?.lines.first?.spans)
+    #expect(value == -roundHalfToEven(
+        modernTightLineAdvancePt(first, fonts: doc.fonts) * 20.0))
 }
 
 @Test func rtfResetsSlToZeroAfterAVerseUnit() throws {
@@ -73,8 +88,14 @@ import Testing
                               highBitBytes: 0, textPct: 100, symmetricBlocks1D: 0, size: data.count)
     let rtf = emitRTF(doc, mode: .modern)
     let values = allSlValues(rtf)
-    #expect((values.first ?? 0) > 0)
+    #expect((values.first ?? 0) < 0)
     #expect(values.last == 0, "the ordinary paragraph after verse must reset \\sl to 0")
+    // C2. The author's blank line after a tightened block is the paragraph break, and it
+    // belongs to the body's ordinary leading -- the same rule `modernStreams` follows
+    // when it spends its UNtightened `lastH` there. So the `\sl0` reset lands BEFORE the
+    // blank `\par`, not after it.
+    #expect(rtf.contains("\\sl0\\slmult0 \n\\par "),
+            "\(String(rtf[(rtf.range(of: #"\sl-"#)?.lowerBound ?? rtf.startIndex)...]).prefix(300))")
 }
 
 @Test func rtfOrdinaryProseNeverGetsSl() throws {
@@ -95,7 +116,10 @@ private func flowParaIsVerseFlags(_ doc: Document) -> [Bool] {
 }
 
 @Test func modernFlowLeftAlignedVerseUnitIsFlaggedIsVerse() throws {
-    let poem = bytes("     line one --") + SOFT + bytes("     line two --") + HARD
+    var poem = bytes("     line one --")
+    poem += SOFT
+    poem += bytes("     line two --")
+    poem += HARD
     let flags = flowParaIsVerseFlags(parseWS(poem))
     #expect(flags.contains(true), "\(flags)")
 }

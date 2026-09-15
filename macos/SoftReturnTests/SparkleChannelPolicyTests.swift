@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 @testable import SoftReturn
+import SoftReturnShared
 
 /// Job 537 (rulings 20-21): the Sparkle 2 channel opt-in. `SparkleChannelPolicy` is the pure
 /// mapping from the one preference to the set Sparkle's own `allowedChannelsForUpdater:`

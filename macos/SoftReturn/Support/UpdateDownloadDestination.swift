@@ -1,4 +1,5 @@
 import Foundation
+import SoftReturnShared
 
 /// Job 276: where the downloaded DMG ends up, and under what name. Split from
 /// `GitHubAssetDownloader` (which only ever answers "here are the bytes, at this temp path") so

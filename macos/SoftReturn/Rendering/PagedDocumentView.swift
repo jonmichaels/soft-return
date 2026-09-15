@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 
 /// The pages of one document, stacked, inside a scroll view that supplies zoom.
 ///
@@ -207,9 +208,19 @@ final class PagedDocumentView: NSView {
 
     /// Replace the displayed document. Rebuilds the container chain, because page size and
     /// line capacity both change with style.
-    func setContent(_ rendered: RenderedDocument, display: PageDisplay) {
+    ///
+    /// `firstPages` (batch 26, #271 M7): lay out only that many pages now and leave the rest to
+    /// `layOutMorePages(until:)` — a long document's pages built a turn of the run loop at a time
+    /// instead of in one block. nil lays out every page, as it always did.
+    ///
+    /// `probe` (batch 27): the unpinned probe's measurement of `rendered`, made already, offscreen, a slice at a
+    /// time (`ProbeMeasurement`) — a render that pins nothing (Show Invisibles) then skips its in-view probe and
+    /// lays out a page at a time like a pinned one.
+    func setContent(_ rendered: RenderedDocument, display: PageDisplay, firstPages: Int? = nil,
+                    probe: ExplicitProbe? = nil) {
         self.rendered = rendered
         self.display = display
+        pendingPages = nil
 
         // Tear down the old chain. Removing the layout manager from the storage first
         // detaches every container and view in one move.
@@ -249,7 +260,7 @@ final class PagedDocumentView: NSView {
         layoutManager.delegate = self
         storage.addLayoutManager(layoutManager)
 
-        buildPages(for: rendered)
+        buildPages(for: rendered, firstPages: firstPages, probe: probe)
         applyPageAccessibilityLabels()
         currentPageIndex = min(currentPageIndex, max(0, pageViews.count - 1))
         // Job 460: `rebuildPageTops()` BEFORE `applyDisplayMode()` — Continuous Scroll's own
@@ -272,9 +283,9 @@ final class PagedDocumentView: NSView {
     /// `.textArea` elements (Continuous Scroll shows every page at once) was
     /// indistinguishable from the others to VoiceOver. "Page N of M" is what a sighted
     /// reader already sees from the page's own edges.
-    private func applyPageAccessibilityLabels() {
+    private func applyPageAccessibilityLabels(from start: Int = 0) {
         let total = pageViews.count
-        for (index, view) in pageViews.enumerated() {
+        for (index, view) in pageViews.enumerated().dropFirst(start) {
             view.setAccessibilityLabel("Page \(index + 1) of \(total)")
         }
     }
@@ -338,27 +349,154 @@ final class PagedDocumentView: NSView {
         storage.endEditing()
     }
 
-    private func buildPages(for rendered: RenderedDocument) {
+    /// Batch 26 (#271 M7): the pages `setContent(_:display:firstPages:)` left for later turns.
+    private enum PendingPages {
+        /// Native: the pages from `next` on. Every page's height is pinned by the render, so each is
+        /// built on its own, in order, with no probe of the whole flow.
+        case explicit(next: Int, columnCountsByPage: [[Int]], width: CGFloat,
+                      cursor: Int, fragmentTops: [CGFloat], fragmentBottoms: [CGFloat])
+        /// Modern: AppKit's own page chain, grown a page at a time.
+        case modern(ModernChain)
+    }
+
+    /// Where Modern's page chain stands between the pages it grows (`buildNextModernPage`).
+    private struct ModernChain {
+        /// b28 note 11: forced screenplay-marker breaks still waiting to be honoured, in
+        /// ascending order — `BreakingTextContainer`'s own doc comment has the mechanism.
+        /// Empty for every document `RenderedDocument.modernForcedPageBreakOffsets` doesn't
+        /// populate, which is every document but a screenplay-detected one — the chain is
+        /// then IDENTICAL to before that job, container for container.
+        var pendingBreaks: [Int]
+        /// Blank lines by their own START offset, so "does the next page open on one?" is a
+        /// dictionary lookup rather than a scan — see the collapse in `buildNextModernPage`.
+        var blankRanges: [Int: NSRange]
+        var pagesBuilt = 0
+    }
+
+    private var pendingPages: PendingPages?
+
+    /// A hard ceiling on Modern's chain: a malformed document should produce an ugly page count,
+    /// never an unbounded loop that hangs the app with no way to cancel.
+    private static let maxModernPages = 10_000
+
+    /// Whether every page of the content is laid out (batch 26: `setContent(_:display:firstPages:)`).
+    var isLaidOut: Bool { pendingPages == nil }
+
+    /// Batch 26 (#271 M7): lays out more of the pages `setContent(_:display:firstPages:)` left, until
+    /// every page is laid out or `deadline` (`DispatchTime` uptime nanoseconds) passes — at least one
+    /// page a call. True once every page is laid out.
+    @discardableResult
+    func layOutMorePages(until deadline: UInt64) -> Bool {
+        guard let pending = pendingPages else { return true }
+        let firstNewPage = pageViews.count
+        switch pending {
+        case .explicit:
+            addExplicitPages(count: .max, deadline: deadline)
+        case .modern:
+            growModernChain(count: .max, deadline: deadline)
+        }
+        let done = pendingPages == nil
+        // Only what the new pages change: their labels, their tops and visibility, and the view's size where
+        // that grows — every page relabelled once, at the end. Relabelling every page, re-marking the whole view
+        // for layout and display and re-adding the overlay on every turn cost more than the layout itself
+        // (b26-holymac-fix4: Modern's turns ran 102–129 ms around layout slices of at most 57–80 ms).
+        applyPageAccessibilityLabels(from: done ? 0 : firstNewPage)
+        rebuildPageTops()
+        applyDisplayMode(toPagesFrom: firstNewPage)
+        if done || display == .continuousScroll {
+            invalidateIntrinsicContentSize()
+            let size = intrinsicContentSize
+            if frame.size != size { setFrameSize(size) }
+        }
+        return done
+    }
+
+    /// Batch 27: the unpinned probe's line-fragment tops and bottoms for a whole flow.
+    struct ExplicitProbe: Sendable {
+        let fragmentTops: [CGFloat]
+        let fragmentBottoms: [CGFloat]
+    }
+
+    /// Whether `rendered` pins every column of every page (`renderNative` does): its pages need no probe.
+    static func pinsEveryPage(_ rendered: RenderedDocument) -> Bool {
+        let counts = rendered.pageColumnFragmentCounts.isEmpty
+            ? rendered.softLineFlags.map { [$0.count] }
+            : rendered.pageColumnFragmentCounts
+        return counts.indices.allSatisfy { page in
+            rendered.pinnedPageBottoms.indices.contains(page)
+                && rendered.pinnedPageBottoms[page].count >= counts[page].count
+        }
+    }
+
+    /// Batch 27: `buildExplicitPages`' unpinned probe, measured OFFSCREEN a slice of characters at a time, so a
+    /// long render that pins nothing (Show Invisibles, Native) never lays its whole flow out in one block. The same
+    /// text, the same layout manager, leading and contiguous layout, one unbounded container at the same width and
+    /// no pins — the probe `buildExplicitPages` makes in view — so the same fragments.
+    @MainActor
+    final class ProbeMeasurement {
+        private let storage: NSTextStorage
+        private let manager: NSLayoutManager
+        private let container: NSTextContainer
+        private var measuredTo = 0
+        private var step = 2_000
+
+        init(rendered: RenderedDocument) {
+            storage = NSTextStorage(attributedString: rendered.text)
+            manager = softReturnLayoutManager()
+            manager.usesFontLeading = rendered.clipsLines
+            manager.allowsNonContiguousLayout = false
+            container = NSTextContainer(size: CGSize(width: max(1, rendered.textFrame.size.width),
+                                                     height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            container.widthTracksTextView = false
+            container.heightTracksTextView = false
+            manager.addTextContainer(container)
+            storage.addLayoutManager(manager)
+        }
+
+        var isComplete: Bool { measuredTo >= storage.length }
+
+        /// Lays more of the flow out until `deadline` passes — a slice at least — each slice sized toward a
+        /// few milliseconds.
+        func measure(until deadline: UInt64) {
+            repeat {
+                let end = min(storage.length, measuredTo + step)
+                let sliceStart = DispatchTime.now().uptimeNanoseconds
+                manager.ensureLayout(forCharacterRange: NSRange(location: 0, length: end))
+                measuredTo = end
+                let took = DispatchTime.now().uptimeNanoseconds - sliceStart
+                if took < 2_000_000 {
+                    step = min(step * 2, 200_000)
+                } else if took > 8_000_000 {
+                    step = max(step / 2, 200)
+                }
+            } while !isComplete && DispatchTime.now().uptimeNanoseconds < deadline
+        }
+
+        /// The fragments, once the whole flow is laid out.
+        func result() -> ExplicitProbe {
+            var tops: [CGFloat] = []
+            var bottoms: [CGFloat] = []
+            let glyphs = manager.glyphRange(for: container)
+            if glyphs.length > 0 {
+                manager.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+                    tops.append(rect.minY)
+                    bottoms.append(rect.maxY)
+                }
+            }
+            return ExplicitProbe(fragmentTops: tops, fragmentBottoms: bottoms)
+        }
+    }
+
+    private func buildPages(for rendered: RenderedDocument, firstPages: Int? = nil, probe: ExplicitProbe? = nil) {
         let containerSize = rendered.textFrame.size
         if rendered.clipsLines {
-            buildExplicitPages(for: rendered, width: containerSize.width)
+            buildExplicitPages(for: rendered, width: containerSize.width, firstPages: firstPages, probe: probe)
             return
         }
 
-        var guardCounter = 0
-        // A hard ceiling: a malformed document should produce an ugly page count, never an
-        // unbounded loop that hangs the app with no way to cancel.
-        let maxPages = 10_000
-        // b28 note 11: forced screenplay-marker breaks still waiting to be honoured, in
-        // ascending order — `BreakingTextContainer`'s own doc comment has the mechanism.
-        // Empty for every document `RenderedDocument.modernForcedPageBreakOffsets` doesn't
-        // populate, which is every document but a screenplay-detected one — this loop is
-        // then IDENTICAL to before this job, container for container.
-        var pendingBreaks = rendered.modernForcedPageBreakOffsets
-        // Blank lines by their own START offset, so "does the next page open on one?" is a
-        // dictionary lookup rather than a scan — see the collapse below.
-        var blankRanges: [Int: NSRange] = [:]
-        for range in rendered.modernBlankLineRanges { blankRanges[range.location] = range }
+        var chain = ModernChain(pendingBreaks: rendered.modernForcedPageBreakOffsets, blankRanges: [:])
+        for range in rendered.modernBlankLineRanges { chain.blankRanges[range.location] = range }
 
         // A BLANK BEFORE ANY CONTENT COSTS NOTHING EITHER. The library's guard is
         // `!body.isEmpty`, which is false for the document's very first items as well as for
@@ -367,13 +505,45 @@ final class PagedDocumentView: NSView {
         // container starts at 0. Measured on VERSIONS.WS, whose first body baseline sat at
         // 102.60 against the library's 88.80 — one whole line of nothing.
         var leadingOffset = 0
-        while let blank = blankRanges[leadingOffset] {
+        while let blank = chain.blankRanges[leadingOffset] {
             collapseBlankLine(blank)
-            blankRanges[leadingOffset] = nil
+            chain.blankRanges[leadingOffset] = nil
             leadingOffset = NSMaxRange(blank)
         }
 
+        pendingPages = .modern(chain)
+        growModernChain(count: firstPages ?? .max, deadline: nil)
+    }
+
+    /// Grows Modern's page chain by up to `count` pages, stopping early once every glyph is placed or
+    /// `deadline` passes (at least one page a call); then replays the running heads over the pages so far.
+    private func growModernChain(count: Int, deadline: UInt64?) {
+        guard case .modern(var chain)? = pendingPages, let rendered else { return }
+        var added = 0
         repeat {
+            buildNextModernPage(&chain, rendered: rendered)
+            added += 1
+        } while chain.pagesBuilt < Self.maxModernPages && !allGlyphsPlaced() && added < count
+            && deadline.map({ DispatchTime.now().uptimeNanoseconds < $0 }) ?? true
+        let done = chain.pagesBuilt >= Self.maxModernPages || allGlyphsPlaced()
+        pendingPages = done ? nil : .modern(chain)
+
+        // Job 393 (391 root cause 2): only once Modern's real pages exist can `rendered.hfEvents`
+        // be replayed against them — see `RenderedDocument.runningLines`'s own doc comment on
+        // why this can't happen inside `DocumentRenderer` the way Printed's own `runningLines`
+        // does. A no-op for every other render (`hfEvents` empty). Replayed over the pages built
+        // so far each time the chain grows (batch 26) — only the new ones — so a page shows its heads as soon
+        // as it exists.
+        if !rendered.hfEvents.isEmpty {
+            let replayed = self.rendered?.runningLines ?? []
+            self.rendered?.runningLines = resolvedModernRunningLines(for: rendered, after: replayed)
+        }
+    }
+
+    /// One page of Modern's chain — the body of the loop that used to build every page at once.
+    private func buildNextModernPage(_ chain: inout ModernChain, rendered: RenderedDocument) {
+            let containerSize = rendered.textFrame.size
+            let maxPages = Self.maxModernPages
             let container = BreakingTextContainer(size: containerSize)
             // The default 5pt padding would shift every line right of where the library
             // said, and silently narrow the text column.
@@ -383,7 +553,7 @@ final class PagedDocumentView: NSView {
             // The NEXT pending break, if any — always strictly ahead of whatever this
             // container has placed so far (see the consumption check below, which pops a
             // break only once some container's real content has actually reached it).
-            container.forcedBreakOffset = pendingBreaks.first
+            container.forcedBreakOffset = chain.pendingBreaks.first
             layoutManager.addTextContainer(container)
             containers.append(container)
             containerPage.append(pageViews.count)
@@ -392,7 +562,7 @@ final class PagedDocumentView: NSView {
 
             let view = makePageView(container: container, rendered: rendered, pageIndex: pageViews.count)
             pageViews.append(view)
-            addSubview(view)
+            addSubview(view, positioned: .below, relativeTo: overlayView)
 
             layoutManager.ensureLayout(for: container)
 
@@ -502,13 +672,13 @@ final class PagedDocumentView: NSView {
             // Each collapse is re-laid before the next offset is read, so this converges on
             // the first non-blank — and cannot loop, since each pass consumes one recorded
             // blank strictly ahead of the last.
-            if !blankRanges.isEmpty {
+            if !chain.blankRanges.isEmpty {
                 var collapsed = 0
                 while let next = nextContainerStart(for: container),
-                      let blank = blankRanges[next], collapsed < maxPages {
+                      let blank = chain.blankRanges[next], collapsed < maxPages {
                     collapseBlankLine(blank)
                     layoutManager.ensureLayout(for: container)
-                    blankRanges[next] = nil
+                    chain.blankRanges[next] = nil
                     collapsed += 1
                 }
                 // The page holds different content now — see `applyConditionalBreak`'s own
@@ -522,23 +692,14 @@ final class PagedDocumentView: NSView {
             // far past what this container would have held naturally has no effect above
             // (the container simply runs out of room first) and stays pending, unconsumed,
             // for the container after this one to try again.
-            if let nextBreak = pendingBreaks.first {
+            if let nextBreak = chain.pendingBreaks.first {
                 let glyphRange = layoutManager.glyphRange(for: container)
                 let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
                 if charRange.location + charRange.length >= nextBreak {
-                    pendingBreaks.removeFirst()
+                    chain.pendingBreaks.removeFirst()
                 }
             }
-            guardCounter += 1
-        } while guardCounter < maxPages && !allGlyphsPlaced()
-
-        // Job 393 (391 root cause 2): only NOW do Modern's real pages exist to replay
-        // `rendered.hfEvents` against — see `RenderedDocument.runningLines`'s own doc comment
-        // on why this can't happen inside `DocumentRenderer` the way Printed's own
-        // `runningLines` does. A no-op for every other render (`hfEvents` empty).
-        if !rendered.hfEvents.isEmpty {
-            self.rendered?.runningLines = resolvedModernRunningLines(for: rendered)
-        }
+            chain.pagesBuilt += 1
     }
 
     /// Job 502: shrinks `container`'s own height to leave room for whichever of
@@ -632,10 +793,26 @@ final class PagedDocumentView: NSView {
     /// full citation). A page with no glyphs of its own (defensive only — the build loop
     /// above never leaves a genuinely empty container mid-chain) inherits the offset of the
     /// page before it, rather than resetting to the very start of the document.
-    private func resolvedModernRunningLines(for rendered: RenderedDocument) -> [[RunningLine]] {
-        var result: [[RunningLine]] = []
+    ///
+    /// `existing` (batch 26): pages already replayed, kept as they are. A page's heads depend only on the
+    /// events before its own first character, which is settled once its container is built, so a chain
+    /// grown a turn at a time replays only its new pages. Each replay measures a face
+    /// (`DocumentRenderer.modernRunningLines`' `firstBaselineOffset`), and replaying every page on every
+    /// turn made each turn slower than the last (b26-holymac-fix2: Modern's layout slices grew from 34 ms
+    /// to 593 ms over -HOLYMAC.WS's pages).
+    private func resolvedModernRunningLines(for rendered: RenderedDocument,
+                                            after existing: [[RunningLine]] = []) -> [[RunningLine]] {
+        let kept = min(existing.count, containers.count)
+        var result = Array(existing.prefix(kept))
         var lastOffset = 0
-        for (index, container) in containers.enumerated() {
+        for container in containers.prefix(kept).reversed() {
+            let glyphRange = layoutManager.glyphRange(for: container)
+            if glyphRange.length > 0 {
+                lastOffset = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil).location
+                break
+            }
+        }
+        for (index, container) in containers.enumerated().dropFirst(kept) {
             let glyphRange = layoutManager.glyphRange(for: container)
             if glyphRange.length > 0 {
                 lastOffset = layoutManager.characterRange(
@@ -689,9 +866,40 @@ final class PagedDocumentView: NSView {
     /// attached to it, so removing the probe and adding the real chain in its place simply
     /// re-runs the SAME flow through the SAME glyphs, this time bounded by the real page
     /// heights instead of one unbounded one.
-    private func buildExplicitPages(for rendered: RenderedDocument, width: CGFloat) {
+    private func buildExplicitPages(for rendered: RenderedDocument, width: CGFloat, firstPages: Int? = nil,
+                                    probe: ExplicitProbe? = nil) {
         let lineCounts = rendered.softLineFlags.map(\.count)
         guard !lineCounts.isEmpty else { return }
+        // A RENDER THAT STATES NO COLUMNS HAS ONE PER PAGE — see the page loop below.
+        let columnCountsByPage = rendered.pageColumnFragmentCounts.isEmpty
+            ? lineCounts.map { [$0] }
+            : rendered.pageColumnFragmentCounts
+
+        // A RENDER THAT PINS EVERY PAGE NEEDS NO PROBE (batch 26, #271 M7). A pinned column's
+        // container height comes from `RenderedDocument.pinnedPageBottoms` and overrides the
+        // probe's figure outright (job 412, below), so when every column of every page is pinned
+        // the probe — a layout of the whole flow, the larger half of laying out a long document —
+        // decides nothing. Then each page's containers can be built on their own, in order, and a
+        // window can build the first few now and the rest on later turns (`layOutMorePages`).
+        // `renderNative` pins every page; the Show Invisibles and table-of-contents renders pin
+        // none and keep the probe.
+        let everyPagePinned = columnCountsByPage.indices.allSatisfy { page in
+            rendered.pinnedPageBottoms.indices.contains(page)
+                && rendered.pinnedPageBottoms[page].count >= columnCountsByPage[page].count
+        }
+        if everyPagePinned {
+            pendingPages = .explicit(next: 0, columnCountsByPage: columnCountsByPage, width: width,
+                                     cursor: 0, fragmentTops: [], fragmentBottoms: [])
+            addExplicitPages(count: firstPages ?? .max, deadline: nil)
+            return
+        }
+        // Batch 27: the probe measured already, offscreen (`ProbeMeasurement`): the pages from it, a few at a time.
+        if let probe {
+            pendingPages = .explicit(next: 0, columnCountsByPage: columnCountsByPage, width: width,
+                                     cursor: 0, fragmentTops: probe.fragmentTops, fragmentBottoms: probe.fragmentBottoms)
+            addExplicitPages(count: firstPages ?? .max, deadline: nil)
+            return
+        }
 
         let probe = NSTextContainer(size: CGSize(width: max(1, width), height: .greatestFiniteMagnitude))
         probe.lineFragmentPadding = 0
@@ -718,11 +926,6 @@ final class PagedDocumentView: NSView {
         layoutManager.removeTextContainer(at: 0)
         isMeasuringProbeContainer = false
 
-        // Float-safety margin only — the height itself is already the real AppKit
-        // measurement above, not a second isolated guess. Same 0.5pt this codebase's own
-        // oracles already treat as "on the grid" (`GeometryOracleTests.swift`).
-        let epsilon: CGFloat = 0.5
-
         // ONE CONTAINER PER COLUMN PER PAGE (item 19, Jon's ruling 2026-09-10).
         //
         // `pageColumnFragmentCounts` is the model's own answer for how many fragments each
@@ -741,11 +944,41 @@ final class PagedDocumentView: NSView {
         // `pinnedBaselines`; without this fallback they got no containers and therefore no
         // pages at all, which is what turned every Show Invisibles and evidence-sheet
         // lookup into `noMatchingPage`.
-        let columnCountsByPage = rendered.pageColumnFragmentCounts.isEmpty
-            ? lineCounts.map { [$0] }
-            : rendered.pageColumnFragmentCounts
         var cursor = 0
         for (pageIndex, columnCounts) in columnCountsByPage.enumerated() {
+            buildExplicitPage(pageIndex, columnCounts: columnCounts, rendered: rendered, width: width,
+                              fragmentTops: fragmentTops, fragmentBottoms: fragmentBottoms, cursor: &cursor)
+        }
+    }
+
+    /// Batch 26: the Native pages `pendingPages` still names, from the next, up to `count` of them or
+    /// until `deadline` passes — at least one a call. Only a render that pins every page gets here, so
+    /// there is no probe to index.
+    private func addExplicitPages(count: Int, deadline: UInt64?) {
+        guard case .explicit(var next, let columnCountsByPage, let width, var cursor, let tops, let bottoms)? = pendingPages,
+              let rendered else { return }
+        var added = 0
+        while next < columnCountsByPage.count, added < count {
+            buildExplicitPage(next, columnCounts: columnCountsByPage[next], rendered: rendered, width: width,
+                              fragmentTops: tops, fragmentBottoms: bottoms, cursor: &cursor)
+            next += 1
+            added += 1
+            if let deadline, DispatchTime.now().uptimeNanoseconds >= deadline { break }
+        }
+        pendingPages = next < columnCountsByPage.count
+            ? .explicit(next: next, columnCountsByPage: columnCountsByPage, width: width,
+                        cursor: cursor, fragmentTops: tops, fragmentBottoms: bottoms) : nil
+    }
+
+    /// One page's containers and views, one per newspaper column — the body of `buildExplicitPages`'
+    /// page loop. `fragmentTops`/`fragmentBottoms` are the unpinned probe's measurement, read at
+    /// `cursor`; empty when every page is pinned.
+    private func buildExplicitPage(_ pageIndex: Int, columnCounts: [Int], rendered: RenderedDocument, width: CGFloat,
+                                   fragmentTops: [CGFloat], fragmentBottoms: [CGFloat], cursor: inout Int) {
+        // Float-safety margin only — the height itself is already the real AppKit
+        // measurement, not a second isolated guess. Same 0.5pt this codebase's own
+        // oracles already treat as "on the grid" (`GeometryOracleTests.swift`).
+        let epsilon: CGFloat = 0.5
         // PAGE-LOCAL, unlike `cursor`: `overprintPasses`/`oversizedSelfPasses`/
         // `graphicCellRows` are indexed by fragment ordinal within the PAGE, and each
         // column owns its own stretch of that numbering — see `makePageView`'s `fragments`.
@@ -817,9 +1050,8 @@ final class PagedDocumentView: NSView {
                 view.drawsBackground = false
                 columnViews[pageIndex].append(view)
             }
-            addSubview(view)
+            addSubview(view, positioned: .below, relativeTo: overlayView)
             layoutManager.ensureLayout(for: container)
-        }
         }
     }
 
@@ -897,6 +1129,10 @@ final class PagedDocumentView: NSView {
         // Scroll's own real frame isn't computable yet here (`frameForPage`'s own doc comment)
         // and gets `.zero` — safe, since nothing is visible until `applyDisplayMode()` runs.
         let view = PageTextView(frame: frameForPage(pageIndex), textContainer: container)
+        // Batch 26: hidden until `applyDisplayMode` frames and shows it — job 460's own order. A page view added
+        // visible, at Single Page's one shared page rect, invalidated the page on screen as it was added and
+        // again as it was hidden, once per page built.
+        view.isHidden = true
         // Job 246 (p6-knockout): a line index whose `oversizedSelfPasses` entry is non-nil
         // is drawn by `drawOversizedSelfPasses` instead (the OVERLAY subview, always
         // composited above every `PageTextView` — see that method's own doc comment on
@@ -972,6 +1208,9 @@ final class PagedDocumentView: NSView {
 
     /// How many pages this document laid out. The Go menu bounds itself against this.
     var pageCount: Int { pageViews.count }
+
+    /// The page size of the content on screen, once there is some (#271 M7).
+    var renderedPageSize: CGSize? { rendered?.pageSize }
 
     /// Item 19: the text views for local page `index`'s SECOND and later newspaper columns,
     /// in column order — empty for every ordinary page. Internal for the same "a test needs
@@ -1129,6 +1368,24 @@ final class PagedDocumentView: NSView {
         for view in columnViews[index] {
             if let frame { view.frame = frame }
             view.isHidden = hidden
+        }
+    }
+
+    /// Batch 26: `applyDisplayMode()` for the pages from `start` on — those a turn of progressive layout just
+    /// added; the pages before them are framed and shown already.
+    private func applyDisplayMode(toPagesFrom start: Int) {
+        guard start < pageViews.count else { return }
+        for index in start..<pageViews.count {
+            let view = pageViews[index]
+            switch display {
+            case .continuousScroll:
+                view.frame = frameForPage(index)
+                view.isHidden = false
+            case .singlePage:
+                if index == currentPageIndex { view.frame = frameForPage(index) }
+                view.isHidden = index != currentPageIndex
+            }
+            syncColumnViews(atPage: index, frame: view.frame, hidden: view.isHidden)
         }
     }
 
@@ -1370,6 +1627,10 @@ final class PagedDocumentView: NSView {
     /// the Go menu without polling.
     var pageDidChange: ((Int) -> Void)?
 
+    /// #271 M7: called once, at the first draw after it is set — where the window's
+    /// `open.firstPageDrawn` interval ends.
+    var onFirstDraw: (() -> Void)?
+
     // MARK: - Drawing the paper
 
     /// The page rectangles themselves — white sheets under the text views, and the grey
@@ -1377,6 +1638,10 @@ final class PagedDocumentView: NSView {
     /// hundred-page document should not cost a hundred extra views.
     override func draw(_ dirtyRect: NSRect) {
         guard let rendered else { return }
+        if let firstDraw = onFirstDraw {
+            onFirstDraw = nil
+            firstDraw()
+        }
         let page = rendered.pageSize
 
         // The grey desk the pages sit on is a SCREEN affordance. Paper has no desk, and

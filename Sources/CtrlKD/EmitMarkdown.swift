@@ -189,6 +189,10 @@ private func markdownTOCIndexBlock(_ doc: Document) -> String {
 @Sendable
 public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
                          options: EmitOptions = EmitOptions()) -> String {
+    // planning #264 item 1: see emitText's identical call.
+    // planning #270 item 42: a non-paged format carries no page apparatus —
+    // the MailMerge page-number variable is removed here, never shown as typed.
+    let doc = mergePagenoDropped(driverSubstituted(doc))
     // emit.py:104-107 — for a printed or columnar document the alignment IS the content, so
     // a fenced block is the honest representation. Delegates to emitText rather than
     // reimplementing the line-for-line layout; `options` carries the same note selection
@@ -226,9 +230,13 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
     // above, inside its own fenced-facsimile branch) -- see emitText's identical
     // comment for the doctrine.
     let screenplayBlocks = detectScreenplayBlocks(doc)
+    // planning #264 item 4 (packet row A10, extended): see `trailingPASkipIndex`
+    // (EmitterRules.swift).
+    let skipPA = trailingPASkipIndex(doc)
     var out: [String] = []
     for (bi, block) in doc.blocks.enumerated() {
         if block.kind == .pagebreak {
+            if bi == skipPA { continue }
             out.append("---")
             continue
         }

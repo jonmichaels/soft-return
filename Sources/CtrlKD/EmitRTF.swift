@@ -31,6 +31,14 @@ func rtfEscape(_ text: String) -> String {
         if scalar == "\\" || scalar == "{" || scalar == "}" {
             out.append("\\")
             out.unicodeScalars.append(scalar)
+        } else if scalar == mergePagenoMarkScalar {
+            // planning #270 item 42: WordStar's MailMerge page-number variable, put here
+            // by `mergePagenoMarked` and resolved to the reader's OWN current-page
+            // field — the identical mechanism a `#` inside a running head uses. Never
+            // present unless `emitRTF` put it there, and unreachable in a real document
+            // (U+E000 is a private-use code point; cp437 and cp1252 decode nowhere near
+            // it).
+            out += #"{\chpgn }"#
         } else if scalar.value < 128 {
             out.unicodeScalars.append(scalar)
         } else {
@@ -437,8 +445,352 @@ func hfRuns(_ txt: String) -> [(text: String, styles: Style)] {
     return runs
 }
 
-/// Modern RTF `\header`/`\footer` groups from the document's own running heads (ruling
+/// `{slot: {parity: text}}` for one head/foot family — every `.he`/`.h1`-`.h5`/`.fo`/
+/// `.f1`-`.f5` the document declared, keyed by line slot and then by PAGE PARITY: `.odd`
+/// for `.h1o`/`.f1o` (the right-hand page), `.even` for `.h1e`/`.f1e`, `nil` for a plain
+/// definition that applies to both. `hfEventsParity` is INDEX-ALIGNED with `hfEvents`
+/// (planning #250); first definition of each (slot, parity) wins, exactly as the flat
+/// reading did before parity existed. Port of `_hf_slots`.
+func hfSlots(_ doc: Document, _ which: HFKind) -> (slots: [Int: [HFParity?: String]],
+                                                   firstAnchor: Int?) {
+    var slots: [Int: [HFParity?: String]] = [:]
+    var firstAnchor: Int? = nil
+    for (i, event) in doc.hfEvents.enumerated() {
+        guard event.kind == which, !event.text.isEmpty else { continue }
+        let parity: HFParity? = i < doc.hfEventsParity.count ? doc.hfEventsParity[i] : nil
+        var byParity = slots[event.line] ?? [:]
+        if byParity[parity] == nil {
+            byParity[parity] = event.text
+            slots[event.line] = byParity
+            if firstAnchor == nil || event.blockAnchor < firstAnchor! {
+                firstAnchor = event.blockAnchor
+            }
+        }
+    }
+    return (slots, firstAnchor)
+}
+
+/// `{slot: {parity: text}}` for one head/foot family AS IT STOOD at block `anchor` — the
+/// LAST definition of each (slot, parity) declared at or before that block, which is
+/// WordStar's own reading: a `.he`/`.fo` replaces the one before it from where it is
+/// typed onward.
+///
+/// The document-wide `hfSlots` keeps the FIRST definition instead, because RTF carried
+/// one header per file and had to pick one. This is the per-SECTION answer the spine
+/// needs (planning #264 R1, packet row A13) and it deliberately does not replace the
+/// other: section 1 is still written from `hfSlots`, so every document that defines each
+/// slot exactly once — almost all of them — emits the bytes it always did. Port of
+/// `_rtf_hf_slots_at`.
+func rtfHFSlotsAt(_ doc: Document, _ which: HFKind, anchor: Int) -> [Int: [HFParity?: String]] {
+    var slots: [Int: [HFParity?: String]] = [:]
+    for (i, event) in doc.hfEvents.enumerated() {
+        guard event.kind == which, !event.text.isEmpty, event.blockAnchor <= anchor
+        else { continue }
+        let parity: HFParity? = i < doc.hfEventsParity.count ? doc.hfEventsParity[i] : nil
+        var byParity = slots[event.line] ?? [:]
+        byParity[parity] = event.text
+        slots[event.line] = byParity
+    }
+    return slots
+}
+
+/// Block anchors at which a running head or foot is REDEFINED — a second or later
+/// definition of the same (kind, slot, parity) whose text differs from the one already in
+/// force (packet row A13).
+///
+/// A slot defined once, however late, is not a redefinition: that is the ordinary "this
+/// document has a running head" case, which section 1 already carries (with `\titlepg`
+/// when it starts after page 1). Port of `_rtf_hf_redefinitions`.
+func rtfHFRedefinitions(_ doc: Document) -> Set<Int> {
+    struct Key: Hashable {
+        let kind: HFKind
+        let line: Int
+        let parity: HFParity?
+    }
+    var inForce: [Key: String] = [:]
+    var anchors: Set<Int> = []
+    for (i, event) in doc.hfEvents.enumerated() {
+        guard !event.text.isEmpty else { continue }
+        let parity: HFParity? = i < doc.hfEventsParity.count ? doc.hfEventsParity[i] : nil
+        let key = Key(kind: event.kind, line: event.line, parity: parity)
+        if let previous = inForce[key], previous != event.text, event.blockAnchor > 0 {
+            anchors.insert(event.blockAnchor)
+        }
+        inForce[key] = event.text
+    }
+    return anchors
+}
+
+/// One `(columns, gutter)` pair per block — the newspaper-column regime in force at each.
+///
+/// A document begins outside any columnar region, so the state before the first `.co` is
+/// one column. A block with no columns opinion (`nil`: the sentinel `pagebreak`/
+/// `colbreak`/`condpage`/`condcolumn` blocks, and everything before the first `.co`)
+/// INHERITS the state around it rather than reading as one column — the same "real blocks
+/// only" rule `docToPagelines`' own `prevCols` tracker follows. `.co1` (columns OFF)
+/// normalises to `(1, nil)` whatever gutter it carries, so turning columns off and on
+/// again with a different gutter opens one section, not two. Port of
+/// `_rtf_columns_state`.
+func rtfColumnsState(_ doc: Document) -> [(cols: Int, gutter: Double?)] {
+    var out: [(cols: Int, gutter: Double?)] = []
+    var current: (cols: Int, gutter: Double?) = (1, nil)
+    for block in doc.blocks {
+        if let cols = block.columns {
+            current = cols > 1 ? (cols, block.columnGutter) : (1, nil)
+        }
+        out.append(current)
+    }
+    return out
+}
+
+/// 10-CPI print column -> twips, for a `.co` gutter.
+let rtfTwipsPerColGutter = 144.0
+
+/// `\cols`/`\colsx` for one section, or "" for a single column.
+///
+/// `.co n, gutter` (packet row A7): the gutter is print columns at 10 CPI, the same unit
+/// `.po` uses, so it converts at 144 twips a column. WordStar's own default gap when the
+/// author names none is one print column. Port of `_rtf_cols_control`.
+func rtfColsControl(_ cols: Int, _ gutter: Double?) -> String {
+    guard cols > 1 else { return "" }
+    let gap = Int(roundHalfToEven((gutter ?? 1) * rtfTwipsPerColGutter))
+    return #"\cols\#(cols)\colsx\#(gap)"#
+}
+
+/// `[blockIndex: (keep, keepn)]` — the paragraphs `.cp n`/`.cc n` asked to be kept
+/// together (planning #264 R2, packet row A8, ruled 2026-09-14 "Yes add it").
+///
+/// WHAT WORDSTAR ASKED FOR. `.cp n` says "break to a new page unless at least n lines
+/// still fit here", and `.cc n` says the same of a column. The author's purpose is never
+/// the break: it is that the n lines AFTER the command arrive together — `.cp` exists
+/// precisely so a heading is not stranded at the foot of a page.
+///
+/// WHAT RTF CAN SAY. Not "break here" — R6 declined imposed page positions outright, and
+/// a reader paginating with its own fonts would fight one anyway. It can say `\keepn`
+/// (keep this paragraph with the next) and `\keep` (do not split this paragraph across a
+/// page), which are CONSTRAINTS the reader honours while paginating rather than positions
+/// imposed on it. That is the packet's own reason this row works where A12's did not.
+///
+/// THE MAPPING. After a `.cp n`/`.cc n`, the following `para` blocks are walked until
+/// their combined stored-line count first reaches n. Every paragraph in that run gets
+/// `\keep`; every one but the LAST also gets `\keepn`. A run of one paragraph — the
+/// common case in Printed RTF, where a whole WordStar block is one `\par` with `\line`
+/// separators — gets `\keep` alone, because the n lines the author asked for are already
+/// inside it. The line count is the document's OWN stored lines, the same number the
+/// printed paginator counts, in both modes: `n` is a fact about the file, not about a
+/// reader's measure. Port of `_rtf_keep_plan`.
+func rtfKeepPlan(_ doc: Document) -> [Int: (keep: Bool, keepn: Bool)] {
+    var plan: [Int: (keep: Bool, keepn: Bool)] = [:]
+    for (bi, block) in doc.blocks.enumerated() {
+        guard block.kind == .condpage || block.kind == .condcolumn else { continue }
+        let want = max(1, block.heading)
+        var run: [Int] = []
+        var counted = 0
+        var k = bi + 1
+        while k < doc.blocks.count {
+            let next = doc.blocks[k]
+            if next.kind == .condpage || next.kind == .condcolumn {
+                k += 1
+                continue                      // a sentinel spends no lines
+            }
+            if next.kind != .para { break }   // a real break ends the run
+            let lines = mergedLines(next).count
+            if lines == 0 {
+                k += 1
+                continue
+            }
+            run.append(k)
+            counted += lines
+            if counted >= want { break }
+            k += 1
+        }
+        for (j, index) in run.enumerated() {
+            let existing = plan[index] ?? (false, false)
+            plan[index] = (true, existing.keepn || j < run.count - 1)
+        }
+    }
+    return plan
+}
+
+/// One entry per section AFTER the first — THE SECTION SPINE (planning #264 R1, ruled
+/// 2026-09-14; packet section 3's recommendation and rows A7/A9/A13).
+///
+/// The first section is the one the document's own page setup and `rtfRunningHeads`
+/// already write. A section opens where the document's own geometry changes, and nowhere
+/// else — no imposed page positions (R6 declined those outright), so an RTF reader still
+/// paginates inside every section exactly as it does today.
+///
+/// TWO things open one:
+///
+///   A7  a change of newspaper-column regime (`.co n, gutter`). PRINTED ONLY. Modern PDF
+///       has no column model at all, and the 2026-08-05 ruling is that "Modern PDF needs
+///       to be the printed version of the Modern RTF" — so a columnar Modern RTF would be
+///       a Modern RTF its own PDF could not render. Modern stays one column by design.
+///       (Modern HTML's `column-count` is a separate, older surface and is untouched.)
+///   A13 a running head or foot REDEFINED mid-document. The new section carries its own
+///       `\header`/`\footer` groups.
+///
+/// `.cb` (row A9) is NOT a section break: it is `\column`, a break to the next column
+/// INSIDE a section, written by the body loop.
+///
+/// Deliberately not here, and not ruled here: a mid-document `.pn` re-anchor
+/// (`\pgnrestart\pgnstarts`), and a mid-document `.po`/margin change. R1 names A7, A9
+/// and A13; those are the three built. Port of `_rtf_section_breaks`.
+struct RTFSection {
+    let cols: Int
+    let gutter: Double?
+    let headerSlots: [Int: [HFParity?: String]]
+    let footerSlots: [Int: [HFParity?: String]]
+}
+
+func rtfSectionBreaks(_ doc: Document, printed: Bool) -> [Int: RTFSection] {
+    var anchors = rtfHFRedefinitions(doc)
+    let state = printed ? rtfColumnsState(doc) : []
+    if printed {
+        for (bi, block) in doc.blocks.enumerated() {
+            // Only a REAL block opens a column regime: a sentinel inherits the state
+            // around it and must not read as a change.
+            guard block.columns != nil, bi > 0 else { continue }
+            if state[bi] != state[bi - 1] { anchors.insert(bi) }
+        }
+    }
+    var out: [Int: RTFSection] = [:]
+    for bi in anchors where bi > 0 && bi < doc.blocks.count {
+        let pair: (cols: Int, gutter: Double?) = printed ? state[bi] : (1, nil)
+        out[bi] = RTFSection(cols: pair.cols, gutter: pair.gutter,
+                             headerSlots: rtfHFSlotsAt(doc, .header, anchor: bi),
+                             footerSlots: rtfHFSlotsAt(doc, .footer, anchor: bi))
+    }
+    return out
+}
+
+/// `{slot: text}` for one side of the sheet. A slot defined only for the OTHER parity
+/// prints nothing on this side — which is the whole point of `.h1o`/`.h1e` — while a
+/// plain definition applies to both. Port of `_hf_variant`.
+func hfVariant(_ slots: [Int: [HFParity?: String]], _ parity: HFParity?) -> [Int: String] {
+    var out: [Int: String] = [:]
+    for (line, byParity) in slots {
+        if let text = byParity[parity] ?? byParity[HFParity?.none] ?? nil, !text.isEmpty {
+            out[line] = text
+        }
+    }
+    return out
+}
+
+/// One per-line head/foot attribute for one page parity, with the same "parity wins,
+/// plain is the fallback" rule `hfVariant` applies to the text. Port of `_hf_attr`.
+func hfAttr<T>(_ plain: [Int: T], _ byParity: [Int: [HFParity: T]],
+               _ parity: HFParity?) -> [Int: T] {
+    guard let parity else { return plain }
+    var out = plain
+    for (line, per) in byParity {
+        // A slot that declares ANY parity variant answers PER PARITY, and a parity that
+        // names no value has none -- assigning `nil` removes the key, so the flat
+        // last-in-source-order fallback never leaks across sides. Python records that
+        // case as an explicit `None` inside the parity dict ("Header Even" selects a
+        // style that declares no alignment while "Header Odd" declares flush right, the
+        // corpus's own booklet templates); a Swift dictionary cannot hold a nil value,
+        // so an ABSENT key means the same thing here.
+        out[line] = per[parity]
+    }
+    return out
+}
+
+/// `(\headery, \footery)` in twips, or `(nil, nil)` for Modern (planning #264 item 4,
+/// packet row A5).
+///
+/// WordStar anchors the header block to the BODY, not to the paper edge: its last line
+/// sits `.hm` lines above the first body line, inside `.mt`. The PDF resolves that as
+/// `headBase = max(0, mt - hm - topHead)` whole 12pt lines from the top of the sheet
+/// (`resolveHeadFootLines`, mechanism W — `hm` participates unconditionally, confirmed
+/// against the PRISTINE.EXE recapture), and the footer as line `pl - mb + fm`, which
+/// leaves `mb - fm - 1` lines under it. `\headery`/`\footery` are exactly those two
+/// distances, so RTF's own gap matches the page the PDF draws instead of the reader's
+/// default.
+///
+/// PRINTED ONLY. Modern's page is its own fixed Letter and Modern carries no vertical
+/// space of ours (ruling 2026-08-17, "never Modern"; packet row D9) — a Modern reader
+/// keeps its own head/foot gap, the same way it keeps its own leading. Port of
+/// `_rtf_head_foot_distance`.
+func rtfHeadFootDistance(_ page: PageGeometry?, headSlots: [Int],
+                         printed: Bool) -> (headery: Int?, footery: Int?) {
+    guard printed else { return (nil, nil) }
+    let line = 240.0                                 // one line at 6 LPI
+    let mt = page?.mtLines ?? 3.0
+    let hm = page?.hmLines ?? 2.0
+    let topHead = Double(headSlots.max() ?? 1)
+    let mb = page?.mbLines ?? 8.0
+    let fm = page?.fmLines ?? 2.0
+    return (roundHalfToEven(max(0.0, mt - hm - topHead) * line),
+            roundHalfToEven(max(0.0, mb - fm - 1.0) * line))
+}
+
+/// `(.poe, .poo)` in print columns, or `(nil, nil)` — the document's own even/odd page
+/// offsets (planning #231), resolved AT BLOCK 0.
+///
+/// The same `poeOrPooCheckpoints`/`poAt` machinery `closePage` and `resolveHeadFootLines`
+/// already use, called at block 0 because RTF has one section: whatever is in force where
+/// the document opens is the only answer this format can carry. Block 0 is also the only
+/// anchor a `.DOT` TEMPLATE has at all — the corpus's galley and advance templates declare
+/// `.poe`/`.poo` (and their `.h1o`/`.h1e` pair) before any block would ever open, and have
+/// no body lines for the per-line `Line.poeCols`/`pooCols` state to ride on. Port of
+/// `_rtf_po_parity`.
+func rtfPoParity(_ doc: Document) -> (poe: Double?, poo: Double?) {
+    let poeList = poeOrPooCheckpoints(doc, dotName: "POE")
+    let pooList = poeOrPooCheckpoints(doc, dotName: "POO")
+    return (poeList.isEmpty ? nil : poAt(poeList, 0),
+            pooList.isEmpty ? nil : poAt(pooList, 0))
+}
+
+/// The alignment control a head/foot group's own paragraph carries (planning #264 item 4,
+/// packet row A4): the `.h#`/`.f#` argument's embedded style-sheet reference, resolved by
+/// the parser into `headerAlign`/`footerAlign` (planning #255).
+private let rtfHFAlign: [Alignment: String] = [.right: #"\qr"#, .center: #"\qc"#]
+
+/// Whether WordStar's own AUTOMATIC page number — the one `.pc` positions, never a `#`
+/// the author typed into a real `.he`/`.fo` — is on for this document (planning #264 item
+/// 3, packet row A1).
+///
+/// `.auto` (the default) asks the document's own `.pn`/`.pg`/`.op` state, the same
+/// `pgnumCheckpoints` the PDF reads, resolved AT THE DOCUMENT'S FIRST BLOCK: RTF has one
+/// section and one footer, so a document that turns numbering off half-way through cannot
+/// be expressed here (that needs the section spine, packet section 3, deliberately not
+/// built). `.on`/`.off` force it either way, exactly as for the PDF. Port of
+/// `_rtf_auto_page_number`.
+func rtfAutoPageNumber(_ doc: Document, _ mode: EmitOptions.PageNumberMode) -> Bool {
+    switch mode {
+    case .off: return false
+    case .on: return true
+    case .auto: return pgnumAt(pgnumCheckpoints(doc), 0)
+    }
+}
+
+/// RTF `\header`/`\footer` groups from the document's own running heads (ruling
 /// 2026-08-06: Modern keeps headers).
+///
+/// Planning #264 item 3 (packet row A1): a document that declares no footer of its own
+/// still gets WordStar's automatic page number, centred at the foot of every page — a
+/// `\footer` group carrying `\chpgn`, the reader's own current-page field. The PDF's
+/// rule, unchanged here: the automatic number appears only when no `.fo` is IN USE
+/// (WSFORMAT.WS, "active only when the footers are not in use") — a declared footer
+/// pre-empts it, and a `#` inside that footer is already rendered as `\chpgn` below.
+/// "In use" is a property of the DOCUMENT, not of what we end up drawing: the corpus's
+/// LJ6DTP document declares an `.f1` of two 0x0F bytes that renders nothing visible, and
+/// its automatic number still stays off — exactly what `closePage` records
+/// (`footerInUse = !pageFtrs.isEmpty`, before the empty slots are dropped). `headers`
+/// gates the running heads and feet this function writes, and NOT the automatic number:
+/// planning #264 R7 (ruled 2026-09-14) separates the two flags — "a header or footer
+/// that contains a page number is controlled by header flag but a page number on its own
+/// is controlled by the page number flag" — so a `#` the author typed into a real
+/// `.he`/`.fo` goes with its head, and WordStar's own automatic number answers to
+/// `--page-numbers` alone.
+///
+/// Planning #264 item 5: the head's OWN print attributes (`headerStyleAttrs`/
+/// `footerStyleAttrs`, the same style-sheet reference the alignment is read from,
+/// planning #255) join every run on their line, exactly as a body paragraph's
+/// `styleAttrs` do — so a head whose bold comes from its style, not from an inline
+/// toggle byte, prints bold here as it already does in the PDF. Per line and per parity,
+/// so a two-sided template's two variants can differ.
 ///
 /// RTF carries ONE header per section; a document that redefines its head mid-file keeps
 /// the FIRST definition of each line slot (the common case — OLDTIMES — defines each
@@ -447,43 +799,123 @@ func hfRuns(_ txt: String) -> [(text: String, styles: Style)] {
 /// header: the manuscript convention (no running head on page 1), and exactly what
 /// WordStar itself printed when `.h1` follows page 1's title. Port of
 /// `_rtf_running_heads`.
-private func rtfRunningHeads(_ doc: Document) -> String {
-    var hdr: [Int: String] = [:]
-    var ftr: [Int: String] = [:]
-    var firstAnchor: Int? = nil
-    for event in doc.hfEvents {
-        let isHeader = event.kind == .header
-        let present = isHeader ? hdr[event.line] != nil : ftr[event.line] != nil
-        if !present, !event.text.isEmpty {
-            if isHeader { hdr[event.line] = event.text } else { ftr[event.line] = event.text }
-            if firstAnchor == nil || event.blockAnchor < firstAnchor! {
-                firstAnchor = event.blockAnchor
-            }
-        }
+private func rtfRunningHeads(_ doc: Document, headers: Bool = true,
+                             autoPageNumber: Bool = false,
+                             printed: Bool = true,
+                             slots: (header: [Int: [HFParity?: String]],
+                                     footer: [Int: [HFParity?: String]])? = nil)
+    -> (groups: String, facingPages: Bool, headery: Int?, footery: Int?) {
+    // planning #264 R1 (packet row A13): `slots`, when given, is a LATER section's own
+    // head/foot state, resolved by `rtfHFSlotsAt`. The `\titlepg` rule below is the
+    // document's first page and belongs to section 1 alone, so a section handed its slots
+    // never asks for one.
+    let hdrAll = slots?.header ?? hfSlots(doc, .header).slots
+    let ftrAll = slots?.footer ?? hfSlots(doc, .footer).slots
+    let firstAnchor: Int? = slots == nil
+        ? [hfSlots(doc, .header).firstAnchor, hfSlots(doc, .footer).firstAnchor]
+            .compactMap { $0 }.min()
+        : nil
+    // "In use" is a property of the DOCUMENT, not of what we end up drawing, and not of
+    // the `headers` flag — see this function's own doc comment. Planning #264 R7 (ruled
+    // 2026-09-14): `headers` no longer enters into it at all. The first RTF batch made
+    // `--headers off` swallow the automatic number too; that is reverted here, on both
+    // surfaces.
+    let showAutoNum = autoPageNumber && ftrAll.isEmpty
+    let hdrSlots = headers ? hdrAll : [:]
+    let ftrSlots = headers ? ftrAll : [:]
+    let (headery, footery) = rtfHeadFootDistance(doc.page,
+                                                 headSlots: Array(hdrSlots.keys),
+                                                 printed: printed)
+    if hdrSlots.isEmpty, ftrSlots.isEmpty, !showAutoNum {
+        // Nothing is drawn in either margin, so there is no gap to state.
+        return ("", false, nil, nil)
     }
-    if hdr.isEmpty, ftr.isEmpty { return "" }
+    // planning #264 item 1: a running head is the document's own text and takes the
+    // driver's substitutions like any other (`emitRTF`'s own document-wide pass cannot
+    // reach it — a head lives in `hfEvents`, not in a block). The head's FACE is
+    // `headerFonts`/`footerFonts`' own `doc.fonts` index (register C6), handed to the
+    // substituter exactly as a body span's `font` is, so the same
+    // proportional-only/Univers-only face rules apply.
+    let subst = driverSubstituter(doc)
 
-    func group(_ name: String, _ lines: [Int: String]) -> String {
+    func group(_ name: String, _ lines: [Int: String], _ faces: [Int: Int],
+               _ aligns: [Int: Alignment], _ attrs: [Int: Style]) -> String {
         if lines.isEmpty { return "" }
         var rendered: [String] = []
+        var alignControl = ""
         for n in lines.keys.sorted() {
-            let runs = hfRuns(lines[n]!)
+            let text = subst.map { $0(lines[n]!, faces[n]) } ?? lines[n]!
+            let runs = hfRuns(text)
             if runs.isEmpty { continue }                 // control-bytes-only head (M10)
+            if rendered.isEmpty {
+                alignControl = aligns[n].flatMap { rtfHFAlign[$0] } ?? ""
+            }
+            // planning #264 item 5 (planning #255's `headerStyleAttrs`): the print
+            // attributes the head's OWN style turns on. A `.h#`/`.f#` argument can name
+            // a style-sheet entry, and that entry's bold/italic/underline belong to
+            // every run on the line exactly as a body paragraph's `styleAttrs` do --
+            // core parses them, the PDF has drawn them since #255
+            // (`hfNaturalWidthPt`'s own `styles.union(styleAttrs)`), and RTF read only
+            // the line's inline toggle bytes, so a head whose weight came from its
+            // style printed light. The corpus's galley template is the case: its
+            // `.h1o`/`.h1e` both declare a bold style and carry no toggle byte at all.
+            let lineAttrs = attrs[n] ?? []
             rendered.append(runs.map { run in
-                "{" + rtfStyleControls(run.styles)
+                "{" + rtfStyleControls(run.styles.union(lineAttrs))
                     + rtfEscape(run.text).replacingAll("#", with: #"{\chpgn }"#) + "}"
             }.joined())
         }
         if rendered.isEmpty { return "" }
         let body = rendered.joined(separator: #"\line "#)
-        return #"{\\#(name) \pard\plain \f0\fs22 \#(body)\par}"#
+        return #"{\\#(name) \pard\plain \#(alignControl)\f0\fs22 \#(body)\par}"#
     }
 
-    var out = group("header", hdr) + group("footer", ftr)
+    /// One head/foot family, as `\headerl`/`\headerr` when the document declares a parity
+    /// variant anywhere in it, else the plain single group it always was.
+    func sided(_ name: String, _ slots: [Int: [HFParity?: String]],
+               _ plainFonts: [Int: Int], _ parityFonts: [Int: [HFParity: Int]],
+               _ plainAligns: [Int: Alignment],
+               _ parityAligns: [Int: [HFParity: Alignment]],
+               _ plainAttrs: [Int: Style],
+               _ parityAttrs: [Int: [HFParity: Style]]) -> (String, Bool) {
+        let hasParity = slots.values.contains { $0.keys.contains { $0 != nil } }
+        if !hasParity {
+            return (group(name, hfVariant(slots, nil), plainFonts, plainAligns,
+                          plainAttrs), false)
+        }
+        var out = ""
+        for (parity, side) in [(HFParity.odd, name + "r"), (HFParity.even, name + "l")] {
+            out += group(side, hfVariant(slots, parity),
+                         hfAttr(plainFonts, parityFonts, parity),
+                         hfAttr(plainAligns, parityAligns, parity),
+                         hfAttr(plainAttrs, parityAttrs, parity))
+        }
+        return (out, !out.isEmpty)
+    }
+
+    let (headGroup, headFacing) = sided("header", hdrSlots, doc.headerFonts,
+                                        doc.headerFontsParity, doc.headerAlign,
+                                        doc.headerAlignParity, doc.headerStyleAttrs,
+                                        doc.headerStyleAttrsParity)
+    var (footGroup, footFacing) = sided("footer", ftrSlots, doc.footerFonts,
+                                        doc.footerFontsParity, doc.footerAlign,
+                                        doc.footerAlignParity, doc.footerStyleAttrs,
+                                        doc.footerStyleAttrsParity)
+    if showAutoNum {
+        // WordStar's stock automatic number: bottom of the page, centred. `.pc`
+        // repositions it on the printed page; RTF's footer is a paragraph, so the
+        // position it can honestly carry is its ALIGNMENT, and centred is both
+        // WordStar's own default and what the PDF draws for a document that never sets
+        // `.pc`. Centred is the same on both sides of a sheet, so this stays the plain
+        // `\footer` group even under `\facingp`.
+        footGroup = #"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#
+        footFacing = false
+    }
+    var out = headGroup + footGroup
     if let anchor = firstAnchor, anchor > 0 {
         out = #"\titlepg{\headerf \pard\plain\par}"# + out
     }
-    return out
+    return (out, headFacing || footFacing, headery, footery)
 }
 
 /// A fixed symmetric inset (0.5in each side) MODERN mode gives a quote-classified style,
@@ -586,30 +1018,70 @@ func rtfSlTwips(_ lead48: Double) -> Int {
     -roundHalfToEven(lead48 * rtfLeadTwipsPer48)
 }
 
-/// `\sl` for a Modern verse/centered unit (b24 round 20, slate item 4) — POSITIVE (a
-/// MINIMUM, not the negative/EXACT convention `rtfSlTwips` uses for Printed's own
-/// physical `.lh`): Modern is reflowed prose, not a fixed print position, so a taller
-/// inline font mid-stanza should still get room to breathe rather than clip. Derived
-/// from the SAME `verseLineHeight` constant HTML's own line-height reads, against
-/// Modern's own fixed body size (`modernBodySize`, FontMap.swift) — one named
-/// multiplier, both formats. Port of `_rtf_verse_tight_sl_twips`.
-func rtfVerseTightSlTwips() -> Int {
-    roundHalfToEven(verseLineHeight * Double(modernBodySize) * 20.0)   // 20 twips/pt
+/// `\sl` for a Modern verse/centered unit — NEGATIVE, so EXACT, and carrying this
+/// block's OWN tightened leading (planning #264 R3, Jon's ruling 2026-09-14; Athena's
+/// call on the form, taken under it).
+///
+/// WHAT IT USED TO BE and why that was wrong. Round 20 emitted one fixed POSITIVE
+/// `\sl322` for every tightened unit in every document: 1.15 (HTML's own verse
+/// line-height) times Modern's 14pt body. Two faults, one measured and one arithmetic.
+///
+///   A positive `\sl` is a MINIMUM, and 16.10pt is what LibreOffice already gives a
+///   14pt Times line by itself, so the control asked for nothing it was not already
+///   going to get. Measured 2026-09-14 (research/2026-09-14_rtf-html-libreoffice-
+///   check.md section 2): `\sl280` and no `\sl` at all both lay 16.10pt; only
+///   `\sl-280` laid 14.00pt. The same probe settles the caveat that made round 20
+///   choose the minimum form — an exact height at the face's own size loses no ink in
+///   LibreOffice (14118 ink pixels either way, every accent and ascender drawn; the
+///   lines merely overlap). Pages and Word are still unmeasured.
+///
+///   And 1.15 × body was never the number Modern uses. Modern's tightening is
+///   `modernVerseTight` (0.71875) against the FACE's own natural line height, plus job
+///   434's leading spacer — see `modernTightLineAdvancePt`, which is the one place that
+///   arithmetic lives now, so RTF cannot drift from the page it describes. A document
+///   whose title block is set at 72pt (LJ6DTP.WS) got the same 322 twips as one set at
+///   14pt.
+///
+/// So: per block, exact, and the same figure the Modern PDF advances by — 15.1pt on
+/// STRENGTH.WS's title block, which is `\sl-302\slmult0`.
+///
+/// THE C2 BOUNDARY is not in this number. The author's blank line after a tightened
+/// block is a paragraph break and belongs to the body's ordinary leading, exactly as
+/// `modernStreams` spends its untightened `lastH` there — so Modern RTF resets `\sl` to
+/// 0 before a run of blank `\par`s rather than letting the compression leak past the
+/// block that earned it. With the old positive form that reset was invisible (the reader
+/// ignored the control either way); with an exact one it is the difference between a
+/// title block closing at the body's 16.80pt and closing at 15.10pt.
+/// Port of `_rtf_verse_tight_sl_twips`.
+func rtfVerseTightSlTwips(_ spans: [Span], _ doc: Document,
+                          nonpropFallback: Bool = false) -> Int {
+    -roundHalfToEven(modernTightLineAdvancePt(spans, fonts: doc.fonts,
+                                              nonpropFallback: nonpropFallback) * 20.0)
 }
 
-/// `\fi` (RTF's first-line indent, relative to `\li`) from `.pm` — `block.paraMargin`,
-/// previously read by no emitter. WSFORMAT semantics: ".pm is the PARAGRAPH margin —
-/// the first line's own indent," a column position in the SAME absolute frame `.lm`/
-/// `.po` use, not a delta against `.lm`. RTF's own model reads `\fi` as relative to
-/// `\li`, so the direct token is the DIFFERENCE between .pm's absolute column (in
-/// twips) and wherever `\li` (the block's own style margin, round 4) is already placing
-/// the body of the paragraph — `\li + \fi` then lands exactly on .pm's column, whether
-/// that's deeper (an ordinary indent) or shallower (a hanging indent) than the body.
-/// `nil` (the block never set `.pm`) leaves `\fi` untouched — no override where there
-/// is no evidence. Port of `_rtf_pm_fi_twips`.
+/// `\fi` (RTF's first-line indent, relative to `\li`) from `.pm` — `block.paraMargin`.
+/// WSFORMAT semantics: ".pm is the PARAGRAPH margin — the first line's own indent," a
+/// column position in the SAME absolute frame `.lm`/`.po` use, not a delta against
+/// `.lm`. RTF reads `\fi` as relative to `\li`, so the direct token is the DIFFERENCE
+/// between the indent's own absolute column (in twips) and wherever `\li` (the block's
+/// own style margin, round 4) already places the body — `\li + \fi` then lands exactly
+/// on it, whether that's deeper (an ordinary indent) or shallower (a hanging indent)
+/// than the body. `nil` (the block never set `.pm`) leaves `\fi` untouched — no override
+/// where there is no evidence. Port of `_rtf_pm_fi_twips`.
+///
+/// WHICH COLUMN (planning #264 item 2, packet row B6): `pmFirstLineIndentCols`
+/// (EmitterRules.swift), the same function the Printed PDF calls, not `.pm`'s raw value.
+/// Printed RTF renders PHYSICAL lines, so a first line that already types its own
+/// leading spaces carries them into the output as real characters; adding `.pm`'s full
+/// column on top of that is the same double-count the PDF stopped making in planning
+/// #202, and it is why such a paragraph indented too far here. The resolved column is
+/// `max(0, .pm - already typed)`, so `\li + \fi + the typed spaces` now lands where the
+/// PDF puts the same line — and the clamp at zero is planning #257's half of it, which
+/// keeps a `.pm 0"` block from pulling its first line LEFT of the column its author
+/// typed.
 func rtfPMFiTwips(_ block: Block, liTwips: Int) -> Int? {
-    guard let paraMargin = block.paraMargin else { return nil }
-    return roundHalfToEven(paraMargin * rtfTwipsPerCol) - liTwips
+    guard let cols = pmFirstLineIndentCols(block) else { return nil }
+    return roundHalfToEven(cols * rtfTwipsPerCol) - liTwips
 }
 
 /// `(sb, sa)` in twips from WordTsar's own `.psa`/`.psb` extensions
@@ -643,6 +1115,10 @@ func rtfDocSpacingTwips(_ doc: Document) -> (sb: Int?, sa: Int?) {
 /// `rtf_state`.
 struct RTFParaState {
     var align: Alignment = .left
+    /// planning #264 R2 (packet row A8): the two keep properties, tracked like the six
+    /// below because they PERSIST across `\par` exactly as those do.
+    var keep: Bool = false
+    var keepn: Bool = false
     var fi: Int = 0
     var li: Int = 0
     var ri: Int = 0
@@ -663,7 +1139,8 @@ struct RTFParaState {
 /// Port of `_rtf_emit_para`.
 func rtfEmitPara(_ parts: inout [String], _ state: inout RTFParaState, _ block: Block,
                  _ lines: [String], fiCols: Int = 0, force: Bool = false, li: Int = 0, ri: Int = 0,
-                 sl: Int = 0, sb: Int = 0, sa: Int = 0, fiTwips: Int? = nil) {
+                 sl: Int = 0, sb: Int = 0, sa: Int = 0, fiTwips: Int? = nil,
+                 keep: Bool = false, keepn: Bool = false) {
     let para = lines.joined(separator: #"\line "#)
     guard !para.trimmed().isEmpty || force else { return }
     if block.align != state.align {
@@ -697,6 +1174,21 @@ func rtfEmitPara(_ parts: inout [String], _ state: inout RTFParaState, _ block: 
         parts.append(#"\sa\#(sa) "#)
         state.sa = sa
     }
+    // planning #264 R2 (packet row A8, ruled 2026-09-14 "Yes add it"): `.cp n`/`.cc n`'s
+    // own request, in the only vocabulary a reflowing reader has for it. `\keep` = do not
+    // split this paragraph across a page; `\keepn` = keep it with the one after. Both
+    // PERSIST across `\par` exactly as the six above do, so both are tracked and reset.
+    // And note WHY this row works where imposed page positions do not (the packet's own
+    // remark on A8): it is a CONSTRAINT the reader honours while paginating, not a
+    // position we impose on it.
+    if keep != state.keep {
+        parts.append(keep ? #"\keep "# : #"\keep0 "#)
+        state.keep = keep
+    }
+    if keepn != state.keepn {
+        parts.append(keepn ? #"\keepn "# : #"\keepn0 "#)
+        state.keepn = keepn
+    }
     if let slot = block.styleID, state.styledSlots.contains(slot) {
         // style pass-through: tag the paragraph with its \sN so a consumer can act on
         // the named style — the visible formatting above is now ALSO direct, so a reader
@@ -706,8 +1198,87 @@ func rtfEmitPara(_ parts: inout [String], _ state: inout RTFParaState, _ block: 
     parts.append(para + #"\par "#)
 }
 
+/// `(li, fi)` in twips for one structured def/bullet row — planning #264 item 5 (packet
+/// row C3), the SAME ladder the Modern PDF already lays
+/// (`modernStructureIndentHang`, backported from the app by Jon's ruling 2026-09-11:
+/// "Definitely backport. We spent a long time getting that looking nice.").
+///
+/// THE LADDER: `max(level - 1, 0)` steps of `modernLevelStepCols` past the margin, level 1
+/// sitting AT the margin. The row's own declared column is deliberately unused.
+///
+/// THE HANG, where a wrapped continuation lands:
+///   - def: a fixed `modernDefHangPt` past the margin, shared by every row of the list.
+///   - bullet: the marker's own advance. The PDF measures it in the face that draws it;
+///     RTF cannot know the reader's face, so it measures the same two characters in the
+///     same base-14 Times at the same Modern body size the PDF's own fontless Modern token
+///     uses — one number both engines compute identically, and far closer than a whole-
+///     column count (the PDF rejected a column-count hang precisely because a marker and
+///     its gap never land on a whole monospace cell in a proportional face).
+///
+/// RTF expresses a hanging indent as `\li` (where the wrapped lines sit) with a NEGATIVE
+/// `\fi` of the same size (pulling the first line, which carries the label or marker, back
+/// out to the ladder position). Port of `_rtf_structure_indent_hang`.
+func rtfStructureIndentHang(_ structure: RowStructure, _ doc: Document,
+                            markerText: String) -> (li: Int, fi: Int) {
+    // `cw120` is 1/120in units; 0.6pt each (the PDF's own `colPt`), and 20 twips to the
+    // point — 12 twips per unit, 144 for the default 12.
+    let colTwips = (doc.page?.cw120 ?? 12.0) * 12.0
+    let indent = Double(max(structure.level - 1, 0) * modernLevelStepCols) * colTwips
+    let hang: Double = structure.kind == .def
+        ? modernDefHangPt * 20.0
+        : stringWidthPt(markerText, "Times-Roman", modernBodyPt) * 20.0
+    return (roundHalfToEven(indent + hang), -roundHalfToEven(hang))
+}
+
+/// One definition or bullet row as a hanging paragraph (planning #264 item 5, packet row
+/// C3). Modern RTF used to render both as plain paragraphs, so a wrapped definition
+/// returned to the left margin instead of hanging under its own text.
+///
+/// A def row is rewritten LABEL + a two-space gap + body rather than the author's own raw
+/// column padding — `modernDefRuns`' rule, and the same thing HTML's `<dt>`/`<dd>` pair
+/// already does. The slice offsets are character counts the classifier took from this
+/// row's own text, so the spans are sliced (never re-joined from strings) and every style
+/// crossing the boundary survives. A bullet row keeps its marker: the marker IS what
+/// hangs. Port of `_rtf_structure_row`.
+func rtfStructureRow(_ parts: inout [String], _ state: inout RTFParaState, _ block: Block,
+                     _ structure: RowStructure, _ line: Line, doc: Document,
+                     li: Int, ri: Int, keep: Bool = false, keepn: Bool = false,
+                     render: ([Span]) -> String) {
+    let raw = Array(line.spans.map(\.text).joined())
+    var lead = 0
+    while lead < raw.count, raw[lead] == " " { lead += 1 }
+    let labelLen = (structure.label ?? "").count
+    let bodyLen = (structure.body ?? "").count
+    var seg: String
+    var marker = ""
+    if structure.kind == .def, labelLen > 0, bodyLen > 0,
+       lead + labelLen <= raw.count - bodyLen {
+        seg = render(sliceSpans(line.spans, start: lead, end: lead + labelLen))
+        seg += "  "
+        seg += render(sliceSpans(line.spans, start: raw.count - bodyLen))
+    } else {
+        // a bullet row, or a def row whose own label/body offsets do not line up (the PDF
+        // declines the rewrite in exactly that case too)
+        seg = render(sliceSpans(line.spans, start: lead))
+        marker = String(raw[lead..<min(lead + 2, raw.count)])
+    }
+    guard !seg.trimmed().isEmpty else { return }
+    let (liTwips, fiTwips) = rtfStructureIndentHang(structure, doc, markerText: marker)
+    rtfEmitPara(&parts, &state, block, [seg], li: li + liTwips, ri: ri, fiTwips: fiTwips,
+                keep: keep, keepn: keepn)
+}
+
 public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
                     options: EmitOptions = EmitOptions()) -> String {
+    // planning #264 item 1: see emitText's identical call.
+    // planning #270 item 42 (ruled 2026-09-14): both RTF modes are PAGED surfaces, so
+    // WordStar's MailMerge page-number variable is substituted rather than shown as
+    // typed — with `{\chpgn }`, the reader's own current-page field, because an RTF's
+    // pages are the reader's (see `mergePagenoMarked`). `--page-numbers off` removes it
+    // instead, the same flag governing it that governs the automatic number.
+    let doc = options.pageNumbers == .off
+        ? mergePagenoDropped(driverSubstituted(doc))
+        : mergePagenoMarked(driverSubstituted(doc))
     let printed = mode == .printed || isPrinted(doc)
     var options = options
     if printed {
@@ -838,6 +1409,11 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // run 1, 2, 3... starting the instant `.l#2` activates, never continuing some large
     // running total). Blank physical lines are numbered exactly like text-bearing ones
     // (measured; the previous `hasText` guard here was unverified).
+    // planning #264 item 5 (packet rows C3+C4): ONE document-wide structure
+    // classification, the same call (and therefore the same verdicts) emitHTML makes --
+    // bullet-marker discovery and nesting both need the whole row order, not one block in
+    // isolation.
+    let blockRows = printed ? [:] : classifyModernBlocks(doc)
     let lineNoCheckpoints: [(blockIndex: Int, interval: Int?)]? =
         printed ? lineNumberingCheckpoints(doc) : nil
     let lineNumbersEnabled = printed && options.lineNumbers
@@ -859,36 +1435,125 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         return renderedLine
     }
 
+    // planning #264 item 2 (packet row A10): a trailing `.pa` opens no page unless the
+    // document earned one. The reading moved to `trailingPASkipIndex`
+    // (EmitterRules.swift) when item 4 gave the other emitters the same rule -- same
+    // fact, same answer, one place.
+    let skipPA = trailingPASkipIndex(doc)
+    // planning #264 R1 (ruled 2026-09-14): THE SECTION SPINE. See `rtfSectionBreaks` for
+    // what opens a section and what deliberately does not. A document whose geometry
+    // never changes gets an empty dictionary here and emits exactly the bytes it always
+    // did.
+    let sectionBreaks = rtfSectionBreaks(doc, printed: printed)
+    let columnsState: [(cols: Int, gutter: Double?)]? =
+        printed ? rtfColumnsState(doc) : nil
+    // planning #264 R2 (packet row A8): `.cp n`/`.cc n` -> `\keep`/`\keepn` on the
+    // paragraphs they asked to hold together. See `rtfKeepPlan`.
+    let keepPlan = rtfKeepPlan(doc)
     for (bi, block) in doc.blocks.enumerated() {
+        if let section = sectionBreaks[bi] {
+            let sectionHeads = rtfRunningHeads(
+                doc, headers: options.headers,
+                autoPageNumber: rtfAutoPageNumber(doc, options.pageNumbers),
+                printed: printed,
+                slots: (header: section.headerSlots, footer: section.footerSlots))
+            // `\sectd` resets EVERY section property to the document's own defaults, so
+            // this section restates the ones it needs: `\headery`/`\footery` (section
+            // properties in the RTF spec, written into the page setup for section 1) and
+            // its own column regime. `\facingp`, `\margmirror` and the paper size are
+            // DOCUMENT properties and survive untouched.
+            var opener = #"\sect\sectd"#
+            if let headery = sectionHeads.headery, let footery = sectionHeads.footery {
+                opener += #"\headery\#(headery)\footery\#(footery)"#
+            }
+            opener += rtfColsControl(section.cols, section.gutter)
+            parts.append(opener + " " + sectionHeads.groups + "\n")
+            // Section properties reset the paragraph state the running text was
+            // carrying, so the next paragraph restates its own.
+            rtfState.align = .left
+            rtfState.fi = 0
+            rtfState.li = 0
+            rtfState.ri = 0
+            rtfState.sl = 0
+            rtfState.sb = 0
+            rtfState.sa = 0
+            rtfState.keep = false
+            rtfState.keepn = false
+            quoteOpen = false
+            quoteFiCols = nil
+        }
+        if block.kind == .colbreak {
+            // planning #264 R1 (packet row A9): `.cb` breaks to the next column — the
+            // reader's own `\column`. PRINTED ONLY, and inside a columnar region only:
+            // Modern has no columns (`rtfSectionBreaks`) and Modern's own flow drops
+            // `.cb` entirely (`semanticFlow` makes a break item for `pagebreak` alone),
+            // so a `\column` there would be a page break Modern PDF does not take.
+            // Outside a region the control would mean the same thing to a reader, which
+            // is not what WordStar did with it either — nothing is written.
+            quoteOpen = false
+            quoteFiCols = nil
+            if let state = columnsState, state[bi].cols > 1 {
+                parts.append(#"\column "#)
+            }
+            continue
+        }
         if block.kind == .pagebreak {
             quoteOpen = false
             quoteFiCols = nil
+            if bi == skipPA { continue }
+            // planning #264 R1: a bare `.pa` INSIDE an active `.co n>1` region is
+            // absorbed, not honoured — the identical reading the Printed PDF has carried
+            // since planning #227, measured against WINGDING.CHT's own WS7 capture. RTF
+            // had no columns to fragment before this commit, which is why it could keep
+            // the break; now it has.
+            if let state = columnsState, state[bi].cols > 1 { continue }
             parts.append(pageControl)
             continue
         }
+        let keepFlags = keepPlan[bi] ?? (keep: false, keepn: false)
         var (li, ri) = block.styleID.flatMap { directMargins[$0] } ?? (0, 0)
         if printed {
-            // b24 round 17 (RULINGS-LEDGER row 8, register C9b, point 8): `directMargins`
-            // is keyed by STYLE SLOT only — a WS4 document (no style table at all) or a
-            // WS5+ document setting bare `.lm`/`.rm` with no style selected got li=ri=0
-            // in Printed RTF regardless of the running dot-state. Fallback to the
-            // block's own fully-RESOLVED column value (style already won over dot-state
-            // when the block was built, matching the SAME precedence Modern already
-            // honors) — fires only when there's nothing more specific to prefer; an
-            // explicit-zero style margin correctly never triggers it (`block.leftMargin`
-            // is ALSO 0 in that case, by the same resolution chain). Printed only:
-            // Modern reads `block.leftMargin`/`rightMargin` through its OWN separate
-            // mechanism already (register C9, DONE) and must stay untouched here.
-            if li == 0, let lm = block.leftMargin { li = roundHalfToEven(lm * rtfTwipsPerCol) }
-            if ri == 0, let rm = block.rightMargin {
-                // b32: `.rm` is the column POSITION where the right margin falls,
-                // not an indent width -- see `rmIndentCols` (same fix as
-                // `rtfStyleMargins`/`styleCSS`'s HTML twin).
-                ri = Int(rmIndentCols(rm) * rtfTwipsPerCol)
-            }
-            // physical lines: \line at every printed break, soft or hard
-            var lines = block.lines.map {
-                numbered(rtfSeg($0.spans, block), bi: bi)
+            // PRINTED CARRIES ITS INDENT ONCE (planning #264, the LibreOffice check's
+            // section 3, 2026-09-14). Printed RTF emits a block as ONE paragraph whose
+            // stored lines are joined by `\line`. A `\line` does not start a new
+            // paragraph, so `\li` lands on every line after the first — on top of the
+            // leading spaces those physical lines already carry, because carrying them
+            // is what Printed MEANS. WSFORMAT.WS asked for a 2.5in hanging indent AND
+            // typed 28 leading spaces on the same rows, and `\ri` took 4 more columns
+            // off the measure on top of that: the file-format reference's own
+            // line-for-line tables wrapped, and LibreOffice paginated 26 engine pages
+            // into 50.
+            //
+            // THE PRINTED PDF SETTLES WHICH COPY IS THE REAL ONE. Its physical lines
+            // start at `.po` plus the line's OWN typed columns and nothing else —
+            // measured on WSFORMAT.WS: a row with 28 leading spaces under `.po 8` draws
+            // at x = 259.2pt = (8 + 28) × 7.2, with no `.lm` added anywhere. So the
+            // spaces are the geometry, and `\li`/`\ri` here are a second copy of a fact
+            // already in the characters.
+            //
+            // Nothing replaces them. `directMargins` and round 17's own style/dot-state
+            // resolution stay exactly as they are for Modern, which reflows and
+            // therefore genuinely needs paragraph properties; round 17 was right about
+            // WHAT the document says and wrong about Printed needing to say it twice.
+            //
+            // MEASURED AFTER (LibreOffice 24.2.7.2): WSFORMAT.WS reproduces all 1279 of
+            // the engine's own printed lines exactly — zero wrapped lines, against 121
+            // before — and 50 pages become 32. The remaining 6 against the engine's 26
+            // are not wrapping: WordStar absorbs blank lines that fall at a page
+            // boundary and no RTF reader does, the same ordinary repagination drift
+            // LYING.WS shows (3 engine pages, 6 in LibreOffice) with no indents at all.
+            li = 0
+            ri = 0
+            // physical lines: \line at every printed break, soft or hard.
+            // planning #264 item 1 (packet row B3): a bare 0x09 expands to WordStar's
+            // own modulus-8 stop first -- Printed RTF is Courier, so a column IS a
+            // character and the expansion is exact. See
+            // `expandBareTabsForPrintedLayout` (EmitterRules.swift); Modern (below)
+            // never calls it.
+            // planning #270 item 37: `.pf on`'s print-time re-wrap -- Printed RTF
+            // renders the same physical lines the Printed PDF does.
+            var lines = pfRewrappedLines(doc, block).map {
+                numbered(rtfSeg(expandBareTabsForPrintedLayout($0.spans), block), bi: bi)
             }
             if block.heading != 0 {
                 lines = lines.map { #"{\b\fs28 "# + $0 + "}" }
@@ -897,9 +1562,26 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             // domain (this IS that one shared code path -- see the module-level
             // ruling above `rtfBlockLead48`).
             let sl = rtfSlTwips(rtfBlockLead48(doc, block, bi: bi, resolved: resolvedLeads48))
-            let pmFi = rtfPMFiTwips(block, liTwips: li)
-            rtfEmitPara(&parts, &rtfState, block, lines, force: true, li: li, ri: ri,
-                       sl: sl, sb: docSb ?? 0, sa: docSa ?? 0, fiTwips: pmFi)
+            // `.pm`'s `\fi` STAYS, and the same measurement is why: the Printed PDF
+            // DOES move a first line for `.pm`, so `\fi` is a fact the characters do
+            // NOT carry — and being a FIRST-LINE property it is the one thing a `\line`
+            // continuation never inherits. It was never part of this defect.
+            //
+            // It is asked through the PDF's OWN gate (`printedPMFiPt`) rather than
+            // `rtfPMFiTwips` directly: WordStar auto-indents a first line when it
+            // REFLOWS the paragraph at print time, so the PDF applies the indent only
+            // under `.pf on` (measured on -HOLYMAC.WS against real WS7 — pages
+            // 223/258/293 open at the plain left edge, `.pm4` and no `.pf` anywhere in
+            // the file). Printed RTF asked unconditionally, so on a `.pf`-less document
+            // it moved a first line the PDF leaves alone: WSFORMAT.WS's `0Bh ^K` row
+            // draws at x 129.6pt in the engine PDF (`.po 8` + its own 10 typed columns)
+            // and landed at 201.7pt through LibreOffice, ten columns further right.
+            // One gate, both surfaces. `\li` is 0 now, so the `\fi` RTF reads RELATIVE
+            // to it is simply its own resolved column.
+            let pmFi = printedPMFiPt(block).map { roundHalfToEven($0 * 20.0) } ?? 0
+            rtfEmitPara(&parts, &rtfState, block, lines, force: true, li: 0, ri: 0,
+                        sl: sl, sb: docSb ?? 0, sa: docSa ?? 0, fiTwips: pmFi,
+                        keep: keepFlags.keep, keepn: keepFlags.keepn)
             continue
         }
         if block.heading != 0 {
@@ -911,7 +1593,8 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             // order).
             var lines = mergedLines(block).map { rtfSeg(maybeStripAlign(block, $0.spans), block) }
             lines = lines.map { #"{\b\fs28 "# + $0 + "}" }
-            rtfEmitPara(&parts, &rtfState, block, lines, li: li, ri: ri)
+            rtfEmitPara(&parts, &rtfState, block, lines, li: li, ri: ri,
+                        keep: keepFlags.keep, keepn: keepFlags.keepn)
             parts.append(contentsOf: Array(repeating: #"\par "#,
                                            count: trailingBlankLines(block)))
             continue
@@ -929,46 +1612,123 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         // it flows as one line instead (round 3b: \line is reserved for a REAL deliberate
         // break — a verified verse/stanza unit).
         let dominant = blockDominantStyles(mergedLines(block))
-        for unit in assembleParagraphs(block, margin: margin,
-                                       headPosition: headPosition[bi] ?? false,
-                                       conventionIndent: conventionIndent) {
-            var (indentCols, first) = splitLeadingIndent(maybeStripAlign(block, unit[0].spans))
-            if quote {
-                // the quote GROUP's own first paragraph sets \fi for every paragraph in
-                // the group, not each one's own raw column count.
-                if quoteFiCols == nil { quoteFiCols = indentCols }
-                indentCols = quoteFiCols!
-            }
-            // round 7 (Register C23): a wrap=off block's unit is ALWAYS verse -- without
-            // this guard a non-verse multi-line unit still flows into one run-on line.
-            let isVerse = unit.count > 1 && (!block.wrap || looksLikeVerse(unit, dominantStyles: dominant)
-                                             || screenplayBlocks.contains(bi))
-            var rendered = [rtfSeg(first, block)]
-            for line in unit.dropFirst() {
-                var spans = maybeStripAlign(block, line.spans)
-                if !isVerse {
-                    (_, spans) = splitLeadingIndent(spans)
+        // planning #264 item 5 (packet rows C3+C4): the structure rules pull definition,
+        // bullet and spaces-centred rows out of the flow FIRST -- the identical verdicts
+        // emitHTML has consumed since the modern-structure-rules round
+        // (`classifyModernBlocks`, one document-wide classification) -- and everything
+        // left over assembles into paragraph units exactly as it always did. Same shape
+        // as emitHTML's own Modern branch, down to `plainRunIsBlockStart`.
+        let rows: [(line: Line, structure: RowStructure?)] =
+            blockRows[bi] ?? mergedLines(block).map { (line: $0, structure: nil) }
+        var plainRunLines: [Line] = []
+        var plainRunIsBlockStart = true
+
+        func flushPlainRun() {
+            guard !plainRunLines.isEmpty else { return }
+            let units = assembleParagraphUnits(
+                plainRunLines, margin: margin,
+                headPosition: plainRunIsBlockStart ? (headPosition[bi] ?? false) : false,
+                conventionIndent: plainRunIsBlockStart ? conventionIndent : nil,
+                wrap: block.wrap)
+            plainRunLines.removeAll()
+            for unit in units {
+                var (indentCols, first) = splitLeadingIndent(maybeStripAlign(block, unit[0].spans))
+                if quote {
+                    // the quote GROUP's own first paragraph sets \\fi for every paragraph
+                    // in the group, not each one's own raw column count.
+                    if quoteFiCols == nil { quoteFiCols = indentCols }
+                    indentCols = quoteFiCols!
                 }
-                rendered.append(rtfSeg(spans, block))
+                // round 7 (Register C23): a wrap=off block's unit is ALWAYS verse --
+                // without this guard a non-verse multi-line unit still flows into one
+                // run-on line.
+                let isVerse = unit.count > 1 && (!block.wrap || looksLikeVerse(unit, dominantStyles: dominant)
+                                                 || screenplayBlocks.contains(bi))
+                var rendered = [rtfSeg(first, block)]
+                for line in unit.dropFirst() {
+                    var spans = maybeStripAlign(block, line.spans)
+                    if !isVerse {
+                        (_, spans) = splitLeadingIndent(spans)
+                    }
+                    rendered.append(rtfSeg(spans, block))
+                }
+                let lines: [String]
+                if unit.count > 1 && !isVerse {
+                    lines = [rendered.filter { !$0.trimmed().isEmpty }.joined(separator: " ")]
+                } else {
+                    lines = rendered
+                }
+                // b24 round 20 (slate item 4): verse-classified units and centered units
+                // (which may themselves wrap in the reader, "wrapped centered units") get
+                // tighter internal spacing -- a deliberate, scoped exception to round 6's
+                // "Modern RTF doesn't do line spacing" rule, exactly as disclosed there.
+                // R3 (2026-09-14): the figure is now this UNIT's own, off its first
+                // line -- the same line the Modern PDF measures the block's first
+                // advance from, and the same "collapsed to the block's own first real
+                // line" ceiling `rtfBlockLead48` already accepts as what a
+                // paragraph-only `\sl` can express.
+                let tightSl = (isVerse || block.align == .center)
+                    ? rtfVerseTightSlTwips(first, doc, nonpropFallback: nonpropFallback) : 0
+                rtfEmitPara(&parts, &rtfState, block, lines, fiCols: indentCols, li: li, ri: ri,
+                           sl: tightSl, keep: keepFlags.keep, keepn: keepFlags.keepn)
             }
-            let lines: [String]
-            if unit.count > 1 && !isVerse {
-                lines = [rendered.filter { !$0.trimmed().isEmpty }.joined(separator: " ")]
-            } else {
-                lines = rendered
-            }
-            // b24 round 20 (slate item 4): verse-classified units and centered units
-            // (which may themselves wrap in the reader, "wrapped centered units") get
-            // tighter internal spacing -- a deliberate, scoped exception to round 6's
-            // "Modern RTF doesn't do line spacing" rule, exactly as disclosed there.
-            let tightSl = (isVerse || block.align == .center) ? rtfVerseTightSlTwips() : 0
-            rtfEmitPara(&parts, &rtfState, block, lines, fiCols: indentCols, li: li, ri: ri,
-                       sl: tightSl)
         }
+
+        for row in rows {
+            if row.structure?.kind == nil {
+                if let structure = row.structure, structure.centered,
+                   structure.centerVia == .spaces {
+                    // C4: the author centred this line by TYPING spaces. Modern RTF
+                    // rendered the padding literally, so the row sat off centre AND
+                    // wrapped early (the padding spends measure). Strip it and let
+                    // `\\qc` do the work -- the same M3 rule a real `.oc` tag has always
+                    // followed, on the classifier verdict HTML has used all along.
+                    flushPlainRun()
+                    plainRunIsBlockStart = false
+                    let raw = Array(row.line.spans.map(\.text).joined())
+                    var lead = 0
+                    while lead < raw.count, raw[lead] == " " { lead += 1 }
+                    var end = raw.count
+                    while end > lead, raw[end - 1] == " " { end -= 1 }
+                    let seg = rtfSeg(sliceSpans(row.line.spans, start: lead, end: end), block)
+                    if !seg.trimmed().isEmpty {
+                        var centred = block
+                        centred.align = .center
+                        rtfEmitPara(&parts, &rtfState, centred, [seg], li: li, ri: ri,
+                                    sl: rtfVerseTightSlTwips(
+                                        sliceSpans(row.line.spans, start: lead, end: end),
+                                        doc, nonpropFallback: nonpropFallback),
+                                    keep: keepFlags.keep, keepn: keepFlags.keepn)
+                    }
+                } else {
+                    plainRunLines.append(row.line)
+                }
+                continue
+            }
+            // C3: a definition or bullet row is a HANGING paragraph.
+            flushPlainRun()
+            plainRunIsBlockStart = false
+            rtfStructureRow(&parts, &rtfState, block, row.structure!, row.line,
+                            doc: doc, li: li, ri: ri,
+                            keep: keepFlags.keep, keepn: keepFlags.keepn,
+                            render: { rtfSeg($0, block) })
+        }
+        flushPlainRun()
         // Only the author's own blank lines make space (ruling 2026-08-06): a block
         // boundary is often just a dot command, and command codes are invisible.
-        parts.append(contentsOf: Array(repeating: #"\par "#,
-                                       count: trailingBlankLines(block)))
+        //
+        // C2 (R3, 2026-09-14): and they make the BODY's space. A tightened block's
+        // compression is about how its own lines read against each other; the author's
+        // blank line after it is the paragraph break, and that gap belongs to the
+        // document's ordinary leading -- which is exactly what `modernStreams` does with
+        // its untightened `lastH`. Left in force, an EXACT `\sl` would close a title
+        // block tighter than the identical block closes with no tightening at all.
+        let blanks = trailingBlankLines(block)
+        if blanks > 0, rtfState.sl != 0 {
+            parts.append(#"\sl0\slmult0 "#)
+            rtfState.sl = 0
+        }
+        parts.append(contentsOf: Array(repeating: #"\par "#, count: blanks))
     }
 
     let body = parts.joined(separator: "\n")
@@ -1031,14 +1791,61 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // width joined the page model 2026-08-06: A4-tall documents get the 210mm sheet;
     // everything else (and every default) stays 12240 twips
     let paperw = roundHalfToEven((page?.pwIn ?? 8.5) * 1440.0)
-    var pageSetup = #"\paperw\#(paperw)\paperh\#(paperh)\margl\#(margl)\margr\#(margl)"#
+    // planning #264 item 4 (packet row A6): `.poe`/`.poo` — a wider margin on the binding
+    // side — become `\margmirror` under `\facingp`, which is RTF's own inside/outside
+    // reading of `\margl`/`\margr`: on an odd (right-hand) page the left margin is
+    // `\margl`, on an even one it is `\margr`. WordStar's `.poo` is the odd page's own
+    // offset and `.poe` the even one's, so they land in that order. The pair is all the
+    // geometry RTF has for this, which is why the right margin stops mirroring the left
+    // here — a document that declares `.poe`/`.poo` is asking for exactly that
+    // alternation. Printed only: Modern's page is its own fixed Letter (packet row D9).
+    let (poeCols, pooCols) = printed ? rtfPoParity(doc) : (nil, nil)
+    let mirrorMargins = poeCols != nil || pooCols != nil
+    var leftMargin = margl
+    var rightMargin = margl
+    if mirrorMargins {
+        let inside = pooCols ?? page?.poCols ?? 8.0
+        let outside = poeCols ?? page?.poCols ?? 8.0
+        leftMargin = roundHalfToEven(inside * 144.0)
+        rightMargin = roundHalfToEven(outside * 144.0)
+    }
+    // planning #264 item 3/4: the running heads are resolved BEFORE the page setup —
+    // `\facingp`, `\headery` and `\footery` are page properties the head/foot groups
+    // themselves decide.
+    let runningHeads = rtfRunningHeads(
+        doc, headers: options.headers,
+        autoPageNumber: rtfAutoPageNumber(doc, options.pageNumbers),
+        printed: printed)
+    var pageSetup = #"\paperw\#(paperw)\paperh\#(paperh)\margl\#(leftMargin)\margr\#(rightMargin)"#
         + #"\margt\#(margt)\margb\#(margb)"#
+    if runningHeads.facingPages || mirrorMargins { pageSetup += #"\facingp"# }
+    if mirrorMargins { pageSetup += #"\margmirror"# }
+    if let headery = runningHeads.headery, let footery = runningHeads.footery {
+        pageSetup += #"\headery\#(headery)\footery\#(footery)"#
+    }
+    // planning #264 item 3 (packet row A2): `.pn` sets the number of the page it appears
+    // on, so a document that says "start numbering at 7" must not start at 1.
+    // `\pgnstart` is the document-level beginning page number; only ever written when
+    // the document actually asked for one (a mid-document `.pn` re-anchor needs the
+    // section spine and is out of scope — see `rtfAutoPageNumber`).
+    let pnStart = page?.pnStart ?? 1
+    if pnStart != 1 { pageSetup += #"\pgnstart\#(pnStart)"# }
     if landscape { pageSetup += #"\landscape"# }
+    // planning #264 R1 (packet row A7): the FIRST section's own column regime. `\cols`
+    // is a section property and the page setup is section 1's; a document that opens
+    // outside a columnar region (all but a handful) resolves to one column and writes
+    // nothing, so its bytes do not move. Printed only — see `rtfSectionBreaks` for why
+    // Modern stays single-column.
+    if printed, let first = rtfColumnsState(doc).first {
+        pageSetup += rtfColsControl(first.cols, first.gutter)
+    }
 
     // b24 round 17 (RULINGS-LEDGER row 1): `rtfRunningHeads` has no printed-specific
     // behavior to add — it was simply never called for `printed` before this round.
     // `options.headers` (default true) now gates BOTH modes uniformly.
-    let running = options.headers ? rtfRunningHeads(doc) : ""
+    // planning #264 item 3 (packet rows A1/A2): `--page-numbers` was accepted by the
+    // command line and swallowed by this emitter, a flag that silently did nothing.
+    let running = runningHeads.groups
     // b24 round 18 (RULINGS-LEDGER row 10): the colour table only needs to exist when a
     // span will actually reference it -- an unconditional \colortbl on every RTF this
     // project has ever produced would be a silent, permanent byte-shape change to files

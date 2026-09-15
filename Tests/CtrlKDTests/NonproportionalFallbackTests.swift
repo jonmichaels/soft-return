@@ -83,7 +83,10 @@ private func psDoc(_ ps: String?, styleBits: Int = 0x8000) -> [UInt8] {
     // The ruling's explicit carve-out: `.ps off` with NO font blocks anywhere in the
     // document changes nothing.
     var data = ws7Block(0x00)
-    data += bytes(".ps off") + HARD + bytes("No font blocks anywhere at all.") + HARD
+    data += bytes(".ps off")
+    data += HARD
+    data += bytes("No font blocks anywhere at all.")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.formatting.proportional == false)
     #expect(doc.fonts.isEmpty)

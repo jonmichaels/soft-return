@@ -22,110 +22,112 @@ private final class FakeMDImportRunner: MDImportRunning {
 
 // MARK: - Pure gating decision
 
-@Test func firstRunHasNoPriorStateAndShouldRun() {
-    #expect(SpotlightNudge.shouldRun(state: nil, version: "7", importerPath: "/a"))
-}
+@Suite struct SpotlightNudgeTests {
+    @Test func firstRunHasNoPriorStateAndShouldRun() {
+        #expect(SpotlightNudge.shouldRun(state: nil, version: "7", importerPath: "/a"))
+    }
 
-@Test func sameVersionAndPathDoesNotRunAgain() {
-    let state = SpotlightNudge.State(version: "7", importerPath: "/a", ranAt: Date(),
-                                     exitCode: 0, output: "")
-    #expect(!SpotlightNudge.shouldRun(state: state, version: "7", importerPath: "/a"))
-}
+    @Test func sameVersionAndPathDoesNotRunAgain() {
+        let state = SpotlightNudge.State(version: "7", importerPath: "/a", ranAt: Date(),
+                                         exitCode: 0, output: "")
+        #expect(!SpotlightNudge.shouldRun(state: state, version: "7", importerPath: "/a"))
+    }
 
-@Test func aFailedPriorRunAtTheSameVersionAndPathStillDoesNotRunAgain() {
-    // Deliberate: a sandboxed denial that retried on every launch would just be noise. The
-    // escape hatch for "try again now" is the unconditional Help-menu item, not automatic
-    // retries.
-    let state = SpotlightNudge.State(version: "7", importerPath: "/a", ranAt: Date(),
-                                     exitCode: 1, output: "denied")
-    #expect(!SpotlightNudge.shouldRun(state: state, version: "7", importerPath: "/a"))
-}
+    @Test func aFailedPriorRunAtTheSameVersionAndPathStillDoesNotRunAgain() {
+        // Deliberate: a sandboxed denial that retried on every launch would just be noise. The
+        // escape hatch for "try again now" is the unconditional Help-menu item, not automatic
+        // retries.
+        let state = SpotlightNudge.State(version: "7", importerPath: "/a", ranAt: Date(),
+                                         exitCode: 1, output: "denied")
+        #expect(!SpotlightNudge.shouldRun(state: state, version: "7", importerPath: "/a"))
+    }
 
-@Test func aVersionBumpRunsAgain() {
-    let state = SpotlightNudge.State(version: "7", importerPath: "/a", ranAt: Date(),
-                                     exitCode: 0, output: "")
-    #expect(SpotlightNudge.shouldRun(state: state, version: "8", importerPath: "/a"))
-}
+    @Test func aVersionBumpRunsAgain() {
+        let state = SpotlightNudge.State(version: "7", importerPath: "/a", ranAt: Date(),
+                                         exitCode: 0, output: "")
+        #expect(SpotlightNudge.shouldRun(state: state, version: "8", importerPath: "/a"))
+    }
 
-@Test func aRelocatedImporterPathRunsAgainEvenAtTheSameVersion() {
-    let state = SpotlightNudge.State(version: "7", importerPath: "/a", ranAt: Date(),
-                                     exitCode: 0, output: "")
-    #expect(SpotlightNudge.shouldRun(state: state, version: "7", importerPath: "/b"))
-}
+    @Test func aRelocatedImporterPathRunsAgainEvenAtTheSameVersion() {
+        let state = SpotlightNudge.State(version: "7", importerPath: "/a", ranAt: Date(),
+                                         exitCode: 0, output: "")
+        #expect(SpotlightNudge.shouldRun(state: state, version: "7", importerPath: "/b"))
+    }
 
-// MARK: - runIfNeeded gating end to end (fake runner, synchronous queue)
+    // MARK: - runIfNeeded gating end to end (fake runner, synchronous queue)
 
-@Test func runIfNeededSpawnsOnFirstLaunchForThisVersion() {
-    let defaults = throwawayDefaults()
-    let runner = FakeMDImportRunner()
-    let bundle = Bundle(for: TestAnchor.self)
+    @Test func runIfNeededSpawnsOnFirstLaunchForThisVersion() {
+        let defaults = throwawayDefaults()
+        let runner = FakeMDImportRunner()
+        let bundle = Bundle(for: TestAnchor.self)
 
-    SpotlightNudge.runIfNeeded(bundle: bundle, defaults: defaults, runner: runner, perform: { $0() })
+        SpotlightNudge.runIfNeeded(bundle: bundle, defaults: defaults, runner: runner, perform: { $0() })
 
-    #expect(runner.calls.count == 1)
-    #expect(runner.calls.first == ["-r", SpotlightNudge.importerPath(bundle: bundle)])
-}
+        #expect(runner.calls.count == 1)
+        #expect(runner.calls.first == ["-r", SpotlightNudge.importerPath(bundle: bundle)])
+    }
 
-@Test func runIfNeededDoesNotSpawnASecondTimeForTheSameVersion() {
-    let defaults = throwawayDefaults()
-    let runner = FakeMDImportRunner()
-    let bundle = Bundle(for: TestAnchor.self)
+    @Test func runIfNeededDoesNotSpawnASecondTimeForTheSameVersion() {
+        let defaults = throwawayDefaults()
+        let runner = FakeMDImportRunner()
+        let bundle = Bundle(for: TestAnchor.self)
 
-    SpotlightNudge.runIfNeeded(bundle: bundle, defaults: defaults, runner: runner, perform: { $0() })
-    SpotlightNudge.runIfNeeded(bundle: bundle, defaults: defaults, runner: runner, perform: { $0() })
+        SpotlightNudge.runIfNeeded(bundle: bundle, defaults: defaults, runner: runner, perform: { $0() })
+        SpotlightNudge.runIfNeeded(bundle: bundle, defaults: defaults, runner: runner, perform: { $0() })
 
-    #expect(runner.calls.count == 1)
-}
+        #expect(runner.calls.count == 1)
+    }
 
-@Test func runIfNeededRecordsTheOutcomeInUserDefaults() {
-    let defaults = throwawayDefaults()
-    let runner = FakeMDImportRunner()
-    runner.result = SpotlightNudge.RunResult(exitCode: 0, output: "imported 1 item")
-    let bundle = Bundle(for: TestAnchor.self)
+    @Test func runIfNeededRecordsTheOutcomeInUserDefaults() {
+        let defaults = throwawayDefaults()
+        let runner = FakeMDImportRunner()
+        runner.result = SpotlightNudge.RunResult(exitCode: 0, output: "imported 1 item")
+        let bundle = Bundle(for: TestAnchor.self)
 
-    SpotlightNudge.runIfNeeded(bundle: bundle, defaults: defaults, runner: runner, perform: { $0() })
+        SpotlightNudge.runIfNeeded(bundle: bundle, defaults: defaults, runner: runner, perform: { $0() })
 
-    let state = SpotlightNudge.readState(defaults: defaults)
-    #expect(state?.version == SpotlightNudge.currentVersion(bundle: bundle))
-    #expect(state?.importerPath == SpotlightNudge.importerPath(bundle: bundle))
-    #expect(state?.exitCode == 0)
-    #expect(state?.output == "imported 1 item")
-}
+        let state = SpotlightNudge.readState(defaults: defaults)
+        #expect(state?.version == SpotlightNudge.currentVersion(bundle: bundle))
+        #expect(state?.importerPath == SpotlightNudge.importerPath(bundle: bundle))
+        #expect(state?.exitCode == 0)
+        #expect(state?.output == "imported 1 item")
+    }
 
-@Test func runIfNeededRecordsAFailureRatherThanLeavingNoRecord() {
-    let defaults = throwawayDefaults()
-    let runner = FakeMDImportRunner()
-    runner.result = SpotlightNudge.RunResult(exitCode: 1, output: "sandbox denied")
+    @Test func runIfNeededRecordsAFailureRatherThanLeavingNoRecord() {
+        let defaults = throwawayDefaults()
+        let runner = FakeMDImportRunner()
+        runner.result = SpotlightNudge.RunResult(exitCode: 1, output: "sandbox denied")
 
-    SpotlightNudge.runIfNeeded(bundle: Bundle(for: TestAnchor.self), defaults: defaults,
-                               runner: runner, perform: { $0() })
+        SpotlightNudge.runIfNeeded(bundle: Bundle(for: TestAnchor.self), defaults: defaults,
+                                   runner: runner, perform: { $0() })
 
-    let state = SpotlightNudge.readState(defaults: defaults)
-    #expect(state?.exitCode == 1)
-    #expect(state?.output == "sandbox denied")
-}
+        let state = SpotlightNudge.readState(defaults: defaults)
+        #expect(state?.exitCode == 1)
+        #expect(state?.output == "sandbox denied")
+    }
 
-// MARK: - runUnconditionally (the Help-menu action)
+    // MARK: - runUnconditionally (the Help-menu action)
 
-@Test func runUnconditionallyIgnoresTheGateAndAlwaysSpawns() {
-    let defaults = throwawayDefaults()
-    let runner = FakeMDImportRunner()
-    let bundle = Bundle(for: TestAnchor.self)
+    @Test func runUnconditionallyIgnoresTheGateAndAlwaysSpawns() {
+        let defaults = throwawayDefaults()
+        let runner = FakeMDImportRunner()
+        let bundle = Bundle(for: TestAnchor.self)
 
-    _ = SpotlightNudge.runUnconditionally(bundle: bundle, defaults: defaults, runner: runner)
-    _ = SpotlightNudge.runUnconditionally(bundle: bundle, defaults: defaults, runner: runner)
+        _ = SpotlightNudge.runUnconditionally(bundle: bundle, defaults: defaults, runner: runner)
+        _ = SpotlightNudge.runUnconditionally(bundle: bundle, defaults: defaults, runner: runner)
 
-    #expect(runner.calls.count == 2)
-}
+        #expect(runner.calls.count == 2)
+    }
 
-@Test func runUnconditionallyReturnsTheRunnersResultDirectly() {
-    let runner = FakeMDImportRunner()
-    runner.result = SpotlightNudge.RunResult(exitCode: 3, output: "boom")
+    @Test func runUnconditionallyReturnsTheRunnersResultDirectly() {
+        let runner = FakeMDImportRunner()
+        runner.result = SpotlightNudge.RunResult(exitCode: 3, output: "boom")
 
-    let result = SpotlightNudge.runUnconditionally(
-        bundle: Bundle(for: TestAnchor.self), defaults: throwawayDefaults(), runner: runner)
+        let result = SpotlightNudge.runUnconditionally(
+            bundle: Bundle(for: TestAnchor.self), defaults: throwawayDefaults(), runner: runner)
 
-    #expect(result == runner.result)
+        #expect(result == runner.result)
+    }
 }
 
 /// A class living in the `SoftReturnTests` bundle, purely so `Bundle(for:)` can hand

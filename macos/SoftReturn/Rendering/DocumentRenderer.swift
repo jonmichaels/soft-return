@@ -1,15 +1,19 @@
+#if canImport(AppKit)
 import AppKit
+#else
+import UIKit
+#endif
 import CoreText
 import CtrlKD
+import SoftReturnShared
 
-/// ONE PIECE OF INK AT AN ABSOLUTE PLACE ON THE PAPER — a second-or-later newspaper
-/// column's line, or a `.l#` gutter number.
+/// ONE PIECE OF INK AT AN ABSOLUTE PLACE ON THE PAPER — a `.l#` gutter number.
 ///
 /// `xPt` and `baselineY` are both absolute on the PAPER — measured from its left and top
 /// edges, not from the text container — because that is the form the engine's own page-lines
-/// model states them in (`PageLine.left`, already resolved to points, carries the column
-/// offset `applyColumns` gave it) and because this line has no fragment of its own to be
-/// relative to. See `RenderedDocument.columnPasses` for why it has none.
+/// model states them in (`PageLine.lineNo`, its x already right-aligned) and because a gutter
+/// number has no fragment of its own to be relative to. See `RenderedDocument.lineNumberPasses`
+/// for why it has none.
 struct ColumnPass {
     let text: NSAttributedString
     let xPt: Double
@@ -264,27 +268,6 @@ struct RenderedDocument {
     /// much extra room at the bottom, because the flow that used to start above the anchor
     /// now starts at it and still has to end where it did.
     let flowTopAdjustment: Double
-    /// Planning #227 follow-up: every line of a page's SECOND and later newspaper columns,
-    /// with the place on the paper the library puts it — drawn as an overlay pass, never
-    /// flowed.
-    ///
-    /// Why they leave the flow. The engine restarts each column at the page's own top
-    /// (`PageLine.col`, engine commit cd9776c), and AppKit's one-container-per-page flow
-    /// cannot hold that: a container proposes each fragment at the previous fragment's own
-    /// bottom, so pulling a column back up to the page top frees room the fitting pass then
-    /// hands to the NEXT page (measured on BOOKLET.WS: 78 fragments on a page the model
-    /// gives 52, the extra 26 page 2's). Cutting the container to the repositioned extent
-    /// starves it instead, because a column's first line is proposed at the bottom of the
-    /// column before it and only afterwards pulled up (WINGDING.CHT: 36 fragments against
-    /// 220). No height separates the two: the room a column start needs to be PROPOSED and
-    /// the room the next page's first line FITS INTO are the same room, and a line limit
-    /// truncates the document rather than flowing it (FONTS.REF page 10: nothing at all).
-    ///
-    /// So column 0 flows exactly as it always has — every container height and page
-    /// boundary in this file is untouched by columns — and the rest are painted, the same
-    /// arrangement `overprintPasses`/`oversizedSelfPasses` already use for content whose
-    /// position is the engine's decision rather than AppKit's. Like those, a painted line
-    /// is ink and not text: it does not take part in selection, find, or Show Invisibles.
     /// Per page, how many line FRAGMENTS each of its newspaper columns contributes — the
     /// model's own answer, counted the way this renderer forms fragments (an overprint chain
     /// is one) rather than measured from a layout.
@@ -601,7 +584,7 @@ private let nativeMacFontRows: [String: (primary: String, falt: String?)] = {
         }
         return flat
     }
-    return expand([
+    var rows = expand([
         ("avant garde", "Futura", "Century Gothic"),
         ("bookman", "Cochin", "Bookman Old Style"),
         ("cntry schlbk|newcntschlbk|new century schoolbook|century", "Georgia", "Century Schoolbook"),
@@ -627,14 +610,30 @@ private let nativeMacFontRows: [String: (primary: String, falt: String?)] = {
         ("broadway", "Phosphate Solid", "Futura"),
         ("univ. roman", "Didot", "Georgia"),
     ])
+    #if os(iOS)
+    // iOS 16 has neither Apple Chancery nor Monotype Corsiva (job 550's floor scan,
+    // iOS-Font-Map.md): the chancery row is Snell Roundhand there. Phosphate Solid is absent
+    // too, but the broadway row's own falt, Futura, is present; and Arial Narrow is taken
+    // by `iosHelveticaNarrow` in the resolvers below.
+    for key in ["zapfchancery", "zapf chancery", "coronet"] {
+        rows[key] = ("Snell Roundhand", nil)
+    }
+    #endif
+    return rows
 }()
 
 /// Port of `genericPrimary[.mac]` (`CtrlKD/FontMap.swift:116-117`). The terminus for any
 /// typestyle name `nativeMacFontRows` doesn't carry — an unmapped family still gets a
 /// USEFUL Mac-native face from its font block's own generic-style bits, never nothing.
+#if os(iOS)
+private let nativeMacGenericPrimary: [GenericStyle: String] = [
+    .sans: "Helvetica", .serif: "Times New Roman", .script: "Snell Roundhand", .display: "Futura",
+]
+#else
 private let nativeMacGenericPrimary: [GenericStyle: String] = [
     .sans: "Helvetica", .serif: "Times New Roman", .script: "Apple Chancery", .display: "Futura",
 ]
+#endif
 
 /// `entry.family`, lowercased, redirected to the short mono key ("courier"/"pica"/"elite"/
 /// "lineprinter") when it's one of those NAMES WITH A SUFFIX the spec's own table carries
@@ -805,6 +804,9 @@ private func nativeResolvedMacFont(
     _ entry: FontChange, size: CGFloat, bold: Bool, italic: Bool, useCourierPrime: Bool = false
 ) -> NSFont? {
     let (primary, falt) = nativeMacFontName(entry, useCourierPrime: useCourierPrime)
+    #if os(iOS)
+    if primary == "Arial Narrow" { return iosHelveticaNarrow(size: size, bold: bold, italic: italic) }
+    #endif
     for name in [primary, falt].compactMap({ $0 }) {
         if let base = NSFont(name: name, size: size) {
             return nativeApplyTraits(base, bold: bold, italic: italic)
@@ -847,6 +849,9 @@ func nativeCoverageAwareResolvedMacFont(
     coveringCharactersIn text: String
 ) -> NSFont? {
     let (primary, falt) = nativeMacFontName(entry, useCourierPrime: useCourierPrime)
+    #if os(iOS)
+    if primary == "Arial Narrow" { return iosHelveticaNarrow(size: size, bold: bold, italic: italic) }
+    #endif
     var firstConstructed: NSFont?
     for name in [primary, falt].compactMap({ $0 }) {
         guard let base = NSFont(name: name, size: size) else { continue }
@@ -1651,6 +1656,58 @@ extension NSAttributedString.Key {
     static let modernBase14 = NSAttributedString.Key("SoftReturn.modernBase14")
 }
 
+/// Batch 26 (#271 M7): the engine's half of a Native render — the document `emitPDF` lays out, its
+/// metrics, and `docToPagelines`' pages — with no AppKit in it, so a window can have it made off the
+/// main thread and hand it to `DocumentRenderer.nativeRenderSession(_:exportFlags:engine:)`.
+struct NativeEngineWork: Sendable {
+    let doc: Document
+    let metrics: PrintedPageMetrics
+    let pages: [Page]
+
+    /// `options`: `DocumentRenderer.nativeEngineOptions`; `pictures`: the export flag of that name.
+    nonisolated static func make(document: Document, options: EmitOptions, pictures: Bool) -> NativeEngineWork {
+        // Job 371 item 1 (PIX IN VIEWS): the pictures resolved when the document was opened ride in
+        // `options`; with `.embed` `docToPagelines` substitutes a resolved `.PIX` tag's own `PageLine`,
+        // sized exactly as `emitPDF`'s Printed PDF sizes it.
+        let doc = printedDocument(document, options: options)
+        return NativeEngineWork(doc: doc, metrics: printedMetrics(document, options: options),
+                                pages: docToPagelines(doc, printed: true,
+                                                      pixResults: pictures ? options.pixResults : [],
+                                                      pictures: .embed))
+    }
+}
+
+/// Batch 27: the engine's half of Native's Show Invisibles render — the printed document, its metrics, its
+/// annotated layout and its pages — made off the main thread by a window and handed to
+/// `DocumentRenderer.nativeAnnotatedRender(_:engine:)`.
+struct NativeAnnotatedEngineWork: Sendable {
+    let doc: Document
+    let metrics: PrintedPageMetrics
+    let annotated: AnnotatedDocument
+    let pages: [Page]
+
+    nonisolated static func make(document: Document, options: EmitOptions) -> NativeAnnotatedEngineWork {
+        let doc = printedDocument(document, options: options)
+        return NativeAnnotatedEngineWork(doc: doc, metrics: printedMetrics(document, options: options),
+                                         annotated: annotatedLayout(doc), pages: docToPagelines(doc, printed: true))
+    }
+}
+
+/// Batch 26 (#271 M7): the engine's half of a Modern render — `modernSemanticFlow` and the graphic cells
+/// placed on it — made off the main thread by a window and handed to `DocumentRenderer.modernRenderSession`.
+struct ModernEngineWork: Sendable {
+    let flow: SemanticFlow
+    let graphicCells: [Int: [PageLine.GraphicCellPlacement]]
+
+    nonisolated static func make(document: Document) -> ModernEngineWork {
+        let flow = modernSemanticFlow(document)
+        // The same notes and references the flow was made with, so the engine places the cells on this flow
+        // instead of deriving it a second time (`semCached`).
+        return ModernEngineWork(flow: flow, graphicCells: attachGraphicCellsModern(
+            document, notes: EmitOptions.defaultNotes, noteRefs: .word, semCached: flow))
+    }
+}
+
 @MainActor
 enum DocumentRenderer {
     /// Job 375 item C2 (b24 completion): the export-only overrides `appKitRenderedPDF` needs
@@ -1732,7 +1789,9 @@ enum DocumentRenderer {
     /// check `page.mtLines != nil || page.mbLines != nil` themselves before calling this
     /// (matching the engine's own guard) so a page with no override never pays for a
     /// `Document` copy or a second `printedMetrics` call.
-    private static func effectivePageDoc(_ doc: Document, for page: Page) -> Document {
+    // Internal, not private, so a test can take a page's top exactly as this renderer does
+    // (`ColumnTopsMatchTheEngineTests`).
+    static func effectivePageDoc(_ doc: Document, for page: Page) -> Document {
         guard var eff = doc.page else { return doc }
         if let mt = page.mtLines { eff.mtLines = mt; eff.mtSource = .file }
         if let mb = page.mbLines { eff.mbLines = mb; eff.mbSource = .file }
@@ -1755,11 +1814,91 @@ enum DocumentRenderer {
     /// page length) already reflects the chosen preset with no separate override plumbing.
     private static func renderNative(_ state: DocumentState,
                                       exportFlags: ExportFlags = .allOn) -> RenderedDocument {
-        var doc = state.document
-        if let preset = state.pageSettingsPreset.value, let page = doc.page {
-            doc.page = effectivePage(page, settings: preset.settings)
+        let session = nativeRenderSession(state, exportFlags: exportFlags)
+        session.renderAll()
+        return session.snapshot(final: true)
+    }
+
+    /// #271 M7: `renderNative`'s work, held open page by page. The engine hands the document over
+    /// already paginated (`docToPagelines`, one cheap call); the cost is building each page's
+    /// attributed text, which a session does for as many pages as it is asked, so a window can show
+    /// a long document's first pages before the rest exist (`DocumentWindowController`'s progressive
+    /// open). Everything document-wide — the metrics, the left anchor over every page — is decided
+    /// from the whole page list up front, so the pages rendered so far are exactly the first pages of
+    /// the full render, and rendering every page then taking the final snapshot IS `renderNative`.
+    @MainActor
+    final class NativeRenderSession {
+        /// How many pages the engine paginated the document into.
+        let pageCount: Int
+        /// How many of them are rendered so far, from the first.
+        private(set) var renderedPages = 0
+        private let renderPage: @MainActor (Int) -> Void
+        private let makeSnapshot: @MainActor (Bool) -> RenderedDocument
+        private var spent = false
+
+        init(pageCount: Int, renderPage: @escaping @MainActor (Int) -> Void,
+             snapshot: @escaping @MainActor (Bool) -> RenderedDocument) {
+            self.pageCount = pageCount
+            self.renderPage = renderPage
+            self.makeSnapshot = snapshot
         }
-        let metrics = printedMetrics(doc)
+
+        var isComplete: Bool { renderedPages >= pageCount }
+
+        /// Renders up to `count` more pages.
+        func renderNext(_ count: Int) {
+            let end = min(pageCount, renderedPages + max(1, count))
+            while renderedPages < end {
+                renderPage(renderedPages)
+                renderedPages += 1
+            }
+        }
+
+        func renderAll() {
+            renderNext(pageCount - renderedPages)
+        }
+
+        /// Batch 26: renders pages until `deadline` (`DispatchTime` uptime nanoseconds) passes — at least
+        /// one, so every call makes progress — which keeps one turn of the main run loop short.
+        func renderNext(until deadline: UInt64) {
+            guard !isComplete else { return }
+            repeat {
+                renderNext(1)
+            } while !isComplete && DispatchTime.now().uptimeNanoseconds < deadline
+        }
+
+        /// The pages rendered so far, as a document of that many pages. A snapshot before the last
+        /// page copies what it needs, so rendering can go on; `final` — once every page is rendered —
+        /// finishes the flow in place, and the session is spent.
+        func snapshot(final: Bool = false) -> RenderedDocument {
+            precondition(!spent, "NativeRenderSession: snapshot after the final one")
+            precondition(!final || isComplete, "NativeRenderSession: final snapshot before the last page")
+            if final { spent = true }
+            return makeSnapshot(final)
+        }
+    }
+
+    /// The options a Native render lays the document out with: the Margins choice and the resolved pictures.
+    static func nativeEngineOptions(_ state: DocumentState) -> EmitOptions {
+        EmitOptions(pageSettings: state.pageSettingsPreset.value?.settings, pixResults: state.pixResults)
+    }
+
+    /// `engine`: the engine's half made already — off the main thread, by a window (batch 26) — for
+    /// `state` as it is now; nil makes it here.
+    static func nativeRenderSession(_ state: DocumentState,
+                                    exportFlags: ExportFlags = .allOn,
+                                    engine: NativeEngineWork? = nil) -> NativeRenderSession {
+        // #271 M2: the document `emitPDF` lays out — the page-settings preset folded in, then a
+        // `.pr or=l` landscape rotation on top (`printedDocument`, engine 944d897). Paginating the
+        // parsed document instead left everything anchored off the page's own size — the odd/even
+        // offsets, heads and feet, page numbers, the note area, a `.PIX`'s fit width — in its
+        // portrait place on a landscape sheet. `printedMetrics` takes the PARSED document and the
+        // same options, and folds them in itself.
+        let options = nativeEngineOptions(state)
+        let work = engine ?? NativeEngineWork.make(document: state.document, options: options,
+                                                   pictures: exportFlags.pictures)
+        let doc = work.doc
+        let metrics = work.metrics
         // Job 371 item 1 (PIX IN VIEWS): `state.pixResults` was resolved once against the
         // document's real path when it was opened/reparsed (`DocumentState.init`/
         // `setVariant`) — passing it (plus `.embed`) here is what makes `docToPagelines`
@@ -1770,9 +1909,7 @@ enum DocumentRenderer {
         // versa. Harmless when `pixResults` is empty (no graphics, or nothing resolved):
         // `resolvePlainBody`'s own `embedImages` gate stays false, byte-for-byte the same
         // plain-text-placeholder pagination as before this job.
-        let pages = docToPagelines(doc, printed: true,
-                                   pixResults: exportFlags.pictures ? state.pixResults : [],
-                                   pictures: .embed)
+        let pages = work.pages
         let capacity = metrics.capacity
         // A mid-document `.po` can move a line LEFT of the document's default one, and an
         // AppKit head indent cannot express that: `firstLineHeadIndent`/`headIndent` are
@@ -1925,6 +2062,9 @@ enum DocumentRenderer {
             nativeTabStops(style, columnWidthPt: Double(metrics.size) * 0.6)
             return style
         }
+        // #271 M1: the `.sr` roll Printed moves a superscript or subscript by when a line carries
+        // none of its own — the engine's `printedRollPt`, `(subSuperRoll48 ?? 3) × 1.5` points.
+        let documentRoll = (doc.formatting.subSuperRoll48 ?? 3.0) * 1.5
         func lineAndTerminator(_ line: PageLine, lead: Double) -> NSAttributedString {
             let extraLeftPt = (line.left ?? metrics.left) - printedLeftAnchor
             let paragraph = paragraphStyle(lead: lead, extraLeftPt: extraLeftPt)
@@ -1951,8 +2091,8 @@ enum DocumentRenderer {
                         coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
                         paragraph: paragraph, fonts: doc.fonts, defaultSize: metrics.size,
                         colourMap: colourMap, disableKerning: true, useCourierPrime: true,
-                        nativeSupSub: true, nativePMActive: line.pmActive,
-                        nativeKerning: line.kerning),
+                        nativeSupSub: true, nativeRoll: line.roll ?? documentRoll,
+                        nativePMActive: line.pmActive, nativeKerning: line.kerning),
                     placements: line.graphicCells ?? []),
                 pieces: line.justifyWordX ?? []))
             piece.append(lineTerminator(font: courier(size: CGFloat(metrics.size)),
@@ -2090,7 +2230,7 @@ enum DocumentRenderer {
             attributedLine(coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
                            paragraph: naturalParagraphStyle(), fonts: doc.fonts,
                            defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
-                           useCourierPrime: true, nativeSupSub: true,
+                           useCourierPrime: true, nativeSupSub: true, nativeRoll: line.roll ?? documentRoll,
                            nativePMActive: line.pmActive, nativeKerning: line.kerning)
         }
         // Job 227: LJ6DTP.WS's 72pt "LJ6DTP" banner title, immediately followed by its own
@@ -2144,7 +2284,7 @@ enum DocumentRenderer {
             return attributedLine(coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
                            paragraph: naturalParagraphStyle(), fonts: doc.fonts,
                            defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
-                           useCourierPrime: true, nativeSupSub: true,
+                           useCourierPrime: true, nativeSupSub: true, nativeRoll: line.roll ?? documentRoll,
                            nativePMActive: line.pmActive, nativeKerning: line.kerning)
         }
         // Job 225: this function no longer tries to make each page's own block of lines
@@ -2161,7 +2301,8 @@ enum DocumentRenderer {
         // chunk) measurably disagrees with how the SAME text measures once actually
         // embedded in the real multi-container chain, and no amount of retuning the
         // padding math on this side can fix a measurement taken on the wrong flow.
-        for (index, page) in pages.enumerated() {
+        // #271 M7: one page's work — the loop body it always was, run by `NativeRenderSession` in order.
+        func renderPage(_ index: Int, _ page: Page) {
             // Job 427 (Jon's ruling: "Native only changes fonts. Otherwise it's the same
             // as Printed."): this page's own effective top margin — `metrics.top` (the
             // document-global one) UNLESS this real page declares its own `.mt`/`.mb`
@@ -2245,8 +2386,8 @@ enum DocumentRenderer {
                 // ONE COLUMN, ONE CONTAINER (item 19, Jon's ruling 2026-09-10).
                 //
                 // Every column's lines are in the flow, in the engine's own order
-                // (`applyColumns` concatenates column 0's, then column 1's), each column
-                // restarting at the page's own top. `PagedDocumentView` gives each its own
+                // (`applyColumns` concatenates column 0's, then column 1's), each later column
+                // restarting where the `.co` region starts on the sheet. `PagedDocumentView` gives each its own
                 // text container, so AppKit flows one into the next the way its multi-column
                 // model always did, and the text stays real: selectable, findable, spoken.
                 //
@@ -2261,11 +2402,15 @@ enum DocumentRenderer {
                     ? Page(page.lines.filter { ($0.col ?? 0) == column })
                     : page
                 if flowPage.isEmpty { break }
-                // THIS COLUMN's own anchor: the page's top plus its own first line's lead,
-                // the same formula the page's own first line uses and the same thing
-                // `pageStream` does at a column boundary.
+                // THIS COLUMN's own anchor: where the column starts plus its own first line's
+                // lead, the same formula the page's own first line uses and the same thing
+                // `pageStream` does at a column boundary. Column 0 starts at the page's top and
+                // runs through any title and blank the sheet opened with. Every later column
+                // starts where the `.co` region starts on this sheet, `columnTopOffsetPt` below
+                // the top (layout version 8), which is where real WS7 puts it.
                 let columnFirstLead = flowPage.first?.lead ?? metrics.lead
-                let columnFirstBaseline = pageTop + columnFirstLead
+                let columnStart = column > 0 ? (page.columnTopOffsetPt ?? 0) : 0
+                let columnFirstBaseline = pageTop + columnStart + columnFirstLead
                 // COUNTED HERE, not off the model. `pageColumnFragmentCounts` slices this
                 // page's fragments into its columns for `buildExplicitPages`, and a count
                 // that disagrees with the fragments this loop actually appends drifts the
@@ -2438,9 +2583,17 @@ enum DocumentRenderer {
             allNumberPasses.append(numberPasses)
             allGraphicRows.append(graphicRows)
         }
+
+        // #271 M7: the pages rendered so far, as a document. Before the last page it works on copies
+        // of the flow and of the per-page tops, so the session can go on; the final snapshot finishes
+        // them in place, exactly as this function's tail always did.
+        func snapshot(final: Bool) -> RenderedDocument {
+        let flow = final ? output : NSMutableAttributedString(attributedString: output)
+        var pageTextTops = perPageTextTop
+        let renderedPageCount = softLineFlags.count
         // The flow needs no trailing newline: the last line's own terminator already closed
         // it, and an extra one would start a phantom page.
-        if output.length > 0 { output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1)) }
+        if flow.length > 0 { flow.deleteCharacters(in: NSRange(location: flow.length - 1, length: 1)) }
 
         // The library's own geometry is the facsimile truth for where the TEXT sits —
         // untouched below, so screen and `emitPDF` never disagree (see this file's top doc
@@ -2514,8 +2667,8 @@ enum DocumentRenderer {
         // declares `.lh` 12 and sets every line of page 1 at 2.
         let flowTopAdjustment = min(0, (tightestFlowTop ?? textTop) - textTop)
         if flowTopAdjustment < 0 {
-            for index in perPageTextTop.indices {
-                perPageTextTop[index] = max(0, perPageTextTop[index] + flowTopAdjustment)
+            for index in pageTextTops.indices {
+                pageTextTops[index] = max(0, pageTextTops[index] + flowTopAdjustment)
             }
         }
         let textFrame = CGRect(
@@ -2527,10 +2680,10 @@ enum DocumentRenderer {
         let leadingHeadroom = Self.leadingHeadroom(oversizedSelfPasses, firstBaselines: perPageFirstBaselines)
 
         return RenderedDocument(
-            text: output,
+            text: flow,
             pageSize: pageSize,
             textFrame: textFrame,
-            pageCount: max(1, pages.count),
+            pageCount: max(1, renderedPageCount),
             clipsLines: true,
             softLineFlags: softLineFlags,
             overprintPasses: overprintPasses,
@@ -2543,9 +2696,9 @@ enum DocumentRenderer {
             // only; see `RenderedDocument.hfEvents`'s own doc comment).
             hfEvents: [],
             pageNumberStart: startNo,
-            realPageIndexByPage: Array(0..<max(1, pages.count)),
+            realPageIndexByPage: Array(0..<max(1, renderedPageCount)),
             pinnedBaselines: pinnedBaselines,
-            perPageTextTop: perPageTextTop,
+            perPageTextTop: pageTextTops,
             pinnedPageBottoms: pinnedPageBottoms,
             pinnedPageTops: pinnedPageTops,
             flowTopAdjustment: flowTopAdjustment,
@@ -2563,6 +2716,10 @@ enum DocumentRenderer {
             modernEndnoteAppendixStart: nil,
             pclPrograms: doc.pclPrograms
         )
+        }
+        return NativeRenderSession(pageCount: pages.count,
+                                   renderPage: { index in renderPage(index, pages[index]) },
+                                   snapshot: snapshot)
     }
 
     // MARK: - Printed, Show Invisibles (job 256/257, parts 2-3/4)
@@ -2607,14 +2764,24 @@ enum DocumentRenderer {
     ///      banners and knockouts survive Invisibles being on. Dot-command/mark-only lines
     ///      never chain and are never oversized (`baseFont`, always well under any `.lh`).
     private static func renderNativeAnnotated(_ state: DocumentState) -> RenderedDocument {
-        var doc = state.document
-        if let preset = state.pageSettingsPreset.value, let page = doc.page {
-            doc.page = effectivePage(page, settings: preset.settings)
-        }
-        let metrics = printedMetrics(doc)
+        let render = nativeAnnotatedRender(state)
+        render.renderAll()
+        return render.finish()
+    }
+
+    /// Batch 27: `renderNativeAnnotated`'s work in slices (`SlicedRender`): the line units, their wrapped row
+    /// counts, the page-break walk, then the pages — each loop body the one it always was. `engine`: the engine's
+    /// half made already, off the main thread, for `state` as it is now; nil makes it here.
+    static func nativeAnnotatedRender(_ state: DocumentState, engine: NativeAnnotatedEngineWork? = nil) -> SlicedRender {
+        // #271 M2: the same printed document `renderNative` lays out — see its own comment.
+        let options = EmitOptions(pageSettings: state.pageSettingsPreset.value?.settings,
+                                  pixResults: state.pixResults)
+        let work = engine ?? NativeAnnotatedEngineWork.make(document: state.document, options: options)
+        let doc = work.doc
+        let metrics = work.metrics
         let baseFont = courier(size: CGFloat(metrics.size))
-        let annotated = annotatedLayout(doc)
-        let pages = docToPagelines(doc, printed: true)
+        let annotated = work.annotated
+        let pages = work.pages
         // Every REAL line's own engine `PageLine` (lead/overprint/spans), in document
         // order, and which `pages` index it came from — `flatLines[n]` and
         // `flatPageIndex[n]` describe the SAME real line `pages` itself already produced.
@@ -2622,6 +2789,14 @@ enum DocumentRenderer {
         var flatPageIndex: [Int] = []
         flatPageIndex.reserveCapacity(flatLines.count)
         for (pi, page) in pages.enumerated() { flatPageIndex.append(contentsOf: Array(repeating: pi, count: page.count)) }
+        // #270 item 36 (sr 4ff64d5, layout JSON v9): a 0x0F print control's SCREEN label is drawn
+        // nowhere but here, in Show Invisibles, and here as a mark, never as the page's ink.
+        // `annotatedLayout` hands it over as an ordinary `.visible` span (`AnnotatedSpan` carries no
+        // `pctlHMI`), so the labels come from the engine's own page-lines: every span
+        // `docToPagelines` marks with `pctlHMI`, the same harvest the layout JSON now publishes as
+        // `invisibles["print_controls"]`. Before this, this pass drew them as ordinary black text.
+        let printControlLabels = Set(flatLines.lazy.flatMap(\.spans)
+            .filter { $0.pctlHMI != nil && !$0.text.isEmpty }.map(\.text))
 
         func paragraphStyle(lead: Double) -> NSParagraphStyle {
             let style = NSMutableParagraphStyle()
@@ -2774,6 +2949,12 @@ enum DocumentRenderer {
             var leading = true
             for span in line.spans {
                 switch span.kind {
+                case .visible where printControlLabels.contains(span.text):
+                    // A print control's label (#270 item 36): the marks' colour and face, never ink.
+                    guard !suppressVisible else { continue }
+                    result.append(markRun(span.text, font: markFont(span.font, styles: span.style),
+                                          spoken: "print control: \(span.text)", paragraph: paragraph))
+                    leading = false
                 case .visible:
                     guard !suppressVisible else { continue }
                     // A synthetic single-span `Span`/`fonts` pair — `AnnotatedSpan.font` is
@@ -2878,7 +3059,8 @@ enum DocumentRenderer {
         var units: [Unit] = []
         units.reserveCapacity(annotated.lines.count)
         var realCounter = 0
-        for line in annotated.lines {
+        func unitStep(_ lineIndex: Int) {
+            let line = annotated.lines[lineIndex]
             if line.endMark != nil {
                 let fi = correlatable ? realCounter : nil
                 let eligible: Bool
@@ -2948,8 +3130,9 @@ enum DocumentRenderer {
         // it by 1 and drifting the same way an un-reflowed natural break did (field bug 2).
         var unitRows: [Int] = []
         unitRows.reserveCapacity(units.count)
-        for unit in units {
-            guard unit.wrapEligible else { unitRows.append(1); continue }
+        func rowStep(_ unitIndex: Int) {
+            let unit = units[unitIndex]
+            guard unit.wrapEligible else { unitRows.append(1); return }
             let content = lineAttributedString(unit.line, paragraph: wrapParagraphStyle(lead: metrics.lead))
             unitRows.append(rowCount(content))
         }
@@ -2964,7 +3147,7 @@ enum DocumentRenderer {
         var spent = 0.0
         var pageEmpty = true
         var previousWasOverprint = false
-        for i in 0..<units.count {
+        func walkStep(_ i: Int) {
             let unit = units[i]
             if i > 0, shouldForceBreak(unit.line.pageBreakBefore, spent: spent) {
                 pageStarts.append(i)
@@ -3018,7 +3201,8 @@ enum DocumentRenderer {
             font: baseFont, paragraph: defaultParagraph,
             width: max(1, metrics.pageWidth - metrics.left))
 
-        for (groupIndex, start) in pageStarts.enumerated() {
+        func pageStep(_ groupIndex: Int) {
+            let start = pageStarts[groupIndex]
             let end = groupIndex + 1 < pageStarts.count ? pageStarts[groupIndex + 1] : units.count
             let pageChunk = NSMutableAttributedString()
             var flags: [Bool] = []
@@ -3086,7 +3270,15 @@ enum DocumentRenderer {
                         unit.line, lead: fragmentLead, suppressVisible: oversized, wrap: unit.wrapEligible))
                     flags.append(unit.line.endMark == .softReturn)
                     selfPasses.append(oversized ? naturalPass(unit.line) : nil)
-                    passes.append(k == m ? [] : (k + 1...m).map { naturalPass(units[$0].line) })
+                    // A loop, not `.map`: inside a step `SlicedRender` holds, a closure handed to `map` is a region
+                    // of its own, and capturing `naturalPass` (its face and paragraph) there is a data-race error.
+                    var chainPasses: [NSAttributedString] = []
+                    if k < m {
+                        for member in (k + 1)...m {
+                            chainPasses.append(naturalPass(units[member].line))
+                        }
+                    }
+                    passes.append(chainPasses)
                     if unit.wrapEligible {
                         for _ in 1..<unitRows[k] {
                             flags.append(false)
@@ -3126,6 +3318,7 @@ enum DocumentRenderer {
                                     doc: doc, metrics: metrics, leftAnchor: metrics.left)
                 : [])
         }
+        func finish() -> RenderedDocument {
         if output.length > 0 { output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1)) }
 
         // Same geometry formulas `renderNative` uses (see that function's own extensive
@@ -3190,6 +3383,13 @@ enum DocumentRenderer {
             modernEndnoteAppendixStart: nil,
             pclPrograms: doc.pclPrograms
         )
+        }
+        return SlicedRender(phases: [
+            SlicedRender.Phase(count: { annotated.lines.count }, step: unitStep),
+            SlicedRender.Phase(count: { units.count }, step: rowStep),
+            SlicedRender.Phase(count: { units.count }, step: walkStep),
+            SlicedRender.Phase(count: { pageStarts.count }, step: pageStep),
+        ], finish: finish)
     }
 
     // MARK: - Modern
@@ -4383,6 +4583,143 @@ enum DocumentRenderer {
 
     private static func renderModern(_ state: DocumentState,
                                      exportFlags: ExportFlags = .allOn) -> RenderedDocument {
+        let session = modernRenderSession(state, exportFlags: exportFlags)
+        session.renderAll()
+        return session.finish()
+    }
+
+    /// Batch 26 (#271 M7): `renderModern`'s work, held open item by item, the way `NativeRenderSession`
+    /// holds Native's page by page. The engine's half — `modernSemanticFlow` and the graphic cells —
+    /// comes first (`ModernEngineWork`, which a window makes off the main thread); each flow item's
+    /// attributed text is then built in order, as many as a turn of the run loop has room for; `finish()`
+    /// builds the document once the last is done. Rendering every item then finishing IS `renderModern`:
+    /// Modern's pages are AppKit's to find, so a partial Modern render is never shown.
+    @MainActor
+    final class ModernRenderSession {
+        /// How many flow items the document has.
+        let itemCount: Int
+        /// How many of them are rendered so far, from the first.
+        private(set) var renderedItems = 0
+        private let renderItem: @MainActor (Int) -> Void
+        private let currentTextLength: @MainActor () -> Int
+        private let makeDocument: @MainActor (Bool) -> RenderedDocument
+        private var finished = false
+
+        init(itemCount: Int, renderItem: @escaping @MainActor (Int) -> Void,
+             textLength: @escaping @MainActor () -> Int,
+             document: @escaping @MainActor (Bool) -> RenderedDocument) {
+            self.itemCount = itemCount
+            self.renderItem = renderItem
+            self.currentTextLength = textLength
+            self.makeDocument = document
+        }
+
+        /// Batch 27: how much text the items rendered so far have built.
+        var textLength: Int { currentTextLength() }
+
+        /// Batch 27: the items rendered so far, as a document — a copy, so rendering goes on. Its first pages are
+        /// the whole render's own while the text runs well past them (`DocumentWindowController`'s Modern preview);
+        /// its last are not.
+        func snapshot() -> RenderedDocument {
+            precondition(!finished, "ModernRenderSession: snapshot after finishing")
+            return makeDocument(false)
+        }
+
+        var isComplete: Bool { renderedItems >= itemCount }
+
+        func renderAll() {
+            while !isComplete {
+                renderItem(renderedItems)
+                renderedItems += 1
+            }
+        }
+
+        /// Renders items until `deadline` (`DispatchTime` uptime nanoseconds) passes — at least one.
+        func renderNext(until deadline: UInt64) {
+            guard !isComplete else { return }
+            repeat {
+                renderItem(renderedItems)
+                renderedItems += 1
+            } while !isComplete && DispatchTime.now().uptimeNanoseconds < deadline
+        }
+
+        /// The rendered document, once every item is rendered. Once only.
+        func finish() -> RenderedDocument {
+            precondition(isComplete, "ModernRenderSession: finished before the last item")
+            precondition(!finished, "ModernRenderSession: finished twice")
+            finished = true
+            return makeDocument(true)
+        }
+    }
+
+    /// Batch 27: a render held open in slices — its work as PHASES run in order, each a count of steps, the
+    /// count read when the phase begins (a later phase's count can depend on an earlier phase's result), and a
+    /// finish once every step has run. The Show Invisibles renders use it (`nativeAnnotatedRender`,
+    /// `modernAnnotatedRender`); running every step then finishing IS the synchronous render.
+    @MainActor
+    final class SlicedRender {
+        struct Phase {
+            let count: @MainActor () -> Int
+            let step: @MainActor (Int) -> Void
+        }
+
+        private let phases: [Phase]
+        private let makeDocument: @MainActor () -> RenderedDocument
+        private var phaseIndex = 0
+        private var stepIndex = 0
+        private var phaseCount: Int?
+        private var finished = false
+
+        init(phases: [Phase], finish: @escaping @MainActor () -> RenderedDocument) {
+            self.phases = phases
+            self.makeDocument = finish
+        }
+
+        var isComplete: Bool {
+            advancePastSpentPhases()
+            return phaseIndex >= phases.count
+        }
+
+        private func advancePastSpentPhases() {
+            while phaseIndex < phases.count {
+                let count = phaseCount ?? phases[phaseIndex].count()
+                phaseCount = count
+                if stepIndex < count { return }
+                phaseIndex += 1
+                stepIndex = 0
+                phaseCount = nil
+            }
+        }
+
+        private func runOneStep() {
+            phases[phaseIndex].step(stepIndex)
+            stepIndex += 1
+        }
+
+        func renderAll() {
+            while !isComplete { runOneStep() }
+        }
+
+        /// Runs steps until `deadline` (`DispatchTime` uptime nanoseconds) passes — at least one.
+        func renderNext(until deadline: UInt64) {
+            guard !isComplete else { return }
+            repeat {
+                runOneStep()
+            } while !isComplete && DispatchTime.now().uptimeNanoseconds < deadline
+        }
+
+        /// The rendered document, once every step has run. Once only.
+        func finish() -> RenderedDocument {
+            precondition(isComplete, "SlicedRender: finished before the last step")
+            precondition(!finished, "SlicedRender: finished twice")
+            finished = true
+            return makeDocument()
+        }
+    }
+
+    /// `engine`: the engine's half made already, off the main thread, for `state` as it is now; nil makes it here.
+    static func modernRenderSession(_ state: DocumentState, exportFlags: ExportFlags = .allOn,
+                                    engine: ModernEngineWork? = nil) -> ModernRenderSession {
         let doc = state.document
         let size = CGFloat(state.modernFontSize)
         let bodyFont = NSFont(name: state.modernFontName, size: size)
@@ -4437,7 +4774,8 @@ enum DocumentRenderer {
         // is 7.20pt in the library (12 x 0.6) and was 8.40 here (14 x 0.6), so every one of
         // those rows started 1.20pt right of the library's and lost its last word.
         let modernPrintedPt = printedSize(doc)
-        var flow = modernSemanticFlow(doc)
+        let work = engine ?? ModernEngineWork.make(document: doc)
+        var flow = work.flow
         // b34 N1 (job 529): same collapse `modernParagraphContent`'s own citation
         // explains, applied to note/footnote text — `PDFModernLayout.swift`'s
         // `modernFlow` collapses `.note`/footnote text the identical way
@@ -4456,9 +4794,8 @@ enum DocumentRenderer {
         // Planning #251(c), Modern's half: the engine's own graphic-cell placements for
         // Modern, keyed by `flow.items` index — the same index the loop below enumerates.
         // Same note defaults as the `modernSemanticFlow` call above, so the two describe the
-        // same flow.
-        let modernGraphicCells = attachGraphicCellsModern(
-            doc, notes: EmitOptions.defaultNotes, noteRefs: .word)
+        // same flow (`ModernEngineWork.make` places them on that very flow).
+        let modernGraphicCells = work.graphicCells
         let blockHangCols = Self.defListBlockHangCols(items: items, colPt: colPt)
         // Job 423 (view item d): the ACTUAL available text width, not `colPt` (one
         // monospace COLUMN's width, e.g. ~7pt — a single character cell, `modernColPt`'s
@@ -4566,7 +4903,9 @@ enum DocumentRenderer {
         var modernForcedPageBreakOffsets: [Int] = []
         var modernBlankLineRanges: [NSRange] = []
         var modernConditionalBreaks: [ModernConditionalBreak] = []
-        for (i, item) in items.enumerated() {
+        // Batch 26: one flow item's work — the loop body it always was, run in order by `ModernRenderSession`.
+        func renderItem(_ i: Int) {
+            let item = items[i]
             switch item {
             case .para(let align, let indentCols, let cutCols, let runs, let paraFootnotes, let structure, let isVerse, let bi):
                 // b27 item 11: Jon's screenplay ruling, Modern's own port (see
@@ -4866,7 +5205,7 @@ enum DocumentRenderer {
                 // into real per-page `RunningLine`s is entirely `DocumentRenderer
                 // .modernRunningLines`/`PagedDocumentView`'s job now — "consume the engine's
                 // verdict," not re-derive it here.
-                guard exportFlags.headers else { continue }
+                guard exportFlags.headers else { return }
                 hfEvents.append(HFEvent(kind: which == .header ? .header : .footer,
                                         line: line, text: text, charOffset: output.length))
             case .pageBreak:
@@ -4907,7 +5246,7 @@ enum DocumentRenderer {
                 // these two files:" paragraph asks for room its page does not have, and the
                 // library moves it whole to page 8 while the app started it at 690.60 on
                 // page 7 — one line's drift that then showed on every page to 21.
-                guard output.length > 0 else { continue }
+                guard output.length > 0 else { return }
                 modernConditionalBreaks.append(
                     ModernConditionalBreak(
                         charOffset: output.length,
@@ -4916,7 +5255,7 @@ enum DocumentRenderer {
             case .tabs:
                 // Editor-time state with no rendered consequence on either side — the
                 // engine's own `modernFlow` says so.
-                continue
+                return
             case .noteSeparator:
                 // Job 423 (view item a, intake item 6): the endnote/annotation/comment
                 // appendix was absent from the on-screen Modern view since job 263 (scope
@@ -4943,7 +5282,12 @@ enum DocumentRenderer {
                 appendNoteLine("\(Self.modernNoteEntryLabel(label)) \(sentenceSpacingTexts([text])[0])")
             }
         }
-        if output.length > 0 { output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1)) }
+
+        // Batch 26: everything after the last item, run once by `ModernRenderSession.finish()` (`final`) — and,
+        // batch 27, on a copy of the text so far for `snapshot()`.
+        func document(final: Bool) -> RenderedDocument {
+        let flowText = final ? output : NSMutableAttributedString(attributedString: output)
+        if flowText.length > 0 { flowText.deleteCharacters(in: NSRange(location: flowText.length - 1, length: 1)) }
 
         // Job 477: the decisive measurement for the persistent "no footnotes/endnotes in
         // Modern" report — every established fact says the appendix/inline notes SHOULD be
@@ -4955,7 +5299,7 @@ enum DocumentRenderer {
         // not visible." Gated on the SAME `SRDiagnosticsGate` switch `PagedDocumentView
         // .logPageDiagnostics` (job 460) already uses.
         if SRDiagnosticsGate.isEnabled() {
-            let haystack = output.string as NSString
+            let haystack = flowText.string as NSString
             let separatorRange = haystack.range(of: String(repeating: "-", count: 20))
             let separatorDesc = separatorRange.location == NSNotFound
                 ? "NOT-FOUND" : "FOUND@\(separatorRange.location)"
@@ -4974,7 +5318,7 @@ enum DocumentRenderer {
                 return "\(kindLabel(row.kind))[\(index)]=\(found)"
             }.joined(separator: " ")
             NSLog("[SoftReturn] DocumentRenderer.renderModern noteAppendix outputLength=%d separator=%@ %@",
-                  output.length, separatorDesc, itemsDesc.isEmpty ? "<no-notes>" : itemsDesc)
+                  flowText.length, separatorDesc, itemsDesc.isEmpty ? "<no-notes>" : itemsDesc)
         }
 
         // The PAPER is the app's own — whatever the bottom bar's Page control reports; the
@@ -4988,7 +5332,7 @@ enum DocumentRenderer {
         let textFrame = Self.modernTextFrame(doc, paper: paper)
 
         var document = RenderedDocument(
-            text: output,
+            text: flowText,
             pageSize: paper,
             // Page count is AppKit's to decide once it has flowed the text; the view layer
             // grows containers until the text is consumed and reports the real number. One
@@ -5045,6 +5389,9 @@ enum DocumentRenderer {
         document.modernBlankLineRanges = modernBlankLineRanges
         document.modernConditionalBreaks = modernConditionalBreaks
         return document
+        }
+        return ModernRenderSession(itemCount: items.count, renderItem: renderItem,
+                                   textLength: { output.length }, document: document)
     }
 
     // MARK: - Modern, Show Invisibles (job 294, Jon's ruling)
@@ -5124,6 +5471,16 @@ enum DocumentRenderer {
     internal static func renderModernAnnotated(
         _ state: DocumentState, notes: Set<NoteKind> = EmitOptions.defaultNotes
     ) -> RenderedDocument {
+        let render = modernAnnotatedRender(state, notes: notes)
+        render.renderAll()
+        return render.finish()
+    }
+
+    /// Batch 27: `renderModernAnnotated`'s work in slices (`SlicedRender`), one flow item a step, the loop body
+    /// the one it always was. `flow`: `modernSemanticFlow` made already, off the main thread, with `notes`.
+    static func modernAnnotatedRender(
+        _ state: DocumentState, notes: Set<NoteKind> = EmitOptions.defaultNotes, flow engineFlow: SemanticFlow? = nil
+    ) -> SlicedRender {
         let doc = state.document
         let size = CGFloat(state.modernFontSize)
         let bodyFont = NSFont(name: state.modernFontName, size: size)
@@ -5152,7 +5509,7 @@ enum DocumentRenderer {
         // is 7.20pt in the library (12 x 0.6) and was 8.40 here (14 x 0.6), so every one of
         // those rows started 1.20pt right of the library's and lost its last word.
         let modernPrintedPt = printedSize(doc)
-        var flow = modernSemanticFlow(doc, notes: notes)
+        var flow = engineFlow ?? modernSemanticFlow(doc, notes: notes)
         // b34 N1 (job 529): same collapse as `renderModern`'s identical citation —
         // Show Invisibles' own note/footnote appendix reads `flow.notes[...].text` too
         // and must match what the OFF-state view (and export) actually show.
@@ -5162,6 +5519,14 @@ enum DocumentRenderer {
             return row
         }
         let items = flow.items
+        // Planning #264 (layout JSON v10, sr 924bad9): the 0x0F print controls the flow dropped,
+        // by the item they sat in. Their labels are drawn here and nowhere else: Show Invisibles
+        // is the one surface allowed to show them, and here as marks, never as ink. The same list
+        // `emitLayout` publishes as `invisibles["modern_print_controls"]`.
+        var printControlsByItem: [Int: [SemanticPrintControl]] = [:]
+        for control in flow.printControls where !control.label.isEmpty {
+            printControlsByItem[control.item, default: []].append(control)
+        }
         let blockHangCols = Self.defListBlockHangCols(items: items, colPt: colPt)
         // Job 434: the SAME figure `renderModern` hoists for its own `modernLeadingSpacer`
         // measurement — `InvisiblesModernLayoutOracle`'s own law (job 300) requires this
@@ -5207,7 +5572,8 @@ enum DocumentRenderer {
         let footnoteRows = flow.notes.enumerated().filter { $0.element.kind == .footnote }
         var footnotesEmitted = false
 
-        for (i, item) in items.enumerated() {
+        func itemStep(_ i: Int) {
+            let item = items[i]
             switch item {
             case .para(let align, let indentCols, let cutCols, let runs, _, let structure, let isVerse, _):
                 // The same line face `renderModern` measures its own leading spacer and
@@ -5311,17 +5677,40 @@ enum DocumentRenderer {
                 // just the summed length of the runs ahead of it; inserting a mark there
                 // lands it exactly between the words it separates, same styling family
                 // (`markRun`) as every other invisible-ink class this view already marks.
+                //
+                // Planning #264 (layout JSON v10): a print control's label goes in the same way,
+                // ahead of the run it preceded (`SemanticPrintControl.run`; `runs.count` is after
+                // the last run). Offsets count UTF-16 units, which is what `line` indexes by. A
+                // centered or structured row rebuilds its runs (padding trimmed, a marker or label
+                // split off), so a run index has no offset there: its labels go after the line's
+                // content, ahead of the ¶.
                 let isPlainParagraph = structure?.centered != true && structure?.kind == nil
+                let printControls = printControlsByItem[i] ?? []
+                func printControlMark(_ control: SemanticPrintControl) -> NSAttributedString {
+                    markRun(control.label, paragraph: paragraph, spoken: "print control: \(control.label)")
+                }
                 if isPlainParagraph {
                     var offset = 0
-                    for run in runs {
+                    for (runIndex, run) in runs.enumerated() {
+                        for control in printControls where control.run == runIndex {
+                            let mark = printControlMark(control)
+                            line.insert(mark, at: min(offset, line.length))
+                            offset += mark.length
+                        }
                         if run.ref != nil, run.text.isEmpty {
                             let mark = markRun("[comment]", paragraph: paragraph, spoken: "comment")
                             line.insert(mark, at: min(offset, line.length))
                             offset += mark.length
                         } else {
-                            offset += run.text.count
+                            offset += run.text.utf16.count
                         }
+                    }
+                    for control in printControls where control.run >= runs.count {
+                        line.append(printControlMark(control))
+                    }
+                } else {
+                    for control in printControls {
+                        line.append(printControlMark(control))
                     }
                 }
                 line.append(markRun("¶", paragraph: paragraph, spoken: "hard return"))
@@ -5358,7 +5747,7 @@ enum DocumentRenderer {
                 // "[footer]" TAG ahead of it — "Modern Show Invisibles regains the header
                 // tag" — so a person can tell running-head text apart from body text, the
                 // same distinguishing role every other mark here already plays.
-                guard !text.isEmpty else { continue }
+                guard !text.isEmpty else { return }
                 let tag = which == .header ? "[header] " : "[footer] "
                 let line = NSMutableAttributedString(attributedString: markRun(
                     tag, paragraph: blankParagraph, spoken: which == .header ? "header" : "footer"))
@@ -5370,7 +5759,7 @@ enum DocumentRenderer {
             case .tabs:
                 // Not rendered OFF either (`renderModern`'s own switch) — editor-time
                 // state, no rendered consequence in either state.
-                continue
+                return
             case .noteSeparator:
                 // Job 423 (view item a/c): `renderModern`'s OFF state now renders the
                 // note appendix (see that switch's own citation) — job 300's ruling
@@ -5397,6 +5786,7 @@ enum DocumentRenderer {
                 appendNoteLine("\(Self.modernNoteEntryLabel(label)) \(sentenceSpacingTexts([text])[0])")
             }
         }
+        func finish() -> RenderedDocument {
         // Footnotes: same end-of-document appendix `renderModern`'s own OFF state builds
         // (see that function's citation on why `SemanticItem.para`'s `footnotes:` field
         // alone can't place them) — identical content, no extra mark, same reasoning as
@@ -5460,6 +5850,8 @@ enum DocumentRenderer {
             modernEndnoteAppendixStart: nil,
             pclPrograms: []
         )
+        }
+        return SlicedRender(phases: [SlicedRender.Phase(count: { items.count }, step: itemStep)], finish: finish)
     }
 
     /// `CtrlKD.Alignment` (the block's own `.oc`/`.oj` state, `SemanticItem.para`'s `align`)
@@ -6216,6 +6608,8 @@ enum DocumentRenderer {
         let entry = span.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
         let ratio = nativeFamilyIsCourier(entry)
             ? nativeSupSubCourierRatio : nativeSupSubDefaultRatio
+        // #271 M1: the LAID-OUT offset only. The rest of Printed's roll is added when the glyphs
+        // are drawn (`.nativeScriptRise`), which moves no fragment and so needs no compensation.
         return Double(scriptMetrics(for: font, raise: span.styles.contains(.sup),
                                     ratio: ratio).offset)
     }
@@ -6239,7 +6633,7 @@ enum DocumentRenderer {
         font: NSFont, paragraph: NSParagraphStyle, fonts: [FontChange], defaultSize: Int,
         colourMap: [Int: Double], disableKerning: Bool, useCourierPrime: Bool = false,
         pixResults: [PixResult] = [], pixMeasureWidthPt: Double = 0,
-        nativeSupSub: Bool = false, nativePMActive: Bool? = nil,
+        nativeSupSub: Bool = false, nativeRoll: Double? = nil, nativePMActive: Bool? = nil,
         nativeKerning: Bool = true, modernPitchScale: Bool = false,
         modernPrintedPt: Int? = nil, modernFontlessFamily: CtrlKD.PDFFamily = .times
     ) {
@@ -6413,14 +6807,14 @@ enum DocumentRenderer {
             Self.appendProportionalRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                nativeSupSub: nativeSupSub, nativeKerning: nativeKerning,
+                nativeSupSub: nativeSupSub, nativeRoll: nativeRoll, nativeKerning: nativeKerning,
                 modernPitchScale: modernPitchScale, modernPrintedPt: modernPrintedPt,
                 modernFontlessFamily: modernFontlessFamily, to: line)
         } else {
             line.append(Self.attributedRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                nativeSupSub: nativeSupSub, nativeKerning: nativeKerning,
+                nativeSupSub: nativeSupSub, nativeRoll: nativeRoll, nativeKerning: nativeKerning,
                 modernPitchScale: modernPitchScale, modernPrintedPt: modernPrintedPt,
                 modernFontlessFamily: modernFontlessFamily))
         }
@@ -6465,7 +6859,7 @@ enum DocumentRenderer {
         _ span: Span, font: NSFont, paragraph: NSParagraphStyle,
         fonts: [FontChange], defaultSize: Int, colourMap: [Int: Double],
         disableKerning: Bool, useCourierPrime: Bool, nativeSupSub: Bool = false,
-        nativeKerning: Bool = true, modernPitchScale: Bool = false,
+        nativeRoll: Double? = nil, nativeKerning: Bool = true, modernPitchScale: Bool = false,
         modernPrintedPt: Int? = nil, modernFontlessFamily: CtrlKD.PDFFamily = .times,
         to line: NSMutableAttributedString
     ) {
@@ -6475,7 +6869,7 @@ enum DocumentRenderer {
             line.append(Self.attributedRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                nativeSupSub: nativeSupSub, nativeKerning: nativeKerning,
+                nativeSupSub: nativeSupSub, nativeRoll: nativeRoll, nativeKerning: nativeKerning,
                 modernPitchScale: modernPitchScale, modernPrintedPt: modernPrintedPt,
                 modernFontlessFamily: modernFontlessFamily))
             return
@@ -6534,7 +6928,7 @@ enum DocumentRenderer {
                 line.append(Self.attributedRun(
                     piece, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                     colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                    nativeSupSub: nativeSupSub))
+                    nativeSupSub: nativeSupSub, nativeRoll: nativeRoll))
             }
         }
     }
@@ -6603,6 +6997,7 @@ enum DocumentRenderer {
         pixResults: [PixResult] = [],
         pixMeasureWidthPt: Double = 0,
         nativeSupSub: Bool = false,
+        nativeRoll: Double? = nil,
         nativePMActive: Bool? = nil,
         nativeKerning: Bool = true,
         modernPitchScale: Bool = false, modernPrintedPt: Int? = nil,
@@ -6618,7 +7013,7 @@ enum DocumentRenderer {
                       fonts: fonts, defaultSize: defaultSize, colourMap: colourMap,
                       disableKerning: disableKerning, useCourierPrime: useCourierPrime,
                       pixResults: pixResults, pixMeasureWidthPt: pixMeasureWidthPt,
-                      nativeSupSub: nativeSupSub, nativePMActive: nativePMActive,
+                      nativeSupSub: nativeSupSub, nativeRoll: nativeRoll, nativePMActive: nativePMActive,
                       nativeKerning: nativeKerning, modernPitchScale: modernPitchScale,
                       modernPrintedPt: modernPrintedPt,
                       modernFontlessFamily: modernFontlessFamily)
@@ -6897,7 +7292,7 @@ enum DocumentRenderer {
         _ span: Span, font: NSFont, paragraph: NSParagraphStyle,
         fonts: [FontChange], defaultSize: Int, colourMap: [Int: Double] = [:],
         disableKerning: Bool = false, useCourierPrime: Bool = false,
-        nativeSupSub: Bool = false, nativeKerning: Bool = true,
+        nativeSupSub: Bool = false, nativeRoll: Double? = nil, nativeKerning: Bool = true,
         modernPitchScale: Bool = false, modernPrintedPt: Int? = nil,
         modernFontlessFamily: CtrlKD.PDFFamily = .times
     ) -> NSAttributedString {
@@ -7018,6 +7413,16 @@ enum DocumentRenderer {
                                                  ratio: ratio)
             attributes[.font] = scaled
             if !isGraphic { attributes[.baselineOffset] = offset }
+            // #271 M1: Printed moves the run by the `.sr` roll in force — `PDFWriter.sized()`'s
+            // `roundHalfToEven(roll)` up, `roundHalfToEven(-roll)` down, +4 / −4 at the default
+            // 3/48in. Laying it out that far would grow its line fragment past the envelope fit
+            // above and change pagination (batch 20: 13 GeometryOracle lines moved), so layout
+            // keeps the fit and the difference is applied when the glyphs are drawn
+            // (`ScriptRiseLayoutManager`). Native only; Modern keeps the fit.
+            if nativeSupSub, !isGraphic, let nativeRoll {
+                let printedRise = CGFloat(nativeRoundHalfToEven(span.styles.contains(.sup) ? nativeRoll : -nativeRoll))
+                if printedRise != offset { attributes[.nativeScriptRise] = printedRise - offset }
+            }
             // MECHANISM G, the PITCH half. WS7 reselects a NARROWER fixed-pitch cell for the
             // span itself — the body cell scaled by `nativeSupSubCellRatio` — where AppKit
             // would simply advance at the smaller face's own natural 0.6em. The gap is small

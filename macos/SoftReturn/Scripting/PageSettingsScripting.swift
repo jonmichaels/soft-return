@@ -1,4 +1,5 @@
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// Bridges `CtrlKD.PageSettings` to and from AppleScript's `page settings` record, and

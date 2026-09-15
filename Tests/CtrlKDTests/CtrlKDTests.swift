@@ -108,8 +108,14 @@ import Testing
     // must emit exactly what it always did — no stray attribute, no stray control.
     let doc = parseWS(bytes("Just ordinary text.\r\n"))
     #expect(!emitHTML(doc, mode: .modern).contains("text-align"))
-    #expect(!emitRTF(doc, mode: .modern).contains(#"\qc"#))
-    #expect(!emitRTF(doc, mode: .modern).contains(#"\ql"#))
+    // planning #264 item 3: the automatic page-number footer is centred (`\qc`) by
+    // design, so this BODY-alignment check opts out of it -- `RTFPagedSurfaceTests`
+    // asserts that footer on its own. ctrl-kd's twin of this test makes the identical
+    // `page_numbers='off'` change.
+    var noNumbers = EmitOptions()
+    noNumbers.pageNumbers = .off
+    #expect(!emitRTF(doc, mode: .modern, options: noNumbers).contains(#"\qc"#))
+    #expect(!emitRTF(doc, mode: .modern, options: noNumbers).contains(#"\ql"#))
 }
 
 @Test func marginsArePerBlockStateNotFirstOccurrence() {

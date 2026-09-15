@@ -293,7 +293,13 @@ private let poemLines = [bytes("     Line one is short,"), bytes("     line two 
 
 @Test func modernRTFPoemStaysOneParWithLineBreaks() {
     let doc = typedParagraphDoc(poemLines)
-    let r = emitRTF(doc, mode: .modern)
+    // planning #264 item 3: this test counts BODY paragraphs (or their run
+    // attributes), so it opts out of the automatic page-number footer, which
+    // carries a `\par` and a `\chpgn` run of its own -- RTFPagedSurfaceTests
+    // asserts that footer by name.
+    var noPageNumbers = EmitOptions()
+    noPageNumbers.pageNumbers = .off
+    let r = emitRTF(doc, mode: .modern, options: noPageNumbers)
     #expect(countOccurrencesStr(#"\par"#, in: r) == 1)
     #expect(countOccurrencesStr(#"\line"#, in: r) == 3)
 }
@@ -318,7 +324,13 @@ private let poemLines = [bytes("     Line one is short,"), bytes("     line two 
     let lines = ["     \(long) one", "     \(long) two", "     \(long) three"].map(bytes)
     let doc = typedParagraphDoc(lines)
     let h = emitHTML(doc, mode: .modern)
-    let r = emitRTF(doc, mode: .modern)
+    // planning #264 item 3: this test counts BODY paragraphs (or their run
+    // attributes), so it opts out of the automatic page-number footer, which
+    // carries a `\par` and a `\chpgn` run of its own -- RTFPagedSurfaceTests
+    // asserts that footer by name.
+    var noPageNumbers = EmitOptions()
+    noPageNumbers.pageNumbers = .off
+    let r = emitRTF(doc, mode: .modern, options: noPageNumbers)
     let md = emitMarkdown(doc, mode: .modern)
     let t = emitText(doc, mode: .modern)
     #expect(countOccurrencesStr("<p", in: h) == 3 && !h.contains("<br>"))
@@ -338,7 +350,13 @@ private let poemLines = [bytes("     Line one is short,"), bytes("     line two 
     #expect(!looksLikeVerse(units[0], dominantStyles: dominant))
 
     let h = emitHTML(doc, mode: .modern)
-    let r = emitRTF(doc, mode: .modern)
+    // planning #264 item 3: this test counts BODY paragraphs (or their run
+    // attributes), so it opts out of the automatic page-number footer, which
+    // carries a `\par` and a `\chpgn` run of its own -- RTFPagedSurfaceTests
+    // asserts that footer by name.
+    var noPageNumbers = EmitOptions()
+    noPageNumbers.pageNumbers = .off
+    let r = emitRTF(doc, mode: .modern, options: noPageNumbers)
     let md = emitMarkdown(doc, mode: .modern)
     let t = emitText(doc, mode: .modern)
     #expect(countOccurrencesStr("<p", in: h) == 1 && !h.contains("<br>"))
@@ -702,18 +720,18 @@ private func missingAttrMarkers(_ rendered: String, fmt: String, attrsPresent: S
 /// never by calling these functions -- this gate stays for its corpus-wide wiring coverage.
 private func rtfPrintedVerticalSpaceExpected(_ doc: Document)
     -> (sl: Set<Int>, fi: Set<Int>, sb: Int?, sa: Int?) {
-    var margins: [Int: (li: Int, ri: Int)] = [:]
-    for e in doc.styles where e.record != nil {
-        margins[e.slot] = rtfStyleMargins(e, printed: true)
-    }
     var slValues: Set<Int> = []
     var fiValues: Set<Int> = []
     for (bi, b) in doc.blocks.enumerated() where b.kind == .para && !b.lines.isEmpty {
         slValues.insert(rtfSlTwips(rtfBlockLead48(doc, b, bi: bi)))
-        if b.paraMargin != nil {
-            let li = margins[b.styleID ?? -1]?.li ?? 0
-            if let fi = rtfPMFiTwips(b, liTwips: li) { fiValues.insert(fi) }
-        }
+        // `.pm`'s `\fi`, through the PRINTED PDF's OWN gate (planning #264, the
+        // LibreOffice check's section 3, 2026-09-14): the PDF applies a `.pm` first-line
+        // indent only under `.pf on`, so Printed RTF asks `printedPMFiPt` the same
+        // question rather than reading `.pm` unconditionally. `\li` is no longer part of
+        // the arithmetic -- Printed RTF emits none, its physical lines carrying their
+        // own indent as typed characters -- so round 17's style-slot/dot-state `li`
+        // reconstruction is gone from here with it.
+        if let pt = printedPMFiPt(b) { fiValues.insert(roundHalfToEven(pt * 20.0)) }
     }
     let (sb, sa) = rtfDocSpacingTwips(doc)
     return (slValues, fiValues, sb, sa)
@@ -748,7 +766,23 @@ private func rtfPrintedVerticalSpaceIssues(_ doc: Document) -> [String] {
 private func rtfModernVerticalSpaceLeak(_ doc: Document) -> [String] {
     let r = emitRTF(doc, mode: .modern)
     var bad: [String] = []
-    if r.contains(#"\sl"#), !regexMatches(#"\\sl-?\d+\\slmult0"#, r).isEmpty { bad.append("sl") }
+    // b24 round 20 (slate item 4) carved ONE scoped exception out of round 6's rule,
+    // "exactly as disclosed there": a verse-classified or centred unit gets a tighter
+    // line height (`rtfVerseTightSlTwips`), and every other Modern paragraph still
+    // resets to `\sl0`. Planning #264 item 5 made that exception common -- a row the
+    // author centred by typing spaces takes the same tight line as a row that carries a
+    // real `.oc` tag -- so the gate has to know the ruled values apart from a real leak
+    // instead of failing on any `\sl` at all.
+    //
+    // R3 (2026-09-14) changed WHICH values are ruled: the tightening is no longer one
+    // document-independent constant but this block's own tightened leading, emitted
+    // EXACT, so the gate can no longer name a single number. The shape is what it checks
+    // now -- `\sl0` (the reader owns it) or a NEGATIVE value (an exact, block-derived
+    // tightening). A positive `\sl` in Modern is the leak: it is Printed's own
+    // at-least-this-much idiom, and round 6 gave that to Printed alone. ctrl-kd's twin
+    // gate carries the same rule.
+    let slValues = regexMatches(#"\\sl(-?\d+)\\slmult0"#, r).compactMap { group($0, 1, in: r) }
+    if slValues.contains(where: { (Int($0) ?? 0) > 0 }) { bad.append("sl") }
     if !regexMatches(#"\\sb-?\d+[ }]"#, r).isEmpty { bad.append("sb") }
     if !regexMatches(#"\\sa-?\d+[ }]"#, r).isEmpty { bad.append("sa") }
     return bad
@@ -885,8 +919,15 @@ private func assertLintGates(_ name: String, _ doc: Document) {
     let t = emitText(doc, mode: .modern)
     let md = emitMarkdown(doc, mode: .modern)
 
+    // No inch geometry anywhere ON SCREEN. The `@media print` block at the foot of the
+    // stylesheet is excluded deliberately (planning #264 item 4(c), 2026-09-14): it
+    // states the document's own PAPER in inches, which is the one place inches are the
+    // right unit, and it decides nothing about the reading column this rule is about.
+    // Round 3's rule is "a reading column is the reader's", and a sheet of paper is not
+    // a reading column.
     #expect(h.contains("<blockquote>") && h.contains("</blockquote>"))
-    #expect(!h.contains("5.8") && !h.contains("in;") && !h.contains("in\""))
+    let screen = h.range(of: "@media print").map { String(h[h.startIndex..<$0.lowerBound]) } ?? h
+    #expect(!screen.contains("5.8") && !screen.contains("in;") && !screen.contains("in\""))
     #expect(htmlBadGeometry(h).isEmpty)
 
     #expect(r.contains(#"\li720\ri720"#))
@@ -946,12 +987,22 @@ private func assertLintGates(_ name: String, _ doc: Document) {
     let lib = styleLibrary([(name: "WordStar Defaults", record: nil),
                             (name: "WordStar Defaults", record: nil),
                             (name: "Award Citation", record: rec)])
-    let body = styleRef(2) + [0x19] + bytes("Honored for outstanding service to the community.") + [0x19] + HARD
+    var body = styleRef(2)
+    body += [0x19]
+    body += bytes("Honored for outstanding service to the community.")
+    body += [0x19]
+    body += HARD
     let doc = parseWS(documentWithStyleLibrary(body: body, library: lib))
     #expect(doc.blocks[0].styleAttrs == [.bold, .italic])
 
     let h = emitHTML(doc, mode: .modern)
-    let r = emitRTF(doc, mode: .modern)
+    // planning #264 item 3: this test counts BODY paragraphs (or their run
+    // attributes), so it opts out of the automatic page-number footer, which
+    // carries a `\par` and a `\chpgn` run of its own -- RTFPagedSurfaceTests
+    // asserts that footer by name.
+    var noPageNumbers = EmitOptions()
+    noPageNumbers.pageNumbers = .off
+    let r = emitRTF(doc, mode: .modern, options: noPageNumbers)
     let md = emitMarkdown(doc, mode: .modern)
 
     #expect(h.contains("font-weight:bold") && h.contains("font-style:italic"))
@@ -998,9 +1049,16 @@ private func assertLintGates(_ name: String, _ doc: Document) {
     // doubles the default leading (16/48in vs the default 8/48in) must open double-
     // spaced in Printed/Native RTF -- Jon's own acceptance idea, verbatim. `.pm`
     // (paragraph margin -- WSFORMAT semantics: "the first line's own indent") lands as
-    // `\fi`, relative to whatever `\li` is already in force (round 4's own style-margin
-    // mechanism; 0 here, no style). Modern RTF gets NONE of it -- the reader owns
-    // presentation there, same doctrine as the no-page-width ruling (round 3).
+    // `\fi`. Modern RTF gets NONE of it -- the reader owns presentation there, same
+    // doctrine as the no-page-width ruling (round 3).
+    //
+    // `.pm` UPDATED 2026-09-14 (planning #264, the LibreOffice check's section 3):
+    // Printed RTF now asks for that `\fi` through the Printed PDF's own gate, and the
+    // PDF applies a `.pm` first-line indent only under `.pf on` -- WordStar auto-indents
+    // a first line when it REFLOWS the paragraph at print time, which is what `.pf`
+    // turns on. This fixture declares no `.pf`, so the right answer for it is now no
+    // `\fi` at all, and the `.pf on` half is asserted just below. The `.lh` half of the
+    // round-6 rule, which is what this test is named for, is untouched.
     let doc = parseWS(ws7Block(0x00, payload: lintHeader)
         + bytes(".lh 16\r\n.pm 10\r\n")
         + bytes("Some paragraph text set at double leading.") + HARD)
@@ -1011,7 +1069,15 @@ private func assertLintGates(_ name: String, _ doc: Document) {
 
     let rPrinted = emitRTF(doc, mode: .printed)
     #expect(rPrinted.contains(#"\sl-480\slmult0"#))      // 16 * 30 twips/48in-unit, doubled
-    #expect(rPrinted.contains(#"\fi1296"#))               // 9 cols * 144 twips/col, li=0
+    #expect(!rPrinted.contains(#"\fi"#))                  // no `.pf on`: the PDF indents nothing
+
+    // Sequential `+=`, never a chained `+` across many terms (planning #253).
+    var reflowedBytes = ws7Block(0x00, payload: lintHeader)
+    reflowedBytes += bytes(".lh 16\r\n.pm 10\r\n.pf on\r\n")
+    reflowedBytes += bytes("Some paragraph text set at double leading.")
+    reflowedBytes += HARD
+    let reflowed = parseWS(reflowedBytes)
+    #expect(emitRTF(reflowed, mode: .printed).contains(#"\fi1296"#))   // 9 cols * 144
 
     let rModern = emitRTF(doc, mode: .modern)
     #expect(rtfModernVerticalSpaceLeak(doc).isEmpty)
@@ -1075,7 +1141,13 @@ private func assertLintGates(_ name: String, _ doc: Document) {
     #expect(wrapOffRenderingIssues(doc).isEmpty)
 
     let h = emitHTML(doc, mode: .modern)
-    let r = emitRTF(doc, mode: .modern)
+    // planning #264 item 3: this test counts BODY paragraphs (or their run
+    // attributes), so it opts out of the automatic page-number footer, which
+    // carries a `\par` and a `\chpgn` run of its own -- RTFPagedSurfaceTests
+    // asserts that footer by name.
+    var noPageNumbers = EmitOptions()
+    noPageNumbers.pageNumbers = .off
+    let r = emitRTF(doc, mode: .modern, options: noPageNumbers)
     let md = emitMarkdown(doc, mode: .modern)
     let t = emitText(doc, mode: .modern)
     #expect(countOccurrencesStr("<p", in: h) == 1 && countOccurrencesStr("<br>", in: h) == 2)
@@ -1097,3 +1169,4 @@ private func countOccurrencesStr(_ needle: String, in haystack: String) -> Int {
     }
     return count
 }
+

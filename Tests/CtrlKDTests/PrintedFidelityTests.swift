@@ -9,7 +9,10 @@ import Testing
 // MARK: - item 1: headers/footers/page numbers in Printed RTF + --headers
 
 @Test func printedRTFGainsHeaderFooterDestinationsWithChpgn() throws {
-    let data = bytes(".h1 My Header #") + HARD + bytes("Body text.") + HARD
+    var data = bytes(".h1 My Header #")
+    data += HARD
+    data += bytes("Body text.")
+    data += HARD
     let rtf = emitRTF(parseWS(data), mode: .printed, options: EmitOptions())
     #expect(rtf.contains(#"\header"#))
     #expect(rtf.contains("My Header"))
@@ -17,14 +20,26 @@ import Testing
 }
 
 @Test func headersFlagOffSuppressesPrintedRTFHeader() throws {
-    let data = bytes(".h1 My Header") + HARD + bytes("Body text.") + HARD
+    var data = bytes(".h1 My Header")
+    data += HARD
+    data += bytes("Body text.")
+    data += HARD
     let rtf = emitRTF(parseWS(data), mode: .printed, options: EmitOptions(headers: false))
-    #expect(!rtf.contains(#"\header"#))
+    // The GROUP, `{\header`, not the bare prefix: since planning #264 R7 this document
+    // keeps its automatic page number with `--headers off`, and the footer that carries
+    // it brings the `\headery`/`\footery` page-setup pair with it. ctrl-kd's twin of
+    // this test always matched on the brace; sr's did not, and that is the whole
+    // difference.
+    #expect(!rtf.contains(#"{\header"#))
+    #expect(rtf.contains("My Header") == false)
     #expect(rtf.contains("Body text."))       // headers off never touches body text
 }
 
 @Test func headersFlagOffSuppressesPrintedPDFRunningContent() throws {
-    let data = bytes(".h1 My Header") + HARD + bytes("Body text.") + HARD
+    var data = bytes(".h1 My Header")
+    data += HARD
+    data += bytes("Body text.")
+    data += HARD
     let on = emitPDF(parseWS(data), mode: .printed, options: EmitOptions(headers: true))
     let off = emitPDF(parseWS(data), mode: .printed, options: EmitOptions(headers: false))
     #expect(contains(on, bytes("(My Header)")))
@@ -34,7 +49,10 @@ import Testing
 // MARK: - item 2: .pr or=l landscape
 
 @Test func prLandscapeFlipsPrintedPDFMediaBox() throws {
-    let data = bytes(".pr or=l") + HARD + bytes("Landscape text.") + HARD
+    var data = bytes(".pr or=l")
+    data += HARD
+    data += bytes("Landscape text.")
+    data += HARD
     let pdf = emitPDF(parseWS(data), mode: .printed)
     // Letter portrait is [0 0 612 792]; landscape swaps to [0 0 792 612].
     #expect(contains(pdf, bytes("/MediaBox [0 0 792 612]")))
@@ -57,7 +75,10 @@ import Testing
 }
 
 @Test func prLandscapeSetsRTFPaperAndLandscapeKeyword() throws {
-    let data = bytes(".pr or=l") + HARD + bytes("Landscape text.") + HARD
+    var data = bytes(".pr or=l")
+    data += HARD
+    data += bytes("Landscape text.")
+    data += HARD
     let rtf = emitRTF(parseWS(data), mode: .printed, options: EmitOptions())
     #expect(rtf.contains(#"\landscape"#))
     // portrait Letter is paperw12240\paperh15840; landscape swaps them.
@@ -85,7 +106,10 @@ import Testing
     // The same explicit 8.5in `.pl`, but portrait: the landscape-only width-column
     // reinterpretation must NOT fire here -- a portrait document that genuinely wants
     // an 8.5in-tall page keeps the plain "Custom" 8.5in companion, unchanged.
-    let data = bytes(".pl 8.50\"") + HARD + bytes("A short portrait page.") + HARD
+    var data = bytes(".pl 8.50\"")
+    data += HARD
+    data += bytes("A short portrait page.")
+    data += HARD
     let pdf = emitPDF(parseWS(data), mode: .printed)
     #expect(contains(pdf, bytes("/MediaBox [0 0 612 612]")))
 }
@@ -157,7 +181,14 @@ import Testing
 
 // MARK: - item 4: .lm/.rm dot-state fallback in Printed RTF margins
 
-@Test func lmRmDotStateReachesPrintedRTFMargins() throws {
+/// SUPERSEDED ON MEASUREMENT (planning #264, the LibreOffice check's section 3,
+/// 2026-09-14): `.lm`/`.rm` are resolved exactly as round 17 made them, and Printed RTF
+/// now emits NEITHER as a paragraph margin. Printed renders PHYSICAL lines joined by
+/// `\line`, which starts no new paragraph, so `\li` landed on every line after the
+/// first on top of the leading spaces those lines already carry. The Printed PDF is the
+/// arbiter and puts a physical line at `.po` plus its own typed columns and nothing
+/// else. See ctrl-kd f31a514 for the full measurement.
+@Test func lmRmDotStateNeverBecomePrintedRTFMargins() throws {
     // Soft returns (not a lone hard-returned line) so `detect()` reads this as ws4/
     // ws5+ prose rather than a `printstream` -- otherwise `isPrinted(doc)` forces
     // printed rendering for the Modern-mode call below too (same D5 override the
@@ -171,8 +202,11 @@ import Testing
     // `.lm N` (no unit suffix) is a 1-based COLUMN NUMBER, not an offset -- ctrl-kd's
     // core.py normalises it to `cols - 1` so left_margin always means "offset columns"
     // to every consumer (register: found 2026-08-06 wiring Modern block margins).
-    // `.lm 11` -> 10 offset cols -> 1440 twips.
-    #expect(rtf.contains(#"\li1440 "#))   // (11 - 1) cols * 144 twips/col
+    // `.lm 11` -> 10 offset cols. The MODEL still resolves it (asserted below);
+    // Printed RTF just no longer restates it as a paragraph property.
+    // `\li` followed by a digit -- `\line`, which this fixture is full of, shares the
+    // first three characters and is a different control word entirely.
+    #expect(!(1...9).contains { rtf.contains("\\li\($0)") })
     // b32 fix: `.rm` is the column POSITION where the right margin falls (the same
     // absolute frame `.lm`/`.po` share), not an indent width -- this used to assert
     // `\ri8784` (61 cols * 144 twips/col treated as a width), the disproven
@@ -180,8 +214,9 @@ import Testing
     // a near-zero-width column (b32 field notes: LYING/WARPRAYR's `\ri9360` on a
     // 6.9in text frame). The real indent is what's left of the fullCols(65)-wide
     // measure: (65 - 61) * 144 = 576.
-    #expect(rtf.contains(#"\ri576 "#))
-    #expect(!rtf.contains(#"\ri8784"#))
+    #expect(!(1...9).contains { rtf.contains("\\ri\($0)") })
+    #expect(doc.blocks[0].leftMargin == 10.0)     // resolved, just not restated
+    #expect(doc.blocks[0].rightMargin == 61.0)
 
     // Modern stays untouched -- the reader owns presentation, same doctrine as the
     // no-page-width ruling.
@@ -194,7 +229,14 @@ import Testing
 // MARK: - item 5: .pm/.psa/.psb reach Printed PDF
 
 @Test func pmShiftsPrintedPDFFirstLineStartX() throws {
-    let data = bytes(".pm 10") + HARD + bytes("Shifted line.") + HARD
+    // `.pf on`: `.pm` reaches the printed page only through print-time paragraph
+    // realignment (planning #270 item 39 / triage Q6 -- see `printedPMFiPt`'s gate).
+    var data = bytes(".pf on")
+    data += HARD
+    data += bytes(".pm 10")
+    data += HARD
+    data += bytes("Shifted line.")
+    data += HARD
     let pdf = emitPDF(parseWS(data), mode: .printed)
     // `.pm 10` is a COLUMN NUMBER (1-based, same frame as `.lm`/`.po`) -- normalised to
     // 9.0 offset columns, same as `.lm` (b26 fix). 9 cols * 7.2pt/col = 64.8pt shift added
@@ -237,10 +279,17 @@ import Testing
     // top (the doubled bug). Pinned here with a synthetic proportional-font fixture
     // (a Helv font block is required: `splitIndent`'s columns-math, this fix's whole
     // subject, only engages for a proportional run).
-    let data = bytes(".pm 5") + HARD
-        + fontBlock(helvTypestyle(), points: 12.0, styleBits: 0x8000)
-        + bytes("          Ten typed leading spaces on this first line.") + HARD
-        + bytes("     Five typed leading spaces on this continuation.") + HARD
+    // Sequential `+=` (planning #253): a long chained `+` fixture is what the macOS
+    // type-checker abandons.
+    var data = bytes(".pf on")            // see `printedPMFiPt`'s `.pf` gate
+    data += HARD
+    data += bytes(".pm 5")
+    data += HARD
+    data += fontBlock(helvTypestyle(), points: 12.0, styleBits: 0x8000)
+    data += bytes("          Ten typed leading spaces on this first line.")
+    data += HARD
+    data += bytes("     Five typed leading spaces on this continuation.")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.blocks[0].paraMargin == 4.0)   // `.pm 5` -> column 5 -> 4 offset cols
     let pdf = emitPDF(doc, mode: .printed)
@@ -256,10 +305,17 @@ import Testing
     // (WordStar's OTHER authoring convention, and the ORIGINAL, still-live case
     // `pmShiftsPrintedPDFFirstLineStartX` above already pins for a fontless span) --
     // `fi` must still apply there, unchanged.
-    let data = bytes(".pm 5") + HARD
-        + fontBlock(helvTypestyle(), points: 12.0, styleBits: 0x8000)
-        + bytes("No typed indent on this first line at all.") + HARD
-        + bytes("No typed indent on this continuation either.") + HARD
+    // Sequential `+=` (planning #253): a long chained `+` fixture is what the macOS
+    // type-checker abandons.
+    var data = bytes(".pf on")            // see `printedPMFiPt`'s `.pf` gate
+    data += HARD
+    data += bytes(".pm 5")
+    data += HARD
+    data += fontBlock(helvTypestyle(), points: 12.0, styleBits: 0x8000)
+    data += bytes("No typed indent on this first line at all.")
+    data += HARD
+    data += bytes("No typed indent on this continuation either.")
+    data += HARD
     let doc = parseWS(data)
     let pdf = emitPDF(doc, mode: .printed)
     let xs = contentSpans(pdf).filter { $0.text == "No" }.compactMap(\.x)
@@ -295,9 +351,17 @@ import Testing
     // is exactly where the pre-fix bug lived, is the LINE's own starting x: it must
     // equal the plain left margin (`fi` contributes nothing once the typed indent
     // already reaches `.pm`'s column) -- not `fi`'s own 36pt added on top.
-    let data = ws7Block(0x00) + bytes(".pm 6") + HARD      // column 6 -> 5 offset cols
-        + bytes("          Ten typed leading spaces, no font block at all.") + HARD
-        + bytes("     Five typed leading spaces on this continuation.") + HARD
+    // Sequential `+=` (planning #253): a long chained `+` fixture is what the macOS
+    // type-checker abandons.
+    var data = ws7Block(0x00)
+    data += bytes(".pf on")               // see `printedPMFiPt`'s `.pf` gate
+    data += HARD
+    data += bytes(".pm 6")                // column 6 -> 5 offset cols
+    data += HARD
+    data += bytes("          Ten typed leading spaces, no font block at all.")
+    data += HARD
+    data += bytes("     Five typed leading spaces on this continuation.")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.blocks[0].paraMargin == 5.0)
     let pdf = emitPDF(doc, mode: .printed)
@@ -325,8 +389,15 @@ import Testing
     // either (it always double-counted), so this pins the formula, not a specific
     // oracle reading. Direct port of ctrl-kd 8956ad4's
     // `test_pm_first_line_indent_tops_up_a_shorter_typed_indent`.
-    let data = ws7Block(0x00) + bytes(".pm 6") + HARD      // column 6 -> 5 offset cols
-        + bytes("  Two typed leading spaces only, short of the pm column.") + HARD
+    // Sequential `+=` (planning #253): a long chained `+` fixture is what the macOS
+    // type-checker abandons.
+    var data = ws7Block(0x00)
+    data += bytes(".pf on")               // see `printedPMFiPt`'s `.pf` gate
+    data += HARD
+    data += bytes(".pm 6")                // column 6 -> 5 offset cols
+    data += HARD
+    data += bytes("  Two typed leading spaces only, short of the pm column.")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.blocks[0].paraMargin == 5.0)
     let pdf = emitPDF(doc, mode: .printed)
@@ -337,6 +408,123 @@ import Testing
     // (14.4) still embedded as literal spaces ahead of "Two" in the string -- 57.6 +
     // 21.6 = 79.2.
     #expect(line.x == 79.2)
+}
+
+// MARK: - planning #264 item 2 (packet row B6): `.pm` in Printed RTF
+
+@Test func rtfPMFirstLineIndentDoesNotDoubleCountATypedIndent() throws {
+    // Printed RTF renders PHYSICAL lines, so a first line that types its own leading
+    // spaces carries them into the output as real characters -- and `\fi` used to add
+    // `.pm`'s full column on top of them, landing the line that many columns right of
+    // where the Printed PDF puts it (the double-count planning #202 fixed for the PDF
+    // alone). `.pm 6` is column 6 -> a 5-column offset, and the first line types 10
+    // columns of its own, so the resolved indent is 0 and `li + fi` must come out at
+    // the document's own left edge: the ink lands on the typed column 10, exactly as
+    // the PDF's does. Port of ctrl-kd 4b02a1d.
+    var data: [UInt8] = ws7Block(0x00)
+    data += bytes(".pm 6")
+    data += HARD
+    data += bytes(".lm 6")
+    data += HARD
+    data += bytes(".pf on")
+    data += HARD
+    data += bytes("          \"God the all-terrible! Thou who ordainest,")
+    data += HARD
+    let doc = parseWS(data)
+    #expect(doc.blocks[0].paraMargin == 5.0)
+    #expect(pmFirstLineIndentCols(doc.blocks[0]) == 0.0)
+    let rtf = emitRTF(doc, mode: .printed, options: EmitOptions())
+    // `\li` is gone from Printed altogether (2026-09-14) so `\fi` stands alone, and
+    // the whole indent must be 0 -- which the emitter writes as no token at all,
+    // `\fi0` being the paragraph state's own initial value.
+    #expect(!(1...9).contains { rtf.contains("\\li\($0)") })
+    #expect(!rtf.contains(#"\fi"#))
+}
+
+@Test func rtfPMFirstLineIndentStillAppliesWithNoTypedIndent() throws {
+    // The long-standing case is untouched: a paragraph that types no indent of its own
+    // still gets `.pm`'s whole column.
+    var data: [UInt8] = ws7Block(0x00)
+    data += bytes(".pm 6")
+    data += HARD
+    data += bytes(".lm 1")
+    data += HARD
+    data += bytes(".pf on")
+    data += HARD
+    data += bytes("A paragraph with no typed indent at all.")
+    data += HARD
+    let doc = parseWS(data)
+    #expect(pmFirstLineIndentCols(doc.blocks[0]) == 5.0)
+    let rtf = emitRTF(doc, mode: .printed, options: EmitOptions())
+    #expect(rtf.contains(#"\fi720 "#))           // 5 cols * 144 twips, `\li` is 0
+
+    // AND ONLY UNDER `.pf on` (2026-09-14). WordStar auto-indents a first line when it
+    // REFLOWS the paragraph at print time, so the Printed PDF gates the indent on `.pf`
+    // (measured on -HOLYMAC.WS against real WS7) and Printed RTF now asks the PDF's own
+    // gate (`printedPMFiPt`) rather than reading `.pm` raw.
+    var noPF: [UInt8] = ws7Block(0x00)
+    noPF += bytes(".pm 6")
+    noPF += HARD
+    noPF += bytes(".lm 1")
+    noPF += HARD
+    noPF += bytes("A paragraph with no typed indent at all.")
+    noPF += HARD
+    let noPFDoc = parseWS(noPF)
+    #expect(pmFirstLineIndentCols(noPFDoc.blocks[0]) == 5.0)
+    #expect(!emitRTF(noPFDoc, mode: .printed, options: EmitOptions()).contains(#"\fi"#))
+}
+
+@Test func rtfPMFirstLineIndentTopsUpAShorterTypedIndent() throws {
+    // A typed indent SHORTER than `.pm`'s column is topped up to it, not discarded --
+    // the same arithmetic the Printed PDF's own test pins.
+    var data: [UInt8] = ws7Block(0x00)
+    data += bytes(".pm 9")
+    data += HARD
+    data += bytes(".lm 1")
+    data += HARD
+    data += bytes(".pf on")
+    data += HARD
+    data += bytes("   A paragraph typing three columns under a .pm of eight.")
+    data += HARD
+    let doc = parseWS(data)
+    #expect(pmFirstLineIndentCols(doc.blocks[0]) == 5.0)      // 8 - 3
+    let rtf = emitRTF(doc, mode: .printed, options: EmitOptions())
+    #expect(rtf.contains(#"\fi720 "#))
+    #expect(!(1...9).contains { rtf.contains("\\li\($0)") })
+}
+
+@Test func rtfPMZeroNeverPullsATypedLineLeftOfItsOwnColumn() throws {
+    // Planning #257's half of the rule, in RTF: a `.pm 0"` block whose author centred a
+    // line with typed spaces has no margin mechanism behind those spaces, so the clamp
+    // at zero must keep `.pm` from pulling the first line LEFT of where it was typed.
+    var data: [UInt8] = ws7Block(0x00)
+    data += bytes(".pm 0\"")
+    data += HARD
+    data += bytes(".lm 1")
+    data += HARD
+    data += bytes("                    A BANNER HEADING")
+    data += HARD
+    let doc = parseWS(data)
+    #expect(pmFirstLineIndentCols(doc.blocks[0]) == 0.0)
+    let rtf = emitRTF(doc, mode: .printed, options: EmitOptions())
+    // `\fi0` against `\li0` is the paragraph state's own initial value, so the emitter
+    // writes no token at all -- absence IS zero here.
+    #expect(!rtf.contains(#"\fi-"#))
+}
+
+@Test func modernRTFCarriesNoPMIndentAtAll() throws {
+    // `.pm` is Printed-only by the 2026-08-17 ruling (packet row D8), and this change
+    // does not alter that.
+    var data: [UInt8] = bytes(".pm 6")
+    data += HARD
+    data += bytes("A paragraph")
+    data += SOFT
+    data += bytes("under a")
+    data += SOFT
+    data += bytes("paragraph margin.")
+    data += HARD
+    let rtf = emitRTF(parseWS(data), mode: .modern, options: EmitOptions())
+    #expect(!rtf.contains(#"\fi720"#))
 }
 
 // MARK: - planning #257 (sawyer/REF/-HOW-TO.RJS pages 10-12): typed indent with NO `.pm`
@@ -392,7 +580,10 @@ import Testing
 }
 
 @Test func pmPsaPsbNeverReachModernPDF() throws {
-    let data = bytes(".pm 10") + HARD + bytes("Text.") + HARD
+    var data = bytes(".pm 10")
+    data += HARD
+    data += bytes("Text.")
+    data += HARD
     let baseline = bytes("Text.") + HARD
     let modernPM = emitPDF(parseWS(data), mode: .modern)
     let modernPlain = emitPDF(parseWS(baseline), mode: .modern)
@@ -411,7 +602,10 @@ import Testing
 /// asserted the now-reversed per-word default.
 @Test func ulDefaultIsContinuousMatchingWS7Paper() throws {
     let underline: [UInt8] = [0x13]
-    let data = underline + bytes("two words") + underline + HARD
+    var data = underline
+    data += bytes("two words")
+    data += underline
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.formatting.underlineBlanks == nil)
     let pdf = emitPDF(doc, mode: .printed)
@@ -428,7 +622,12 @@ import Testing
 /// the parser only sets `underlineBlanks` when the command is present.
 @Test func ulOffBreaksUnderlineAtSpaces() throws {
     let underline: [UInt8] = [0x13]
-    let data = bytes(".ul off") + HARD + underline + bytes("two words") + underline + HARD
+    var data = bytes(".ul off")
+    data += HARD
+    data += underline
+    data += bytes("two words")
+    data += underline
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.formatting.underlineBlanks == false)
     let pdf = emitPDF(doc, mode: .printed)
@@ -441,7 +640,12 @@ import Testing
 
 @Test func ulOnDrawsOneContinuousRule() throws {
     let underline: [UInt8] = [0x13]
-    let data = bytes(".ul on") + HARD + underline + bytes("two words") + underline + HARD
+    var data = bytes(".ul on")
+    data += HARD
+    data += underline
+    data += bytes("two words")
+    data += underline
+    data += HARD
     let pdf = emitPDF(parseWS(data), mode: .printed)
     #expect(countOccurrences(of: bytes(" l S"), in: pdf) == 1)
 }
@@ -478,7 +682,10 @@ import Testing
 /// (.mt+.hm)=60pt pairing this test used to assume was measured only against Robert J.
 /// Sawyer's own WSCHANGE-customized install; see `printedTop`'s own doc comment.
 @Test func sbSuppressesLeadingBlankLinesAtPageTop() throws {
-    let body = HARD + HARD + bytes("Actual content starts here.") + HARD
+    var body = HARD
+    body += HARD
+    body += bytes("Actual content starts here.")
+    body += HARD
     let dataDefault = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15)) + body
     let dataSB = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
         + bytes(".sb on") + HARD + body
@@ -499,7 +706,12 @@ import Testing
 }
 
 @Test func lineNumbersFlagOffSuppressesTheGutter() throws {
-    let data = bytes(".l# 1") + HARD + bytes("Line one.") + HARD + bytes("Line two.") + HARD
+    var data = bytes(".l# 1")
+    data += HARD
+    data += bytes("Line one.")
+    data += HARD
+    data += bytes("Line two.")
+    data += HARD
     var doc = parseWS(data)
     doc.lineNumbering = 1
     let on = emitPDF(doc, mode: .printed, options: EmitOptions(lineNumbers: true))
@@ -539,7 +751,13 @@ import Testing
 /// ctrl-kd's `test_l_hash_gutter_interval_1_numbers_every_line`.
 @Test func lHashGutterIntervalOneNumbersEveryLine() throws {
     let header = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
-    let body = bytes(".l# 1") + HARD + bytes("One.") + HARD + HARD + bytes("Two.") + HARD
+    var body = bytes(".l# 1")
+    body += HARD
+    body += bytes("One.")
+    body += HARD
+    body += HARD
+    body += bytes("Two.")
+    body += HARD
     let doc = parseWS(header + body)
     #expect(doc.lineNumbering == 1)
 
@@ -596,10 +814,24 @@ import Testing
 // block on that branch (info.swift's shape 3); a document with no soft returns and >=2
 // hard returns reads as `printstream` (detect's own txt>=90 && hard>=2 rule) and never
 // reaches it at all, regardless of how many dot commands it carries.
-private let diagnoseProse = bytes("word") + SOFT + bytes("word") + SOFT + bytes("word") + SOFT
+private let diagnoseProse: [UInt8] = {
+    var v = bytes("word")
+    v += SOFT
+    v += bytes("word")
+    v += SOFT
+    v += bytes("word")
+    v += SOFT
+    return v
+}()
 
 @Test func diagnoseSurfacesFormattingDict() throws {
-    let data = bytes(".sr 10") + HARD + bytes(".pr or=l") + HARD + diagnoseProse + bytes("Text.") + HARD
+    var data = bytes(".sr 10")
+    data += HARD
+    data += bytes(".pr or=l")
+    data += HARD
+    data += diagnoseProse
+    data += bytes("Text.")
+    data += HARD
     let info = documentInfo(data)
     guard case .object(let obj) = info, case .object(let formatting)? = obj["formatting"] else {
         Issue.record("no formatting object in diagnose output")
@@ -620,7 +852,11 @@ private let diagnoseProse = bytes("word") + SOFT + bytes("word") + SOFT + bytes(
 }
 
 @Test func diagnoseSurfacesHeadersFootersDeclared() throws {
-    let data = bytes(".h1 My Header") + HARD + diagnoseProse + bytes("Body.") + HARD
+    var data = bytes(".h1 My Header")
+    data += HARD
+    data += diagnoseProse
+    data += bytes("Body.")
+    data += HARD
     let info = documentInfo(data)
     guard case .object(let obj) = info else {
         Issue.record("diagnose output is not an object")
@@ -799,14 +1035,42 @@ private func pgnumOps(_ pdf: [UInt8]) -> [(x: Double, y: Double, n: String)] {
     #expect(ops.map(\.n) == ["2", "3"])
 }
 
-@Test func pageNumbersHeadersFlagOffAlsoSuppresses() throws {
-    // `--headers off`'s own documented scope already covers "headers, footers, and page
-    // numbers" -- the automatic number must go silent along with everything else it
-    // controls, even under `.auto` with a live `.pn`.
-    let data = bytes(".pn 5") + HARD
-        + (1...20).flatMap { bytes("L\(String(format: "%03d", $0))") + HARD }
+@Test func pageNumbersFlagAloneGovernsTheAutomaticNumber() throws {
+    // Planning #264 R7 (ruled 2026-09-14): `--headers` and `--page-numbers` are
+    // SEPARATE. The automatic number -- the one `.pc` positions -- is the page-number
+    // flag's business alone, so it survives `--headers off` and goes silent only when
+    // `--page-numbers off` says so. (The RTF matches, `RTFPagedSurfaceTests`.)
+    var data = bytes(".pn 5")
+    data += HARD
+    for i in 1...20 {
+        data += bytes("L\(String(format: "%03d", i))")
+        data += HARD
+    }
     let doc = parseWS(data)
-    let out = emitPDF(doc, mode: .printed,
-                      options: EmitOptions(headers: false, pageNumbers: .auto))
-    #expect(pgnumOps(out).isEmpty)
+    for headers in [true, false] {
+        let out = emitPDF(doc, mode: .printed,
+                          options: EmitOptions(headers: headers, pageNumbers: .auto))
+        #expect(pgnumOps(out).map(\.n) == ["5"])
+        let off = emitPDF(doc, mode: .printed,
+                          options: EmitOptions(headers: headers, pageNumbers: .off))
+        #expect(pgnumOps(off).isEmpty)
+    }
+}
+
+@Test func aDeclaredFooterStillPreEmptsItWithHeadersOff() throws {
+    // "In use" is a property of the DOCUMENT, not of the flag: a file that declares a
+    // `.fo` has no automatic number, and suppressing the drawing of that footer must not
+    // conjure one.
+    var data = bytes(".fo Chapter One")
+    data += HARD
+    for i in 1...20 {
+        data += bytes("L\(String(format: "%03d", i))")
+        data += HARD
+    }
+    let doc = parseWS(data)
+    for headers in [true, false] {
+        let out = emitPDF(doc, mode: .printed,
+                          options: EmitOptions(headers: headers, pageNumbers: .auto))
+        #expect(pgnumOps(out).isEmpty)
+    }
 }

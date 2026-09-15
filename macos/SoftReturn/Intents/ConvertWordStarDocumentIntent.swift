@@ -1,5 +1,6 @@
 import AppIntents
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// Shortcuts' "Convert WordStar Document" — a thin parameter/file translation over
@@ -27,7 +28,7 @@ struct ConvertWordStarDocumentIntent: AppIntent {
     @Parameter(title: "Output Formats")
     var formats: [ConversionFormat]
 
-    @Parameter(title: "Style", default: .modern)
+    @Parameter(title: "Mode", default: .modern)
     var style: ConversionStyle
 
     @Parameter(
@@ -51,7 +52,7 @@ struct ConvertWordStarDocumentIntent: AppIntent {
     var pictures: ConversionPictures?
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Convert \(\.$files) to \(\.$formats), \(\.$style) style") {
+        Summary("Convert \(\.$files) to \(\.$formats), \(\.$style) mode") {
             \.$destinationFolder
             \.$headers
             \.$tableOfContents

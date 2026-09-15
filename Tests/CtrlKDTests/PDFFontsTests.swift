@@ -26,8 +26,15 @@ import Testing
     // EQUIVALENCE, not identity -- so the agreement is an observation about these four
     // fixtures, not a contract. The pin is on this engine's own output either way.
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var styled = bytes("Plain ") + [0x02] + bytes("bold") + [0x02] + bytes(" ")
-    styled += [0x13] + bytes("under") + [0x13] + bytes(" ")
+    var styled = bytes("Plain ")
+    styled += [0x02]
+    styled += bytes("bold")
+    styled += [0x02]
+    styled += bytes(" ")
+    styled += [0x13]
+    styled += bytes("under")
+    styled += [0x13]
+    styled += bytes(" ")
     styled += bytes("and (word) here.") + HARD
     styled += bytes("More ordinary prose for the detector to chew on.") + HARD
     let stream: [UInt8] = bytes("Line one of printed page\r\nLine two\r\nLine three\r\n") + [0x1a]
@@ -74,8 +81,15 @@ import Testing
     // re-pinned fixture carries (9fb1677).
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .modern))
         == "cd3760328da8b4ffadd366e6d253a8e9cf3adbe1981fa68f7f1c5a8bc472c87b")
+    // Re-pinned a SIXTH time 2026-09-14 (this `styled` PRINTED hash ONLY -- the other
+    // three are untouched): a run that is all whitespace no longer gets a text-showing
+    // op of its own (`lineOpsPrinted`, planning #270 item 39). Blanks put no ink on
+    // paper in any face; the advance is unchanged and `rules` already drew nothing for
+    // such a run, which is why only the ONE fixture that happens to contain a
+    // whitespace-only span -- the single space between the bold and underlined words --
+    // moves at all. Again the identical digest ctrl-kd's own re-pinned fixture carries.
     #expect(sha256Hex(emitPDF(parseWS(styled), mode: .printed))
-        == "a2d067710cee2ebd9f4b86274f2e787d3bf1d304a582dd9d02103956334fe183")
+        == "0f0797c238b8e8e347baa2eca89c3cfb363c8b1a38dc73a65acac2cb8df30472")
     #expect(sha256Hex(emitPDF(parsePrintstream(stream), mode: .printed))
         == "9dec7b10d0158a392bf684b63ff1e243f821a86194354b53f1095b23533c59f6")
 }
@@ -101,7 +115,10 @@ import Testing
     // staged: 6.2.4's type-checker times out on the one-expression form
     var data = ws7Block(0x00)
     data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
-    data += bytes("Before. ") + fontBlock(4, points: 14.0, styleBits: 0x8000) + bytes("After.") + HARD
+    data += bytes("Before. ")
+    data += fontBlock(4, points: 14.0, styleBits: 0x8000)
+    data += bytes("After.")
+    data += HARD
     data += bytes("A closing line of ordinary prose keeps the byte ratio honest.") + HARD
     let doc = parseWS(data)
     #expect(doc.detection?.variant == .ws5plus)
@@ -216,30 +233,29 @@ import Testing
 }
 
 @Test func printedFontBlockLeadingIsCarriedThroughBlanksAndResetByFixedPitch() throws {
-    // round 26 wave 3 (fidelity_gate.py Finding B, PREVIEW.WS ground truth): an unstyled
-    // WS5+ FONT-BLOCK document doesn't lay every line on the flat 12pt default -- WS7
-    // spreads them by autoLeadFactor x the largest PROPORTIONAL font size active on the
-    // line, carried through blank lines, reset by a FIXED-PITCH (Courier) font tag. Gated
-    // document-wide on "any doc.fonts entry is proportional" -- a document with only
-    // fixed-pitch font records stays on the flat grid (see
-    // `pdfFontlessDocumentsAreByteIdenticalToPreFontsOutput` and this test's own "Intro
-    // line." case: no font tag has appeared yet, but the GATE is document-wide, so it
-    // still gets the flat lead, not a bare 12).
+    // WS7's auto-leading, MEASURED on the real harness 2026-09-14 (planning #270 item 34
+    // / triage Q4; see `fontLeadPt`'s own doc comment for the probe). A line's advance is
+    // the max of the size carried out of the line before it and every font size declared
+    // on it; what a line carries out is its LAST span's size when that font is
+    // PROPORTIONAL and the document default otherwise.
     //
-    // Mechanism T (`autoLeadFactor`'s own doc comment): the factor below moved from 1.2
-    // (Sawyer's install) to stock WS7's real 1.0 -- the SHAPE (carry-through-blanks,
-    // reset-by-fixed-pitch, stale-state-on-the-resetting-line-itself) is unchanged, only
-    // the literal point values are.
+    // The expected leads below are UNCHANGED by that measurement — this fixture's shape
+    // reads the same under both models — but the `.lh a` line at the top is new and is
+    // the point: auto-leading is a MODE a document turns on, not a state inferred from
+    // the presence of proportional fonts. Without it every lead here is the flat 12.
     //
-    // Expected leads are the real Python reference's own (`pdf._doc_to_pagelines`) on the
-    // byte-identical fixture, including the one subtlety a docstring-only reading would
-    // miss: `_font_lead_pt`'s carried `state` resets to `None` only AFTER computing the
-    // CURRENT line's own governing size, so the fixed-pitch tag's OWN line still reads the
-    // stale carried 20pt (20.0pt at stock) -- only the line AFTER it sees the reset
-    // (flat, 12.0pt).
+    // Reading them one at a time: "Intro line." has no tag and nothing has carried, so it
+    // takes the document default. "Prop line." raises its OWN line to 20 (the max rule,
+    // not "the line after it") and carries 20 out. The blank has no spans at all, so it
+    // carries that 20 through and advances by it. "Fixed line."'s own 12 loses the max
+    // against the carried 20 — so its own line is still 20 — and a FIXED-PITCH font
+    // carries NOTHING out, which is what drops "After fixed." back to the default.
+    // PREVIEW.WS is the corpus oracle for that last step: six blank lines after its
+    // trailing Courier-20pt line advance at 12, not 20.
     let prop = fontBlock(0, points: 20.0, styleBits: 0x8000)     // proportional, 20pt
     let fixed = fontBlock(1, points: 12.0, styleBits: 0)         // fixed-pitch (Courier), 12pt
-    var data = bytes("Intro line.") + HARD
+    var data = bytes(".lh a") + HARD                             // auto-leading: the gate
+    data += bytes("Intro line.") + HARD
     data += prop + bytes("Prop line.") + HARD
     data += HARD                                                  // blank: carries state forward
     data += fixed + bytes("Fixed line.") + HARD
@@ -259,6 +275,15 @@ import Testing
     // Sawyer's install; mechanism T).
     let flat = 12.0 * autoLeadFactor
     #expect(leads == [flat, 20.0, 20.0, 20.0, flat])
+    // And the mode is the whole of it: the identical bytes without `.lh a` lay flat.
+    var plain = bytes("Intro line.") + HARD
+    plain += prop + bytes("Prop line.") + HARD
+    plain += HARD
+    plain += fixed + bytes("Fixed line.") + HARD
+    plain += bytes("After fixed.") + HARD
+    plain += [0x1a]
+    let plainLeads = docToPagelines(parseWS(plain), printed: true)[0].map { $0.lead }
+    #expect(plainLeads.allSatisfy { $0 == nil || $0 == flat }, "\(plainLeads)")
 }
 
 @Test func fontResourcesKeepsTheCourierFourAndAppendsFromF5() {

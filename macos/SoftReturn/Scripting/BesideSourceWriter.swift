@@ -1,4 +1,5 @@
 import Foundation
+import SoftReturnShared
 
 /// Writes convert/export output beside its source file, under the source's own base name
 /// with a new extension.

@@ -151,7 +151,7 @@ private func measurePageBudget(_ url: URL) throws -> (
 /// and with the suites that drive real windows, QuickLook and the UI target. Serializing
 /// them costs nothing when they are the only thing running and stops the full suite from
 /// thrashing.
-@Suite(.serialized) struct PageBudgetMeasurementTests {
+@Suite(.tags(.corpus), .serialized) struct PageBudgetMeasurementTests {
 
 /// THE VERDICT. Runs the sound measurement over every fixture and reports the numbers —
 /// this is the evidence job-029 asked for, replacing what was retracted.

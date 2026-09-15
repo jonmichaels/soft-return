@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -13,7 +14,7 @@ import Testing
 ///
 /// Writes into the drop box directory, the one place both sides of the fence can reach.
 /// Asserts nothing, so it cannot fail a run.
-@Suite(.serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
+@Suite(.tags(.corpus), .serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct Batch2ModernProbe {
 
     static var dumpDirectory: URL {
@@ -38,7 +39,7 @@ struct Batch2ModernProbe {
         // What the app's own state actually holds for the documents with pictures — the
         // Modern line list shows a placeholder and the question is which end of the chain
         // dropped it.
-        for name in Self.pdfDocuments.sorted() {
+        for name in CorpusDocumentFilter.apply(Self.pdfDocuments.sorted()) {
             guard let url = AppNativeFidelityTests.resolveSource(name) else { continue }
             let defaults = UserDefaults(suiteName: "Batch2.\(UUID().uuidString)")!
             guard let bytes = try? Data(contentsOf: url),
@@ -168,7 +169,7 @@ struct Batch2ModernProbe {
         summary += "SHIPPED TOTAL \(shippedTotal)\n"
         // WHAT THE APP'S OWN RUNS CARRY — face, size and the `.expansion` the declared
         // character cell asked for, which is the quantity the library states as a `Tz`.
-        for name in Self.pdfDocuments.union(["LYING", "WARPRAYR"]).sorted() {
+        for name in CorpusDocumentFilter.apply(Self.pdfDocuments.union(["LYING", "WARPRAYR"]).sorted()) {
             guard let url = AppNativeFidelityTests.resolveSource(name),
                   let bytes = try? Data(contentsOf: url) else { continue }
             let defaults = UserDefaults(suiteName: "Batch2Tz.\(UUID().uuidString)")!

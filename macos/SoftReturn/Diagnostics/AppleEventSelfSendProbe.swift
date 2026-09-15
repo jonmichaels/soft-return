@@ -1,6 +1,7 @@
 import AppKit
 import CoreServices
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// Job 235 (-1708 cross-process repro, continuing 143-234). Every prior probe in this module

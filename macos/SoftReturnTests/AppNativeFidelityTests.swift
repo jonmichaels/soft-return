@@ -1,4 +1,5 @@
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -61,18 +62,21 @@ import Testing
 /// See the register: "a suite that lays out the armed corpus is serialized." Measured
 /// 2026-09-07: concurrent corpus-wide layout walks turned 21-27s tests into 14-35 MINUTE
 /// stalls that killed two full runs; serialized, they match their run-alone times exactly.
-@Suite(.serialized)
+@Suite(.tags(.corpus), .serialized)
 struct AppNativeFidelityTests {
 
     /// The 12 PUBLIC documents `ws7-prints/v3` captures (planning #243, 2026-09-08:
     /// six private-corpus document aliases removed -- this file ships to the public
     /// app repo, and Tier 3, private-document testing, has no coverage here until a
     /// genuinely private carrier exists for it).
-    static let documents = [
+    static let allDocuments = [
         "BOXES", "LYING", "OCAPTAIN", "PREVIEW",
         "-README", "SAWYER", "-SCREEN", "SCRIPT", "TWAINLET", "VERSIONS",
         "WARPRAYR", "LJ6DTP",
     ]
+
+    /// The documents the gate walks: all twelve, narrowed by `SR_DOC` (`CorpusDocumentFilter`).
+    static let documents = CorpusDocumentFilter.apply(allDocuments)
 
     /// WHICH DOCUMENTS ARE EXPECTED TO DIVERGE IS READ FROM CTRL-KD'S OWN MANIFEST, never
     /// held as a copy here.
@@ -250,6 +254,7 @@ struct AppNativeFidelityTests {
     /// real WordStar captures by ctrl-kd's own tolerance model.
     @Test(.enabled(if: isArmed, skipReason), arguments: documents)
     @MainActor func appNativeViewMatchesTheWordStarCapture(doc: String) throws {
+        if CorpusDocumentFilter.recordIfUnmatched(doc) { return }
         let pdf = try Self.appNativePDF(forDocumentNamed: doc)
         // Extracted on THIS side, by AppPDFWords, because ctrl-kd cannot read these bytes.
         // AppPDFWordsProofTests is what makes that trustworthy: it runs ctrl-kd's own

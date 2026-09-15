@@ -1,5 +1,6 @@
 import CtrlKD
 import Foundation
+import SoftReturnShared
 import Testing
 @testable import SoftReturn
 

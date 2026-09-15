@@ -347,7 +347,7 @@
             <enumerator name="sawyer" code="SRxs"
                        description="Robert J. Sawyer's WSCHANGE-recovered machine."/>
             <enumerator name="modern" code="SRxm"
-                       description="Modern style's own 1in-margin page (the CLI's 'modern')."/>
+                       description="Modern mode's own 1in-margin page (the CLI's 'modern')."/>
         </enumeration>
 
         <enumeration name="pictures mode" code="SRpx"
@@ -375,8 +375,8 @@
         <enumeration name="sentence spacing mode" code="SRsq"
                      description="Job 521 (N9, b33): the typewriter double space after a sentence-ending . ? or ! — the CLI's --sentence-spacing {auto,keep,single}.">
             <enumerator name="auto" code="SRsa" description="Modern exports collapse it to a single space; Printed and Native exports keep the document exactly as authored. The default."/>
-            <enumerator name="keep" code="SRsk" description="Keep the document's own spacing exactly as authored, regardless of style."/>
-            <enumerator name="single" code="SRsl" description="Collapse it to a single space, regardless of style."/>
+            <enumerator name="keep" code="SRsk" description="Keep the document's own spacing exactly as authored, regardless of mode."/>
+            <enumerator name="single" code="SRsl" description="Collapse it to a single space, regardless of mode."/>
         </enumeration>
 
         <enumeration name="zoom setting" code="SRzs"
@@ -460,7 +460,7 @@
             <property name="style" code="SRDs" type="style" description="The viewer's display mode. Reading reports exactly what the window shows, including native (job 313B — superseded the earlier printed-only reporting). Setting native switches the view the same way the View menu's Native item does.">
                 <cocoa key="scriptingStyle"/>
             </property>
-            <property name="page count" code="SRDc" type="integer" access="r" description="How many pages this document laid out, at its current style.">
+            <property name="page count" code="SRDc" type="integer" access="r" description="How many pages this document laid out, in its current view.">
                 <cocoa key="scriptingPageCount"/>
             </property>
             <property name="current page" code="SRDp" type="integer" description="Which page is showing — the Go menu, as a property.">
@@ -474,10 +474,10 @@
             <property name="page size" code="SRDg" type="page size" description="The printed sheet override.">
                 <cocoa key="scriptingPageSize"/>
             </property>
-            <property name="modern font" code="SRDf" type="text" description="Modern style's typeface. Native and Printed styles ignore this — both are always Courier.">
+            <property name="modern font" code="SRDf" type="text" description="The Modern view's typeface. The Native and Printed views ignore this — both are always Courier.">
                 <cocoa key="scriptingModernFont"/>
             </property>
-            <property name="modern size" code="SRDe" type="real" description="Modern style's point size. Native and Printed styles ignore this.">
+            <property name="modern size" code="SRDe" type="real" description="The Modern view's point size. The Native and Printed views ignore this.">
                 <cocoa key="scriptingModernSize"/>
             </property>
             <property name="show invisibles" code="SRDi" type="boolean" description="View ▸ Show Invisibles.">
@@ -510,7 +510,7 @@
                 <cocoa key="scriptingFormat"/>
             </parameter>
             <parameter name="using style" code="SRus" type="style" optional="yes"
-                      description="Omitted: the document's current style.">
+                      description="Omitted: the mode of the document's current view.">
                 <cocoa key="scriptingStyle"/>
             </parameter>
             <parameter name="footnotes" code="SRbf" type="boolean" optional="yes"
@@ -590,7 +590,7 @@
                 <cocoa key="scriptingFormats"/>
             </parameter>
             <parameter name="using style" code="SRcs" type="style" optional="yes"
-                      description="Omitted: each document's current/detected style.">
+                      description="Omitted: the mode of each document's current/detected view.">
                 <cocoa key="scriptingStyle"/>
             </parameter>
             <parameter name="footnotes" code="SRkf" type="boolean" optional="yes"

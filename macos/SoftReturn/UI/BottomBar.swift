@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 
 /// What the bottom bar reports and lets you change.
 @MainActor
@@ -153,7 +154,7 @@ final class BottomBar: NSView {
     }
 
     private static let zoomCandidates: [String] = {
-        let names = ["Fit", "Actual"] + ZoomSetting.steps.map { "\($0)%" }
+        let names = [ZoomSetting.fit, .actual].map(\.displayName) + ZoomSetting.steps.map { "\($0)%" }
         return names.flatMap { name in provenanceSuffixes.map { name + $0 } }
     }()
 
@@ -250,6 +251,8 @@ final class BottomBar: NSView {
     // MARK: - Populating
 
     func update(from state: DocumentState) {
+        let updateToken = PerformanceSignposts.begin("bottomBar.update")
+        defer { PerformanceSignposts.end(updateToken) }
         buildVariantMenu(state)
         buildStyleMenu(state)
         buildZoomMenu(state)
@@ -379,7 +382,8 @@ final class BottomBar: NSView {
     private func buildStyleMenu(_ state: DocumentState) {
         let current = state.style
         let menu = NSMenu()
-        Self.addHeader("Style", to: menu)
+        // #271 M11 (batch 30): Native, Printed and Modern are views.
+        Self.addHeader("View", to: menu)
         for style in ViewStyle.allCases {
             let item = NSMenuItem(title: style.displayName, action: nil, keyEquivalent: "")
             item.representedObject = style
@@ -390,17 +394,17 @@ final class BottomBar: NSView {
         }
         apply(menu: menu, title: current.value.displayName,
               to: styleButton,
-              label: "Rendering style: " + current.value.displayName + current.provenance.spokenSuffix)
+              label: "View: " + current.value.displayName + current.provenance.spokenSuffix)
     }
 
     private func buildZoomMenu(_ state: DocumentState) {
         let current = state.zoom
         let menu = NSMenu()
         Self.addHeader("Zoom", to: menu)
-        for named: (String, ZoomSetting) in [("Fit", .fit), ("Actual", .actual)] {
-            let item = NSMenuItem(title: named.0, action: nil, keyEquivalent: "")
-            item.representedObject = named.1
-            let isCurrent = named.1 == current.value
+        for setting in [ZoomSetting.fit, .actual] {
+            let item = NSMenuItem(title: setting.displayName, action: nil, keyEquivalent: "")
+            item.representedObject = setting
+            let isCurrent = setting == current.value
             Self.applyStateBadge(to: item, selected: isCurrent,
                                  manual: isCurrent && current.provenance == .manual)
             menu.addItem(item)

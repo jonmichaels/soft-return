@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import PDFKit
 import Testing
 @testable import SoftReturn
@@ -149,282 +150,284 @@ private enum ExportPDFOrientationEvidence {
 
 // MARK: - Job 322: orientation — an exported page must never read upside-down or mirrored
 
-@Test @MainActor func nativeViewPDFExportIsUprightNotFlipped() throws {
-    let state = try ExportPDFOrientationEvidence.sparseTopLeftState()
-    state.style.setManually(.native)
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: .native, viewStyle: .native)
-    let bytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
-    let page = try #require(PDFDocument(data: bytes)?.page(at: 0))
+@Suite struct Job313ExportPDFTests {
+    @Test @MainActor func nativeViewPDFExportIsUprightNotFlipped() throws {
+        let state = try ExportPDFOrientationEvidence.sparseTopLeftState()
+        state.style.setManually(.native)
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
+            style: .native, viewStyle: .native)
+        let bytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
+        let page = try #require(PDFDocument(data: bytes)?.page(at: 0))
 
-    let ink = try ExportPDFOrientationEvidence.inkHalves(of: page)
-    #expect(ink.top > ink.bottom,
-            "top-half ink \(ink.top) is not greater than bottom-half ink \(ink.bottom) — the native-view PDF export reads upside-down")
-    #expect(ink.left > ink.right,
-            "left-half ink \(ink.left) is not greater than right-half ink \(ink.right) — the native-view PDF export reads mirrored")
-}
-
-@Test @MainActor func modernPDFExportIsUprightNotFlipped() throws {
-    let state = try ExportPDFOrientationEvidence.sparseTopLeftState()
-    state.style.setManually(.modern)
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .modern)
-    let bytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
-    let page = try #require(PDFDocument(data: bytes)?.page(at: 0))
-
-    let ink = try ExportPDFOrientationEvidence.inkHalves(of: page)
-    #expect(ink.top > ink.bottom,
-            "top-half ink \(ink.top) is not greater than bottom-half ink \(ink.bottom) — the Modern PDF export reads upside-down")
-    #expect(ink.left > ink.right,
-            "left-half ink \(ink.left) is not greater than right-half ink \(ink.right) — the Modern PDF export reads mirrored")
-}
-
-// MARK: - Current view NATIVE -> exported PDF matches a REAL print operation, not a rebuilt one
-
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func nativeViewPDFExportIsNoLongerTheLiteralEngineBytes() throws {
-    let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    state.style.setManually(.native)
-
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: .native, viewStyle: .native)
-    let exported = try #require(products.first { $0.format == .pdf }).bytes
-    #expect(Array(exported.prefix(4)) == Array("%PDF".utf8), "native-view export is not a PDF")
-
-    let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
-    #expect(exported != literalEngineBytes,
-            "native-view PDF export unexpectedly matches the literal engine PDF byte-for-byte — the b19A print-path carve-out is not taking effect")
-}
-
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func nativeViewPDFExportMatchesARealPrintOperationsPageCountTextSizeAndOrientation() throws {
-    let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    state.style.setManually(.native)
-
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: .native, viewStyle: .native)
-    let exportedBytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
-    let exportedDoc = try #require(PDFDocument(data: exportedBytes))
-
-    // A second, independently built `DocumentState` — the print-operation ground truth must
-    // never share the exported state's object graph.
-    let printState = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    let printBytes = try ExportPDFOrientationEvidence.printOperationPDF(printState, viewStyle: .native)
-    let printDoc = try #require(PDFDocument(data: printBytes))
-
-    #expect(exportedDoc.pageCount == printDoc.pageCount,
-            "exported \(exportedDoc.pageCount) pages, the real print operation produced \(printDoc.pageCount)")
-    for index in 0..<min(exportedDoc.pageCount, printDoc.pageCount) {
-        let exportedPage = try #require(exportedDoc.page(at: index))
-        let printPage = try #require(printDoc.page(at: index))
-        #expect(exportedPage.string == printPage.string,
-                "page \(index + 1) text differs between the export and a real print operation")
-        #expect(exportedPage.bounds(for: .mediaBox) == printPage.bounds(for: .mediaBox),
-                "page \(index + 1) size differs between the export and a real print operation")
+        let ink = try ExportPDFOrientationEvidence.inkHalves(of: page)
+        #expect(ink.top > ink.bottom,
+                "top-half ink \(ink.top) is not greater than bottom-half ink \(ink.bottom) — the native-view PDF export reads upside-down")
+        #expect(ink.left > ink.right,
+                "left-half ink \(ink.left) is not greater than right-half ink \(ink.right) — the native-view PDF export reads mirrored")
     }
 
-    // Not a strict pixel-compare here: `dataWithPDF(inside:)` and a real `NSPrintOperation`
-    // are genuinely different AppKit rendering techniques (different rasterizer/AA path for
-    // the SAME content), so demanding near-pixel-equality would be testing an implementation
-    // detail neither side promises. Ink-halves proximity is the right bar — it says "same
-    // rough layout, same orientation," which is what this test exists to prove.
-    let exportedInk = try ExportPDFOrientationEvidence.inkHalves(of: try #require(exportedDoc.page(at: 0)))
-    let printInk = try ExportPDFOrientationEvidence.inkHalves(of: try #require(printDoc.page(at: 0)))
-    #expect(abs(exportedInk.top - printInk.top) < 0.05,
-            "page 1 top-half ink \(exportedInk.top) vs print operation's \(printInk.top) — export may be flipped or otherwise mis-laid-out")
-    #expect(abs(exportedInk.bottom - printInk.bottom) < 0.05,
-            "page 1 bottom-half ink \(exportedInk.bottom) vs print operation's \(printInk.bottom) — export may be flipped or otherwise mis-laid-out")
-    #expect(abs(exportedInk.left - printInk.left) < 0.05,
-            "page 1 left-half ink \(exportedInk.left) vs print operation's \(printInk.left) — export may be mirrored or otherwise mis-laid-out")
-    #expect(abs(exportedInk.right - printInk.right) < 0.05,
-            "page 1 right-half ink \(exportedInk.right) vs print operation's \(printInk.right) — export may be mirrored or otherwise mis-laid-out")
+    @Test @MainActor func modernPDFExportIsUprightNotFlipped() throws {
+        let state = try ExportPDFOrientationEvidence.sparseTopLeftState()
+        state.style.setManually(.modern)
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .modern)
+        let bytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
+        let page = try #require(PDFDocument(data: bytes)?.page(at: 0))
 
-    // Font faces: the bundled Courier Prime substitution (job 306/311/312), not the library
-    // emitter's Courier — a raw PDF font-resource check, same spirit as
-    // `ModernViewerStyleTests`' `familyName` assertions but at the PDF-bytes level since this
-    // path never builds an `NSAttributedString` a test could inspect directly.
-    let pdfString = String(decoding: exportedBytes, as: UTF8.self)
-    #expect(pdfString.contains("CourierPrime"),
-            "exported native PDF's font resources do not mention CourierPrime — Courier Prime substitution may not have carried into the print-path PDF export")
-}
-
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func modernPDFExportMatchesARealPrintOperationsPageCountTextAndSize() throws {
-    let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    state.style.setManually(.modern)
-
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .modern)
-    let exportedBytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
-    let exportedDoc = try #require(PDFDocument(data: exportedBytes))
-
-    let printState = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    let printBytes = try ExportPDFOrientationEvidence.printOperationPDF(printState, viewStyle: .modern)
-    let printDoc = try #require(PDFDocument(data: printBytes))
-
-    #expect(exportedDoc.pageCount == printDoc.pageCount,
-            "exported \(exportedDoc.pageCount) pages, the real print operation produced \(printDoc.pageCount)")
-    for index in 0..<min(exportedDoc.pageCount, printDoc.pageCount) {
-        let exportedPage = try #require(exportedDoc.page(at: index))
-        let printPage = try #require(printDoc.page(at: index))
-        #expect(exportedPage.string == printPage.string,
-                "page \(index + 1) text differs between the Modern export and a real print operation")
-        #expect(exportedPage.bounds(for: .mediaBox) == printPage.bounds(for: .mediaBox),
-                "page \(index + 1) size differs between the Modern export and a real print operation")
+        let ink = try ExportPDFOrientationEvidence.inkHalves(of: page)
+        #expect(ink.top > ink.bottom,
+                "top-half ink \(ink.top) is not greater than bottom-half ink \(ink.bottom) — the Modern PDF export reads upside-down")
+        #expect(ink.left > ink.right,
+                "left-half ink \(ink.left) is not greater than right-half ink \(ink.right) — the Modern PDF export reads mirrored")
     }
 
-    // See the native-view sibling test above for why this is ink-halves proximity, not a
-    // strict pixel-compare.
-    let exportedInk = try ExportPDFOrientationEvidence.inkHalves(of: try #require(exportedDoc.page(at: 0)))
-    let printInk = try ExportPDFOrientationEvidence.inkHalves(of: try #require(printDoc.page(at: 0)))
-    #expect(abs(exportedInk.top - printInk.top) < 0.05,
-            "page 1 top-half ink \(exportedInk.top) vs print operation's \(printInk.top) — export may be flipped or otherwise mis-laid-out")
-    #expect(abs(exportedInk.bottom - printInk.bottom) < 0.05,
-            "page 1 bottom-half ink \(exportedInk.bottom) vs print operation's \(printInk.bottom) — export may be flipped or otherwise mis-laid-out")
-    #expect(abs(exportedInk.left - printInk.left) < 0.05,
-            "page 1 left-half ink \(exportedInk.left) vs print operation's \(printInk.left) — export may be mirrored or otherwise mis-laid-out")
-    #expect(abs(exportedInk.right - printInk.right) < 0.05,
-            "page 1 right-half ink \(exportedInk.right) vs print operation's \(printInk.right) — export may be mirrored or otherwise mis-laid-out")
-}
+    // MARK: - Current view NATIVE -> exported PDF matches a REAL print operation, not a rebuilt one
 
-// MARK: - Current view PRINTED -> unchanged: the engine's own PDF bytes
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func nativeViewPDFExportIsNoLongerTheLiteralEngineBytes() throws {
+        let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        state.style.setManually(.native)
 
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func printedViewPDFExportStaysTheLiteralEngineBytes() throws {
-    let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    state.style.setManually(.printed)
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
+            style: .native, viewStyle: .native)
+        let exported = try #require(products.first { $0.format == .pdf }).bytes
+        #expect(Array(exported.prefix(4)) == Array("%PDF".utf8), "native-view export is not a PDF")
 
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: .native, viewStyle: .printed)
-    let exported = try #require(products.first { $0.format == .pdf }).bytes
+        let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
+        #expect(exported != literalEngineBytes,
+                "native-view PDF export unexpectedly matches the literal engine PDF byte-for-byte — the b19A print-path carve-out is not taking effect")
+    }
 
-    let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
-    #expect(exported == literalEngineBytes,
-            "printed-view PDF export must stay byte-identical to the engine's own PDF — the b19A carve-out must never apply when the current view genuinely is Printed")
-}
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func nativeViewPDFExportMatchesARealPrintOperationsPageCountTextSizeAndOrientation() throws {
+        let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        state.style.setManually(.native)
 
-// MARK: - Omitting `viewStyle` (batch/scripting callers that predate job 313A) is inert
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
+            style: .native, viewStyle: .native)
+        let exportedBytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
+        let exportedDoc = try #require(PDFDocument(data: exportedBytes))
 
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func omittingViewStyleLeavesPDFExportUnchanged() throws {
-    let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    // Deliberately leave `state.style.value` at its Settings-seeded default (`.native`) but
-    // never pass `viewStyle` to `render` — the pre-313 call shape every caller this job does
-    // not touch (`ConvertCommand`, `DocumentOperations.convert`) still uses.
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .native)
-    let exported = try #require(products.first { $0.format == .pdf }).bytes
+        // A second, independently built `DocumentState` — the print-operation ground truth must
+        // never share the exported state's object graph.
+        let printState = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        let printBytes = try ExportPDFOrientationEvidence.printOperationPDF(printState, viewStyle: .native)
+        let printDoc = try #require(PDFDocument(data: printBytes))
 
-    let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
-    #expect(exported == literalEngineBytes,
-            "a caller that omits `viewStyle` must keep getting the literal engine PDF, even when the DocumentState's own `.style.value` happens to be `.native`")
-}
+        #expect(exportedDoc.pageCount == printDoc.pageCount,
+                "exported \(exportedDoc.pageCount) pages, the real print operation produced \(printDoc.pageCount)")
+        for index in 0..<min(exportedDoc.pageCount, printDoc.pageCount) {
+            let exportedPage = try #require(exportedDoc.page(at: index))
+            let printPage = try #require(printDoc.page(at: index))
+            #expect(exportedPage.string == printPage.string,
+                    "page \(index + 1) text differs between the export and a real print operation")
+            #expect(exportedPage.bounds(for: .mediaBox) == printPage.bounds(for: .mediaBox),
+                    "page \(index + 1) size differs between the export and a real print operation")
+        }
 
-// MARK: - Batch: keyed off the batch window's OWN Style pulldown, same mechanism as the window
+        // Not a strict pixel-compare here: `dataWithPDF(inside:)` and a real `NSPrintOperation`
+        // are genuinely different AppKit rendering techniques (different rasterizer/AA path for
+        // the SAME content), so demanding near-pixel-equality would be testing an implementation
+        // detail neither side promises. Ink-halves proximity is the right bar — it says "same
+        // rough layout, same orientation," which is what this test exists to prove.
+        let exportedInk = try ExportPDFOrientationEvidence.inkHalves(of: try #require(exportedDoc.page(at: 0)))
+        let printInk = try ExportPDFOrientationEvidence.inkHalves(of: try #require(printDoc.page(at: 0)))
+        #expect(abs(exportedInk.top - printInk.top) < 0.05,
+                "page 1 top-half ink \(exportedInk.top) vs print operation's \(printInk.top) — export may be flipped or otherwise mis-laid-out")
+        #expect(abs(exportedInk.bottom - printInk.bottom) < 0.05,
+                "page 1 bottom-half ink \(exportedInk.bottom) vs print operation's \(printInk.bottom) — export may be flipped or otherwise mis-laid-out")
+        #expect(abs(exportedInk.left - printInk.left) < 0.05,
+                "page 1 left-half ink \(exportedInk.left) vs print operation's \(printInk.left) — export may be mirrored or otherwise mis-laid-out")
+        #expect(abs(exportedInk.right - printInk.right) < 0.05,
+                "page 1 right-half ink \(exportedInk.right) vs print operation's \(printInk.right) — export may be mirrored or otherwise mis-laid-out")
 
-/// Job 323 (b20 item 3) revised this mechanism: `BatchModel.style` is now the SAME
-/// three-case `ViewStyle` pulldown the Export As sheet's accessory offers (Native/Printed/
-/// Modern), and `convertOne` passes its CHOSEN value straight through as `viewStyle` for
-/// every item — no longer each item's own individually-seeded `state.style.value` (the
-/// pre-323 mechanism `batchStyleDefaultViewGetsThePrintPathPDFTheSameWayTheWindowDoes` used
-/// to prove). A batch item never opened as a window has no "current view" to defer to; an
-/// explicit choice on the batch control is the only signal that exists, the same "the chosen
-/// pulldown value, not an ambient default" rule job 323 applies to the single-document sheet.
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func batchStyleNativeChoiceGetsThePrintPathPDFRegardlessOfItemDefault() throws {
-    let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        // Font faces: the bundled Courier Prime substitution (job 306/311/312), not the library
+        // emitter's Courier — a raw PDF font-resource check, same spirit as
+        // `ModernViewerStyleTests`' `familyName` assertions but at the PDF-bytes level since this
+        // path never builds an `NSAttributedString` a test could inspect directly.
+        let pdfString = String(decoding: exportedBytes, as: UTF8.self)
+        #expect(pdfString.contains("CourierPrime"),
+                "exported native PDF's font resources do not mention CourierPrime — Courier Prime substitution may not have carried into the print-path PDF export")
+    }
 
-    // The batch control explicitly set to Native — proves the CHOICE drives the carve-out,
-    // not whatever `SettingsStore`'s own default happens to be.
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: ViewStyle.native.renderStyle, viewStyle: .native)
-    let exported = try #require(products.first { $0.format == .pdf }).bytes
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func modernPDFExportMatchesARealPrintOperationsPageCountTextAndSize() throws {
+        let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        state.style.setManually(.modern)
 
-    let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
-    #expect(exported != literalEngineBytes,
-            "the batch window's Style pulldown set to Native must get the print-path PDF for every item, the same 'export what you see' rule the window's Export As sheet applies")
-}
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .modern)
+        let exportedBytes = Data(try #require(products.first { $0.format == .pdf }).bytes)
+        let exportedDoc = try #require(PDFDocument(data: exportedBytes))
 
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func batchStylePrintedChoiceStaysTheLiteralEngineBytesEvenWhenAnItemsOwnDefaultIsNative() throws {
-    let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    #expect(state.style.value == .native, "precondition: a synthetic batch item still defaults to Native")
+        let printState = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        let printBytes = try ExportPDFOrientationEvidence.printOperationPDF(printState, viewStyle: .modern)
+        let printDoc = try #require(PDFDocument(data: printBytes))
 
-    // The batch control explicitly set to Printed must win over the item's own ambient
-    // Native default — exactly the override job 323's ruling fixes for the window's sheet,
-    // proven here for batch's own control.
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: ViewStyle.printed.renderStyle, viewStyle: .printed)
-    let exported = try #require(products.first { $0.format == .pdf }).bytes
+        #expect(exportedDoc.pageCount == printDoc.pageCount,
+                "exported \(exportedDoc.pageCount) pages, the real print operation produced \(printDoc.pageCount)")
+        for index in 0..<min(exportedDoc.pageCount, printDoc.pageCount) {
+            let exportedPage = try #require(exportedDoc.page(at: index))
+            let printPage = try #require(printDoc.page(at: index))
+            #expect(exportedPage.string == printPage.string,
+                    "page \(index + 1) text differs between the Modern export and a real print operation")
+            #expect(exportedPage.bounds(for: .mediaBox) == printPage.bounds(for: .mediaBox),
+                    "page \(index + 1) size differs between the Modern export and a real print operation")
+        }
 
-    let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
-    #expect(exported == literalEngineBytes,
-            "the batch window's Style pulldown set to Printed must stay the literal engine PDF even when an item's own default view is Native")
-}
+        // See the native-view sibling test above for why this is ink-halves proximity, not a
+        // strict pixel-compare.
+        let exportedInk = try ExportPDFOrientationEvidence.inkHalves(of: try #require(exportedDoc.page(at: 0)))
+        let printInk = try ExportPDFOrientationEvidence.inkHalves(of: try #require(printDoc.page(at: 0)))
+        #expect(abs(exportedInk.top - printInk.top) < 0.05,
+                "page 1 top-half ink \(exportedInk.top) vs print operation's \(printInk.top) — export may be flipped or otherwise mis-laid-out")
+        #expect(abs(exportedInk.bottom - printInk.bottom) < 0.05,
+                "page 1 bottom-half ink \(exportedInk.bottom) vs print operation's \(printInk.bottom) — export may be flipped or otherwise mis-laid-out")
+        #expect(abs(exportedInk.left - printInk.left) < 0.05,
+                "page 1 left-half ink \(exportedInk.left) vs print operation's \(printInk.left) — export may be mirrored or otherwise mis-laid-out")
+        #expect(abs(exportedInk.right - printInk.right) < 0.05,
+                "page 1 right-half ink \(exportedInk.right) vs print operation's \(printInk.right) — export may be mirrored or otherwise mis-laid-out")
+    }
 
-// MARK: - Job 323: the Export As accessory's OWN selection reaches the print-path carve-out
+    // MARK: - Current view PRINTED -> unchanged: the engine's own PDF bytes
 
-/// Closes the exact gap Jon's ruling calls out: before job 323, `exportAs` passed
-/// `viewStyle: documentState.style.value` (the window's AMBIENT style) unconditionally,
-/// never `accessory.selectedStyle` (what the pulldown actually shows) — so an explicit
-/// Printed choice on a Native window silently kept getting the Native print-path PDF. These
-/// tests drive `ExportAccessoryView.selectedStyle` itself (the exact value
-/// `DocumentWindowController+Actions.exportAs` now reads) into `ExportEngine.render`, rather
-/// than a hand-picked `ViewStyle` literal, so a regression that reintroduces the ambient-style
-/// bug would have to break the accessory's own reported selection to slip past unnoticed.
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func accessoryExplicitPrintedSelectionExportsEngineBytesEvenWhenTheAccessoryWasHandedNative() throws {
-    let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    // The accessory is constructed as if the window were showing Native (its own default),
-    // then the pulldown is moved to Printed — the exact "explicit override" scenario the
-    // ruling names.
-    let accessory = ExportAccessoryView(formats: [.pdf], notes: NoteSelection(), style: .native)
-    let popup = try #require(stylePopUpButton(in: accessory))
-    popup.selectItem(withTitle: ViewStyle.printed.displayName)
-    #expect(accessory.selectedStyle == .printed, "precondition: the pulldown now reports Printed")
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func printedViewPDFExportStaysTheLiteralEngineBytes() throws {
+        let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        state.style.setManually(.printed)
 
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: accessory.selectedStyle.renderStyle, viewStyle: accessory.selectedStyle)
-    let exported = try #require(products.first { $0.format == .pdf }).bytes
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
+            style: .native, viewStyle: .printed)
+        let exported = try #require(products.first { $0.format == .pdf }).bytes
 
-    let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
-    #expect(exported == literalEngineBytes,
-            "an explicit Printed pulldown choice must export the literal engine PDF even though the accessory was handed Native at init")
-}
+        let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
+        #expect(exported == literalEngineBytes,
+                "printed-view PDF export must stay byte-identical to the engine's own PDF — the b19A carve-out must never apply when the current view genuinely is Printed")
+    }
 
-@Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
-func accessoryExplicitNativeSelectionExportsThePrintPathPDFEvenWhenTheAccessoryWasHandedPrinted() throws {
-    let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    let accessory = ExportAccessoryView(formats: [.pdf], notes: NoteSelection(), style: .native)
-    let popup = try #require(stylePopUpButton(in: accessory))
-    popup.selectItem(withTitle: ViewStyle.native.displayName)
-    #expect(accessory.selectedStyle == .native, "precondition: the pulldown now reports Native")
+    // MARK: - Omitting `viewStyle` (batch/scripting callers that predate job 313A) is inert
 
-    let products = try ExportEngine.render(
-        document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
-        style: accessory.selectedStyle.renderStyle, viewStyle: accessory.selectedStyle)
-    let exported = try #require(products.first { $0.format == .pdf }).bytes
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func omittingViewStyleLeavesPDFExportUnchanged() throws {
+        let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        // Deliberately leave `state.style.value` at its Settings-seeded default (`.native`) but
+        // never pass `viewStyle` to `render` — the pre-313 call shape every caller this job does
+        // not touch (`ConvertCommand`, `DocumentOperations.convert`) still uses.
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(), style: .native)
+        let exported = try #require(products.first { $0.format == .pdf }).bytes
 
-    let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
-    #expect(exported != literalEngineBytes,
-            "an explicit Native pulldown choice must reach the print-path PDF even though the accessory was handed Printed at init")
+        let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
+        #expect(exported == literalEngineBytes,
+                "a caller that omits `viewStyle` must keep getting the literal engine PDF, even when the DocumentState's own `.style.value` happens to be `.native`")
+    }
 
-    // Orientation ground truth #1 (this file's own header) — not a second flip-prone
-    // renderer, a REAL `NSPrintOperation` — confirms the print-path bytes the explicit
-    // Native choice produced are the same shape a real print of a Native window gives.
-    let exportedDoc = try #require(PDFDocument(data: Data(exported)))
-    let printState = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
-    let printBytes = try ExportPDFOrientationEvidence.printOperationPDF(printState, viewStyle: .native)
-    let printDoc = try #require(PDFDocument(data: printBytes))
-    #expect(exportedDoc.pageCount == printDoc.pageCount,
-            "exported \(exportedDoc.pageCount) pages, the real print operation produced \(printDoc.pageCount)")
+    // MARK: - Batch: keyed off the batch window's OWN Style pulldown, same mechanism as the window
+
+    /// Job 323 (b20 item 3) revised this mechanism: `BatchModel.style` is now the SAME
+    /// three-case `ViewStyle` pulldown the Export As sheet's accessory offers (Native/Printed/
+    /// Modern), and `convertOne` passes its CHOSEN value straight through as `viewStyle` for
+    /// every item — no longer each item's own individually-seeded `state.style.value` (the
+    /// pre-323 mechanism `batchStyleDefaultViewGetsThePrintPathPDFTheSameWayTheWindowDoes` used
+    /// to prove). A batch item never opened as a window has no "current view" to defer to; an
+    /// explicit choice on the batch control is the only signal that exists, the same "the chosen
+    /// pulldown value, not an ambient default" rule job 323 applies to the single-document sheet.
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func batchStyleNativeChoiceGetsThePrintPathPDFRegardlessOfItemDefault() throws {
+        let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+
+        // The batch control explicitly set to Native — proves the CHOICE drives the carve-out,
+        // not whatever `SettingsStore`'s own default happens to be.
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
+            style: ViewStyle.native.renderStyle, viewStyle: .native)
+        let exported = try #require(products.first { $0.format == .pdf }).bytes
+
+        let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
+        #expect(exported != literalEngineBytes,
+                "the batch window's Style pulldown set to Native must get the print-path PDF for every item, the same 'export what you see' rule the window's Export As sheet applies")
+    }
+
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func batchStylePrintedChoiceStaysTheLiteralEngineBytesEvenWhenAnItemsOwnDefaultIsNative() throws {
+        let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        #expect(state.style.value == .native, "precondition: a synthetic batch item still defaults to Native")
+
+        // The batch control explicitly set to Printed must win over the item's own ambient
+        // Native default — exactly the override job 323's ruling fixes for the window's sheet,
+        // proven here for batch's own control.
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
+            style: ViewStyle.printed.renderStyle, viewStyle: .printed)
+        let exported = try #require(products.first { $0.format == .pdf }).bytes
+
+        let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
+        #expect(exported == literalEngineBytes,
+                "the batch window's Style pulldown set to Printed must stay the literal engine PDF even when an item's own default view is Native")
+    }
+
+    // MARK: - Job 323: the Export As accessory's OWN selection reaches the print-path carve-out
+
+    /// Closes the exact gap Jon's ruling calls out: before job 323, `exportAs` passed
+    /// `viewStyle: documentState.style.value` (the window's AMBIENT style) unconditionally,
+    /// never `accessory.selectedStyle` (what the pulldown actually shows) — so an explicit
+    /// Printed choice on a Native window silently kept getting the Native print-path PDF. These
+    /// tests drive `ExportAccessoryView.selectedStyle` itself (the exact value
+    /// `DocumentWindowController+Actions.exportAs` now reads) into `ExportEngine.render`, rather
+    /// than a hand-picked `ViewStyle` literal, so a regression that reintroduces the ambient-style
+    /// bug would have to break the accessory's own reported selection to slip past unnoticed.
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func accessoryExplicitPrintedSelectionExportsEngineBytesEvenWhenTheAccessoryWasHandedNative() throws {
+        let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        // The accessory is constructed as if the window were showing Native (its own default),
+        // then the pulldown is moved to Printed — the exact "explicit override" scenario the
+        // ruling names.
+        let accessory = ExportAccessoryView(formats: [.pdf], notes: NoteSelection(), style: .native)
+        let popup = try #require(stylePopUpButton(in: accessory))
+        popup.selectItem(withTitle: ViewStyle.printed.displayName)
+        #expect(accessory.selectedStyle == .printed, "precondition: the pulldown now reports Printed")
+
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
+            style: accessory.selectedStyle.renderStyle, viewStyle: accessory.selectedStyle)
+        let exported = try #require(products.first { $0.format == .pdf }).bytes
+
+        let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
+        #expect(exported == literalEngineBytes,
+                "an explicit Printed pulldown choice must export the literal engine PDF even though the accessory was handed Native at init")
+    }
+
+    @Test(.enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason)) @MainActor
+    func accessoryExplicitNativeSelectionExportsThePrintPathPDFEvenWhenTheAccessoryWasHandedPrinted() throws {
+        let state = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        let accessory = ExportAccessoryView(formats: [.pdf], notes: NoteSelection(), style: .native)
+        let popup = try #require(stylePopUpButton(in: accessory))
+        popup.selectItem(withTitle: ViewStyle.native.displayName)
+        #expect(accessory.selectedStyle == .native, "precondition: the pulldown now reports Native")
+
+        let products = try ExportEngine.render(
+            document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
+            style: accessory.selectedStyle.renderStyle, viewStyle: accessory.selectedStyle)
+        let exported = try #require(products.first { $0.format == .pdf }).bytes
+
+        let literalEngineBytes = [UInt8](emitPDF(state.document, mode: .printed, options: EmitOptions()))
+        #expect(exported != literalEngineBytes,
+                "an explicit Native pulldown choice must reach the print-path PDF even though the accessory was handed Printed at init")
+
+        // Orientation ground truth #1 (this file's own header) — not a second flip-prone
+        // renderer, a REAL `NSPrintOperation` — confirms the print-path bytes the explicit
+        // Native choice produced are the same shape a real print of a Native window gives.
+        let exportedDoc = try #require(PDFDocument(data: Data(exported)))
+        let printState = try Oracle.state(for: ExportPDFOrientationEvidence.oldtimesURL)
+        let printBytes = try ExportPDFOrientationEvidence.printOperationPDF(printState, viewStyle: .native)
+        let printDoc = try #require(PDFDocument(data: printBytes))
+        #expect(exportedDoc.pageCount == printDoc.pageCount,
+                "exported \(exportedDoc.pageCount) pages, the real print operation produced \(printDoc.pageCount)")
+    }
 }
 
 /// The Style pulldown sits three levels deep (`accessory` → the outer vertical stack → the

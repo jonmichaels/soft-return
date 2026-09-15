@@ -1,4 +1,6 @@
+import AppKit
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -157,5 +159,75 @@ import Testing
         document.scriptingShowInvisibles = true
         #expect(document.state.showInvisibles == true)
         #expect(document.scriptingShowInvisibles == true)
+    }
+}
+
+/// Batch 27 item 1: a long document opened with NO window is still parsed. Batch 26 started the deferred
+/// parse from `makeWindowControllers`, so a document of 64 KB or more read without one — the path a script's
+/// `open`, `export` or `AppleEventSelfSendProbe` takes (`openDocument(withContentsOf:display: false)`) — never
+/// parsed, and its state stayed the empty placeholder. Both tests open -HOLYMAC.WS (538 KB) through
+/// `NSDocumentController.makeDocument(withContentsOf:ofType:)`: `read`, and no window.
+@Suite(.tags(.corpus), .serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
+@MainActor
+struct WindowlessOpenTests {
+    /// -HOLYMAC.WS copied into a fresh scratch folder, and the folder, for removal.
+    private static func holymacCopy() throws -> (folder: URL, document: URL) {
+        let source = try #require(PrivateCorpusSupport.sawyerArchiveRoot)
+            .appendingPathComponent("MACROS/HOLYMAC/-HOLYMAC.WS")
+        try #require(FileManager.default.fileExists(atPath: source.path), "no -HOLYMAC.WS in the Sawyer archive")
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WindowlessOpenTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appendingPathComponent("-HOLYMAC.WS")
+        try FileManager.default.copyItem(at: source, to: copy)
+        return (folder, copy)
+    }
+
+    private static func openWithoutAWindow(_ url: URL) throws -> WSDocument {
+        let opened = try NSDocumentController.shared.makeDocument(withContentsOf: url,
+                                                                  ofType: "me.beforeti.wordstar-document")
+        let document = try #require(opened as? WSDocument)
+        #expect(document.windowControllers.isEmpty, "the document was given a window")
+        #expect(document.state.isAwaitingParse,
+                "-HOLYMAC.WS is over the \(WSDocument.backgroundParseThreshold)-byte threshold, so read defers its parse")
+        return document
+    }
+
+    /// Nobody asks: the background parse still runs, and the document is parsed within the minute.
+    @Test func aLongDocumentOpenedWithoutAWindowParsesInTheBackground() throws {
+        let (folder, url) = try Self.holymacCopy()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let document = try Self.openWithoutAWindow(url)
+        let deadline = Date().addingTimeInterval(60)
+        while document.state.isAwaitingParse, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        #expect(!document.state.isAwaitingParse, "the parse never returned for a document with no window")
+        #expect(!document.state.document.blocks.isEmpty, "the adopted document is empty")
+        #expect(document.state.variant.value == document.state.detection.variant)
+        let pages = try DocumentOperations.pageCount(data: document.state.data, variant: document.state.variant.value)
+        print("WINDOWLESS-OPEN background: blocks \(document.state.document.blocks.count), variant \(document.state.variant.value), pages \(pages)")
+        #expect(pages > 250, "-HOLYMAC.WS paginated to \(pages) pages")
+    }
+
+    /// A script reaches the document before its background parse returns: it is parsed on the spot, and the
+    /// scripting properties and the export command read the real document, never the placeholder.
+    @Test func aScriptReachingALongDocumentBeforeItsParseGetsItParsed() throws {
+        let (folder, url) = try Self.holymacCopy()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let document = try Self.openWithoutAWindow(url)
+        let pageCount = document.scriptingPageCount
+        #expect(!document.state.isAwaitingParse, "reading a scripting property left the document unparsed")
+        #expect(!document.state.document.blocks.isEmpty, "the document a script read is empty")
+        let detected = try #require(ScriptingEnumCoding.code(for: document.state.detection.variant))
+        #expect(document.scriptingVariant.uint32Value == detected)
+        print("WINDOWLESS-OPEN script: blocks \(document.state.document.blocks.count), variant \(document.state.variant.value), page count \(pageCount)")
+        #expect(pageCount > 250, "the scripting page count read \(pageCount)")
+        let parsed = try document.ensureParsed()
+        #expect(parsed === document.state)
+        // The background parse, returning afterwards, changes nothing.
+        let settle = Date().addingTimeInterval(5)
+        while Date() < settle { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        #expect(document.state.variant.value == document.state.detection.variant)
     }
 }

@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import UniformTypeIdentifiers
 
 /// The View and File menu commands, and the Export As sheet.
@@ -128,7 +129,9 @@ extension DocumentWindowController: NSMenuItemValidation {
     }
     /// How many pages the document laid out.
     var pageTotal: Int {
-        documentState.style.value == .printed ? (pdfView.document?.pageCount ?? 0) : pagedView.pageCount
+        guard documentState.style.value != .printed else { return pdfView.document?.pageCount ?? 0 }
+        // #271 M7: while a progressive load is still rendering or laying out, the document's own page count.
+        return max(pagedView.pageCount, expectedPageTotal ?? 0)
     }
 
     /// Move to `index`, in whichever way the current display mode means it.
@@ -142,6 +145,8 @@ extension DocumentWindowController: NSMenuItemValidation {
     /// (`WSDocument+Scripting.swift`) drives the same navigation the Go menu does, so it
     /// needs this from outside the file.
     func goToPage(index: Int) {
+        let changeToken = PerformanceSignposts.begin("page.change")
+        defer { PerformanceSignposts.end(changeToken) }
         let clamped = max(0, min(index, pageTotal - 1))
         if documentState.style.value == .printed {
             guard let document = pdfView.document, let page = document.page(at: clamped) else { return }
@@ -152,6 +157,11 @@ extension DocumentWindowController: NSMenuItemValidation {
             // command path never depends on notification delivery timing.
             refreshPageIndicator()
             return
+        }
+        // #271 M7: a page not laid out yet, while a progressive load renders or lays out the rest, is gone
+        // to once it is; until then the last page laid out shows.
+        if isLoadingContent, clamped >= pagedView.pageCount {
+            pendingPageIndex = clamped
         }
         guard clamped != currentPage || documentState.display.value == .continuousScroll else { return }
         switch documentState.display.value {
@@ -165,7 +175,7 @@ extension DocumentWindowController: NSMenuItemValidation {
         }
         // Job 450 (b6): the Go menu/AppleScript path changes the current page without
         // touching anything else `bottomBar.update(from:)` shows, so it needs its own call —
-        // the scroll-gesture path (`pagedView.pageDidChange`) already has one.
+        // the scroll-gesture path (`pagedView.pageDidChange`) makes the same one.
         refreshPageIndicator()
     }
 
@@ -418,6 +428,9 @@ extension DocumentWindowController: NSMenuItemValidation {
             return currentPage < pageTotal - 1
         case #selector(goToPage(_:) as (Any?) -> Void):
             return pageTotal > 1
+        // Batch 26: there is nothing to export while the document is still being parsed.
+        case #selector(exportAs(_:)):
+            return !documentState.isAwaitingParse
 
         default:
             break

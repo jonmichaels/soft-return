@@ -17,16 +17,26 @@ import Testing
 @Test func detectBinary() {
     // Mirrors test_detect_binary: bytes(range(256)) * 4.
     let byteRange = (0...255).map { UInt8($0) }
-    let data = byteRange + byteRange + byteRange + byteRange
+    var data = byteRange
+    data += byteRange
+    data += byteRange
+    data += byteRange
     #expect(detect(data).variant == .binary)
 }
 
 @Test func detectWS5PlusFromSymmetricBlocks() {
     // Mirrors the 1D-symmetric-block shape from test_ws7_heading_and_softpage; only
     // detect()'s classification is asserted here, since parse_ws() isn't ported yet.
-    let data = ws7Block(0x00) + styleRef(2) + Array("Chapter One".utf8) +
-               HARD + HARD + Array("Body text of the chapter.".utf8) + HARD +
-               ws7Block(0x0B) + Array("Next page text.".utf8) + HARD
+    var data = ws7Block(0x00)
+    data += styleRef(2)
+    data += Array("Chapter One".utf8)
+    data += HARD
+    data += HARD
+    data += Array("Body text of the chapter.".utf8)
+    data += HARD
+    data += ws7Block(0x0B)
+    data += Array("Next page text.".utf8)
+    data += HARD
     #expect(detect(data).variant == .ws5plus)
 }
 
@@ -90,7 +100,10 @@ import Testing
                ws4Text("and continues here across several more words") + SOFT +
                ws4Text("a third wrapped line completes the paragraph") + HARD
     let pad = Array(repeating: UInt8(0x1a), count: 10)
-    let data = header + stray + body + pad
+    var data = header
+    data += stray
+    data += body
+    data += pad
 
     #expect(detect(data).variant == .ws4)
 

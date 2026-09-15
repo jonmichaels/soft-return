@@ -20,8 +20,12 @@ public struct Span: Hashable, Sendable {
     /// width in HMIs (1/1800in) — 0 for LJ6DTP's rule-drawing controls, whose payload
     /// draws with no character advance at all. Non-`nil` marks this span as SCREEN-ONLY:
     /// on paper WordStar sends the raw printer payload instead and advances by this HMI
-    /// figure; reading modes render the text verbatim, the only human-visible trace of
-    /// what the control does. Python tags this as a synthetic `pctl<hmi>` style string;
+    /// figure. NO reading surface renders the label: planning #270 item 36 (Jon's
+    /// ruling 2026-09-13, "Print controls aren't supposed to be visible except in Show
+    /// Invisibles") retired the old "reading modes keep the string" habit — the printed
+    /// layout JSON was the last surface still publishing it, and now publishes the
+    /// declared width as spaces with the label moved to `invisibles["print_controls"]`.
+    /// Python tags this as a synthetic `pctl<hmi>` style string;
     /// the value rides in its own field here for the same reason `font` does.
     public var pctlHMI: Int?
     /// b24 round 19 (RULINGS-LEDGER PIX row): the index into `Document.graphics` this
@@ -54,10 +58,17 @@ public struct Span: Hashable, Sendable {
     /// NO printed padding at all) without re-deriving it from the already-expanded text.
     /// Python's `tableader<N>` tag.
     public var tabLeader: Int?
+    /// This span IS a ^ONI INDEX ENTRY's stored phrase (a type-0x0E symmetrical block).
+    /// The phrase belongs to the index file (*._IX), not to the page: real WS7 spends
+    /// the row and prints nothing on it — MEASURED on `sawyer/REF/-INDEX.HOW`
+    /// (ws7-prints/v4), see `symmetricBlocks`' own cmd 0x0E branch. The PRINTED
+    /// facsimile drops such a span; every other consumer keeps it exactly as before.
+    /// Python tags this `ixentry` in the same frozenset as the style codes.
+    public var indexEntry: Bool = false
 
     public init(text: String, styles: Style = [], font: Int? = nil, colour: Int? = nil,
                 pctlHMI: Int? = nil, pix: Int? = nil, pcl: Int? = nil,
-                tabHMI: Int? = nil, tabLeader: Int? = nil) {
+                tabHMI: Int? = nil, tabLeader: Int? = nil, indexEntry: Bool = false) {
         self.text = text
         self.styles = styles
         self.font = font
@@ -67,5 +78,6 @@ public struct Span: Hashable, Sendable {
         self.pcl = pcl
         self.tabHMI = tabHMI
         self.tabLeader = tabLeader
+        self.indexEntry = indexEntry
     }
 }

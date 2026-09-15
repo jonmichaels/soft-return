@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 
 /// One row in the batch list.
 ///
@@ -84,7 +85,7 @@ final class BatchModel: ObservableObject {
     @Published var variant: Variant?          // nil == Auto
     /// Job 323 (b20 item 3): the SAME three-case pulldown vocabulary the Export As sheet's
     /// Style control gained (Native/Printed/Modern, `ViewStyle` — not the export-only
-    /// two-case `RenderStyle`). Defaults to Settings' own Default Style: batch has no single
+    /// two-case `RenderStyle`). Defaults to Settings' own Default View (Default Style until batch 30): batch has no single
     /// open window to read a "current view" off of, so the app's own live default — what a
     /// freshly opened window would show right now — is the closest honest analog to the
     /// Export As sheet's "defaults to the exporting window's current view style" rule.

@@ -29,7 +29,11 @@ let italicOn: [UInt8] = [0x19]
 
 @Test func underlineSpansAndHibitStrip() {
     // Mirrors test_underline_spans_and_hibit_strip.
-    let data = ws4Text("I read") + [0x20, 0x13] + ws4Text("A Book") + [0x13] + HARD
+    var data = ws4Text("I read")
+    data += [0x20, 0x13]
+    data += ws4Text("A Book")
+    data += [0x13]
+    data += HARD
     let doc = parseWS(data)
     let spans = doc.blocks[0].lines[0].spans
     let underlined = spans.filter { $0.styles.contains(.underline) }
@@ -55,8 +59,12 @@ let italicOn: [UInt8] = [0x19]
 
 @Test func dotPABecomesPagebreak() {
     // Mirrors test_dot_pa_becomes_pagebreak.
-    let data = bytes("Page one text here.") + HARD + bytes(".pa") + HARD +
-               bytes("Page two text here.") + HARD
+    var data = bytes("Page one text here.")
+    data += HARD
+    data += bytes(".pa")
+    data += HARD
+    data += bytes("Page two text here.")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.blocks.map(\.kind) == [.para, .pagebreak, .para])
     #expect(doc.dotCommands == [".pa"])
@@ -66,41 +74,111 @@ let italicOn: [UInt8] = [0x19]
     // Mirrors test_if_el_ei_evaluate_constant_conditions (ctrl-kd tests/test_ctrlkd.py).
     // #229 (ledger 2026-09-08 08:00, planning #229): see ParseWS.swift's own
     // conditionals section for the full WSFORMAT.WS/REFORM.DOT citation.
-    var doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=0") + HARD +
-                      bytes(".po .7i") + HARD + bytes(".ei") + HARD + bytes("T.") + HARD)
+    var parseWSArg69: [UInt8] = bytes(".po 1i")
+    parseWSArg69 += HARD
+    parseWSArg69 += bytes(".if 1=0")
+    parseWSArg69 += HARD
+    parseWSArg69 += bytes(".po .7i")
+    parseWSArg69 += HARD
+    parseWSArg69 += bytes(".ei")
+    parseWSArg69 += HARD
+    parseWSArg69 += bytes("T.")
+    parseWSArg69 += HARD
+    var doc = parseWS(parseWSArg69)
     #expect(doc.page?.poCols == 10.0)
 
-    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=1") + HARD +
-                  bytes(".po .7i") + HARD + bytes(".ei") + HARD + bytes("T.") + HARD)
+    var parseWSArg73: [UInt8] = bytes(".po 1i")
+    parseWSArg73 += HARD
+    parseWSArg73 += bytes(".if 1=1")
+    parseWSArg73 += HARD
+    parseWSArg73 += bytes(".po .7i")
+    parseWSArg73 += HARD
+    parseWSArg73 += bytes(".ei")
+    parseWSArg73 += HARD
+    parseWSArg73 += bytes("T.")
+    parseWSArg73 += HARD
+    doc = parseWS(parseWSArg73)
     #expect(doc.page?.poCols == 7.0)
 
     // .EL flips a false .IF's suppression
-    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=0") + HARD + bytes(".po .5i") +
-                  HARD + bytes(".el") + HARD + bytes(".po .7i") + HARD + bytes(".ei") +
-                  HARD + bytes("T.") + HARD)
+    var parseWSArg78: [UInt8] = bytes(".po 1i")
+    parseWSArg78 += HARD
+    parseWSArg78 += bytes(".if 1=0")
+    parseWSArg78 += HARD
+    parseWSArg78 += bytes(".po .5i")
+    parseWSArg78 += HARD
+    parseWSArg78 += bytes(".el")
+    parseWSArg78 += HARD
+    parseWSArg78 += bytes(".po .7i")
+    parseWSArg78 += HARD
+    parseWSArg78 += bytes(".ei")
+    parseWSArg78 += HARD
+    parseWSArg78 += bytes("T.")
+    parseWSArg78 += HARD
+    doc = parseWS(parseWSArg78)
     #expect(doc.page?.poCols == 7.0)
 
     // ... and a true .IF's .EL side is the one suppressed
-    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=1") + HARD + bytes(".po .5i") +
-                  HARD + bytes(".el") + HARD + bytes(".po .7i") + HARD + bytes(".ei") +
-                  HARD + bytes("T.") + HARD)
+    var parseWSArg84: [UInt8] = bytes(".po 1i")
+    parseWSArg84 += HARD
+    parseWSArg84 += bytes(".if 1=1")
+    parseWSArg84 += HARD
+    parseWSArg84 += bytes(".po .5i")
+    parseWSArg84 += HARD
+    parseWSArg84 += bytes(".el")
+    parseWSArg84 += HARD
+    parseWSArg84 += bytes(".po .7i")
+    parseWSArg84 += HARD
+    parseWSArg84 += bytes(".ei")
+    parseWSArg84 += HARD
+    parseWSArg84 += bytes("T.")
+    parseWSArg84 += HARD
+    doc = parseWS(parseWSArg84)
     #expect(doc.page?.poCols == 5.0)
 
     // bare numeric argument, no operator: REFORM.DOT's own prose states
     // outright "The command if 0 is equivalent to if 1=0"
-    doc = parseWS(bytes(".rm 6.5\"") + HARD + bytes(".if 0") + HARD +
-                  bytes(".rm 5.0\"") + HARD + bytes(".ei") + HARD + bytes("T.") + HARD)
+    var parseWSArg91: [UInt8] = bytes(".rm 6.5\"")
+    parseWSArg91 += HARD
+    parseWSArg91 += bytes(".if 0")
+    parseWSArg91 += HARD
+    parseWSArg91 += bytes(".rm 5.0\"")
+    parseWSArg91 += HARD
+    parseWSArg91 += bytes(".ei")
+    parseWSArg91 += HARD
+    parseWSArg91 += bytes("T.")
+    parseWSArg91 += HARD
+    doc = parseWS(parseWSArg91)
     #expect(doc.blocks[0].rightMargin == 65.0)
 
     // nesting: an outer false frame suppresses an inner TRUE one too
-    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if 1=0") + HARD + bytes(".if 1=1") +
-                  HARD + bytes(".po .5i") + HARD + bytes(".ei") + HARD + bytes(".ei") +
-                  HARD + bytes("T.") + HARD)
+    var parseWSArg96: [UInt8] = bytes(".po 1i")
+    parseWSArg96 += HARD
+    parseWSArg96 += bytes(".if 1=0")
+    parseWSArg96 += HARD
+    parseWSArg96 += bytes(".if 1=1")
+    parseWSArg96 += HARD
+    parseWSArg96 += bytes(".po .5i")
+    parseWSArg96 += HARD
+    parseWSArg96 += bytes(".ei")
+    parseWSArg96 += HARD
+    parseWSArg96 += bytes(".ei")
+    parseWSArg96 += HARD
+    parseWSArg96 += bytes("T.")
+    parseWSArg96 += HARD
+    doc = parseWS(parseWSArg96)
     #expect(doc.page?.poCols == 10.0)
 
     // false-branch TEXT is skipped for output too, not just dot commands
-    doc = parseWS(bytes(".if 1=0") + HARD + bytes("Hidden text.") + HARD +
-                  bytes(".ei") + HARD + bytes("Visible text.") + HARD)
+    var parseWSArg102: [UInt8] = bytes(".if 1=0")
+    parseWSArg102 += HARD
+    parseWSArg102 += bytes("Hidden text.")
+    parseWSArg102 += HARD
+    parseWSArg102 += bytes(".ei")
+    parseWSArg102 += HARD
+    parseWSArg102 += bytes("Visible text.")
+    parseWSArg102 += HARD
+    doc = parseWS(parseWSArg102)
     let texts = doc.blocks.flatMap { $0.lines.map { $0.text() } }
     #expect(texts == ["Visible text."])
 
@@ -108,13 +186,34 @@ let italicOn: [UInt8] = [0x19]
     // behaviour": both the .if side and the .el side apply in document
     // order, exactly as before .IF/.EL/.EI were recognized as anything but
     // inert dot lines.
-    doc = parseWS(bytes(".po 1i") + HARD + bytes(".if &X&=1") + HARD + bytes(".po .5i") +
-                  HARD + bytes(".el") + HARD + bytes(".po .7i") + HARD + bytes(".ei") +
-                  HARD + bytes("T.") + HARD)
+    var parseWSArg111: [UInt8] = bytes(".po 1i")
+    parseWSArg111 += HARD
+    parseWSArg111 += bytes(".if &X&=1")
+    parseWSArg111 += HARD
+    parseWSArg111 += bytes(".po .5i")
+    parseWSArg111 += HARD
+    parseWSArg111 += bytes(".el")
+    parseWSArg111 += HARD
+    parseWSArg111 += bytes(".po .7i")
+    parseWSArg111 += HARD
+    parseWSArg111 += bytes(".ei")
+    parseWSArg111 += HARD
+    parseWSArg111 += bytes("T.")
+    parseWSArg111 += HARD
+    doc = parseWS(parseWSArg111)
     #expect(doc.page?.poCols == 7.0)
 
-    doc = parseWS(bytes(".if &X&=1") + HARD + bytes("A.") + HARD + bytes(".el") + HARD +
-                  bytes("B.") + HARD + bytes(".ei") + HARD)
+    var parseWSArg116: [UInt8] = bytes(".if &X&=1")
+    parseWSArg116 += HARD
+    parseWSArg116 += bytes("A.")
+    parseWSArg116 += HARD
+    parseWSArg116 += bytes(".el")
+    parseWSArg116 += HARD
+    parseWSArg116 += bytes("B.")
+    parseWSArg116 += HARD
+    parseWSArg116 += bytes(".ei")
+    parseWSArg116 += HARD
+    doc = parseWS(parseWSArg116)
     let texts2 = doc.blocks.flatMap { $0.lines.map { $0.text() } }
     #expect(texts2 == ["A.", "B."])
 }
@@ -157,7 +256,11 @@ let italicOn: [UInt8] = [0x19]
 
     // end to end: `.lh 12/72"` resolves to WordStar's own 12pt, not the
     // pre-fix bug's 18pt (12 read as a bare integer, at the 6-LPI default)
-    let doc = parseWS(bytes(".lh 12/72\"") + HARD + bytes("T.") + HARD)
+    var parseWSArg160: [UInt8] = bytes(".lh 12/72\"")
+    parseWSArg160 += HARD
+    parseWSArg160 += bytes("T.")
+    parseWSArg160 += HARD
+    let doc = parseWS(parseWSArg160)
     #expect(doc.page?.lh48 == 8.0)                    // 12pt in 1/48in units
 }
 
@@ -168,13 +271,31 @@ let italicOn: [UInt8] = [0x19]
     let pad = Array(repeating: UInt8(0x1a), count: 8)
 
     #expect(trailingPaHasContentAfter(bytes("...pa") + suf + pad) == false)
-    #expect(trailingPaHasContentAfter(bytes("...pa") + suf + bytes("\r\n") + pad) == true)
-    #expect(trailingPaHasContentAfter(bytes("...pa") + suf + bytes("\r\n\r\n") + pad) == true)
-    #expect(trailingPaHasContentAfter(bytes("...pa") + suf + bytes(" \r\n") + pad) == true)
-    #expect(trailingPaHasContentAfter(
-        bytes("...pa") + suf + bytes(".. end of file\r\n") + pad) == false)
-    #expect(trailingPaHasContentAfter(
-        bytes("...pa") + suf + bytes(".av \"prompt\",any-key\r\n") + pad) == false)
+    var trailingPaHasContentAfterArg171: [UInt8] = bytes("...pa")
+    trailingPaHasContentAfterArg171 += suf
+    trailingPaHasContentAfterArg171 += bytes("\r\n")
+    trailingPaHasContentAfterArg171 += pad
+    #expect(trailingPaHasContentAfter(trailingPaHasContentAfterArg171) == true)
+    var trailingPaHasContentAfterArg172: [UInt8] = bytes("...pa")
+    trailingPaHasContentAfterArg172 += suf
+    trailingPaHasContentAfterArg172 += bytes("\r\n\r\n")
+    trailingPaHasContentAfterArg172 += pad
+    #expect(trailingPaHasContentAfter(trailingPaHasContentAfterArg172) == true)
+    var trailingPaHasContentAfterArg173: [UInt8] = bytes("...pa")
+    trailingPaHasContentAfterArg173 += suf
+    trailingPaHasContentAfterArg173 += bytes(" \r\n")
+    trailingPaHasContentAfterArg173 += pad
+    #expect(trailingPaHasContentAfter(trailingPaHasContentAfterArg173) == true)
+    var trailingPaHasContentAfterArg174: [UInt8] = bytes("...pa")
+    trailingPaHasContentAfterArg174 += suf
+    trailingPaHasContentAfterArg174 += bytes(".. end of file\r\n")
+    trailingPaHasContentAfterArg174 += pad
+    #expect(trailingPaHasContentAfter(trailingPaHasContentAfterArg174) == false)
+    var trailingPaHasContentAfterArg176: [UInt8] = bytes("...pa")
+    trailingPaHasContentAfterArg176 += suf
+    trailingPaHasContentAfterArg176 += bytes(".av \"prompt\",any-key\r\n")
+    trailingPaHasContentAfterArg176 += pad
+    #expect(trailingPaHasContentAfter(trailingPaHasContentAfterArg176) == false)
     #expect(trailingPaHasContentAfter(bytes("...pa") + suf) == false)
     #expect(trailingPaHasContentAfter(bytes("no pa command here") + pad) == false)
     #expect(trailingPaHasContentAfter(bytes("...pa\r\n") + pad) == false)
@@ -209,7 +330,10 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
 
 @Test func rulerMarksColumnar() {
     // Mirrors test_ruler_marks_columnar.
-    let data = bytes(".rr----!----!----R") + HARD + bytes("Col1    Col2") + HARD
+    var data = bytes(".rr----!----!----R")
+    data += HARD
+    data += bytes("Col1    Col2")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.columnar)
 }
@@ -320,9 +444,13 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // WS7 (LYING.pcl + LYING.measurements.json) prints the superscript inline: 'Prize.' at
     // (2786, 1461) decipoints, the footnote's '1' at (3079, 1416) -- SAME row (a 4.5pt
     // rise, not a new line), immediately to its right.
-    let data = ws7Block(0x00) + bytes("Anchor text ends here.") +
-               ws7Note(bytes("Note body text."), number: 0) + HARD + HARD +
-               bytes("Next paragraph starts fresh.") + HARD
+    var data = ws7Block(0x00)
+    data += bytes("Anchor text ends here.")
+    data += ws7Note(bytes("Note body text."), number: 0)
+    data += HARD
+    data += HARD
+    data += bytes("Next paragraph starts fresh.")
+    data += HARD
     let doc = parseWS(data)
     // the marker rides on the SAME line as its anchor text, not a block of its own -- the
     // blank spacer line survives (unlike the marker, which no longer breaks to its own).
@@ -389,7 +517,10 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
 
 @Test func ws7TabBlock() {
     // Mirrors test_ws7_tab_block: a tab block expands to four literal spaces.
-    let data = ws7Block(0x00) + ws7Block(0x09) + bytes("Indented by tab block.") + HARD
+    var data = ws7Block(0x00)
+    data += ws7Block(0x09)
+    data += bytes("Indented by tab block.")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.blocks[0].lines[0].text().hasPrefix("    "))
 }
@@ -443,7 +574,10 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
 /// depending on an emitter to trim it.
 @Test func extendedEscapeRendersControlBytesAsTheirCP437Glyphs() {
     for byte: UInt8 in [0x01, 0x1C, 0x1D, 0x1E, 0x1F] {
-        let data = bytes("A") + [0x1B, byte] + bytes("B") + HARD
+        var data = bytes("A")
+        data += [0x1B, byte]
+        data += bytes("B")
+        data += HARD
         let text = parseWS(data).blocks[0].lines[0].text()
         let expected = "A" + cp437Graphics[byte]! + "B"
         #expect(text == expected, "escaped 0x\(String(byte, radix: 16)) must render as its cp437 glyph, matching Python")
@@ -456,7 +590,10 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
 /// `input_hex` `...1b8220 6f6b2e...`): `0x1B 0x82` decodes to 'é'. Confirms the escape
 /// path above is untouched for the byte range it actually exists to serve.
 @Test func extendedEscapeStillSmugglesHighByteAsExtendedCharacter() {
-    let data = bytes("here ") + [0x1B, 0x82] + bytes(" ok.") + HARD
+    var data = bytes("here ")
+    data += [0x1B, 0x82]
+    data += bytes(" ok.")
+    data += HARD
     #expect(parseWS(data).blocks[0].lines[0].text() == "here \u{e9} ok.")
 }
 
@@ -512,7 +649,12 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     #expect(doc.blocks[0].lines.map { $0.text() } == ["Cell ♀ no eject."])
 
     // A BARE 0x0C still ejects: the rule is "not a triple middle", not "never".
-    let bare = parseWS(ws7Block(0x00) + bytes("top") + [0x0C] + bytes("bottom") + HARD)
+    var parseWSArg515: [UInt8] = ws7Block(0x00)
+    parseWSArg515 += bytes("top")
+    parseWSArg515 += [0x0C]
+    parseWSArg515 += bytes("bottom")
+    parseWSArg515 += HARD
+    let bare = parseWS(parseWSArg515)
     #expect(bare.blocks.map(\.kind) == [.para, .pagebreak, .para])
 }
 
@@ -568,10 +710,16 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
 /// meaning — 0x1E dropped entirely, 0x1F rendered as a literal hyphen — confirming the
 /// investigation above never touched this branch.
 @Test func nonEscapedSoftHyphensKeepTheirDeliberateMeaning() {
-    let inactive = bytes("wave") + [0x1E] + bytes("length") + HARD
+    var inactive = bytes("wave")
+    inactive += [0x1E]
+    inactive += bytes("length")
+    inactive += HARD
     #expect(parseWS(inactive).blocks[0].lines[0].text() == "wavelength")
 
-    let active = bytes("wave") + [0x1F] + bytes("length") + HARD
+    var active = bytes("wave")
+    active += [0x1F]
+    active += bytes("length")
+    active += HARD
     #expect(parseWS(active).blocks[0].lines[0].text() == "wave-length")
 }
 
@@ -583,7 +731,10 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // in a ws4 file a 0x1D is ordinary control noise that decodeSpans drops (counting it
     // into unknownCodes), NOT a symmetric-block marker whose "length" would eat the
     // following text. Expectation from the real Python parse_ws on this input.
-    let data = ws4Text("Stray block marker") + [0x1d] + ws4Text("follows inline here") + HARD
+    var data = ws4Text("Stray block marker")
+    data += [0x1d]
+    data += ws4Text("follows inline here")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.detection?.variant == .ws4)
     #expect(doc.blocks.count == 1)
@@ -675,7 +826,11 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // two 0x1D-framed bytes make `detect()` read this fixture as ws5+.
     let seed = ws7Block(0x0B, payload: [0, 0, 0, 0])
     let tab = ws7Block(0x09, payload: [0x68, 0x01, 0x68, 0x01] + bytes(" ") + [0x02])
-    var data: [UInt8] = seed + bytes("Line one.") + HARD + tab + HARD
+    var data: [UInt8] = seed
+    data += bytes("Line one.")
+    data += HARD
+    data += tab
+    data += HARD
     data += bytes("Line two.") + HARD
     data += [0x1a]
     let doc = parseWS(data)
@@ -718,7 +873,11 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // used to guard the eject on something already being open, so a document beginning
     // with ^L — a deliberate blank first page — silently lost it while Python
     // (`if n:` over the split parts, no guard) kept it. Verified against the reference.
-    let leading = parseWS(ws7Block(0x00) + [0x0C] + bytes("After the eject.") + HARD)
+    var parseWSArg721: [UInt8] = ws7Block(0x00)
+    parseWSArg721 += [0x0C]
+    parseWSArg721 += bytes("After the eject.")
+    parseWSArg721 += HARD
+    let leading = parseWS(parseWSArg721)
     #expect(leading.blocks.map(\.kind) == [.pagebreak, .para])
 }
 
@@ -906,9 +1065,11 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     ])
     // styleRef(2) immediately followed by styleRef(3) -- NOT ONE byte of decoded text
     // between them, reproducing the real corpus shape exactly.
-    let doc = parseWS(documentWithStyleLibrary(
-        body: styleRef(2) + styleRef(3) + bytes("Sample.") + HARD,
-        library: lib))
+    var body909: [UInt8] = styleRef(2)
+    body909 += styleRef(3)
+    body909 += bytes("Sample.")
+    body909 += HARD
+    let doc = parseWS(documentWithStyleLibrary( body:body909, library: lib))
     let span = try! #require(doc.blocks.flatMap(\.lines).flatMap(\.spans)
         .first { $0.text.hasPrefix("Sample") })
     let font = try! #require(span.font.flatMap { doc.fonts[$0] })
@@ -928,7 +1089,10 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     var data = ws7Block(0x00) + bytes("the dirt underfoot")
     data += [0x8D, 0x8A]                                       // WS7's soft pair
     data += bytes("ash gray.") + HARD
-    data += bytes("wa") + [0x94] + bytes("s") + [0x94]
+    data += bytes("wa")
+    data += [0x94]
+    data += bytes("s")
+    data += [0x94]
     data += bytes(" raised text here.") + HARD
     let doc = parseWS(data)
     let txt = emitText(doc, mode: .printed)

@@ -51,11 +51,20 @@ private let ordinaryStyleBits = 0x8000
 /// reproduces the real corpus defect -- all three carry the SAME graphic run + middle dot.
 private func buildDoc() -> Document {
     var data: [UInt8] = []
-    data += graphicCP437 + bytes(" ") + dotCP437 + HARD
+    data += graphicCP437
+    data += bytes(" ")
+    data += dotCP437
+    data += HARD
     data += fontBlock(helvTypestyle(), points: 12.0, styleBits: ordinaryStyleBits, width: 180)
-    data += graphicCP437 + bytes(" ") + dotCP437 + HARD
+    data += graphicCP437
+    data += bytes(" ")
+    data += dotCP437
+    data += HARD
     data += fontBlock(symbolMappedNumber, points: 12.0, styleBits: symbolMappedStyleBits, width: 180)
-    data += graphicCP437 + bytes(" ") + dotCP437 + HARD
+    data += graphicCP437
+    data += bytes(" ")
+    data += dotCP437
+    data += HARD
     return parseWS(data)
 }
 

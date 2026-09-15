@@ -262,6 +262,17 @@ public enum DocumentOperations {
         public let info: InfoValue
 
         public var hasDotCommands: Bool { !dotCommands.isEmpty }
+
+        /// The memberwise initializer, spelled out: Swift synthesizes it `internal` even on a
+        /// public struct, and tests outside this package build results by hand.
+        public init(variant: Variant, pageCount: Int?, dotCommands: [String],
+                    unknownCodeCount: Int, info: InfoValue) {
+            self.variant = variant
+            self.pageCount = pageCount
+            self.dotCommands = dotCommands
+            self.unknownCodeCount = unknownCodeCount
+            self.info = info
+        }
     }
 
     /// `documentInfo`, plus the figures a caller that doesn't want to walk `InfoValue` by

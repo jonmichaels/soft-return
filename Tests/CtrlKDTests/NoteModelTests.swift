@@ -26,7 +26,10 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     // columns. (The old expectation of 31 came from dividing by 144 — VMI's 1/1440in
     // unit misapplied to the horizontal axis; every archive tab block's own tenths-byte
     // says /180.)
-    let data = ws7Block(0x00) + ws7Tab(sizeHMI: 4500, tabType: UInt8(ascii: "]")) + bytes("Indented.") + HARD
+    var data = ws7Block(0x00)
+    data += ws7Tab(sizeHMI: 4500, tabType: UInt8(ascii: "]"))
+    data += bytes("Indented.")
+    data += HARD
     let doc = parseWS(data)
     let text = doc.blocks[0].lines[0].text()
     #expect(text.hasPrefix(String(repeating: " ", count: 25)))
@@ -36,8 +39,11 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
 @Test func tabDotLeaderRepeatsLeaderCharacter() {
     // spec: "Other character such as '.' or '*' are used for dot leaders."
     // 720 HMI = 0.4in = 4 columns.
-    let data = ws7Block(0x00) + bytes("Row") + ws7Tab(sizeHMI: 720, tabType: UInt8(ascii: ".")) +
-               bytes("Contents") + HARD
+    var data = ws7Block(0x00)
+    data += bytes("Row")
+    data += ws7Tab(sizeHMI: 720, tabType: UInt8(ascii: "."))
+    data += bytes("Contents")
+    data += HARD
     let doc = parseWS(data)
     let text = doc.blocks[0].lines[0].text()
     #expect(text.contains(String(repeating: ".", count: 4)))
@@ -45,7 +51,10 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
 }
 
 @Test func tabMalformedBlockDoesNotCrashAndDegradesToFourSpaces() {
-    let data = ws7Block(0x00) + ws7Block(0x09) + bytes("Still here.") + HARD   // empty content
+    var data = ws7Block(0x00)
+    data += ws7Block(0x09)
+    data += bytes("Still here.")
+    data += HARD   // empty content
     let doc = parseWS(data)
     #expect(doc.blocks[0].lines[0].text().hasSuffix("Still here."))
 }
@@ -56,8 +65,11 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     // A footnote block whose content is only 2 bytes — short of the 5 the line-count/
     // tag-word/conversion-flag header needs. `parseNote`'s `content.count >= 5` guard
     // must catch this and return a mostly-empty Note, not read past the array.
-    let data = ws7Block(0x00) + bytes("Body ") + ws7Block(0x03, payload: [0x01, 0x00]) +
-               bytes(" end.") + HARD
+    var data = ws7Block(0x00)
+    data += bytes("Body ")
+    data += ws7Block(0x03, payload: [0x01, 0x00])
+    data += bytes(" end.")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.notes.count == 1)
     #expect(doc.notes[0].kind == .footnote)
@@ -83,7 +95,10 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     // has enough 0x1d evidence to route this as ws5+): the trailing text is KEPT, which
     // is the whole point of rejecting the false block. WordStar itself truncates the file
     // when fooled by one (engineering note 650); we keep the document.
-    let full = ws7Block(0x00) + data + bytes(" trailing.") + HARD
+    var full = ws7Block(0x00)
+    full += data
+    full += bytes(" trailing.")
+    full += HARD
     let doc = parseWS(full)
     #expect(doc.notes.isEmpty)
     #expect(doc.blocks[0].lines[0].text().hasSuffix("hi trailing."))
@@ -96,8 +111,11 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     // increases), not loop forever or crash.
     let nestedHuge: [UInt8] = [0x1d, 0xff, 0xff, 0x03, 0x00, 0x00]   // claims 0xffff more bytes
     let noteContent: [UInt8] = [0x01, 0x00, 0x00, 0x00, 0x30] + bytes("before ") + nestedHuge
-    let data = ws7Block(0x00) + bytes("Ref ") + ws7Block(0x03, payload: noteContent) +
-               bytes(" end.") + HARD
+    var data = ws7Block(0x00)
+    data += bytes("Ref ")
+    data += ws7Block(0x03, payload: noteContent)
+    data += bytes(" end.")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.notes.count == 1)
     #expect(doc.notes[0].kind == .footnote)
@@ -106,7 +124,11 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
 }
 
 @Test func pageLengthOfZeroDoesNotCrashAndReportsCustom() {
-    let doc = parseWS(bytes(".PL 0") + HARD + bytes("Body.") + HARD)
+    var parseWSArg109: [UInt8] = bytes(".PL 0")
+    parseWSArg109 += HARD
+    parseWSArg109 += bytes("Body.")
+    parseWSArg109 += HARD
+    let doc = parseWS(parseWSArg109)
     let page = try! #require(doc.page)
     #expect(page.plLines == 0.0)
     #expect(page.heightIn == 0.0)
@@ -130,7 +152,11 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
 
 @Test func malformedPLArgumentDoesNotCrashAndDefaults() {
     // A `.PL` with no numeric argument at all must degrade to the default, never raise.
-    let doc = parseWS(bytes(".PL") + HARD + bytes("Body.") + HARD)
+    var parseWSArg133: [UInt8] = bytes(".PL")
+    parseWSArg133 += HARD
+    parseWSArg133 += bytes("Body.")
+    parseWSArg133 += HARD
+    let doc = parseWS(parseWSArg133)
     let page = try! #require(doc.page)
     #expect(page.plLines == 66.0)
     #expect(page.sizeSource == .default)
@@ -141,7 +167,11 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
 @Test func pageLengthExplicitInchUnitConverts() {
     // NOT the trap case (a bare number is lines) -- WordStar 5.0+ DOES allow an
     // explicit unit suffix, and it must still convert: 11" -> 66 lines -> Letter.
-    let doc = parseWS(bytes(".PL 11\"") + HARD + bytes("Body.") + HARD)
+    var parseWSArg144: [UInt8] = bytes(".PL 11\"")
+    parseWSArg144 += HARD
+    parseWSArg144 += bytes("Body.")
+    parseWSArg144 += HARD
+    let doc = parseWS(parseWSArg144)
     let page = try! #require(doc.page)
     #expect(page.plLines == 66.0)
     #expect(page.sizeName == "Letter")
@@ -194,7 +224,11 @@ private func ws7Tab(sizeHMI: Int, tabType: UInt8, tenths: UInt8 = 0) -> [UInt8] 
     // pair bracketing a note whose own text also carries a dot-command line.
     let noteBody = bytes(".rr----!----R") + [0x0d, 0x0a] +
                    [UInt8(0xFF)] + bytes("Hello there") + [UInt8(0xFF)]
-    let data = ws7Block(0x00) + bytes("Ref ") + ws7Note(noteBody, cmd: 0x04) + bytes(" end.") + HARD
+    var data = ws7Block(0x00)
+    data += bytes("Ref ")
+    data += ws7Note(noteBody, cmd: 0x04)
+    data += bytes(" end.")
+    data += HARD
     let doc = parseWS(data)
     #expect(doc.notes.count == 1)
     #expect(doc.notes[0].kind == .endnote)
@@ -274,7 +308,12 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
 @Test func twoInsetGraphicsGetDistinctPixIndices() {
     let block1 = wsBlock(cmd: 0x10, content: Array(#"C:\PIX\ONE.PIX"#.utf8))
     let block2 = wsBlock(cmd: 0x10, content: Array(#"C:\PIX\TWO.PIX"#.utf8))
-    let doc = parseWS(bytes("A. ") + block1 + bytes(" B. ") + block2 + bytes(" C.\r\n"))
+    var parseWSArg277: [UInt8] = bytes("A. ")
+    parseWSArg277 += block1
+    parseWSArg277 += bytes(" B. ")
+    parseWSArg277 += block2
+    parseWSArg277 += bytes(" C.\r\n")
+    let doc = parseWS(parseWSArg277)
     #expect(doc.graphics == [#"C:\PIX\ONE.PIX"#, #"C:\PIX\TWO.PIX"#])
     let idxs = doc.blocks.flatMap(\.lines).flatMap(\.spans).compactMap(\.pix).sorted()
     #expect(idxs == [0, 1])
@@ -378,7 +417,7 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
     // all).
     let data = Array(emitLayout(doc).utf8)
     let json = try! JSONSerialization.jsonObject(with: Data(data)) as! [String: Any]
-    #expect(json["version"] as? Int == 7)
+    #expect(json["version"] as? Int == 10)
     let jpages = (json["printed"] as! [String: Any])["pages"] as! [[String: Any]]
     #expect(jpages.count == 3)
     let jp1 = jpages[0]
@@ -433,7 +472,12 @@ private func paranum(level: UInt8, _ counters: Int...) -> [UInt8] {
                                             240, 0,             // height 240/1440in = 12pt
                                             0x00, 0x84]         // proportional, serif
                                            + [UInt8](repeating: 0, count: 6))
-    let doc = parseWS(bytes("Plain ") + colour + bytes("coloured ") + font + bytes("sized.\r\n"))
+    var parseWSArg436: [UInt8] = bytes("Plain ")
+    parseWSArg436 += colour
+    parseWSArg436 += bytes("coloured ")
+    parseWSArg436 += font
+    parseWSArg436 += bytes("sized.\r\n")
+    let doc = parseWS(parseWSArg436)
     #expect(doc.colours.map { [$0.colour, $0.previous] } == [[8, 4]])
     let f = doc.fonts[0]
     #expect(f.points == 12.0)

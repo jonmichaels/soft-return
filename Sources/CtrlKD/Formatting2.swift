@@ -34,6 +34,11 @@ struct FormatState {
     var leftMargin: Double? = nil
     var rightMargin: Double? = nil
     var paraMargin: Double? = nil
+    /// `.pf` — print-time paragraph realignment: "on" / "off" / "dis". See
+    /// `Block.printReformat` for what it means and why it matters.
+    var printReformat: String? = nil
+    /// `.lh a` / `.lh auto` — auto-leading. See `Block.lhAuto`.
+    var lhAuto: Bool = false
     var columns: Int? = nil                 // `.co`  C5
     var columnGutter: Double? = nil
     var endnotesHere: Bool? = nil           // `.pe`  C4
@@ -89,8 +94,19 @@ struct FormatState {
         // stops (2026-08-06) — rendering doesn't change, but per-block fidelity of the
         // carried state does. Empty stops count as none, mirroring Python's
         // `tuple(...) if state.get('tab_stops') else None`.
+        // `.pf` mid-paragraph means the lines after it are realigned at print time and
+        // the ones before are not — the same reason `.lm` is here.
         BlockFormat(align: alignment, wrap: wrap ?? true, leftMargin: leftMargin,
                     rightMargin: rightMargin, paraMargin: paraMargin,
+                    printReformat: printReformat,
+                    // `.lh a` mid-paragraph means the lines after it take their advance
+                    // from the fonts on them and the ones before do not. Unlike a
+                    // NUMERIC `.lh` — which is per LINE (`Line.lead48`) and deliberately
+                    // absent from this tuple — auto-leading is a MODE, and only the two
+                    // commands that switch it (`.lh a` on, any numeric `.lh` off) move
+                    // this value at all, so an ordinary `.lh 10pt`-between-headings
+                    // document never splits a block it did not split before.
+                    lhAuto: lhAuto,
                     columns: columns, columnGutter: columnGutter,
                     tabStops: (tabStops?.isEmpty ?? true) ? nil : tabStops)
     }
@@ -110,6 +126,8 @@ struct BlockFormat: Equatable {
     var leftMargin: Double?
     var rightMargin: Double?
     var paraMargin: Double?
+    var printReformat: String?
+    var lhAuto: Bool
     var columns: Int?
     var columnGutter: Double?
     var tabStops: [Double]?
@@ -259,6 +277,14 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // 'P', arg '#...'; rejoin before dispatch.
         name = Array("P#".utf8)
         arg = Array(arg.dropFirst())
+    } else if name.map(asciiUpper) == Array("LHA".utf8), arg.isEmpty {
+        // `.lha` — auto-leading, written with no space. The shared name scanner takes
+        // up to THREE letters, so it swallows the argument into the name; split it
+        // back, the same repair `.p#` needs just above. `sawyer/DEFAULT/PRINT.TST` and
+        // `sawyer/PSPRINT.TST` write it this way; `sawyer/PREVIEW.WS` and two
+        // `-README.WS` write `.lh auto`, which the scanner handles unaided.
+        name = Array("LH".utf8)
+        arg = Array("a".utf8)
     }
     switch String(decoding: name.map(asciiUpper), as: UTF8.self) {
     case "OC":
@@ -279,6 +305,22 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         if let v = onOff(arg) { state.suppressBlanks = v }
     case "PS":
         if let v = onOff(arg) { state.proportional = v }
+    case "PF":
+        // Print-time paragraph realignment. THREE values, not two, so `onOff` is the
+        // wrong reader: WSFORMAT.TXT's own `.PF` row names ON, OFF and DIS. Anything
+        // else leaves the state standing, the same doctrine every other command in this
+        // function follows for junk arguments. The archive writes `.pf on`, `.PF OFF`.
+        //
+        // Byte-wise, and `trimmed`/`asciiLower` rather than Foundation's
+        // `trimmingCharacters`/`lowercased`: this module deliberately imports nothing.
+        let pfArg = trimmed(arg).map(asciiLower)
+        if pfArg.starts(with: Array("dis".utf8)) {
+            state.printReformat = "dis"
+        } else if pfArg.starts(with: Array("off".utf8)) {
+            state.printReformat = "off"
+        } else if pfArg.starts(with: Array("on".utf8)) {
+            state.printReformat = "on"
+        }
     case "KR":
         if let v = onOff(arg) { state.kerning = v }
     case "PR":
@@ -294,8 +336,20 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // Line height, 1/48in units — RUNNING state, unlike the page geometry's first-wins
         // read of the same command. See `FormatState.lead48`. Junk or a non-positive height
         // is rejected by `resolveLhArg` and the state stands, exactly as `.lm` does.
+        //
+        // `.lh a` / `.lh auto` is AUTO-LEADING, a MODE rather than a measure: the line
+        // takes its advance from the fonts on it (`fontLeadPt`). A NUMERIC `.lh`
+        // switches the mode back off from where it sits. Seven archive files ask for
+        // it; no other document in the corpus leads by its fonts at all.
+        if trimmed(arg).first.map({ asciiLower($0) == UInt8(ascii: "a") }) == true {
+            state.lhAuto = true
+            return
+        }
         guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
-        if let resolved = resolveLhArg(value, unit) { state.lead48 = resolved }
+        if let resolved = resolveLhArg(value, unit) {
+            state.lead48 = resolved
+            state.lhAuto = false
+        }
     case "PO":
         // Page offset (left origin), print columns — RUNNING state, unlike the page
         // geometry's first-wins read of the same command. See `FormatState.poCols`.

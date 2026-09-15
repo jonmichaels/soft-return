@@ -153,8 +153,17 @@ public enum RenderProbeKit {
     /// Early-exits each of the four scans as soon as a hit lands, rather than sweeping the
     /// whole bitmap four times over — the difference between a probe that finishes in this
     /// suite's run and one that does not.
+    ///
+    /// `compositeOverBackground`: judge each pixel as it looks laid over `background` — its colour
+    /// weighted by its alpha — rather than by its colour alone. A capture taken at a fractional
+    /// pixel scale (`cacheDisplay` at the window's backing scale times its magnification, 3.013 or
+    /// 1.669 once Fit is capped at Actual Size, ruling M3) leaves the paper's own top pixel row
+    /// only partly covered: the grey desk behind the page shows through at 23% alpha, which the
+    /// colour-only test reads as ink at 0pt. Off by default, so every other caller measures
+    /// exactly as before.
     public static func inkMargins(in bitmap: NSBitmapImageRep, background: NSColor,
-                                   viewSize: CGSize, tolerance: CGFloat = 0.06) -> InkMarginsPt? {
+                                   viewSize: CGSize, tolerance: CGFloat = 0.06,
+                                   compositeOverBackground: Bool = false) -> InkMarginsPt? {
         let width = bitmap.pixelsWide
         let height = bitmap.pixelsHigh
         guard width > 0, height > 0, viewSize.width > 0, viewSize.height > 0 else { return nil }
@@ -163,9 +172,13 @@ public enum RenderProbeKit {
 
         func isInk(_ x: Int, _ y: Int) -> Bool {
             guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
-            return abs(c.redComponent - bgR) > tolerance
-                || abs(c.greenComponent - bgG) > tolerance
-                || abs(c.blueComponent - bgB) > tolerance
+            let alpha = compositeOverBackground ? c.alphaComponent : 1
+            let r = c.redComponent * alpha + bgR * (1 - alpha)
+            let g = c.greenComponent * alpha + bgG * (1 - alpha)
+            let b = c.blueComponent * alpha + bgB * (1 - alpha)
+            return abs(r - bgR) > tolerance
+                || abs(g - bgG) > tolerance
+                || abs(b - bgB) > tolerance
         }
 
         var minX: Int?

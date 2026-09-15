@@ -1,14 +1,15 @@
 import AppKit
 import Testing
 @testable import SoftReturn
+import SoftReturnShared
 
 /// Job 398 (Jon's correction to job 397's F10 ruling — Default Display "needs to go back
 /// in... under Default Style"), amended verbatim order:
 ///
 ///     On Launch
-///     Starting View
+///     Open at Launch     (Starting View until #271 M11, batch 30)
 ///     Default Zoom
-///     Default Style
+///     Default View       (Default Style until #271 M11, batch 30)
 ///     Default Display
 ///     Default Page Size
 ///     Quick Look Margins
@@ -88,14 +89,14 @@ struct SettingsWindowOrderTests {
 
         let expected: [Landmark] = [
             .row("On Launch:"),
-            .row("Starting View:"),
+            .row("Open at Launch:"),
             .row("Default Zoom:"),
-            .row("Default Style:"),
+            .row("Default View:"),
             .row("Default Display:"),
             .row("Default Page Size:"),
             .row("Quick Look Margins:"),
             .separator,
-            .caption("Font and size apply to Modern style — and to its RTF and PDF exports."),
+            .caption("Font and size apply to the Modern view — and to its RTF and PDF exports."),
             .row("Font:"),
             .row("Size:"),
             .row("Default Export Formats:"),

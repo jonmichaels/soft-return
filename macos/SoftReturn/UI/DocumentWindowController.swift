@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import PDFKit
 
 /// One document window: the page, and the bottom bar under it.
@@ -46,11 +47,81 @@ final class DocumentWindowController: NSWindowController {
     /// whatever real screen the test happens to run against.
     private let actualSizeMetrics: (NSScreen) -> DisplayPhysicalMetrics?
 
+    /// #271 M7 (the engine agent's design note; batches 25–26): load a long document without holding the
+    /// main thread. On for the app's own open (`WSDocument.makeWindowControllers`), for a document at
+    /// least `WSDocument.backgroundParseThreshold` long (`loadsProgressively`); a shorter one loads at
+    /// once, as it always did. A progressive load:
+    /// - shows a spinner while the document still awaits its parse (`documentDidFinishParsing()`);
+    /// - makes the engine's half of a render (`NativeEngineWork`, `ModernEngineWork`) and the Printed PDF
+    ///   off the main thread;
+    /// - builds the attributed text a slice of a run-loop turn at a time (`turnBudgetNanoseconds`), Native
+    ///   showing its first pages as soon as they exist;
+    /// - lays the pages out the same way: a few with the content, the rest on later turns
+    ///   (`PagedDocumentView.layOutMorePages(until:)`).
+    /// Off by default, so a test that builds a window and measures it at once has every page, as before.
+    private let progressiveOpen: Bool
+    /// Whether the content is still being made: a parse awaited, a render under way, or pages to lay out.
+    private(set) var isLoadingContent = false
+    /// The document's page count while a Native render or its layout is under way; nil once the pages view knows.
+    private(set) var expectedPageTotal: Int?
+    /// A page asked for (Go menu, AppleScript, a style switch) past the pages laid out so far; gone to once they are.
+    var pendingPageIndex: Int?
+    /// Bumped by every load, so the rest of a progressive load stops if its content is replaced.
+    private var loadToken = 0
+    /// Bumped by everything that changes what a style renders — variant, page size, margins, Show
+    /// Invisibles, restoration — and never by a style switch, which is what the caches below keep.
+    private var contentGeneration = 0
+    private struct RenderKey: Hashable {
+        let style: ViewStyle
+        let showInvisibles: Bool
+        let modernFontName: String
+        let modernFontSize: Int
+        let generation: Int
+    }
+    /// #271 M7: each paged style's rendered document for `contentGeneration`, so going back to a style
+    /// never runs its whole-document passes again (`docToPagelines` or `modernSemanticFlow`, and the
+    /// text built on it).
+    private var renderedCache: [RenderKey: RenderedDocument] = [:]
+    /// Printed's PDF for `contentGeneration`, so going back to Printed never emits it again.
+    private var printedCache: (generation: Int, document: PDFDocument)?
+    /// Batch 27: each unpinned render's probe (Show Invisibles, Native), so going back to it never measures the
+    /// whole flow again.
+    private var probeCache: [RenderKey: PagedDocumentView.ExplicitProbe] = [:]
+    /// Batch 27: the style whose content is on screen now — which, while a progressive load runs, can still be the
+    /// style before a switch.
+    private(set) var shownContentStyle: ViewStyle? {
+        didSet { shownContentVersion += 1 }
+    }
+    /// Batch 27: bumped every time new content goes on screen — a first page, a preview, a whole render, a PDF —
+    /// the same style again included (Show Invisibles turned on or off).
+    private(set) var shownContentVersion = 0
+    /// Batch 27: Modern's text built before its first pages are shown from a snapshot of it — far enough past a
+    /// first page that the page is the whole render's own.
+    static let modernPreviewCharacters = 32_000
+    private var allPagesToken: PerformanceSignposts.Token?
+    /// Pages a progressive Native render shows before the rest of its text is built.
+    static let firstPages = 3
+    /// Pages a progressive load lays out with its content, the rest following a turn at a time: one, because
+    /// a page is what the reader sees, and laying out three with Modern's content made that turn — the text
+    /// copied into a new storage, three pages laid out, the page drawn — the only one at or over 100 ms left
+    /// (b26-holymac-fix5: `pages.setContent` 67–72 ms, turns of 98.5–102.5 ms).
+    static let firstLaidOutPages = 1
+    /// The longest a progressive load's work holds one turn of the main run loop before it yields.
+    static let turnBudgetNanoseconds: UInt64 = 20_000_000
+    /// Shown while a progressive load has nothing new on screen yet.
+    let loadingIndicator = NSProgressIndicator()
+    /// The page size the first-open geometry was sized for. A progressive load sizes the window before its
+    /// pages exist, against a stand-in, and sizes it again once if the real page differs (`contentDidAppear`).
+    private var firstOpenPageSize: CGSize?
+    private var hasShownContent = false
+
     init(state: DocumentState, settings: SettingsStore = .shared,
-         actualSizeMetrics: @escaping (NSScreen) -> DisplayPhysicalMetrics? = DisplayPhysicalMetrics.live) {
+         actualSizeMetrics: @escaping (NSScreen) -> DisplayPhysicalMetrics? = DisplayPhysicalMetrics.live,
+         progressiveOpen: Bool = false) {
         self.documentState = state
         self.settings = settings
         self.actualSizeMetrics = actualSizeMetrics
+        self.progressiveOpen = progressiveOpen
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 700, height: 800),
             // NO .fullSizeContentView. It exists so content can show THROUGH a transparent
@@ -80,8 +151,13 @@ final class DocumentWindowController: NSWindowController {
         // belt-and-suspenders gate on the custom state blob specifically.
         window.isRestorable = settings.restoreWindowsOnLaunch
         super.init(window: window)
+        // #271 M7: from here to the pages' first draw, and the window's own construction within it.
+        let firstPage = PerformanceSignposts.begin("open.firstPageDrawn")
+        pagedView.onFirstDraw = { PerformanceSignposts.end(firstPage) }
+        allPagesToken = PerformanceSignposts.begin("open.allPages")
         window.delegate = self
-        buildContent()
+        PerformanceSignposts.measure("open.window") { buildContent() }
+        if !isLoadingContent { endAllPages() }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -113,10 +189,11 @@ final class DocumentWindowController: NSWindowController {
         // A scroll gesture in Single Page flips pages, which changes what the Go menu should
         // allow. Menu validation runs when a menu opens, so this only has to keep the window
         // in step — but without it, page-dependent UI would lag a flick by one interaction.
+        // #271 M7: only the page indicator. Nothing else the bottom bar shows depends on the page,
+        // and rebuilding its five menus on every flip was work a fast scroll through a long
+        // document repeats page after page.
         pagedView.pageDidChange = { [weak self] _ in
-            guard let self else { return }
-            self.bottomBar.update(from: self.documentState)
-            self.refreshPageIndicator()
+            self?.refreshPageIndicator()
         }
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.setAccessibilityIdentifier("document-scroll-view")
@@ -187,8 +264,15 @@ final class DocumentWindowController: NSWindowController {
         bottomBar.delegate = self
         bottomBar.translatesAutoresizingMaskIntoConstraints = false
 
+        // Batch 26: a progressive load's spinner, over whichever content view shows.
+        loadingIndicator.style = .spinning
+        loadingIndicator.isDisplayedWhenStopped = false
+        loadingIndicator.translatesAutoresizingMaskIntoConstraints = false
+        loadingIndicator.setAccessibilityLabel("Loading document")
+
         content.addSubview(scrollView)
         content.addSubview(pdfView)
+        content.addSubview(loadingIndicator)
         content.addSubview(bottomBar)
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: content.topAnchor),
@@ -202,6 +286,8 @@ final class DocumentWindowController: NSWindowController {
             bottomBar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             bottomBar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             bottomBar.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            loadingIndicator.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
+            loadingIndicator.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
         ])
         window.contentView = content
 
@@ -246,16 +332,377 @@ final class DocumentWindowController: NSWindowController {
         return controller
     }
 
+    /// Batch 26: whether this window's loads are progressive — the app's own open, of a long document.
+    private var loadsProgressively: Bool {
+        progressiveOpen && documentState.data.count >= WSDocument.backgroundParseThreshold
+    }
+
+    /// A new load: whatever the last one left for later turns stops here (`loadToken`).
+    private func beginLoad() -> Int {
+        loadToken += 1
+        isLoadingContent = false
+        expectedPageTotal = nil
+        loadingIndicator.stopAnimation(nil)
+        return loadToken
+    }
+
+    /// The load has work left for later turns. `spinner` when nothing on screen stands for it yet.
+    private func setLoading(spinner: Bool) {
+        isLoadingContent = true
+        if spinner {
+            loadingIndicator.startAnimation(nil)
+        } else {
+            loadingIndicator.stopAnimation(nil)
+        }
+    }
+
+    /// Every part of the load is done.
+    private func finishLoad() {
+        isLoadingContent = false
+        expectedPageTotal = nil
+        loadingIndicator.stopAnimation(nil)
+        goToPendingPage()
+        refreshPageIndicator()
+        endAllPages()
+    }
+
+    /// The cache key for what the window shows now.
+    private var currentRenderKey: RenderKey {
+        let style = documentState.style.value
+        return RenderKey(style: style, showInvisibles: style != .printed && documentState.showInvisibles,
+                         modernFontName: documentState.modernFontName,
+                         modernFontSize: documentState.modernFontSize, generation: contentGeneration)
+    }
+
     private func loadPagedContent() {
-        let renderStyle = documentState.style.value.renderStyle
+        let token = beginLoad()
+        let key = currentRenderKey
+        // Batch 26: nothing to render until the parse returns (`documentDidFinishParsing`).
+        if documentState.isAwaitingParse {
+            setLoading(spinner: true)
+            return
+        }
+        // #271 M7: a style already shown lays out its rendered document again, without re-entering
+        // the engine or rebuilding the text.
+        if let cached = renderedCache[key] {
+            present(cached, token: token)
+            return
+        }
+        if loadsProgressively {
+            setLoading(spinner: true)
+            switch (key.style.renderStyle, key.showInvisibles) {
+            case (.native, false): renderNativeProgressively(token: token)
+            case (.modern, false): renderModernProgressively(token: token)
+            // Batch 27: Show Invisibles goes the same way — engine work off the main thread, the rest in slices.
+            case (.native, true): renderNativeAnnotatedProgressively(token: token)
+            case (.modern, true): renderModernAnnotatedProgressively(token: token)
+            }
+            return
+        }
         // Job 294: Modern shows invisibles too now, not just Native — `renderWithInvisibles`
         // itself picks the right annotated pass per style (`renderNativeAnnotated` vs
         // `renderModernAnnotated`); Printed never reaches here (`reloadContent` routes it to
         // `pdfView` instead).
-        let rendered = (documentState.style.value != .printed && documentState.showInvisibles)
-            ? DocumentRenderer.renderWithInvisibles(documentState)
-            : DocumentRenderer.render(documentState, style: renderStyle)
-        pagedView.setContent(rendered, display: documentState.display.value)
+        let rendered = PerformanceSignposts.measure("render.content") {
+            key.showInvisibles
+                ? DocumentRenderer.renderWithInvisibles(documentState)
+                : DocumentRenderer.render(documentState, style: key.style.renderStyle)
+        }
+        renderedCache[key] = rendered
+        present(rendered, token: token)
+    }
+
+    /// Shows `rendered`: every page at once, or — in a progressive load — the first few now and the rest a
+    /// turn at a time (`layOutRemainingPages`), the reader's page gone to once it is laid out.
+    private func present(_ rendered: RenderedDocument, token: Int) {
+        // Batch 27: a render that pins nothing (Show Invisibles, Native) is laid out from a probe measured offscreen
+        // in slices first, so its pages come a turn at a time too.
+        let key = currentRenderKey
+        var probe = probeCache[key]
+        if loadsProgressively, rendered.clipsLines, probe == nil, !PagedDocumentView.pinsEveryPage(rendered) {
+            measureProbe(PagedDocumentView.ProbeMeasurement(rendered: rendered), token: token)
+            return
+        }
+        if !loadsProgressively { probe = nil }
+        let readerPage = currentPage
+        let display = documentState.display.value
+        PerformanceSignposts.measure("pages.setContent") {
+            pagedView.setContent(rendered, display: display, firstPages: loadsProgressively ? Self.firstLaidOutPages : nil,
+                                 probe: probe)
+        }
+        shownContentStyle = documentState.style.value
+        contentDidAppear()
+        guard !pagedView.isLaidOut else {
+            finishLoad()
+            return
+        }
+        expectedPageTotal = rendered.clipsLines ? rendered.pageCount : nil
+        if pendingPageIndex == nil, readerPage >= pagedView.pageCount {
+            pendingPageIndex = readerPage
+        }
+        setLoading(spinner: false)
+        layOutRemainingPages(token: token)
+    }
+
+    /// `body` on a later turn of the main run loop, unless another load has replaced this one by then.
+    ///
+    /// A run-loop perform in the default mode, not `DispatchQueue.main.async`: a main-queue block cannot
+    /// run while another main-queue block is running, and a caller that turns the run loop from inside one
+    /// (a `@MainActor` test waiting on the pages) starved every chunk (b25-holymac-fix1). The default mode
+    /// also pauses the work while a scroll or resize is being tracked, so it never stutters one.
+    private func onNextTurn(token: Int, _ body: @escaping @MainActor @Sendable (DocumentWindowController) -> Void) {
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.loadToken == token else { return }
+                body(self)
+            }
+        }
+    }
+
+    private static func turnDeadline() -> UInt64 {
+        DispatchTime.now().uptimeNanoseconds + turnBudgetNanoseconds
+    }
+
+    /// The pages `present` left, a turn's budget of them at a time.
+    private func layOutRemainingPages(token: Int) {
+        onNextTurn(token: token) { controller in
+            let done = PerformanceSignposts.measure("pages.layOut") {
+                controller.pagedView.layOutMorePages(until: DocumentWindowController.turnDeadline())
+            }
+            if done {
+                controller.finishLoad()
+            } else {
+                controller.goToPendingPage()
+                controller.refreshPageIndicator()
+                controller.layOutRemainingPages(token: token)
+            }
+        }
+    }
+
+    /// Goes to the page asked for past the pages laid out, once it is laid out (or nothing more is coming).
+    private func goToPendingPage() {
+        guard let pending = pendingPageIndex, pending < pagedView.pageCount || !isLoadingContent else { return }
+        pendingPageIndex = nil
+        goToPage(index: pending)
+    }
+
+    /// The first content of a progressive load is on screen, so the page's real size is known: the
+    /// first-open geometry, sized against a stand-in (`currentPageSize`) or not at all yet, is sized again
+    /// if they differ, and the zoom settles on it.
+    private func contentDidAppear() {
+        guard loadsProgressively, !hasShownContent else { return }
+        hasShownContent = true
+        if firstOpenPageSize != currentPageSize() {
+            hasAppliedFirstOpenGeometry = false
+            hasSnappedToViewport = false
+            applyFirstOpenGeometry()
+        }
+        applyZoom()
+    }
+
+    /// Batch 27: the offscreen probe for the render just cached, a turn's budget at a time; then the render is shown.
+    private func measureProbe(_ measurement: PagedDocumentView.ProbeMeasurement, token: Int) {
+        onNextTurn(token: token) { controller in
+            PerformanceSignposts.measure("pages.probe") {
+                measurement.measure(until: DocumentWindowController.turnDeadline())
+            }
+            guard measurement.isComplete else {
+                controller.measureProbe(measurement, token: token)
+                return
+            }
+            controller.probeCache[controller.currentRenderKey] = measurement.result()
+            controller.presentCachedOnNextTurn(token: token)
+        }
+    }
+
+    /// Batch 27: Native's Show Invisibles render, progressively.
+    private func renderNativeAnnotatedProgressively(token: Int) {
+        let document = documentState.document
+        let options = DocumentRenderer.nativeEngineOptions(documentState)
+        let start = DispatchTime.now().uptimeNanoseconds
+        Task.detached(priority: .userInitiated) {
+            let work = NativeAnnotatedEngineWork.make(document: document, options: options)
+            MainRunLoop.perform { [weak self] in
+                guard let self, self.loadToken == token else { return }
+                PerformanceSignposts.record("render.engine", startedAt: start)
+                let render = PerformanceSignposts.measure("render.session") {
+                    DocumentRenderer.nativeAnnotatedRender(self.documentState, engine: work)
+                }
+                self.renderSliced(render, token: token)
+            }
+        }
+    }
+
+    /// Batch 27: Modern's Show Invisibles render, progressively.
+    private func renderModernAnnotatedProgressively(token: Int) {
+        let document = documentState.document
+        let start = DispatchTime.now().uptimeNanoseconds
+        Task.detached(priority: .userInitiated) {
+            let flow = modernSemanticFlow(document)
+            MainRunLoop.perform { [weak self] in
+                guard let self, self.loadToken == token else { return }
+                PerformanceSignposts.record("render.engine", startedAt: start)
+                let render = PerformanceSignposts.measure("render.session") {
+                    DocumentRenderer.modernAnnotatedRender(self.documentState, flow: flow)
+                }
+                self.renderSliced(render, token: token)
+            }
+        }
+    }
+
+    /// Batch 27: a sliced render a turn's budget at a time, finished on a turn of its own, cached, then shown.
+    private func renderSliced(_ render: DocumentRenderer.SlicedRender, token: Int) {
+        onNextTurn(token: token) { controller in
+            PerformanceSignposts.measure("render.chunk") {
+                render.renderNext(until: DocumentWindowController.turnDeadline())
+            }
+            guard render.isComplete else {
+                controller.renderSliced(render, token: token)
+                return
+            }
+            controller.onNextTurn(token: token) { controller in
+                let rendered = PerformanceSignposts.measure("render.finish") { render.finish() }
+                controller.renderedCache[controller.currentRenderKey] = rendered
+                controller.presentCachedOnNextTurn(token: token)
+            }
+        }
+    }
+
+    /// Batch 26: the document this window opened awaiting its parse has it now
+    /// (`WSDocument.startDeferredParse`); the bottom bar reads its variant and page size, and its content loads.
+    func documentDidFinishParsing() {
+        reloadContent()
+    }
+
+    /// Batch 26: a Native render made the progressive way — the engine's half off the main thread, then the
+    /// text a turn's budget at a time, the first pages shown as soon as they exist.
+    private func renderNativeProgressively(token: Int) {
+        let document = documentState.document
+        let options = DocumentRenderer.nativeEngineOptions(documentState)
+        let start = DispatchTime.now().uptimeNanoseconds
+        Task.detached(priority: .userInitiated) {
+            let work = NativeEngineWork.make(document: document, options: options, pictures: true)
+            MainRunLoop.perform { [weak self] in
+                self?.nativeEngineWorkDone(work, token: token, startedAt: start)
+            }
+        }
+    }
+
+    private func nativeEngineWorkDone(_ work: NativeEngineWork, token: Int, startedAt start: UInt64) {
+        guard loadToken == token else { return }
+        PerformanceSignposts.record("render.engine", startedAt: start)
+        let session = PerformanceSignposts.measure("render.session") {
+            DocumentRenderer.nativeRenderSession(documentState, engine: work)
+        }
+        expectedPageTotal = session.pageCount
+        renderNativeText(session, token: token, firstPagesShown: false)
+    }
+
+    private func renderNativeText(_ session: DocumentRenderer.NativeRenderSession, token: Int, firstPagesShown: Bool) {
+        onNextTurn(token: token) { controller in
+            PerformanceSignposts.measure("render.chunk") {
+                session.renderNext(until: DocumentWindowController.turnDeadline())
+            }
+            guard !session.isComplete else {
+                controller.onNextTurn(token: token) { controller in
+                    let rendered = PerformanceSignposts.measure("render.finish") { session.snapshot(final: true) }
+                    controller.renderedCache[controller.currentRenderKey] = rendered
+                    controller.presentCachedOnNextTurn(token: token)
+                }
+                return
+            }
+            var shown = firstPagesShown
+            if !shown, session.renderedPages >= DocumentWindowController.firstPages {
+                // The first pages, while the rest render.
+                let first = PerformanceSignposts.measure("render.firstPages") { session.snapshot() }
+                PerformanceSignposts.measure("pages.setContent") {
+                    controller.pagedView.setContent(first, display: controller.documentState.display.value)
+                }
+                controller.shownContentStyle = controller.documentState.style.value
+                controller.contentDidAppear()
+                controller.setLoading(spinner: false)
+                controller.refreshPageIndicator()
+                shown = true
+            }
+            controller.renderNativeText(session, token: token, firstPagesShown: shown)
+        }
+    }
+
+    /// Batch 26: a Modern render made the progressive way — the flow off the main thread, then the text a
+    /// turn's budget at a time. Modern's pages are AppKit's to find, so nothing of it shows until it is whole.
+    private func renderModernProgressively(token: Int) {
+        let document = documentState.document
+        let start = DispatchTime.now().uptimeNanoseconds
+        Task.detached(priority: .userInitiated) {
+            let work = ModernEngineWork.make(document: document)
+            MainRunLoop.perform { [weak self] in
+                self?.modernEngineWorkDone(work, token: token, startedAt: start)
+            }
+        }
+    }
+
+    private func modernEngineWorkDone(_ work: ModernEngineWork, token: Int, startedAt start: UInt64) {
+        guard loadToken == token else { return }
+        PerformanceSignposts.record("render.engine", startedAt: start)
+        let session = PerformanceSignposts.measure("render.session") {
+            DocumentRenderer.modernRenderSession(documentState, engine: work)
+        }
+        renderModernText(session, token: token, previewShown: false)
+    }
+
+    /// Batch 27 (item 3): once the text runs `modernPreviewCharacters` past the start, Modern's first pages show from
+    /// a snapshot while the rest renders — the Native way — and the whole render replaces them when it is done.
+    private func renderModernText(_ session: DocumentRenderer.ModernRenderSession, token: Int, previewShown: Bool) {
+        onNextTurn(token: token) { controller in
+            PerformanceSignposts.measure("render.chunk") {
+                session.renderNext(until: DocumentWindowController.turnDeadline())
+            }
+            guard session.isComplete else {
+                var shown = previewShown
+                if !shown, session.textLength >= DocumentWindowController.modernPreviewCharacters {
+                    let preview = PerformanceSignposts.measure("render.firstPages") { session.snapshot() }
+                    PerformanceSignposts.measure("pages.setContent") {
+                        controller.pagedView.setContent(preview, display: controller.documentState.display.value,
+                                                        firstPages: DocumentWindowController.firstLaidOutPages)
+                    }
+                    controller.shownContentStyle = controller.documentState.style.value
+                    controller.contentDidAppear()
+                    controller.setLoading(spinner: false)
+                    controller.refreshPageIndicator()
+                    shown = true
+                }
+                controller.renderModernText(session, token: token, previewShown: shown)
+                return
+            }
+            controller.onNextTurn(token: token) { controller in
+                let rendered = PerformanceSignposts.measure("render.finish") { session.finish() }
+                controller.renderedCache[controller.currentRenderKey] = rendered
+                controller.presentCachedOnNextTurn(token: token)
+            }
+        }
+    }
+
+    /// Shows the rendered document just cached for what the window shows, on the next turn — each of the
+    /// render's last steps gets a turn of its own.
+    private func presentCachedOnNextTurn(token: Int) {
+        onNextTurn(token: token) { controller in
+            guard let rendered = controller.renderedCache[controller.currentRenderKey] else { return }
+            controller.present(rendered, token: token)
+        }
+    }
+
+    private func endAllPages() {
+        guard let token = allPagesToken else { return }
+        allPagesToken = nil
+        PerformanceSignposts.end(token)
+    }
+
+    /// Everything a style renders from has changed: forget every style's rendered answer.
+    private func invalidateRenderedContent() {
+        contentGeneration += 1
+        renderedCache.removeAll()
+        printedCache = nil
+        probeCache.removeAll()
     }
 
     /// The engine's own PDF, not `DocumentRenderer` at all — `emitPDF(doc, mode: .printed)`
@@ -268,11 +715,59 @@ final class DocumentWindowController: NSWindowController {
         // Job 371 item 1 (PIX IN VIEWS): `documentState.pixResults` was already resolved once
         // against the document's own real path at open/reparse time — reused here rather than
         // re-resolved, same "decode once per document" contract every other pix consumer keeps.
+        let token = beginLoad()
+        defer { applyPrintedDisplayMode() }
+        // Batch 26: nothing to emit until the parse returns (`documentDidFinishParsing`).
+        if documentState.isAwaitingParse {
+            setLoading(spinner: true)
+            return
+        }
+        // #271 M7: a Printed PDF already emitted for this content is shown again, not emitted again.
+        if let cached = printedCache, cached.generation == contentGeneration {
+            if pdfView.document !== cached.document { pdfView.document = cached.document }
+            shownContentStyle = .printed
+            return
+        }
         let options = EmitOptions(
             pageSettings: documentState.pageSettingsPreset.value?.settings,
             pixResults: documentState.pixResults)
-        let bytes = emitPDF(documentState.document, mode: .printed, options: options)
-        pdfView.document = PDFDocument(data: Data(bytes))
+        guard loadsProgressively else {
+            let bytes = PerformanceSignposts.measure("printed.emit") {
+                emitPDF(documentState.document, mode: .printed, options: options)
+            }
+            showPrintedPDF(bytes)
+            return
+        }
+        // Batch 26: the engine's PDF, made off the main thread (`printedPDFDone`).
+        setLoading(spinner: true)
+        let document = documentState.document
+        let start = DispatchTime.now().uptimeNanoseconds
+        Task.detached(priority: .userInitiated) {
+            let bytes = emitPDF(document, mode: .printed, options: options)
+            MainRunLoop.perform { [weak self] in
+                self?.printedPDFDone(bytes, token: token, startedAt: start)
+            }
+        }
+    }
+
+    private func printedPDFDone(_ bytes: [UInt8], token: Int, startedAt start: UInt64) {
+        guard loadToken == token else { return }
+        PerformanceSignposts.record("printed.emit", startedAt: start)
+        showPrintedPDF(bytes)
+        applyPrintedDisplayMode()
+        contentDidAppear()
+        finishLoad()
+    }
+
+    private func showPrintedPDF(_ bytes: [UInt8]) {
+        PerformanceSignposts.measure("printed.load") {
+            pdfView.document = PDFDocument(data: Data(bytes))
+        }
+        shownContentStyle = .printed
+        if let document = pdfView.document { printedCache = (contentGeneration, document) }
+    }
+
+    private func applyPrintedDisplayMode() {
         pdfView.displayMode = documentState.display.value == .continuousScroll
             ? .singlePageContinuous : .singlePage
     }
@@ -280,7 +775,10 @@ final class DocumentWindowController: NSWindowController {
     // MARK: - Commands (driven by the menu extension)
 
     /// Re-render after a state change the menu made.
-    func rerender() { reloadContent() }
+    func rerender() {
+        invalidateRenderedContent()
+        reloadContent()
+    }
 
     func setStyle(_ style: ViewStyle) {
         documentState.style.setManually(style)
@@ -316,11 +814,13 @@ final class DocumentWindowController: NSWindowController {
 
     func setPageSize(_ size: NamedPageSize) {
         documentState.setPageSize(size)
+        invalidateRenderedContent()
         reloadContent()
     }
 
     func setPageSettingsPreset(_ preset: DocumentOperations.PageSettingsPreset?) {
         documentState.setPageSettingsPreset(preset)
+        invalidateRenderedContent()
         reloadContent()
     }
 
@@ -339,6 +839,7 @@ final class DocumentWindowController: NSWindowController {
         } else {
             documentState.resetVariantToAuto()
         }
+        invalidateRenderedContent()
         reloadContent()
     }
 
@@ -369,10 +870,26 @@ final class DocumentWindowController: NSWindowController {
     /// one place `applyFirstOpenGeometry`/`snapToViewport`/`applyZoom` all ask "how big is
     /// the page", so none of the three can disagree about which view is authoritative.
     private func currentPageSize() -> CGSize {
+        // Batch 26: while a progressive load has nothing of this style on screen yet, the named page size
+        // stands in. Rendering the whole document here only to measure its page is the very block the load
+        // exists to avoid; the real size replaces the stand-in when the content arrives (`contentDidAppear`).
+        let standIn = isLoadingContent ? (documentState.pageSize.value?.sizeInPoints ?? .zero) : .zero
         if documentState.style.value == .printed {
-            return pdfView.document?.page(at: 0)?.bounds(for: .mediaBox).size ?? .zero
+            return pdfView.document?.page(at: 0)?.bounds(for: .mediaBox).size ?? standIn
         }
-        return DocumentRenderer.render(documentState, style: documentState.style.value.renderStyle).pageSize
+        if isLoadingContent, pagedView.renderedPageSize == nil {
+            return standIn
+        }
+        // #271 M7: the page the pages view has laid out. `reloadContent()` loads it before anything
+        // asks, so this no longer renders the whole document again for every zoom, resize and
+        // first-open measure (five full renders on one open, from the code: init's applyZoom,
+        // applyFirstOpenGeometry, windowDidResize, showWindow's applyZoom, snapToViewport).
+        if let laidOut = pagedView.renderedPageSize {
+            return laidOut
+        }
+        return PerformanceSignposts.measure("render.pageSize") {
+            DocumentRenderer.render(documentState, style: documentState.style.value.renderStyle).pageSize
+        }
     }
 
     /// The viewport the current content view actually has to draw into — `scrollView`'s clip
@@ -420,42 +937,53 @@ final class DocumentWindowController: NSWindowController {
     /// NOT fire early in this construction — the probe showed this method entered once, from
     /// `showWindow`, with a real view tree. That is a fact about today's construction, not a
     /// guarantee, which is why the warning stays.)
+    /// Tests only: the visible frame the first-open rule sizes against, in place of the window's
+    /// own screen — so a test can open a document "on" a screen of another size.
+    var firstOpenVisibleFrameOverride: NSRect?
+
+    /// Jon's first-open rule (#271 M3), as arithmetic. The window spans the screen's visible frame
+    /// vertically — from the bottom of the menu bar to the top of the Dock (`visibleFrame`) — and
+    /// the page is zoomed to fit whole inside it, never above 100% (Actual Size), portrait or
+    /// landscape alike. The window is as wide as the fitted page, never wider than the visible
+    /// frame, and centred across it.
+    static func firstOpenLayout(page: CGSize, visible: NSRect, titleBarHeight: CGFloat,
+                                barHeight: CGFloat, actualScale: CGFloat) -> (frame: NSRect, scale: CGFloat) {
+        let pageAreaHeight = visible.height - titleBarHeight - barHeight
+        let scale = max(0.05, min(actualScale, pageAreaHeight / page.height, visible.width / page.width))
+        let width = min(visible.width, (page.width * scale).rounded())
+        let frame = NSRect(x: (visible.midX - width / 2).rounded(), y: visible.minY,
+                           width: width, height: visible.height)
+        return (frame, scale)
+    }
+
     private func applyFirstOpenGeometry() {
         guard !hasAppliedFirstOpenGeometry, let window else { return }
-        hasAppliedFirstOpenGeometry = true
-
         let page = currentPageSize()
+        // Nothing to size against yet — a progressive load with no page and no named size to stand in for
+        // it: the rule runs once the content is on screen (`contentDidAppear`).
         guard page.width > 0, page.height > 0 else { return }
+        hasAppliedFirstOpenGeometry = true
+        firstOpenPageSize = page
 
         let screen = window.screen ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-
-        // Leave the page room to breathe on screen without ever exceeding it. The bottom
-        // bar and title bar are chrome the page does not have to share.
-        let chromeHeight = BottomBar.barHeight + titleBarHeight(of: window)
-        let maxPageHeight = visible.height * 0.92 - chromeHeight
-        let maxPageWidth = visible.width * 0.92
-
-        let scale = min(1.0, min(maxPageHeight / page.height, maxPageWidth / page.width))
-        // Sized to the page. Legacy scrollers will take their thickness out of the clip
-        // view, but WHICH style is in force cannot be predicted here: macOS switches between
-        // overlay and legacy depending on whether a mouse is in use, and it can change
-        // between this method and the first layout pass. Guessing the thickness here was a
-        // real bug — the window came out 15pt wrong whenever the guess and the layout
-        // disagreed. `snapToViewport()` measures the shortfall after layout instead.
-        let contentSize = NSSize(
-            width: (page.width * scale).rounded(),
-            height: (page.height * scale).rounded() + BottomBar.barHeight
-        )
-
-        firstOpenScale = scale
+        let visible = firstOpenVisibleFrameOverride
+            ?? screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        // Sized to the fitted page's width. Legacy scrollers will take their thickness out of
+        // the clip view, but WHICH style is in force cannot be predicted here: macOS switches
+        // between overlay and legacy depending on whether a mouse is in use, and it can change
+        // between this method and the first layout pass. `snapToViewport()` measures the
+        // shortfall after layout instead.
+        let layout = Self.firstOpenLayout(page: page, visible: visible,
+                                          titleBarHeight: titleBarHeight(of: window),
+                                          barHeight: BottomBar.barHeight,
+                                          actualScale: currentActualScale)
+        firstOpenScale = layout.scale
         if documentState.style.value == .printed {
-            pdfView.scaleFactor = scale
+            pdfView.scaleFactor = layout.scale
         } else {
-            scrollView.magnification = scale
+            scrollView.magnification = layout.scale
         }
-        window.setContentSize(contentSize)
-        window.center()
+        window.setFrame(layout.frame, display: false)
     }
 
     /// Grow the window by whatever the scrollers actually took.
@@ -475,18 +1003,16 @@ final class DocumentWindowController: NSWindowController {
                             height: page.height * firstOpenScale)
         let viewport = currentViewportSize()
         let shortfallX = wanted.width - viewport.width
-        let shortfallY = wanted.height - viewport.height
-        // Sub-point differences are rounding, not scrollers.
-        guard shortfallX > 0.5 || shortfallY > 0.5 else {
-            hasSnappedToViewport = true
-            return
-        }
+        // Sub-point differences are rounding, not scrollers. Only the WIDTH is ever grown: the
+        // first-open rule (#271 M3) already spans the visible frame's full height, so a vertical
+        // shortfall has nowhere to go and the fitted page already fits inside it.
         hasSnappedToViewport = true
+        guard shortfallX > 0.5 else { return }
 
-        let content = window.contentRect(forFrameRect: window.frame).size
-        window.setContentSize(NSSize(width: content.width + max(0, shortfallX),
-                                     height: content.height + max(0, shortfallY)))
-        window.center()
+        var frame = window.frame
+        frame.size.width += shortfallX
+        frame.origin.x -= (shortfallX / 2).rounded()
+        window.setFrame(frame, display: false)
         window.contentView?.layoutSubtreeIfNeeded()
     }
 
@@ -514,7 +1040,10 @@ final class DocumentWindowController: NSWindowController {
 
     // MARK: - Zoom
 
-    private func applyZoom() {
+    /// `reapplying`: the second pass Fit makes when applying the first changed the viewport (below).
+    private func applyZoom(reapplying: Bool = false) {
+        let zoomToken = PerformanceSignposts.begin("zoom.apply")
+        defer { PerformanceSignposts.end(zoomToken) }
         let page = currentPageSize()
         guard page.width > 0, page.height > 0 else { return }
 
@@ -539,7 +1068,13 @@ final class DocumentWindowController: NSWindowController {
         // The window's CURRENT screen, not `NSScreen.main` — a window dragged to a second
         // display must render Actual Size against the display it is actually on.
         let actualScale = currentActualScale
-        let scale = documentState.zoom.value.scale(fitScale: fitScale, actualScale: actualScale)
+        // Fit never goes above Actual Size on the Mac (#271 M3: "never above 100% on large
+        // screens"). The shared `ZoomSetting.fit` stays uncapped: the iPhone's fit-width zooms in
+        // past 1 when rotated, by Jon's own rule there.
+        let zoom = documentState.zoom.value
+        let scale = zoom == .fit
+            ? min(fitScale, actualScale)
+            : zoom.scale(fitScale: fitScale, actualScale: actualScale)
         // A non-finite magnification puts a NaN into the layer transform. Refusing is the
         // only safe response; there is no sensible value to fall back to.
         guard scale.isFinite, scale > 0 else { return }
@@ -547,6 +1082,20 @@ final class DocumentWindowController: NSWindowController {
             pdfView.scaleFactor = scale
         } else {
             scrollView.magnification = scale
+            // Fit worked out against a viewport a scroller was taking room from stays short once that scroller hides.
+            // Measured: shrinking the window from its large first-open zoom, `windowDidResize` reached here while the
+            // legacy horizontal scroller still took 15pt. At the new scale the page fitted, the scroller auto-hid, the
+            // viewport grew 15pt, and the page stayed 15pt smaller than Fit (0.5189 against 0.5379 at 600x450).
+            // So once the scale is applied the scroll view tiles again, and if the viewport moved, Fit is worked out
+            // once more against the one that is really there. One extra pass is enough: a scroller that hid at this
+            // scale is not needed at a scale worked out without it.
+            if zoom == .fit, !reapplying {
+                scrollView.tile()
+                let settled = currentViewportSize()
+                if abs(settled.width - available.width) > 0.5 || abs(settled.height - available.height) > 0.5 {
+                    applyZoom(reapplying: true)
+                }
+            }
         }
     }
 
@@ -598,6 +1147,8 @@ extension DocumentWindowController: NSWindowDelegate {
     }
 
     override func showWindow(_ sender: Any?) {
+        let showToken = PerformanceSignposts.begin("open.showWindow")
+        defer { PerformanceSignposts.end(showToken) }
         applyFirstOpenGeometry()
         super.showWindow(sender)
         // The proxy icon and the filename come from the URL — the system draws both, which
@@ -636,6 +1187,7 @@ extension DocumentWindowController: NSWindowDelegate {
               let restorable = WindowRestorationCoding.decode(from: state)
         else { return }
         restorable.apply(to: documentState)
+        invalidateRenderedContent()
         reloadContent()
         window.contentView?.layoutSubtreeIfNeeded()
         // Applied last: `reloadContent()` calls `applyZoom()`, which can itself move the
@@ -694,5 +1246,23 @@ extension DocumentWindowController: BottomBarDelegate {
     func bottomBarDidChoosePageSize(_ size: NamedPageSize) { setPageSize(size) }
     func bottomBarDidChoosePageSettings(_ preset: DocumentOperations.PageSettingsPreset?) {
         setPageSettingsPreset(preset)
+    }
+}
+
+/// Batch 26 (#271 M7): work finished off the main thread comes back through the main RUN LOOP, in its
+/// default mode — not `await MainActor.run`, and not `DispatchQueue.main.async`. Both of those enqueue on
+/// the main dispatch queue, which cannot run while another main-queue block is running, so a caller that
+/// turns the run loop from inside one (a `@MainActor` test waiting on a window) never saw a background
+/// parse finish (b26-holymac-fix1: every wait ran to its limit). A run-loop block runs on the next turn of
+/// the loop however the loop is being turned, and — like a progressive load's own slices — waits while a
+/// scroll or a resize is being tracked.
+enum MainRunLoop {
+    /// `body` on the main thread, on a coming turn of its run loop. Callable from any thread.
+    nonisolated static func perform(_ body: @escaping @MainActor @Sendable () -> Void) {
+        let loop = CFRunLoopGetMain()
+        CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue) {
+            MainActor.assumeIsolated { body() }
+        }
+        CFRunLoopWakeUp(loop)
     }
 }

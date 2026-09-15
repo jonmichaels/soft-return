@@ -1,0 +1,30 @@
+{
+  "configurations" : [
+    {
+      "id" : "8C0A5B13-2620-4F57-9E13-000000000262",
+      "name" : "Fast",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : false,
+      "skippedTags" : {
+        "tags" : [
+          "corpus"
+        ]
+      },
+      "target" : {
+        "containerPath" : "container:SoftReturn.xcodeproj",
+        "identifier" : "SoftReturnTests",
+        "name" : "SoftReturnTests"
+      }
+    }
+  ],
+  "version" : 1
+}

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SoftReturnShared
 
 /// The one sliver of `NSDocumentController` `DocumentRestorationStore` actually needs —
 /// narrow enough that a test can fake it without opening a real document or a real window.

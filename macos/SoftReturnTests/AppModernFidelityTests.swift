@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -36,7 +37,7 @@ import Testing
 /// reader's type is what a reading view is for. Pinning the face is what makes line breaks a
 /// comparable quantity at all; without it this gate would be asserting that two different
 /// fonts wrap identically, which is false and uninteresting.
-@Suite(.serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
+@Suite(.tags(.corpus), .serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))
 struct AppModernFidelityTests {
 
     /// The engine's own Modern metrics, vendored rather than imported: `modernBodyPt` and
@@ -68,8 +69,8 @@ struct AppModernFidelityTests {
     /// disappears with it, which is correct here: this gate is about WHERE THE BREAKS FALL,
     /// and indentation is placement, which Modern legitimately renders in the reader's own
     /// type.
-    static func lines(of pdf: [UInt8]) throws -> [[String]] {
-        let payload = try AppPDFWords.payload(from: pdf)
+    static func lines(of pdf: [UInt8], rises: [Double] = []) throws -> [[String]] {
+        let payload = try AppPDFWords.payload(from: pdf, rises: rises)
         var byPage: [Int: [Double: [(x: Double, text: String)]]] = [:]
         for word in payload.words {
             // Baselines group to a tenth of a point: a line's own words share a baseline
@@ -313,6 +314,7 @@ struct AppModernFidelityTests {
 
     @Test(arguments: AppModernFidelityTests.documents)
     @MainActor func appModernMatchesTheLibrarysModernPageAndLineBreaks(doc: String) throws {
+        if CorpusDocumentFilter.recordIfUnmatched(doc) { return }
         let app = try Self.lines(of: Self.appModernPDF(forDocumentNamed: doc))
         let library = try Self.lines(of: Self.engineModernPDF(forDocumentNamed: doc))
 

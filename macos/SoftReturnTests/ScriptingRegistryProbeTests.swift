@@ -18,39 +18,41 @@ private func throwawayDefaults() -> UserDefaults {
     UserDefaults(suiteName: "ScriptingRegistryProbeTests.\(UUID().uuidString)")!
 }
 
-@Test func runWritesARecordContainingTheSuiteList() {
-    NSScriptSuiteRegistry.shared().loadSuites(from: Bundle.main)
-    let defaults = throwawayDefaults()
+@Suite struct ScriptingRegistryProbeTests {
+    @Test func runWritesARecordContainingTheSuiteList() {
+        NSScriptSuiteRegistry.shared().loadSuites(from: Bundle.main)
+        let defaults = throwawayDefaults()
 
-    ScriptingRegistryProbe.run(defaults: defaults)
+        ScriptingRegistryProbe.run(defaults: defaults)
 
-    let state = ScriptingRegistryProbe.readState(defaults: defaults)
-    #expect(state != nil)
-    #expect((state?.suiteNames.isEmpty ?? true) == false)
-    // "Standard Suite" registers via AppKit's own `<cocoa name="NSCoreSuite"/>` inclusion
-    // regardless of the -1708 bug under investigation — a non-empty list that is missing even
-    // this would mean the registry never loaded at all, a different and worse failure than the
-    // one this probe is chasing.
-    #expect(state?.suiteNames.contains("Standard Suite") == true)
-    #expect(state?.recordedAt != nil)
-}
+        let state = ScriptingRegistryProbe.readState(defaults: defaults)
+        #expect(state != nil)
+        #expect((state?.suiteNames.isEmpty ?? true) == false)
+        // "Standard Suite" registers via AppKit's own `<cocoa name="NSCoreSuite"/>` inclusion
+        // regardless of the -1708 bug under investigation — a non-empty list that is missing even
+        // this would mean the registry never loaded at all, a different and worse failure than the
+        // one this probe is chasing.
+        #expect(state?.suiteNames.contains("Standard Suite") == true)
+        #expect(state?.recordedAt != nil)
+    }
 
-@Test func readStateOnAnEmptySuiteReturnsNil() {
-    let defaults = throwawayDefaults()
+    @Test func readStateOnAnEmptySuiteReturnsNil() {
+        let defaults = throwawayDefaults()
 
-    #expect(ScriptingRegistryProbe.readState(defaults: defaults) == nil)
-}
+        #expect(ScriptingRegistryProbe.readState(defaults: defaults) == nil)
+    }
 
-@Test func runIsSafeToCallTwiceAndTheSecondRecordOverwritesTheFirst() {
-    NSScriptSuiteRegistry.shared().loadSuites(from: Bundle.main)
-    let defaults = throwawayDefaults()
+    @Test func runIsSafeToCallTwiceAndTheSecondRecordOverwritesTheFirst() {
+        NSScriptSuiteRegistry.shared().loadSuites(from: Bundle.main)
+        let defaults = throwawayDefaults()
 
-    ScriptingRegistryProbe.run(defaults: defaults)
-    let first = ScriptingRegistryProbe.readState(defaults: defaults)
-    ScriptingRegistryProbe.run(defaults: defaults)
-    let second = ScriptingRegistryProbe.readState(defaults: defaults)
+        ScriptingRegistryProbe.run(defaults: defaults)
+        let first = ScriptingRegistryProbe.readState(defaults: defaults)
+        ScriptingRegistryProbe.run(defaults: defaults)
+        let second = ScriptingRegistryProbe.readState(defaults: defaults)
 
-    #expect(first != nil)
-    #expect(second != nil)
-    #expect((second?.recordedAt ?? .distantPast) >= (first?.recordedAt ?? .distantPast))
+        #expect(first != nil)
+        #expect(second != nil)
+        #expect((second?.recordedAt ?? .distantPast) >= (first?.recordedAt ?? .distantPast))
+    }
 }

@@ -264,8 +264,12 @@ let afmWidths: [String: [Int]] = [
 public func stringWidth1000(_ text: String, _ baseFont: String) -> Int {
     let table = afmWidths[baseFont] ?? afmCourier
     var total = 0
-    for byte in cp1252Encode(text) {
-        total += table[Int(byte)]
+    // Perf (planning #271 M7): the scalars are walked in place rather than through
+    // `cp1252Encode`'s own `[UInt8]`. Same bytes, same `?` substitution, same sum --
+    // this is `cp1252Encode` inlined with its array left unbuilt, and a novel-length
+    // document asks this question ~140,000 times per Modern pass (-HOLYMAC.WS).
+    for scalar in text.unicodeScalars {
+        total += table[Int(cp1252Byte(for: scalar) ?? 0x3F)]
     }
     return total
 }

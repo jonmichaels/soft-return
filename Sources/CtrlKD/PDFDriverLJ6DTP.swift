@@ -790,10 +790,19 @@ private func cp1252OK(_ ch: Character) -> Bool {
 /// untouched. A single-piece result with the input text unchanged means no fallback was
 /// needed. Port of ctrl-kd `pdf.py`'s `_symbol_fallback_split`.
 func symbolFallbackSplit(_ text: String, family: PDFFamily) -> [(text: String, family: PDFFamily)] {
-    let chars = Array(text)
-    if chars.isEmpty || chars.allSatisfy({ graphicChars.contains($0) || cp1252OK($0) }) {
-        return [(text, family)]                 // fast path: no fallback needed
+    // Perf (planning #271 M7): the fast path -- the answer for all but a handful of
+    // tokens in the whole corpus -- is decided by walking `text` itself, so the
+    // `[Character]` array is built only for a token that actually needs splitting.
+    // Same predicate, same order, same answer; a novel-length document asks this
+    // ~138,000 times per Modern pass (-HOLYMAC.WS) and materialised an array every
+    // time.
+    var needsFallback = false
+    for ch in text where !(graphicChars.contains(ch) || cp1252OK(ch)) {
+        needsFallback = true
+        break
     }
+    if !needsFallback { return [(text, family)] }
+    let chars = Array(text)
     var runs: [(start: Int, end: Int, kind: SymbolTranslit?)] = []
     var runKind: SymbolTranslit? = nil
     var started = false
@@ -969,7 +978,19 @@ func parsePCLProgram(_ data: [UInt8]) -> [PCLOp] {
             }
         }
         if lit(i, "\u{1B}*c") {
-            // `(\d+)a(\d+)b(\d+)(?:g(\d+))?P` — UNSIGNED throughout.
+            // `(\d+)a(\d+)b(\d*)(?:g(\d+))?P` — UNSIGNED throughout, and the THIRD
+            // value may be OMITTED. HP's parameterized escapes are VALUE+LETTER pairs
+            // and an omitted value means zero, so `...b` followed straight by `g0P` is
+            // a legal, common sequence -- `sawyer/LSRBOX/LSRBOX.WS` sends 16 of them
+            // (`*c0001a0150bg0P`, `*c0600a0006bg0P`, `*c0010a3000bg0P`,
+            // `*c0001a2850bg0P`: its thin rules and vertical lines), every one of which
+            // this parser dropped as `.ignored` before.
+            //
+            // WHICH captured value is which parameter depends on how many pairs the
+            // sequence actually wrote:
+            //   `*c<w>a<h>b<t>P`         -- `t` is the FILL TYPE (`P`).
+            //   `*c<w>a<h>b<pat>g<t>P`   -- `pat` is the shading pattern (`g`, ink
+            //                               percent) and `t` the fill type (`P`).
             var j = i + 3
             var fields: [Int] = []
             var ok = true
@@ -979,24 +1000,28 @@ func parsePCLProgram(_ data: [UInt8]) -> [PCLOp] {
                 fields.append(f.value)
                 j = f.end + 1
             }
-            if ok, let f = pclSignedInt(data, j), !f.relative, f.end < n {
-                fields.append(f.value)
-                j = f.end
-                var shade: Int? = nil
-                if data[j] == UInt8(ascii: "g"), let g = pclSignedInt(data, j + 1),
+            if ok {
+                var third = 0
+                if let f = pclSignedInt(data, j), !f.relative, f.end < n {
+                    third = f.value
+                    j = f.end
+                }
+                var fourth: Int? = nil
+                if j < n, data[j] == UInt8(ascii: "g"), let g = pclSignedInt(data, j + 1),
                    !g.relative, g.end < n, data[g.end] == UInt8(ascii: "P") {
-                    shade = g.value
+                    fourth = g.value
                     j = g.end
                 }
-                if data[j] == UInt8(ascii: "P") {
-                    let w = fields[0], h = fields[1], f0 = fields[2]
-                    if shade != nil {
-                        // Shading pattern: `f` here is the ink PERCENTAGE (0-100), not a
-                        // fill-type code — 100% reads as solid black, same as fill type 0.
-                        ops.append(.fill(w: w, h: h, gray: 1.0 - Double(f0) / 100.0))
-                    } else if f0 == 0 {
-                        // Solid black — the only plain fill type this document ever sends.
-                        ops.append(.fill(w: w, h: h, gray: 0.0))
+                if j < n, data[j] == UInt8(ascii: "P") {
+                    let w = fields[0], h = fields[1]
+                    let fillType = fourth ?? third
+                    let pattern = fourth != nil ? third : 0
+                    if fillType == 0 {
+                        ops.append(.fill(w: w, h: h, gray: 0.0))        // solid black
+                    } else if fillType == 2 {
+                        // Shaded fill: `pattern` is the ink PERCENTAGE (0-100); 100%
+                        // reads as solid black, same as fill type 0 above.
+                        ops.append(.fill(w: w, h: h, gray: 1.0 - Double(pattern) / 100.0))
                     } else {
                         ops.append(.ignored(Array(data[i...j])))
                     }

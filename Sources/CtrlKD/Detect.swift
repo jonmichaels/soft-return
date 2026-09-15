@@ -28,6 +28,15 @@ public struct Detection: Hashable, Sendable {
     public let textPct: Int
     public let symmetricBlocks1D: Int
     public let size: Int
+    /// The document KIND, when the bytes are more specific than the variant —
+    /// `mergeDataKind` for a MailMerge data file (planning #264, mail-merge scope ruled
+    /// 2026-09-13). `nil` for everything else. The VARIANT is left exactly as the bytes
+    /// found it: a non-document data file really is plain text and a document-mode one
+    /// really is `ws4`/`ws5+`, and everything downstream that branches on `variant` goes
+    /// on seeing what it always saw.
+    public let kind: String?
+    public let mergeRecords: Int?
+    public let mergeFields: Int?
 
     public init(
         variant: Variant,
@@ -37,8 +46,14 @@ public struct Detection: Hashable, Sendable {
         highBitBytes: Int = 0,
         textPct: Int = 0,
         symmetricBlocks1D: Int = 0,
-        size: Int = 0
+        size: Int = 0,
+        kind: String? = nil,
+        mergeRecords: Int? = nil,
+        mergeFields: Int? = nil
     ) {
+        self.kind = kind
+        self.mergeRecords = mergeRecords
+        self.mergeFields = mergeFields
         self.variant = variant
         self.reason = reason
         self.softReturns = softReturns
@@ -48,6 +63,19 @@ public struct Detection: Hashable, Sendable {
         self.symmetricBlocks1D = symmetricBlocks1D
         self.size = size
     }
+}
+
+/// `result` with the MailMerge-data kind added when the file is one (planning #264,
+/// mail-merge scope 2026-09-13). Applied at every non-binary return, so a data file is
+/// recognised whichever way its bytes classify. Port of `_with_merge_data_kind`.
+func withMergeDataKind(_ data: [UInt8], _ result: Detection) -> Detection {
+    guard let records = detectMergeData(data) else { return result }
+    return Detection(variant: result.variant, reason: result.reason,
+                     softReturns: result.softReturns, hardReturns: result.hardReturns,
+                     highBitBytes: result.highBitBytes, textPct: result.textPct,
+                     symmetricBlocks1D: result.symmetricBlocks1D, size: result.size,
+                     kind: mergeDataKind, mergeRecords: records.count,
+                     mergeFields: records[0].count)
 }
 
 public func detect(_ data: [UInt8]) -> Detection {
@@ -64,11 +92,11 @@ public func detect(_ data: [UInt8]) -> Detection {
         if jump >= 8, jump < 0x400, end < data.count, data[end] == 0x1D,
            Int(data[end - 2]) | (Int(data[end - 1]) << 8) == jump,
            [0x50, 0x55, 0x60, 0x70].contains(data[4]) {
-            return Detection(
+            return withMergeDataKind(data, Detection(
                 variant: .ws5plus,
                 reason: "opens with a valid header block (declared release "
                     + "\(data[4] >> 4).\(data[4] & 0x0F))",
-                size: data.count)
+                size: data.count))
         }
     }
     // core.py:1199 — truncate at the file's real EOF before any counting: the
@@ -156,7 +184,7 @@ public func detect(_ data: [UInt8]) -> Detection {
     // characters are WS5+ machinery regardless of anything else, checked first after
     // the binary gate.
     if blocks1D >= 1 || denseTrips {
-        return result(.ws5plus)
+        return withMergeDataKind(data, result(.ws5plus))
     }
     // core.py:75-83 — soft returns are strong WS evidence on their own; high-bit density
     // alone is NOT (binaries are full of high bytes) unless the file is mostly text.
@@ -173,16 +201,16 @@ public func detect(_ data: [UInt8]) -> Detection {
         // (Symmetric blocks — footnotes etc., WS5+ only — settled it above; blocks1D is
         // necessarily 0 by the time we get here, so this branch is about returns alone.)
         if denseSoft && hi < soft / 4 {
-            return result(.ws5plus)
+            return withMergeDataKind(data, result(.ws5plus))
         }
-        return result(.ws4)
+        return withMergeDataKind(data, result(.ws4))
     }
     // core.py:84-88
     if txt >= 90 && hard >= 2 {
-        return result(.printstream)
+        return withMergeDataKind(data, result(.printstream))
     }
     if txt >= 90 {
-        return result(.text)
+        return withMergeDataKind(data, result(.text))
     }
     return result(.binary, reason: "\(txt)% text but no structure")
 }

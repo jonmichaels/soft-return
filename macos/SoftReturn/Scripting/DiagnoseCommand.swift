@@ -1,4 +1,5 @@
 import CtrlKD
+import SoftReturnShared
 import Foundation
 
 /// `diagnose POSIX file "..."` — `SoftReturn.sdef`'s `diagnose` command. The CLI's

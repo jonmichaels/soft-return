@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnShared
 import Testing
 @testable import SoftReturn
 
@@ -58,95 +59,98 @@ private func chooseByTitle(_ title: String, in popup: NSPopUpButton) throws {
     menu.performActionForItem(at: index)
 }
 
-@Test @MainActor func choosingAStyleThroughTheRealMenuReachesTheDelegate() throws {
-    let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
-    let state = try Oracle.state(for: url)
-    let bar = BottomBar()
-    let delegate = CapturingBottomBarDelegate()
-    bar.delegate = delegate
-    bar.update(from: state)
+@Suite struct PopupSelectionWiringTests {
+    @Test @MainActor func choosingAStyleThroughTheRealMenuReachesTheDelegate() throws {
+        let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
+        let state = try Oracle.state(for: url)
+        let bar = BottomBar()
+        let delegate = CapturingBottomBarDelegate()
+        bar.delegate = delegate
+        bar.update(from: state)
 
-    let styleButton = try popup("style-control", in: bar)
-    try chooseByTitle(ViewStyle.modern.displayName, in: styleButton)
+        let styleButton = try popup("style-control", in: bar)
+        try chooseByTitle(ViewStyle.modern.displayName, in: styleButton)
 
-    #expect(delegate.styleCalls == [.modern],
-            "a real click on the style popup did not reach BottomBarDelegate")
-}
+        #expect(delegate.styleCalls == [.modern],
+                "a real click on the style popup did not reach BottomBarDelegate")
+    }
 
-@Test @MainActor func choosingAVariantThroughTheRealMenuReachesTheDelegate() throws {
-    let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
-    let state = try Oracle.state(for: url)
-    let bar = BottomBar()
-    let delegate = CapturingBottomBarDelegate()
-    bar.delegate = delegate
-    bar.update(from: state)
+    @Test @MainActor func choosingAVariantThroughTheRealMenuReachesTheDelegate() throws {
+        let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
+        let state = try Oracle.state(for: url)
+        let bar = BottomBar()
+        let delegate = CapturingBottomBarDelegate()
+        bar.delegate = delegate
+        bar.update(from: state)
 
-    let variantButton = try popup("variant-control", in: bar)
-    // WS4 is what `dropped-chapter.ws4` already detects as, so Printstream is a genuine
-    // change of value, not a same-value no-op that could pass by accident.
-    try chooseByTitle("Printstream", in: variantButton)
+        let variantButton = try popup("variant-control", in: bar)
+        // WS4 is what `dropped-chapter.ws4` already detects as, so Printstream is a genuine
+        // change of value, not a same-value no-op that could pass by accident.
+        try chooseByTitle("Printstream", in: variantButton)
 
-    #expect(delegate.variantCalls == [.printstream],
-            "a real click on the variant popup did not reach BottomBarDelegate")
-}
+        #expect(delegate.variantCalls == [.printstream],
+                "a real click on the variant popup did not reach BottomBarDelegate")
+    }
 
-@Test @MainActor func choosingAZoomThroughTheRealMenuReachesTheDelegate() throws {
-    let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
-    let state = try Oracle.state(for: url)
-    let bar = BottomBar()
-    let delegate = CapturingBottomBarDelegate()
-    bar.delegate = delegate
-    bar.update(from: state)
+    @Test @MainActor func choosingAZoomThroughTheRealMenuReachesTheDelegate() throws {
+        let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
+        let state = try Oracle.state(for: url)
+        let bar = BottomBar()
+        let delegate = CapturingBottomBarDelegate()
+        bar.delegate = delegate
+        bar.update(from: state)
 
-    let zoomButton = try popup("zoom-control", in: bar)
-    try chooseByTitle("Actual", in: zoomButton)
+        let zoomButton = try popup("zoom-control", in: bar)
+        try chooseByTitle(ZoomSetting.actual.displayName, in: zoomButton)
+        #expect(ZoomSetting.actual.displayName == "Actual Size", "#271 M4: the Mac reads Actual Size, as the iPhone does")
 
-    #expect(delegate.zoomCalls == [.actual],
-            "a real click on the zoom popup did not reach BottomBarDelegate")
-}
+        #expect(delegate.zoomCalls == [.actual],
+                "a real click on the zoom popup did not reach BottomBarDelegate")
+    }
 
-@Test @MainActor func choosingAPageSizeThroughTheRealMenuReachesTheDelegate() throws {
-    let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
-    let state = try Oracle.state(for: url)
-    let bar = BottomBar()
-    let delegate = CapturingBottomBarDelegate()
-    bar.delegate = delegate
-    bar.update(from: state)
+    @Test @MainActor func choosingAPageSizeThroughTheRealMenuReachesTheDelegate() throws {
+        let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
+        let state = try Oracle.state(for: url)
+        let bar = BottomBar()
+        let delegate = CapturingBottomBarDelegate()
+        bar.delegate = delegate
+        bar.update(from: state)
 
-    let pageButton = try popup("page-size-control", in: bar)
-    let target = try #require(NamedPageSize.allCases.first { $0 != state.pageSize.value })
-    try chooseByTitle(target.displayName, in: pageButton)
+        let pageButton = try popup("page-size-control", in: bar)
+        let target = try #require(NamedPageSize.allCases.first { $0 != state.pageSize.value })
+        try chooseByTitle(target.displayName, in: pageButton)
 
-    #expect(delegate.pageCalls == [target],
-            "a real click on the page size popup did not reach BottomBarDelegate")
-}
+        #expect(delegate.pageCalls == [target],
+                "a real click on the page size popup did not reach BottomBarDelegate")
+    }
 
-@Test @MainActor func choosingAPageSettingsPresetThroughTheRealMenuReachesTheDelegate() throws {
-    let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
-    let state = try Oracle.state(for: url)
-    let bar = BottomBar()
-    let delegate = CapturingBottomBarDelegate()
-    bar.delegate = delegate
-    bar.update(from: state)
+    @Test @MainActor func choosingAPageSettingsPresetThroughTheRealMenuReachesTheDelegate() throws {
+        let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
+        let state = try Oracle.state(for: url)
+        let bar = BottomBar()
+        let delegate = CapturingBottomBarDelegate()
+        bar.delegate = delegate
+        bar.update(from: state)
 
-    let pageSettingsButton = try popup("page-settings-control", in: bar)
-    try chooseByTitle("Sawyer", in: pageSettingsButton)
+        let pageSettingsButton = try popup("page-settings-control", in: bar)
+        try chooseByTitle("Sawyer", in: pageSettingsButton)
 
-    #expect(delegate.pageSettingsCalls == [.sawyer],
-            "a real click on the page settings popup did not reach BottomBarDelegate")
-}
+        #expect(delegate.pageSettingsCalls == [.sawyer],
+                "a real click on the page settings popup did not reach BottomBarDelegate")
+    }
 
-/// Job 315 (b19 item 10): "Use as Default for Quick Look" is gone from this popup — its
-/// function moved to Settings' own "Quick Look Margins" pulldown. Regression guard: the
-/// item must not be findable in the real menu at all, not merely unreachable by click.
-@Test @MainActor func useAsDefaultForQuickLookIsNoLongerInTheMarginsPopup() throws {
-    let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
-    let state = try Oracle.state(for: url)
-    state.setPageSettingsPreset(.modern)
-    let bar = BottomBar()
-    bar.update(from: state)
+    /// Job 315 (b19 item 10): "Use as Default for Quick Look" is gone from this popup — its
+    /// function moved to Settings' own "Quick Look Margins" pulldown. Regression guard: the
+    /// item must not be findable in the real menu at all, not merely unreachable by click.
+    @Test @MainActor func useAsDefaultForQuickLookIsNoLongerInTheMarginsPopup() throws {
+        let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
+        let state = try Oracle.state(for: url)
+        state.setPageSettingsPreset(.modern)
+        let bar = BottomBar()
+        bar.update(from: state)
 
-    let pageSettingsButton = try popup("page-settings-control", in: bar)
-    let titles = pageSettingsButton.menu?.items.map(\.title) ?? []
-    #expect(!titles.contains("Use as Default for Quick Look"))
+        let pageSettingsButton = try popup("page-settings-control", in: bar)
+        let titles = pageSettingsButton.menu?.items.map(\.title) ?? []
+        #expect(!titles.contains("Use as Default for Quick Look"))
+    }
 }

@@ -1,6 +1,6 @@
 {
  "format": "ctrl-kd-layout",
- "version": 7,
+ "version": 10,
  "meta": {
   "variant": "ws5+",
   "producer": null,
@@ -897,6 +897,8 @@
   ]
  },
  "invisibles": {
+  "print_controls": [],
+  "modern_print_controls": [],
   "dot_commands": [
    ".pl 66",
    ".mt 4",

@@ -195,10 +195,15 @@ public struct RowStructure: Hashable, Sendable {
     public var centerVia: CenterVia?
     /// The line with alignment padding stripped, when centered.
     public var centerText: String?
+    /// The column of the list container this row sits INSIDE, or nil. A row with
+    /// `kind == nil` whose `containerCol` equals its own `col` is the wrapped
+    /// continuation of the item above it (planning #264 item 4(b)).
+    public var containerCol: Double?
 
     public init(col: PyNumber, level: Int, kind: RowStructureKind? = nil, marker: String? = nil,
                label: String? = nil, body: String? = nil, centered: Bool = false,
-               centerVia: CenterVia? = nil, centerText: String? = nil) {
+               centerVia: CenterVia? = nil, centerText: String? = nil,
+               containerCol: Double? = nil) {
         self.col = col
         self.level = level
         self.kind = kind
@@ -207,6 +212,7 @@ public struct RowStructure: Hashable, Sendable {
         self.body = body
         self.centered = centered
         self.centerVia = centerVia
+        self.containerCol = containerCol
         self.centerText = centerText
     }
 }
@@ -341,6 +347,10 @@ private struct WorkingRow {
     var label: String?
     var body: String?
     var level: Int = 0
+    /// The column of the container this row sits INSIDE, if any — needed by the centring
+    /// test, which cannot otherwise tell a list item's own wrapped continuation from a
+    /// deliberately centred short line.
+    var containerCol: Double?
     var centered: Bool = false
     var centerVia: CenterVia?
     var centerText: String?
@@ -446,6 +456,7 @@ public func classifyRows(_ entries: [StructureEntry]) -> [RowStructure?] {
             stack.append(row.col.value)
         }
         row.level = stack.count
+        row.containerCol = stack.last
         rows[i] = row
     }
 
@@ -463,6 +474,24 @@ public func classifyRows(_ entries: [StructureEntry]) -> [RowStructure?] {
             row.centered = true
             row.centerVia = .tag
             row.centerText = String(content)
+        } else if row.kind == nil, row.containerCol == row.col.value {
+            // A LIST ITEM'S OWN CONTINUATION IS NOT A CENTRED LINE (planning #264 item
+            // 4(b), the browser check's section 3, 2026-09-14). A row that opens no
+            // container of its own but starts at exactly the column of the one still
+            // open above it is the wrapped remainder of that item: its indent is the
+            // list's own body column, which is HABIT in precisely the sense `bodyIndent`
+            // already excludes — an indent every sibling shares is not evidence of
+            // intent.
+            //
+            // STRENGTH.WS's last bullet is the case. Its continuation ("and open source
+            // DOS emulator DOSBox-X: https://dosbox-x.com", 58 columns of a 65-column
+            // measure, 2 columns of lead against an ideal 3.5) cleared the symmetry test
+            // by its last half-column, was classified centred, and so closed the `<ul>`
+            // and rendered centred BELOW the list — while the identically-shaped
+            // continuation two bullets earlier, which happens not to be last, stayed
+            // joined. Both are continuations; neither is centred.
+            rows[i] = row
+            continue
         } else if row.align == .left, wideGapCount(content) < 2, !row.internalTabRun {
             // Undeclared centering: no tag at all, just spaces padding the line so it
             // SITS centred within this row's own printable measure. Symmetric
@@ -510,7 +539,8 @@ public func classifyRows(_ entries: [StructureEntry]) -> [RowStructure?] {
         guard let row else { return nil }
         return RowStructure(col: row.col, level: row.level, kind: row.kind, marker: row.marker,
                             label: row.label, body: row.body, centered: row.centered,
-                            centerVia: row.centerVia, centerText: row.centerText)
+                            centerVia: row.centerVia, centerText: row.centerText,
+                            containerCol: row.containerCol)
     }
 }
 
@@ -543,10 +573,15 @@ public struct SemanticRun: Hashable, Sendable {
     /// reason `pix` does.
     public var tabHMI: Int?
     public var tabLeader: Int?
+    /// This run IS a ^ONI index ENTRY's stored phrase (`Span.indexEntry`). Python
+    /// carries it as an `ixentry` style tag, which `effective_span_styles` passes
+    /// straight through into a semantic run's own sorted style list -- so it belongs in
+    /// this JSON for the same byte-parity reason `pix`/`tabHMI` do.
+    public var indexEntry: Bool = false
 
     public init(text: String, styles: Style = [], font: Int? = nil, colour: Int? = nil,
                 ref: Int? = nil, noteKind: NoteKind? = nil, pix: Int? = nil,
-                tabHMI: Int? = nil, tabLeader: Int? = nil) {
+                tabHMI: Int? = nil, tabLeader: Int? = nil, indexEntry: Bool = false) {
         self.text = text
         self.styles = styles
         self.font = font
@@ -556,6 +591,7 @@ public struct SemanticRun: Hashable, Sendable {
         self.pix = pix
         self.tabHMI = tabHMI
         self.tabLeader = tabLeader
+        self.indexEntry = indexEntry
     }
 }
 
@@ -642,14 +678,48 @@ public struct SemanticNoteRow: Hashable, Sendable {
     }
 }
 
-/// What `modernSemanticFlow` returns — Python's `{'items': [...], 'notes': [...]}`.
+/// One 0x0F print control the MODERN flow dropped, and where it sat (planning #264
+/// running list, the batch-23 finding).
+///
+/// The flow has ALWAYS dropped the span — a print control's editor label is not ink
+/// (M4, and Jon's ruling 2026-09-13, planning #270 item 36) — and dropping it dropped
+/// the POSITION with it, which left Modern's own SHOW INVISIBLES with nothing at all to
+/// draw. This is the Modern twin of what layout format version 9 did for the printed
+/// page-lines: the label and its position published to the invisibles layer, never to a
+/// rendering surface.
+///
+/// `item` indexes `SemanticFlow.items`; `run` is the index in that item's own `runs`
+/// that the control PRECEDES, so `runs.count` means "after the last run on that line".
+public struct SemanticPrintControl: Hashable, Sendable {
+    public var item: Int
+    public var run: Int
+    public var label: String
+    public var hmi: Int
+    public var columns: Int
+
+    public init(item: Int, run: Int, label: String, hmi: Int, columns: Int) {
+        self.item = item
+        self.run = run
+        self.label = label
+        self.hmi = hmi
+        self.columns = columns
+    }
+}
+
+/// What `modernSemanticFlow` returns — Python's `{'items': [...], 'notes': [...]}`,
+/// plus the dropped print controls Python hands back through its own
+/// `print_controls` out-parameter (a Swift struct returns them instead, the same way
+/// `SemanticItem.isVerse` is a field here and an out-parameter there).
 public struct SemanticFlow: Hashable, Sendable {
     public var items: [SemanticItem]
     public var notes: [SemanticNoteRow]
+    public var printControls: [SemanticPrintControl]
 
-    public init(items: [SemanticItem], notes: [SemanticNoteRow]) {
+    public init(items: [SemanticItem], notes: [SemanticNoteRow],
+                printControls: [SemanticPrintControl] = []) {
         self.items = items
         self.notes = notes
+        self.printControls = printControls
     }
 }
 
@@ -779,6 +849,7 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
                                         origin: note.origin))
     }
 
+    var printControls: [SemanticPrintControl] = []
     let lj = doc.printerDriver == "LJ6DTP"
     // b24 completion (C1): the same whole-document context `EmitRTF`/`EmitHTML`/`EmitText`
     // compute for their own `assembleParagraphs`/`isVerse` calls — Modern is never
@@ -873,11 +944,23 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
             }
             var runs: [SemanticRun] = []
             var footnotes: [SemanticFootnote] = []
+            var linePrintControls: [SemanticPrintControl] = []
             for span in spans {
-                if span.pctlHMI != nil {
+                if let hmi = span.pctlHMI {
                     // a 0x0F print control's display string is SCREEN-ONLY; the paper
                     // got the raw payload. Modern shows nothing — command codes are
-                    // invisible (M4, extended M10)
+                    // invisible (M4, extended M10).
+                    // The LABEL and where it sat still go to the invisibles layer,
+                    // which is the one feature allowed to draw it (see
+                    // `SemanticPrintControl`): dropping the span used to drop the
+                    // position with it, so Modern's own Show Invisibles had nothing to
+                    // show. Recorded against the run index the control precedes; the
+                    // centre/right trim below can still pop runs off the head, so the
+                    // index is fixed up after that, once `runs` is final.
+                    linePrintControls.append(
+                        SemanticPrintControl(item: 0, run: runs.count,
+                                             label: span.text, hmi: hmi,
+                                             columns: printControlColumns(hmi)))
                     continue
                 }
                 let styles = effectiveSpanStyles(span, block: block, headingBold: true)
@@ -941,9 +1024,11 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
                     runs.append(SemanticRun(text: text, styles: styles, font: span.font,
                                             colour: colour, pix: span.pix,
                                             tabHMI: span.tabHMI,
-                                            tabLeader: span.tabLeader))
+                                            tabLeader: span.tabLeader,
+                                            indexEntry: span.indexEntry))
                 }
             }
+            var headPopped = 0
             if block.align == .center || block.align == .right {
                 // WordStar 5+ aligned at EDITOR time — the centering is already in the
                 // file as spaces (the WS4 `.oj` DOSBox probe proved the same for
@@ -957,6 +1042,7 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
                         break
                     }
                     runs.removeFirst()
+                    headPopped += 1
                 }
                 while let last = runs.last, last.ref == nil {
                     var t = last.text
@@ -967,6 +1053,11 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
                     }
                     runs.removeLast()
                 }
+            }
+            for var control in linePrintControls {
+                control.item = items.count
+                control.run = min(max(control.run - headPopped, 0), runs.count)
+                printControls.append(control)
             }
             items.append(.para(align: block.align, indentCols: lm, cutCols: cut,
                                runs: runs, footnotes: footnotes, structure: nil,
@@ -1021,7 +1112,7 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
                                footnotes: footnotes, structure: s, isVerse: isVerse, bi: bi)
         }
     }
-    return SemanticFlow(items: items, notes: noteRows)
+    return SemanticFlow(items: items, notes: noteRows, printControls: printControls)
 }
 
 // ---------------------------------------------------------------- JSON
@@ -1146,7 +1237,8 @@ func jsonSerialize(_ value: LayoutJSONValue, indent: Int = 0) -> String {
 /// fields the Swift IR carries structurally. Sorted, matching Python's `sorted(styles)`.
 func pythonStyleTags(_ styles: Style, font: Int? = nil, colour: Int? = nil,
                      pctlHMI: Int? = nil, pix: Int? = nil, pcl: Int? = nil,
-                     tabHMI: Int? = nil, tabLeader: Int? = nil) -> [String] {
+                     tabHMI: Int? = nil, tabLeader: Int? = nil,
+                     indexEntry: Bool = false) -> [String] {
     var tags: [String] = []
     if styles.contains(.bold) { tags.append("b") }
     if styles.contains(.italic) { tags.append("i") }
@@ -1168,6 +1260,11 @@ func pythonStyleTags(_ styles: Style, font: Int? = nil, colour: Int? = nil,
     // from typed text it would otherwise coalesce with.
     if let tabHMI { tags.append("tabhmi\(tabHMI)") }
     if let tabLeader { tags.append("tableader\(tabLeader)") }
+    // A ^ONI index ENTRY's phrase: Python carries `ixentry` in the same frozenset as
+    // the style codes, so it shows up in this JSON's own style list too — in BOTH
+    // modes, since the tag travels with the IR and only the Printed FACSIMILE drops
+    // the span itself.
+    if indexEntry { tags.append("ixentry") }
     return tags.sorted()
 }
 
@@ -1252,7 +1349,8 @@ private func jsonRun(_ run: SemanticRun) -> LayoutJSONValue {
         ("text", .string(run.text)),
         ("styles", .array(pythonStyleTags(run.styles, font: run.font, colour: run.colour,
                                           pix: run.pix, tabHMI: run.tabHMI,
-                                          tabLeader: run.tabLeader)
+                                          tabLeader: run.tabLeader,
+                                          indexEntry: run.indexEntry)
             .map { .string($0) })),
     ]
     if let ref = run.ref {
@@ -1432,9 +1530,10 @@ private func jsonGraphicCellPlacement(_ cell: PageLine.GraphicCellPlacement) -> 
 /// null, when this line/page has no opinion (the document's own default applies) — a
 /// document with no `.po`/`.poe`/`.poo` override and no `.co n>1` region anywhere emits
 /// byte-identical JSON to version 1. `col` is the field a consumer MUST use to decide
-/// "this line starts a new column, reset the vertical cursor to the page top" — an
-/// ordinary `left` change (a mid-document `.po`/`.poe`/`.poo` override) is NOT that
-/// signal and must not reset the flow; only a `col` change is.
+/// "this line starts a new column, reset the vertical cursor" — an ordinary `left`
+/// change (a mid-document `.po`/`.poe`/`.poo` override) is NOT that signal and must not
+/// reset the flow; only a `col` change is. (Version 8 corrects WHERE it resets to: the
+/// page top PLUS that page's own `column_top_offset_pt`, not the page top itself.)
 ///
 /// version 3 (planning #251(b), 2026-09-09): each printed line MAY now carry
 /// `justify_word_x` — `[{"text", "x", "width"}, ...]` — the per-word/per-gap
@@ -1489,6 +1588,17 @@ private func jsonGraphicCellPlacement(_ cell: PageLine.GraphicCellPlacement) -> 
 /// JSON to version 5. The raw `headers`/`footers` dict (unsubstituted template
 /// strings) stays exactly as it was; this is purely additive.
 ///
+/// version 8 (planning #227 follow-up, 2026-09-12): a printed PAGE that carries
+/// `columns` now also carries `column_top_offset_pt` — how far BELOW that sheet's own
+/// first text line every column AFTER the first restarts, in points. It is 0.0 on a
+/// sheet whose `.co n>1` region owns the sheet from its first line, and the height of
+/// the non-columnar prefix (a title and its blank) otherwise. A consumer that resets
+/// the vertical cursor on a `col` change (version 2's own rule) MUST reset it to
+/// `top + column_top_offset_pt`, not to `top`: real WS7 starts every column of a sheet
+/// where the REGION starts on it, not where the sheet does — measured on
+/// sawyer/REF/WINGDING.CHT, REF/SYMBOL.CHT, PRINTERS/fontcrib.ws and PRINTER.PS. Pages
+/// with no `columns` key are unaffected and emit byte-identical JSON to version 7.
+///
 /// version 7 (planning #251 follow-up, 2026-09-10, found by the app coder job 348): a
 /// `modern.items` entry of kind `para` or `note` MAY now carry `graphic_cells` —
 /// `[{"char", "x", "width", "page"}, ...]`, one entry per cp437 box-drawing/graphic
@@ -1509,6 +1619,41 @@ private func jsonGraphicCellPlacement(_ cell: PageLine.GraphicCellPlacement) -> 
 /// per-character lookup, not exported through this JSON" choice version 5's own doc
 /// comment already made.
 ///
+// MARK: - Print-control labels (planning #270 item 36)
+//
+// Jon's ruling 2026-09-13: "Print controls aren't supposed to be visible except in
+// Show Invisibles." A 0x0F user print control carries a SCREEN display string --
+// what WordStar shows in the EDITOR where the control sits (`sawyer/LSRBOX/
+// LSRBOX.WS` labels its rules `«Shaded ┌00.500"hx00.500"v ...»`, LJ6DTP has 41 of
+// them) -- and the printer gets the raw payload instead, the block advancing by its
+// own declared HMI word.
+//
+// Every OTHER surface already obeyed this: the Modern flow drops the span, text /
+// Markdown / HTML / RTF drop it or pad it, and the PDF writer advances x without
+// drawing. The printed LAYOUT JSON did not -- it published `segments` verbatim,
+// label text and all -- and that JSON is what the Native view draws from, so Native
+// was the one reading surface still showing the editor's label. Port of ctrl-kd's
+// `_printed_segment_text` (`layout.py`, commit `bef1abd`).
+//
+// 180 HMI units (1/1800 inch each) is one 10-CPI print column, which is the unit
+// both engines' printed text/HTML paths already measure this padding in.
+let hmiPerPrintColumn = 180
+
+/// The printed width, in 10-CPI print columns, a print control declares.
+/// `roundHalfToEven` is Python's own `round()` rule, which `emit.py`'s and
+/// `layout.py`'s `round(hmi / 180)` uses -- the SAME helper `EmitText`/`EmitHTML`
+/// already call for this exact quantity, so all four surfaces pad identically.
+func printControlColumns(_ hmi: Int) -> Int {
+    max(0, roundHalfToEven(Double(hmi) / Double(hmiPerPrintColumn)))
+}
+
+/// One printed page-line segment's published text: a print control's SCREEN label
+/// swapped for its declared printed width, every other span's text unchanged.
+func printedSegmentText(_ span: Span) -> String {
+    guard let hmi = span.pctlHMI else { return span.text }
+    return String(repeating: " ", count: printControlColumns(hmi))
+}
+
 /// Old fields (`segments`, `soft`, `overprint`, `lead`) are unchanged; this is purely
 /// additive.
 @Sendable
@@ -1529,19 +1674,36 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         }
     }
     var printedPages: [LayoutJSONValue] = []
+    // Planning #270 item 36 (version 9), Jon's ruling 2026-09-13: every 0x0F print
+    // control's own SCREEN label, harvested in the SAME pass that builds the
+    // segments (so the two can never disagree about which segment a label belongs
+    // to) and published ONLY in the invisibles layer below.
+    var printControls: [LayoutJSONValue] = []
     for page in docToPagelines(doc, printed: true) {
         var lines: [LayoutJSONValue] = []
         for pl in page {
+            for (si, span) in pl.spans.enumerated() {
+                guard let hmi = span.pctlHMI else { continue }
+                printControls.append(.object([
+                    ("page", .int(printedPages.count + 1)),
+                    ("line", .int(lines.count)),
+                    ("segment", .int(si)),
+                    ("label", .string(span.text)),
+                    ("hmi", .int(hmi)),
+                    ("columns", .int(printControlColumns(hmi))),
+                ]))
+            }
             var fields: [(String, LayoutJSONValue)] = [
                 ("segments", .array(pl.spans.map { span in
                     .object([
-                        ("text", .string(span.text)),
+                        ("text", .string(printedSegmentText(span))),
                         ("styles", .array(pythonStyleTags(span.styles, font: span.font,
                                                           colour: span.colour,
                                                           pctlHMI: span.pctlHMI,
                                                           pix: span.pix, pcl: span.pcl,
                                                           tabHMI: span.tabHMI,
-                                                          tabLeader: span.tabLeader)
+                                                          tabLeader: span.tabLeader,
+                                                          indexEntry: span.indexEntry)
                             .map { .string($0) })),
                     ])
                 })),
@@ -1677,6 +1839,11 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                                page.columnGutterPt.map { LayoutJSONValue.double($0) } ?? .null))
             pageFields.append(("column_width_pt",
                                page.columnWidthPt.map { LayoutJSONValue.double($0) } ?? .null))
+            // version 8 (planning #227 follow-up, 2026-09-12): where a new column's
+            // vertical cursor RESTARTS -- `top` PLUS this, not `top`. See the version
+            // note on `emitLayout`.
+            pageFields.append(("column_top_offset_pt",
+                               .double(roundToOneDecimal(page.columnTopOffsetPt ?? 0.0))))
         }
         printedPages.append(.object(pageFields))
     }
@@ -1686,10 +1853,11 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
     // called with the SAME `notes`/`noteRefs` just above, so its own `sem.items`
     // indices line up with `flow.items` exactly -- see that function's own doc comment.
     let modernGraphicCells = attachGraphicCellsModern(doc, notes: options.notes,
-                                                      noteRefs: options.noteRefs)
+                                                      noteRefs: options.noteRefs,
+                                                      semCached: flow)
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
-        ("version", .int(7)),
+        ("version", .int(10)),
         ("meta", jsonMeta(doc)),
         ("page", jsonPage(doc.page)),
         ("fonts", .array(doc.fonts.map(jsonFont))),
@@ -1701,6 +1869,29 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         ])),
         ("printed", .object([("pages", .array(printedPages))])),
         ("invisibles", .object([
+            // Planning #270 item 36 (version 9): a 0x0F print control's own SCREEN
+            // label, the ONE place this contract still publishes it. Every rendering
+            // surface drops it (see `printedSegmentText`); Show Invisibles is the only
+            // feature allowed to draw it, and it reads it from here.
+            ("print_controls", .array(printControls)),
+            // Planning #264 running list (version 10): the SAME labels seen from the
+            // MODERN side. Two lists, not one, because the two flows genuinely differ
+            // in both count and order — a running head's print control repeats on
+            // every printed page and reaches no Modern item at all — and because their
+            // coordinates are not the same kind of thing: page/line/segment locate a
+            // printed page-line segment, item/run locate a position in
+            // `modern["items"]`. `run` is the index of the run the control PRECEDES,
+            // so `runs.count` means "after the last run on that line". Empty for every
+            // document with no 0x0F print control.
+            ("modern_print_controls", .array(flow.printControls.map { control in
+                .object([
+                    ("item", .int(control.item)),
+                    ("run", .int(control.run)),
+                    ("label", .string(control.label)),
+                    ("hmi", .int(control.hmi)),
+                    ("columns", .int(control.columns)),
+                ])
+            })),
             ("dot_commands", .array(doc.dotCommands.map { .string($0) })),
             ("dot_positions", .array(doc.dotPositions.map {
                 .array([.int($0.blockIndex), .int($0.lineIndex), .string($0.text)])
@@ -1720,4 +1911,301 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         ])),
     ])
     return jsonSerialize(out) + "\n"
+}
+
+// MARK: - Driver substitutions for the emitters
+//
+// Planning #264 item 1 (packet rows B1+B2), Jon's ruling 2026-08-06 (M7: the driver's
+// character substitutions are CONTENT) and 2026-09-11 (the driver-keyed euro at cp437
+// 158). Both rules reached the PDF views only; RTF, HTML, Markdown and plain text kept
+// the raw typed characters — measured 2026-09-12 on the corpus's own LJ6DTP document: 7
+// smiley faces where a © belongs, 4 suns where an ellipsis belongs, 11 `«` and 11 `»`
+// where curly double quotes belong, 4 `≡` where an en dash belongs, the four card suits
+// where the box corners belong; and the archive read-me emitted a peseta where the euro
+// belongs.
+//
+// ONE table for every non-PDF export, deliberately the SEMANTIC flow's own
+// (`ljSubstituteText`, which already uses `ljSubstUniversSemantic`'s square corners for
+// exactly this reason) rather than the Printed PDF's `ljSubstitute`: every mapping is ONE
+// character for ONE character, so a Printed facsimile keeps its columns. `ljSubstitute`'s
+// extra step — collapsing a KERNED `` `` ``/`''` pair to a single curly DOUBLE quote,
+// register C7 — is a glyph-geometry refinement for a renderer that positions each glyph
+// itself: it shortens the row by one column, which a monospace facsimile cannot absorb.
+
+/// A span whose text is a MARKER rather than prose, and so is never substituted: a note
+/// reference (`fnref` — its text is the label a caller resolves notes by), a print
+/// control's screen-only display string (`pctlHMI`), or a picture/PCL placeholder (`pix`/
+/// `pcl`, whose text carries a real FILE NAME — and `_` -> em dash would rewrite one).
+/// Port of `layout._subst_exempt`.
+func substExempt(_ span: Span) -> Bool {
+    span.styles.contains(.fnref) || span.pctlHMI != nil || span.pix != nil
+        || span.pcl != nil
+}
+
+/// `(text, fontIndex) -> text` applying this document's own driver-keyed content
+/// substitutions, or `nil` when neither rule applies to it (the overwhelmingly common
+/// case — callers skip the whole pass and nothing is copied). Port of
+/// `layout.driver_substituter`.
+func driverSubstituter(_ doc: Document) -> ((String, Int?) -> String)? {
+    let lj = (doc.printerDriver ?? "").trimmed().uppercased() == "LJ6DTP"
+    let euro = pesetaMeansEuro(doc)
+    guard lj || euro else { return nil }
+    let fonts = doc.fonts
+    return { text, fontIndex in
+        guard !text.isEmpty else { return text }
+        var out = text
+        if lj, let index = fontIndex, index < fonts.count {
+            // proportional faces only, Univers corners only — the document's own chart's
+            // face rules, the same gate `ljSubstitute` and `modernFlow` apply
+            out = ljSubstituteText(out, entry: fonts[index])
+        }
+        return euroText(out, euro)
+    }
+}
+
+/// `text` with every MailMerge page-number variable REMOVED — `&#&` and its `/x`
+/// modifier forms — or the SAME string when it carries none.
+///
+/// Hand scan, reusing `containsMergePageNumberOpener`/`mergePageNumberRange` (the same
+/// two helpers the printed SUBSTITUTION uses, so the two halves of the rule can never
+/// disagree about what the variable's shape is). This module imports no Foundation —
+/// see `SymmetricBlocks.swift`'s own note.
+func mergePagenoDroppedText(_ text: String) -> String {
+    guard containsMergePageNumberOpener(text) else { return text }
+    let chars = Array(text)
+    var out = ""
+    var i = 0
+    var dropped = false
+    while i < chars.count {
+        if let end = mergePageNumberRange(chars, from: i) {
+            i = end
+            dropped = true
+        } else {
+            out.append(chars[i])
+            i += 1
+        }
+    }
+    return dropped ? out : text
+}
+
+/// The marker a paged RTF export puts in the variable's place, resolved to `{\chpgn }`
+/// — the reader's OWN current-page field — when the run is escaped (`rtfEscape`). A
+/// private-use character, so no real document can carry one: cp437 and cp1252 both
+/// decode entirely inside the BMP's assigned blocks, nowhere near U+E000.
+let mergePagenoMark: Character = "\u{E000}"
+/// The same code point as `mergePagenoMark`, for the scalar-by-scalar loop in
+/// `rtfEscape`.
+let mergePagenoMarkScalar: Unicode.Scalar = "\u{E000}"
+
+/// `text` with every MailMerge page-number variable replaced by `mergePagenoMark`.
+/// Same hand scan as `mergePagenoDroppedText`, one character written instead of none.
+func mergePagenoMarkedText(_ text: String) -> String {
+    guard containsMergePageNumberOpener(text) else { return text }
+    let chars = Array(text)
+    var out = ""
+    var i = 0
+    var marked = false
+    while i < chars.count {
+        if let end = mergePageNumberRange(chars, from: i) {
+            out.append(mergePagenoMark)
+            i = end
+            marked = true
+        } else {
+            out.append(chars[i])
+            i += 1
+        }
+    }
+    return marked ? out : text
+}
+
+/// `doc` with every MailMerge page-number variable replaced by `mergePagenoMark`, which
+/// the RTF escaper turns into `{\chpgn }`.
+///
+/// Jon's ruling 2026-09-14 (planning #270 item 42): "The page number merge variable
+/// should be substituted for page numbers in Modern PDF and RTF. And it should be
+/// controlled by the page number flag."
+///
+/// RTF's answer to "the number of the page this lands on" is not a number at all — it is
+/// `\chpgn`, the reader's own current-page field, the identical mechanism a `#` inside a
+/// running head has always used here. Both RTF modes paginate in the READER (packet
+/// section 3: the section spine imposes no page positions, and Printed RTF's own pages
+/// have always been the reader's), so a field is not a fallback for a number we could
+/// not compute — it is the only answer that stays TRUE of the file after the reader lays
+/// it out at its own margins and fonts. It also costs no pagination pass at all, which
+/// is why the RTF half of this item needed none of the measure-then-render machinery the
+/// Modern PDF half does. Port of `layout.merge_pageno_marked`.
+func mergePagenoMarked(_ doc: Document) -> Document {
+    mergePagenoRewritten(doc, mergePagenoMarkedText)
+}
+
+/// `doc` with its MailMerge page-number variables replaced by REAL page numbers —
+/// `bodyNumbers[k]` for the k-th occurrence in the blocks, `noteNumbers[k]` for the k-th
+/// in the notes, both in document order. A list shorter than the occurrences it is asked
+/// to cover leaves the rest as typed (never traps: a caller that measured a subset must
+/// not lose the document).
+///
+/// Modern PDF's half of item 42. Printed pages are never re-wrapped, so the printed path
+/// substitutes AFTER pagination (`substituteMergePageNumbersPrinted`) and the arithmetic
+/// is exact by construction. Modern REFLOWS: a token's advance is baked when the flow is
+/// built, so a post-pagination edit would leave every token after it on the line drawing
+/// at the variable's own width. The numbers therefore have to be in the text BEFORE it
+/// is wrapped, which is what this function is for — see `mergePagenoModern` for the
+/// measure-then-render pass that supplies them. Port of `layout.merge_pageno_numbered`.
+func mergePagenoNumbered(_ doc: Document, body bodyNumbers: [Int],
+                         notes noteNumbers: [Int]) -> Document {
+    if bodyNumbers.isEmpty, noteNumbers.isEmpty { return doc }
+
+    func numbered(_ text: String, _ numbers: [Int], _ k: inout Int) -> String {
+        guard containsMergePageNumberOpener(text) else { return text }
+        let chars = Array(text)
+        var out = ""
+        var i = 0
+        var changed = false
+        while i < chars.count {
+            if let end = mergePageNumberRange(chars, from: i) {
+                if k < numbers.count {
+                    out += String(numbers[k])
+                    changed = true
+                } else {
+                    out += String(chars[i..<end])
+                }
+                k += 1
+                i = end
+            } else {
+                out.append(chars[i])
+                i += 1
+            }
+        }
+        return changed ? out : text
+    }
+
+    var out = doc
+    var bodyK = 0
+    for bi in out.blocks.indices {
+        for li in out.blocks[bi].lines.indices {
+            for si in out.blocks[bi].lines[li].spans.indices {
+                let text = out.blocks[bi].lines[li].spans[si].text
+                let next = numbered(text, bodyNumbers, &bodyK)
+                if next != text { out.blocks[bi].lines[li].spans[si].text = next }
+            }
+        }
+    }
+    // `text` and `textLines` are the SAME note text, whole and split, so they must
+    // consume the same stretch of `noteNumbers` — the counter rewinds to this note's own
+    // base before the split form is walked, or the two would disagree and the next note
+    // would read the wrong end of the list.
+    var noteK = 0
+    for ni in out.notes.indices {
+        let base = noteK
+        let text = numbered(out.notes[ni].text, noteNumbers, &noteK)
+        let after = noteK
+        noteK = base
+        var lines: [String] = []
+        for line in out.notes[ni].textLines {
+            lines.append(numbered(line, noteNumbers, &noteK))
+        }
+        noteK = max(after, noteK)
+        out.notes[ni].text = text
+        out.notes[ni].textLines = lines
+    }
+    return out
+}
+
+/// How many MailMerge page-number variables `text` carries. Same hand scan as
+/// `mergePagenoDroppedText`, counting instead of writing.
+func mergePagenoCount(_ text: String) -> Int {
+    guard containsMergePageNumberOpener(text) else { return 0 }
+    let chars = Array(text)
+    var i = 0
+    var n = 0
+    while i < chars.count {
+        if let end = mergePageNumberRange(chars, from: i) {
+            n += 1
+            i = end
+        } else {
+            i += 1
+        }
+    }
+    return n
+}
+
+/// `doc` with `rewrite` applied to every body span and note text — the SAME document
+/// when nothing changed. The shared body of `mergePagenoDropped` and
+/// `mergePagenoMarked`.
+func mergePagenoRewritten(_ doc: Document, _ rewrite: (String) -> String) -> Document {
+    var out = doc
+    var changed = false
+    for bi in out.blocks.indices {
+        for li in out.blocks[bi].lines.indices {
+            for si in out.blocks[bi].lines[li].spans.indices {
+                let text = out.blocks[bi].lines[li].spans[si].text
+                let next = rewrite(text)
+                if next != text {
+                    out.blocks[bi].lines[li].spans[si].text = next
+                    changed = true
+                }
+            }
+        }
+    }
+    for ni in out.notes.indices {
+        let text = out.notes[ni].text
+        let next = rewrite(text)
+        if next != text {
+            out.notes[ni].text = next
+            changed = true
+        }
+        let lines = out.notes[ni].textLines.map(rewrite)
+        if lines != out.notes[ni].textLines {
+            out.notes[ni].textLines = lines
+            changed = true
+        }
+    }
+    return changed ? out : doc
+}
+
+/// `doc` with every MailMerge page-number variable removed from every body span and
+/// note text — the SAME document for the documents (nearly all of them) that carry none.
+///
+/// Jon's ruling 2026-09-14 (planning #270 item 42): "Actual page numbers and the page
+/// number merge should NOT be sent to non-paged exports: HTML, Markdown, and Text."
+/// Those three formats have no pages, so there is no number to substitute and nothing
+/// the variable could mean; the ruling is that it is REMOVED, not shown as typed — the
+/// one exception to the Mail Merge scope rule's "variables stay visible exactly as
+/// typed", and for the same reason headers and footers are already dropped there
+/// (ruled correct in the same breath).
+///
+/// Called by `emitText`/`emitMarkdown`/`emitHTML` at entry, beside `driverSubstituted`,
+/// so every later pass reads the text that actually ships. ALSO called by `emitRTF` and
+/// the PDF writer under `--page-numbers off`: the flag governs the variable exactly as
+/// it governs the automatic number (item 42, "it should be controlled by the page number
+/// flag"), and with no number to show there is nothing for the variable to say, so it
+/// goes the same way it goes on a page-less surface. Port of
+/// `layout.merge_pageno_dropped`.
+func mergePagenoDropped(_ doc: Document) -> Document {
+    mergePagenoRewritten(doc, mergePagenoDroppedText)
+}
+
+/// `doc` with `driverSubstituter`'s substitutions applied to every body span and note
+/// text — the SAME document when it carries neither rule.
+///
+/// Emitters call this ONCE, at entry, before anything else reads the blocks: every later
+/// pass (paragraph assembly, structure classification, sentence spacing) then sees the
+/// characters the document actually printed. Port of `layout.driver_substituted`.
+func driverSubstituted(_ doc: Document) -> Document {
+    guard let subst = driverSubstituter(doc) else { return doc }
+    var out = doc
+    for bi in out.blocks.indices {
+        for li in out.blocks[bi].lines.indices {
+            for si in out.blocks[bi].lines[li].spans.indices {
+                let span = out.blocks[bi].lines[li].spans[si]
+                guard !substExempt(span) else { continue }
+                out.blocks[bi].lines[li].spans[si].text = subst(span.text, span.font)
+            }
+        }
+    }
+    for ni in out.notes.indices {
+        out.notes[ni].text = subst(out.notes[ni].text, nil)
+        out.notes[ni].textLines = out.notes[ni].textLines.map { subst($0, nil) }
+    }
+    return out
 }

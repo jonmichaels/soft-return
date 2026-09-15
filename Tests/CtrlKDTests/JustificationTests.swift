@@ -60,7 +60,12 @@ private func justifyDoc(_ src: [UInt8]) -> Document {
 /// per-gap SPLIT that gets it there is this pass's own documented approximation (rule
 /// 2 above), not a WS7 byte-for-byte match.
 @Test func justifiedLineReachesTheResolvedRightMargin() throws {
-    let doc = justifyDoc(bytes(".oj on\r\n") + bytes("AA BB CC") + SOFT + bytes("DD.") + HARD)
+    var justifyDocArg63: [UInt8] = bytes(".oj on\r\n")
+    justifyDocArg63 += bytes("AA BB CC")
+    justifyDocArg63 += SOFT
+    justifyDocArg63 += bytes("DD.")
+    justifyDocArg63 += HARD
+    let doc = justifyDoc(justifyDocArg63)
     let b = doc.blocks[0]
     #expect(b.align == .justify)
     #expect(b.lines.count == 2)
@@ -84,7 +89,12 @@ private func justifyDoc(_ src: [UInt8]) -> Document {
 /// physical line of the SAME block and must render at its natural, un-stretched
 /// position.
 @Test func lastLineOfJustifiedParagraphIsNotStretched() throws {
-    let doc = justifyDoc(bytes(".oj on\r\n") + bytes("AA BB CC") + SOFT + bytes("DD.") + HARD)
+    var justifyDocArg87: [UInt8] = bytes(".oj on\r\n")
+    justifyDocArg87 += bytes("AA BB CC")
+    justifyDocArg87 += SOFT
+    justifyDocArg87 += bytes("DD.")
+    justifyDocArg87 += HARD
+    let doc = justifyDoc(justifyDocArg87)
     let pdf = emitPDF(doc, mode: .printed)
     #expect(wordX(pdf, "DD.") == 0.0)
 }
@@ -94,7 +104,12 @@ private func justifyDoc(_ src: [UInt8]) -> Document {
 /// only the single-blank gap should carry any of the line's slack; the double stays at
 /// its natural 2*7.2=14.4pt.
 @Test func multiSpaceGapIsNotStretchedSingleSpaceGapsAbsorbIt() throws {
-    let doc = justifyDoc(bytes(".oj on\r\n") + bytes("AA BB  CC") + SOFT + bytes("DD.") + HARD)
+    var justifyDocArg97: [UInt8] = bytes(".oj on\r\n")
+    justifyDocArg97 += bytes("AA BB  CC")
+    justifyDocArg97 += SOFT
+    justifyDocArg97 += bytes("DD.")
+    justifyDocArg97 += HARD
+    let doc = justifyDoc(justifyDocArg97)
     let b = doc.blocks[0]
     #expect(b.lines[0].text() == "AA BB  CC")
     let pdf = emitPDF(doc, mode: .printed)
@@ -118,7 +133,11 @@ private func justifyDoc(_ src: [UInt8]) -> Document {
 /// feature existed: one whole-line Tj (`justifyEligible` never fires, so the line is
 /// never split into per-word pieces), the line's own single, exact, un-stretched text.
 @Test func ojOffIsUnaffected() throws {
-    let doc = justifyDoc(bytes("AA BB CC") + SOFT + bytes("DD.") + HARD)
+    var justifyDocArg121: [UInt8] = bytes("AA BB CC")
+    justifyDocArg121 += SOFT
+    justifyDocArg121 += bytes("DD.")
+    justifyDocArg121 += HARD
+    let doc = justifyDoc(justifyDocArg121)
     #expect(doc.blocks[0].align == .left)
     let pdf = emitPDF(doc, mode: .printed)
     #expect(wordX(pdf, "AA BB CC") == 0.0)

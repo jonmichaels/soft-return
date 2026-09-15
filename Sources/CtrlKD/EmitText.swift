@@ -15,7 +15,14 @@ public enum EmitMode: String, Hashable, Sendable {
 /// when the caller asked for `modern`, because reflowing them destroys the alignment that
 /// carries the meaning. emit.py:53-54.
 public func isPrinted(_ doc: Document) -> Bool {
-    doc.detection?.variant == .printstream || doc.columnar
+    // planning #264, mail-merge scope: a MailMerge DATA file is a record list, never a
+    // captured page, so it never forces the printed facsimile on itself — a `.DTA`
+    // written in non-document mode classifies as `printstream` on its bytes (plain ASCII,
+    // hard returns, no machinery) and would otherwise render as a typescript in one shape
+    // and as prose in the other, purely by how its author saved it. `--mode printed`
+    // still reaches it; what this drops is the OVERRIDE.
+    if doc.kind == mergeDataKind { return false }
+    return doc.detection?.variant == .printstream || doc.columnar
 }
 
 /// - Parameter options: accepted and ignored, as Python's `**_options` is (emit.py:58).
@@ -100,6 +107,12 @@ func alignLines(_ lines: [String], _ block: Block) -> [String] {
 
 public func emitText(_ doc: Document, mode: EmitMode = .modern,
                      options: EmitOptions = EmitOptions()) -> String {
+    // planning #264 item 1: the driver's own character substitutions and the
+    // driver-keyed euro are CONTENT (rulings 2026-08-06 M7 / 2026-09-11) — applied once,
+    // here, before anything reads the blocks. See `driverSubstituted`.
+    // planning #270 item 42: a non-paged format carries no page apparatus —
+    // the MailMerge page-number variable is removed here, never shown as typed.
+    let doc = mergePagenoDropped(driverSubstituted(doc))
     let refNotes = inlineReferenceNotes(doc)
     let printed = mode == .printed || isPrinted(doc)
     var options = options
@@ -129,14 +142,21 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
     // unit -- computed once per document, not printed (a facsimile already preserves
     // every line's own position; detection only changes REFLOW behavior).
     let screenplayBlocks = printed ? [] : detectScreenplayBlocks(doc)
+    // planning #264 item 4 (packet row A10, extended): a bare trailing `.pa` marks
+    // nothing -- see `trailingPASkipIndex` (EmitterRules.swift).
+    let skipPA = trailingPASkipIndex(doc)
     for (bi, block) in doc.blocks.enumerated() {
         if block.kind == .pagebreak {
+            if bi == skipPA { continue }
             out.append(mode == .printed ? "\u{0C}" : "\n" + String(repeating: "-", count: 20) + "\n")
             continue
         }
         if printed {
-            // PHYSICAL lines: soft returns broke the line on paper.
-            let lines = alignLines(block.lines.map(render), block)
+            // PHYSICAL lines: soft returns broke the line on paper -- and under
+            // `.pf on` the lines WordStar re-wraps at print time (planning #270 item
+            // 37, `pfRewrappedLines`: every other block hands back `block.lines`
+            // itself, unchanged).
+            let lines = alignLines(pfRewrappedLines(doc, block).map(render), block)
             let para = lines.joined(separator: "\n")
             // emit.py:69 — in printed mode an all-whitespace paragraph is still a
             // printed paragraph and is kept.

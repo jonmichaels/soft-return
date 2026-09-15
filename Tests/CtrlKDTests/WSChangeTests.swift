@@ -58,7 +58,10 @@ struct MissingSawyerFixture: Error, CustomStringConvertible {
 }
 
 private func patFixture(_ name: String) throws -> [UInt8] {
-    let path = sawyerArchivePath + "/" + name + ".PAT"
+    var path = sawyerArchivePath
+    path += "/"
+    path += name
+    path += ".PAT"
     guard let data = FileManager.default.contents(atPath: path) else {
         throw MissingSawyerFixture(path: path)
     }

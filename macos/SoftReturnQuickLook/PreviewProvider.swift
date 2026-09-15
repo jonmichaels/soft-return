@@ -6,6 +6,7 @@ import PDFKit
 // QLPreviewReply, QLFilePreviewRequest) are vended by QuickLookUI. Importing QuickLook
 // compiles the file and then fails to find any of them.
 import QuickLookUI
+import SoftReturnShared
 import UniformTypeIdentifiers
 
 /// Spacebar in the Finder shows the document, as a page.
@@ -51,11 +52,16 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
             }
         }
 
+        // Batch 28 (#271 M10): the parse and the engine's pagination here, off the main actor;
+        // `QuickLookEngineWork` is plain `Sendable` data. The main actor takes only the text, the
+        // layout and the PDF (`QuickLookNativeRenderer.previewPDF(for:)`, which
+        // `QuickLookTimingTests` times).
+        let work = try QuickLookEngineWork.make(
+            bytes: bytes, docPath: docPath,
+            pageSettingsPreset: QuickLookPageSettingsPreference.resolvedDefault())
         let (pdf, pageSize) = try await MainActor.run { () throws -> (Data, CGSize) in
-            let rendered = try QuickLookNativeRenderer.renderedDocument(
-                fromFileBytes: bytes, docPath: docPath)
-            let pdf = try QuickLookNativeRenderer.multiPagePDF(for: rendered)
-            return (pdf, rendered.pageSize)
+            let preview = try QuickLookNativeRenderer.previewPDF(for: work)
+            return (preview.pdf, preview.pageSize)
         }
 
         // `.zero` told QuickLookUI the preview has no intrinsic size to lay a window out

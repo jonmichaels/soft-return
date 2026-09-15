@@ -33,6 +33,11 @@ public func parse(_ data: [UInt8], variant: Variant? = nil) throws -> Document {
     }
     let detection = variant == nil ? detect(data) : nil
     let v = variant ?? detection!.variant
+    // planning #264, mail-merge scope (ruled 2026-09-13): a data file opens as its own
+    // records, not as a document that happens to be full of commas. See `parseMergeData`.
+    if let detection, detection.kind == mergeDataKind {
+        return parseMergeData(data, detection: detection)
+    }
     switch v {
     case .ws4, .ws5plus:
         return parseWS(data)
