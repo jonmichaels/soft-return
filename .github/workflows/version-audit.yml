@@ -5,7 +5,7 @@
 # public, so the knowledge that section documents is embedded directly
 # in this workflow's script below):
 #
-#   - Sources/SoftReturnCLI/Arguments.swift's `srVersion` is the ONE
+#   - Sources/CtrlKD/EngineVersion.swift's `engineVersion` is the ONE (srVersion re-exports it; moved 2026-09-16)
 #     engine version, and it is a plain numeric X.Y.Z (no "v" prefix,
 #     no "-beta"/"b34"-style suffix).
 #   - macos/Project.swift carries MARKETING_VERSION and
@@ -54,7 +54,7 @@ jobs:
           import sys
           import pathlib
 
-          ARGS_PATH = "Sources/SoftReturnCLI/Arguments.swift"
+          ARGS_PATH = "Sources/CtrlKD/EngineVersion.swift"
           PROJECT_PATH = "macos/Project.swift"
 
           failures = []
@@ -75,7 +75,7 @@ jobs:
 
           # --- Check 1: exactly one `srVersion = "X.Y.Z"`, plain numeric ---
           if args_text is not None:
-              decl_re = re.compile(r'\bsrVersion\s*=\s*"([^"]*)"')
+              decl_re = re.compile(r'\bengineVersion\s*=\s*"([^"]*)"')
               matches = []
               for i, line in enumerate(args_text.splitlines(), start=1):
                   m = decl_re.search(line)

@@ -32,7 +32,7 @@
 # required assets are absent, rather than silently passing partial state.
 #
 # Jobs:
-#   guard      - the release tag must equal srVersion in
+#   guard      - the release tag must equal engineVersion in
 #                Sources/SoftReturnCLI/Arguments.swift, the single
 #                machine-readable version source (see version-audit.yml's
 #                header comment for why that file is canonical). Fails
@@ -77,22 +77,22 @@ jobs:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - id: v
-        name: Tag must equal srVersion (Sources/SoftReturnCLI/Arguments.swift)
+        name: Tag must equal engineVersion (Sources/CtrlKD/EngineVersion.swift)
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          ARGS="Sources/SoftReturnCLI/Arguments.swift"
+          ARGS="Sources/CtrlKD/EngineVersion.swift"
           if [ ! -f "$ARGS" ]; then
             echo "::error::$ARGS not found at ref $TAG"
             exit 1
           fi
-          VER="$(sed -n 's/^public let srVersion = "\(.*\)"/\1/p' "$ARGS")"
-          echo "tag=$TAG srVersion=$VER"
+          VER="$(sed -n 's/^public let engineVersion = "\(.*\)"/\1/p' "$ARGS")"
+          echo "tag=$TAG engineVersion=$VER"
           if [ -z "$VER" ]; then
-            echo "::error::could not find a \`srVersion = \"X.Y.Z\"\` declaration in $ARGS"
+            echo "::error::could not find an \`engineVersion = \"X.Y.Z\"\` declaration in $ARGS"
             exit 1
           fi
           if [ "v$VER" != "$TAG" ]; then
-            echo "::error::tag $TAG does not match srVersion $VER (from $ARGS)"
+            echo "::error::tag $TAG does not match engineVersion $VER (from $ARGS)"
             exit 1
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
