@@ -401,6 +401,66 @@ struct RenderedDocument {
     /// Empty in Modern style, which has no `PageLine`/paper-facsimile concept for a PCL
     /// rectangle to draw against at all.
     let pclPrograms: [[UInt8]]
+    /// Batch 41 (A): what the engine's Modern PDF draws on each page besides body text
+    /// (`modernPageFurniture`, engine be5fefb) — the sheet, the text frame, the newspaper columns.
+    /// Empty for every non-Modern render.
+    var modernFurniture: [ModernPageFurniture] = []
+    /// Batch 41 (after the release gate): the flags THIS render was asked for, so the view can honour them when
+    /// it draws the furniture's running lines.
+    ///
+    /// Suppression of Modern's heads used to be a property of the TEXT: `guard exportFlags.headers else
+    /// { return }` skipped recording the `.hf` events, and the view drew its running lines from those events, so
+    /// no events meant no heads. Items C and F moved the view onto the engine's furniture, which describes the
+    /// page whatever the export asked for — and rightly so; the furniture is not an export decision. The flag
+    /// therefore has to travel with the render and be honoured where the lines are CONSUMED, which is what the
+    /// resolvers do with this.
+    ///
+    /// Asking the engine for headerless furniture would be the other shape, and it is not this one: the live
+    /// window always renders `.allOn`, so only the export path has anything to suppress, and a furniture record
+    /// that silently omitted heads would make every geometry test read differently depending on who asked.
+    var exportFlags = DocumentRenderer.ExportFlags.allOn
+    /// Batch 41 (columns): per Modern page, where each of its columns ends in THIS render's own text — the engine's own
+    /// column partition (`ModernPageFurniture.columnRanges`, engine 63fab84) resolved against the text this render
+    /// built. Empty when no furniture covers the render, where the views keep their own chain of forced breaks.
+    var modernColumnBreaks: [[ModernColumnBreak]] = []
+    /// Batch 41 (columns): where each flow item began in this render's own text, or -1 for an item that put nothing
+    /// there. The engine names a column's end as an item and an offset inside it, and the two texts are NOT the same
+    /// length — the engine's flow carries `hf` and `break` text the view's does not — so this is what the mapping
+    /// resolves against, and what a test needs to say WHERE the two disagree rather than only that they do.
+    var modernItemStarts: [Int] = []
+}
+
+/// Batch 41 (columns): one Modern column's own end in the view's text.
+struct ModernColumnBreak: Sendable {
+    /// The column this content sits in, `0..<columns`. Not always the container's ordinal: a column the engine's
+    /// pagination left empty is not reported at all, and its items roll into the next column that took some.
+    let column: Int
+    /// Where this column's content ends in the view's own text — `nil` for the last column of the last page, which
+    /// runs to the end.
+    let end: Int?
+}
+
+extension RenderedDocument {
+    /// Batch 41 (columns): how many newspaper columns the engine lays page `page` in (`ModernPageFurniture.columns`,
+    /// which a `.co` regime change varies from page to page). One for every other render, and for a page the engine
+    /// lays no Modern page for.
+    func modernColumns(onPage page: Int) -> Int {
+        guard !clipsLines, modernFurniture.indices.contains(page) else { return 1 }
+        return max(1, modernFurniture[page].columns)
+    }
+
+    /// One Modern column's width on page `page` — the engine's own, or the whole text frame where there is one column.
+    func modernColumnWidth(onPage page: Int) -> CGFloat {
+        guard modernColumns(onPage: page) > 1, modernFurniture.indices.contains(page) else { return textFrame.width }
+        return max(1, CGFloat(modernFurniture[page].columnWidth))
+    }
+
+    /// How far column `index` of page `page` starts right of the text frame's own left edge.
+    func modernColumnOffset(_ index: Int, onPage page: Int) -> CGFloat {
+        guard index > 0, modernColumns(onPage: page) > 1, modernFurniture.indices.contains(page) else { return 0 }
+        let furniture = modernFurniture[page]
+        return CGFloat(index) * (CGFloat(furniture.columnWidth) + CGFloat(furniture.columnGutter))
+    }
 }
 
 /// Job 412: one `RenderedDocument.pinnedBaselines` entry — see that field's own doc comment.
@@ -478,7 +538,11 @@ private func desuperscripted(_ line: PageLine) -> PageLine {
 /// names for a running line, `PDFWriter.swift:209`'s `pdfFont(bold: false, italic: false)`)
 /// so `PagedDocumentView` only ever has to draw it, never reconstruct its font.
 struct RunningLine {
-    enum Kind { case header, footer }
+    /// Batch 41 (C): `autoPageNumber` is WordStar's own automatic number, which rides a footer's row but is NOT a
+    /// typed `.f#` line — a document can carry both, and a test that asked "which of these is the number" could
+    /// only have guessed from the text otherwise. Nothing switches exhaustively on this, and the probes' own
+    /// `isHeader` test (`kind == .header`) stays right: the number is not a header.
+    enum Kind { case header, footer, autoPageNumber }
     let text: NSAttributedString
     let baselineFromTop: Double
     /// How far `PagedDocumentView.drawRunningLines` must pull its `NSAttributedString
@@ -1698,13 +1762,19 @@ struct NativeAnnotatedEngineWork: Sendable {
 struct ModernEngineWork: Sendable {
     let flow: SemanticFlow
     let graphicCells: [Int: [PageLine.GraphicCellPlacement]]
+    /// Batch 41 (A): the engine's Modern page furniture — made here, off the main thread, because it runs the Modern
+    /// emitter itself.
+    let furniture: [ModernPageFurniture]
 
-    nonisolated static func make(document: Document) -> ModernEngineWork {
+    /// `options`: `DocumentRenderer.modernEngineOptions` — the page-settings preset and Page Numbers the Modern export
+    /// uses, made on the main thread by the caller.
+    nonisolated static func make(document: Document, options: EmitOptions) -> ModernEngineWork {
         let flow = modernSemanticFlow(document)
         // The same notes and references the flow was made with, so the engine places the cells on this flow
         // instead of deriving it a second time (`semCached`).
         return ModernEngineWork(flow: flow, graphicCells: attachGraphicCellsModern(
-            document, notes: EmitOptions.defaultNotes, noteRefs: .word, semCached: flow))
+            document, notes: EmitOptions.defaultNotes, noteRefs: .word, semCached: flow),
+            furniture: modernPageFurniture(document, options: options))
     }
 }
 
@@ -1881,6 +1951,15 @@ enum DocumentRenderer {
     /// The options a Native render lays the document out with: the Margins choice and the resolved pictures.
     static func nativeEngineOptions(_ state: DocumentState) -> EmitOptions {
         EmitOptions(pageSettings: state.pageSettingsPreset.value?.settings, pixResults: state.pixResults)
+    }
+
+    /// Batch 41 (A, presets): the options Modern's own export lays its pages out with — the bottom bar's page-settings
+    /// preset and the Page Numbers setting (`ExportEngine.render`) — so the Modern view reads the same page furniture
+    /// (`modernPageFurniture(_:options:)`, engine 93d458d) the export draws.
+    static func modernEngineOptions(_ state: DocumentState) -> EmitOptions {
+        var options = EmitOptions(pageSettings: state.pageSettingsPreset.value?.settings)
+        options.pageNumbers = SettingsStore.shared.defaultPageNumbers
+        return options
     }
 
     /// `engine`: the engine's half made already — off the main thread, by a window (batch 26) — for
@@ -2815,9 +2894,9 @@ enum DocumentRenderer {
         // space — "counting marks as real lines" per the reflow ruling, extended to a mark
         // that itself spans several visual rows. No `\n` is ever inserted at a wrap point —
         // wrapping is AppKit's own visual line-breaking of ONE paragraph, never a new
-        // character — so `endMark`'s own ↵/¶ glyph (appended once, after the LAST span) can
+        // character — so `endMark`'s own ¬/¶ glyph (appended once, after the LAST span) can
         // never appear anywhere but the paragraph's true end, matching "wrap points show no
-        // ↵ icon" exactly by construction, not by suppressing anything.
+        // soft-return icon" exactly by construction, not by suppressing anything.
         func wrapParagraphStyle(lead: Double) -> NSParagraphStyle {
             let style = NSMutableParagraphStyle()
             style.minimumLineHeight = CGFloat(lead)
@@ -2912,10 +2991,13 @@ enum DocumentRenderer {
         // `AnnotatedSpan` already carries the host run's own `font` (`AnnotatedSpan`'s own
         // doc comment: "so a viewer can size a mark like the line it sits in without
         // re-deriving the surrounding run"), so this is a direct read, never a guess.
+        //
+        // Batch 40 (M14, Athena's rule: one glyph and one colour per kind of mark): every mark is set in the page's base
+        // face, `baseFont`, whatever run it sits in. A mark in its run's own face and weight took that run's size and
+        // bold/italic — a `.h1` title's marks drawn huge beside body-sized ones, a style toggle bold in one place and
+        // plain in the next — and a mark taller than the line's lead reached into the lines around it.
         func markFont(_ font: FontChange?, styles: Style) -> NSFont {
-            guard let font else { return styled(baseFont, with: styles) }
-            return resolvedFont(for: font, styles: styles, fallback: baseFont, defaultSize: metrics.size,
-                                useCourierPrime: true)
+            baseFont
         }
 
         // JOB 257: `suppressVisible` blanks a line's OWN `.visible` text — used only for an
@@ -2989,7 +3071,10 @@ enum DocumentRenderer {
             // "soft/hard end-of-line marks... inline after the last character" (job 256's
             // brief) — `endMark` is the LINE's own property, appended once, after every span.
             if let endMark = line.endMark {
-                let symbol = endMark == .softReturn ? "↵" : "¶"
+                // Batch 40 (M14): "¬" for a soft return. System Courier, `baseFont`, has no "↵" (nor "↩", "⏎" or "↲"
+                // — measured with CTFontGetGlyphsForCharacters), so every soft-return mark was drawn in a fallback face
+                // with its own, taller metrics; it has "¬" and "¶".
+                let symbol = endMark == .softReturn ? "¬" : "¶"
                 result.append(markRun(symbol, font: baseFont, spoken: spokenLabel(endMark), paragraph: paragraph))
             }
 
@@ -4573,12 +4658,154 @@ enum DocumentRenderer {
     /// only the margins inside it come from the file.
     static func modernTextFrame(_ doc: Document, paper: CGSize) -> CGRect {
         let geometry = modernGeometry(doc)
-        // The right margin is always 1in — WordStar's right edge is a text measure (`.rm`),
-        // not a page property (`modernGeometry`'s own note).
-        let width = max(1, paper.width - CGFloat(geometry.left) - 72)
+        // Batch 41: the engine's own measure — its right margin mirrors the left (engine f596f82),
+        // no longer a flat 1in.
+        let width = max(1, CGFloat(geometry.width))
         let height = max(1, paper.height - CGFloat(geometry.top) - CGFloat(geometry.bottom))
         return CGRect(x: CGFloat(geometry.left), y: CGFloat(geometry.top),
                       width: width, height: height)
+    }
+
+    /// Batch 41 (A): Modern's page — the sheet, the text frame on it, and the measure a paragraph wraps at.
+    struct ModernPage {
+        let paper: CGSize
+        let textFrame: CGRect
+        /// One column's width on a page the engine lays in newspaper columns, else the frame's.
+        let measure: CGFloat
+    }
+
+    /// Batch 41 (A): Modern's page as the engine's own Modern PDF lays it (`modernPageFurniture`'s first page): its
+    /// sheet — the document's declared page, `.pr or=l` applied, which put REF/BOOKLET.WS on a portrait Letter sheet
+    /// until now — and the text frame and columns on it. A hand-picked Page size in the bottom bar still wins for the
+    /// sheet, exactly as Native's does (Athena, 2026-09-15), and the text keeps the engine's frame on it. A document the
+    /// engine lays no Modern page for keeps the paper the bottom bar reports.
+    static func modernPage(_ state: DocumentState, furniture: [ModernPageFurniture]) -> ModernPage {
+        let doc = state.document
+        let manual = state.pageSize.provenance == .manual ? state.pageSize.value?.sizeInPoints : nil
+        guard let first = furniture.first else {
+            let paper = state.pageSize.value?.sizeInPoints
+                ?? CGSize(width: modernMetrics(doc).pageWidth, height: modernMetrics(doc).pageHeight)
+            let frame = modernTextFrame(doc, paper: paper)
+            return ModernPage(paper: paper, textFrame: frame, measure: frame.width)
+        }
+        let paper = manual ?? CGSize(width: first.sheetWidth, height: first.sheetHeight)
+        let frame = CGRect(x: first.marginLeft, y: first.marginTop, width: max(1, first.textWidth),
+                           height: max(1, paper.height - first.marginTop - first.marginBottom))
+        // The whole frame: newspaper columns wait on the engine's own column ranges (`modernColumnCount`).
+        return ModernPage(paper: paper, textFrame: frame, measure: frame.width)
+    }
+
+    /// Batch 41 (columns): the engine's own column partition, resolved against the text this render built.
+    ///
+    /// `ModernColumnRange` (engine 63fab84) names each column's end as a flow-item index and a UTF-16 offset into that
+    /// item's own `runs.map(\.text).joined()`. `endItem` is EXCLUSIVE and the ranges are contiguous across columns and
+    /// pages, so a column's end is the next one's start and the last ends at `items.count`. An offset of `0` means a
+    /// whole-item boundary — this item begins the next column — and a non-zero offset means the item was split at a
+    /// visual line, the offset being where the line on the far side begins.
+    ///
+    /// A whole-item boundary resolves to that item's own start in the view's text (`itemStarts`, recorded as the text
+    /// was built). A SPLIT resolves by looking for the engine's own text at that offset inside the view's copy of that
+    /// item: the view's text is not the flow's joined run text (sentence spacing collapsed, markers and tabs inserted),
+    /// so an arithmetic offset would drift. The search runs in a window around where the offset would fall if nothing
+    /// had changed, because a document like REF/BOOKLET.WS repeats the same sentence inside one item and a
+    /// whole-item search could match the wrong copy.
+    static func modernColumnBreaks(furniture: [ModernPageFurniture], items: [SemanticItem],
+                                   itemStarts: [Int], text: String) -> [[ModernColumnBreak]] {
+        guard !furniture.isEmpty, !itemStarts.isEmpty else { return [] }
+        let whole = text as NSString
+
+        /// The first item at or after `index` that put something in the view's text, and where it began.
+        func start(atOrAfter index: Int) -> Int? {
+            var cursor = max(0, index)
+            while cursor < itemStarts.count {
+                if itemStarts[cursor] >= 0 { return itemStarts[cursor] }
+                cursor += 1
+            }
+            return nil
+        }
+
+        /// The text with every run of whitespace squeezed to one space and every invisible dropped, plus a map from
+        /// each kept character back to where it came from. The two texts differ INSIDE an item — measured on
+        /// REF/BOOKLET.WS, the engine's paragraph is 238 characters where the view's is 250, and the extra twelve sit
+        /// at different places in the line — so a boundary is found by comparing what the characters SAY, with the
+        /// map giving back the real offset.
+        func normalised(_ text: NSString, from: Int, to: Int) -> (text: String, map: [Int]) {
+            var scalars: [Character] = []
+            var map: [Int] = []
+            var lastWasSpace = false
+            var index = from
+            while index < to {
+                let unit = text.character(at: index)
+                // The view inserts WORD JOINERs of its own, and neither side's spacing is the other's.
+                if unit == 0x2060 || unit == 0xFEFF { index += 1; continue }
+                let scalar = Character(UnicodeScalar(unit) ?? " ")
+                if scalar.isWhitespace {
+                    if !lastWasSpace { scalars.append(" "); map.append(index); lastWasSpace = true }
+                } else {
+                    scalars.append(scalar); map.append(index); lastWasSpace = false
+                }
+                index += 1
+            }
+            return (String(scalars), map)
+        }
+
+        /// One engine boundary in the view's own text, or `nil` for "the end of the document". A boundary this cannot
+        /// place returns `nil` rather than an arithmetic guess: `itemStart + offset` is WRONG — the two texts run to
+        /// different lengths inside an item — and a wrong offset that looks plausible is worse than none, because the
+        /// column silently fills to its own capacity instead and nothing says why.
+        func viewOffset(item: Int, offset: Int) -> Int? {
+            guard item < itemStarts.count else { return nil }
+            guard let itemStart = start(atOrAfter: item) else { return nil }
+            guard offset > 0, itemStarts.indices.contains(item), itemStarts[item] == itemStart,
+                  case .para(_, _, _, let runs, _, _, _, _) = items[item]
+            else { return itemStart }
+            let engineText = runs.map(\.text).joined() as NSString
+            guard offset < engineText.length else { return itemStart }
+            let itemEnd = start(atOrAfter: item + 1) ?? whole.length
+            guard itemEnd > itemStart else { return itemStart }
+
+            // What the engine's line SAYS at the boundary, normalised, and the same for the view's copy of the item.
+            //
+            // SEARCHED IN A WINDOW, NOT ACROSS THE WHOLE ITEM. REF/BOOKLET.WS repeats one paragraph over and over
+            // — its boundary phrase occurs 37 times in the flow, at 139, 359, 579 … 1459, 1679 — so a whole-item
+            // search takes whichever copy comes first and can land a boundary hundreds of characters past the
+            // right one. (That is exactly what it did: 1679 next door to the 1675 this used to return.)
+            //
+            // The window is measured in the NORMALISED space on BOTH sides, which is what the earlier windowed
+            // version got wrong: it positioned the window with `itemStart + offset`, an arithmetic estimate in
+            // RAW characters, and the two texts do not run to the same length inside an item. Normalising first
+            // puts both in the same units, so the engine's own normalised distance from the item's start is a
+            // sound estimate of the view's, and a tolerance around it only has to absorb the small differences
+            // that remain.
+            let engineItem = normalised(engineText, from: 0, to: engineText.length)
+            let engineBoundary = engineItem.map.firstIndex { $0 >= offset } ?? engineItem.text.count
+            let engineTail = normalised(engineText, from: offset, to: engineText.length).text
+            guard !engineTail.isEmpty else { return itemStart }
+            let needle = String(engineTail.prefix(24))
+            let view = normalised(whole, from: itemStart, to: itemEnd)
+            let slack = 48
+            let lower = max(0, engineBoundary - slack)
+            let upper = min(view.text.count, engineBoundary + slack + needle.count)
+            var found: Range<String.Index>?
+            if upper > lower {
+                let from = view.text.index(view.text.startIndex, offsetBy: lower)
+                let to = view.text.index(view.text.startIndex, offsetBy: upper)
+                found = view.text.range(of: needle, range: from..<to)
+            }
+            // No whole-item fallback: on a repeating document that is the very thing that mis-placed the
+            // boundary. A boundary this window cannot place is reported as unplaceable and fails loudly.
+            guard let found else { return nil }
+            let position = view.text.distance(from: view.text.startIndex, to: found.lowerBound)
+            guard view.map.indices.contains(position) else { return nil }
+            return view.map[position]
+        }
+
+        return furniture.map { page in
+            page.columnRanges.sorted { $0.column < $1.column }.map { range in
+                ModernColumnBreak(column: range.column,
+                                  end: viewOffset(item: range.endItem, offset: range.endOffset))
+            }
+        }
     }
 
     private static func renderModern(_ state: DocumentState,
@@ -4774,7 +5001,7 @@ enum DocumentRenderer {
         // is 7.20pt in the library (12 x 0.6) and was 8.40 here (14 x 0.6), so every one of
         // those rows started 1.20pt right of the library's and lost its last word.
         let modernPrintedPt = printedSize(doc)
-        let work = engine ?? ModernEngineWork.make(document: doc)
+        let work = engine ?? ModernEngineWork.make(document: doc, options: Self.modernEngineOptions(state))
         var flow = work.flow
         // b34 N1 (job 529): same collapse `modernParagraphContent`'s own citation
         // explains, applied to note/footnote text — `PDFModernLayout.swift`'s
@@ -4806,12 +5033,10 @@ enum DocumentRenderer {
         // WORDSTAR.PIX: ~468pt wide native, capped to ~7pt — the "dash placeholder" field
         // report, intake items 15/23). Same paper/margin this function computes at its own
         // end for `textFrame` — hoisted here since it does not depend on anything the item
-        // loop below produces.
-        let modernTextWidthPt: Double = {
-            let paper = state.pageSize.value?.sizeInPoints
-                ?? CGSize(width: modernMetrics(doc).pageWidth, height: modernMetrics(doc).pageHeight)
-            return max(1, Double(Self.modernTextFrame(doc, paper: paper).width))
-        }()
+        // loop below produces. Batch 41 (A): the engine's page, and one COLUMN's width on a
+        // columnar page, since that is the measure a paragraph and its picture sit in.
+        let modernPage = Self.modernPage(state, furniture: work.furniture)
+        let modernTextWidthPt: Double = max(1, Double(modernPage.measure))
         // b27 item 11: computed once, not per-line — `ModernScreenplay.detectBlocks` already
         // walks the whole document itself (same discipline the engine's own `modernFlow`
         // uses for its own `screenplayBlocks`/`screenplayMarkerBis`).
@@ -4903,9 +5128,16 @@ enum DocumentRenderer {
         var modernForcedPageBreakOffsets: [Int] = []
         var modernBlankLineRanges: [NSRange] = []
         var modernConditionalBreaks: [ModernConditionalBreak] = []
+        // Batch 41 (columns): where each flow item's own text begins in `output` — the map the engine's column
+        // boundaries (`ModernColumnRange`: an item index and a UTF-16 offset into that item's own run text) are
+        // resolved against once the whole text exists. `-1` for an item that contributed nothing to the view.
+        var modernItemStarts = [Int](repeating: -1, count: items.count)
         // Batch 26: one flow item's work — the loop body it always was, run in order by `ModernRenderSession`.
         func renderItem(_ i: Int) {
             let item = items[i]
+            // Batch 41 (columns): where this item's own text begins, whatever kind it is — the anchor every engine
+            // column boundary inside it is resolved from.
+            if modernItemStarts.indices.contains(i) { modernItemStarts[i] = output.length }
             switch item {
             case .para(let align, let indentCols, let cutCols, let runs, let paraFootnotes, let structure, let isVerse, let bi):
                 // b27 item 11: Jon's screenplay ruling, Modern's own port (see
@@ -5327,9 +5559,9 @@ enum DocumentRenderer {
         // independent PDF baseline to check against: Modern's own PDF export
         // (`ExportEngine.modernPDF`) draws this SAME `textFrame` through the native text
         // stack, so screen and export can only ever agree or disagree together.
-        let paper = state.pageSize.value?.sizeInPoints
-            ?? CGSize(width: modernMetrics(doc).pageWidth, height: modernMetrics(doc).pageHeight)
-        let textFrame = Self.modernTextFrame(doc, paper: paper)
+        // Batch 41 (A): the engine's own sheet and frame (`modernPage`), a hand-picked Page size aside.
+        let paper = modernPage.paper
+        let textFrame = modernPage.textFrame
 
         var document = RenderedDocument(
             text: flowText,
@@ -5388,6 +5620,13 @@ enum DocumentRenderer {
         // `var`, so it is assigned rather than passed — see its own doc comment.
         document.modernBlankLineRanges = modernBlankLineRanges
         document.modernConditionalBreaks = modernConditionalBreaks
+        document.modernFurniture = work.furniture
+        // The flags this render was asked for, carried so the view can honour them where the furniture's
+        // running lines are drawn — see `RenderedDocument.exportFlags`.
+        document.exportFlags = exportFlags
+        document.modernItemStarts = modernItemStarts
+        document.modernColumnBreaks = Self.modernColumnBreaks(
+            furniture: work.furniture, items: items, itemStarts: modernItemStarts, text: flowText.string)
         return document
         }
         return ModernRenderSession(itemCount: items.count, renderItem: renderItem,
@@ -5468,10 +5707,19 @@ enum DocumentRenderer {
     /// the flow, not adding the toggle that puts it there). `internal` rather than `private`
     /// so `SoftReturnTests` can exercise the mark with `notes: [.comment]`, the same reason
     /// `attributedLine` above is `internal`.
+    /// Batch 40 (M14): the room, in points, Show Invisibles leaves between a Modern line's last glyph and its "¶" —
+    /// more than the 0.68 pt a glyph's ink was measured overhanging its advance, taken back from the mark's own advance.
+    static let modernHardReturnRoom: CGFloat = 1.5
+
+    /// Batch 40 (M14): Show Invisibles' Modern "¶", as a fraction of the body size — small enough that its ink clears a
+    /// descender on a tightly led row above (b40-m14-after4), and every hard return the same size.
+    static let modernHardReturnScale: CGFloat = 0.8
+
     internal static func renderModernAnnotated(
-        _ state: DocumentState, notes: Set<NoteKind> = EmitOptions.defaultNotes
+        _ state: DocumentState, notes: Set<NoteKind> = EmitOptions.defaultNotes,
+        exportFlags: ExportFlags = .allOn
     ) -> RenderedDocument {
-        let render = modernAnnotatedRender(state, notes: notes)
+        let render = modernAnnotatedRender(state, notes: notes, exportFlags: exportFlags)
         render.renderAll()
         return render.finish()
     }
@@ -5479,7 +5727,9 @@ enum DocumentRenderer {
     /// Batch 27: `renderModernAnnotated`'s work in slices (`SlicedRender`), one flow item a step, the loop body
     /// the one it always was. `flow`: `modernSemanticFlow` made already, off the main thread, with `notes`.
     static func modernAnnotatedRender(
-        _ state: DocumentState, notes: Set<NoteKind> = EmitOptions.defaultNotes, flow engineFlow: SemanticFlow? = nil
+        _ state: DocumentState, notes: Set<NoteKind> = EmitOptions.defaultNotes, flow engineFlow: SemanticFlow? = nil,
+        furniture engineFurniture: [ModernPageFurniture]? = nil,
+        exportFlags: ExportFlags = .allOn
     ) -> SlicedRender {
         let doc = state.document
         let size = CGFloat(state.modernFontSize)
@@ -5533,11 +5783,12 @@ enum DocumentRenderer {
         // function to insert the identical spacer paragraph `renderModern` does, at the same
         // place, so a page-1 oversized title's screen affordance stays invisible to that
         // oracle's per-item comparison, not a Show-Invisibles-only layout change.
-        let modernTextWidthPt: Double = {
-            let paper = state.pageSize.value?.sizeInPoints
-                ?? CGSize(width: modernMetrics(doc).pageWidth, height: modernMetrics(doc).pageHeight)
-            return max(1, Double(Self.modernTextFrame(doc, paper: paper).width))
-        }()
+        // Batch 41 (A): the same engine page `renderModern` lays out on (`modernPage`) — made off
+        // the main thread by a window, with the flow (`engineFurniture`), since it runs the whole
+        // Modern emitter: made here it held -HOLYMAC.WS's main thread 1.7 s (b41-a).
+        let modernFurniture = engineFurniture ?? modernPageFurniture(doc, options: Self.modernEngineOptions(state))
+        let modernPage = Self.modernPage(state, furniture: modernFurniture)
+        let modernTextWidthPt: Double = max(1, Double(modernPage.measure))
         let blankParagraph = Self.modernParagraphStyle(colPt: colPt, size: size, align: .left,
                                                         indentCols: 0, cutCols: 0)
         let noteSize = size * (11.0 / 14.0)
@@ -5548,9 +5799,14 @@ enum DocumentRenderer {
 
         let output = NSMutableAttributedString()
 
-        func markRun(_ text: String, paragraph: NSParagraphStyle, spoken: String) -> NSAttributedString {
+        // Batch 40 (M14): the "¶" is set smaller than the body. At the body's 14 pt its ink rises 9.70 pt above the
+        // baseline; on -README.WS page 18 a row set about 12.5 pt below the one above put that ink 1.23 pt into a
+        // descender above it (b40-m14-after4). At `modernHardReturnScale` it rises 7.76 pt — still taller than the
+        // text's x-height — and every hard return, on a line or alone on a blank one, is the one size.
+        let hardReturnFont = bodyFont.withSize(bodyFont.pointSize * Self.modernHardReturnScale)
+        func markRun(_ text: String, paragraph: NSParagraphStyle, spoken: String, font: NSFont? = nil) -> NSAttributedString {
             NSAttributedString(string: text, attributes: [
-                .font: bodyFont,
+                .font: font ?? bodyFont,
                 .foregroundColor: invisibleMarkColour,
                 .paragraphStyle: paragraph,
                 .accessibilityAnnotationTextAttribute: [[NSAccessibility.AnnotationAttributeKey.label: spoken]],
@@ -5690,19 +5946,31 @@ enum DocumentRenderer {
                     markRun(control.label, paragraph: paragraph, spoken: "print control: \(control.label)")
                 }
                 if isPlainParagraph {
-                    var offset = 0
+                    // Batch 40 (M14): the offset walks `line` itself, stepping over the zero-width break characters
+                    // `runBoundaryBreaks` and `joinOversizedTokens` put in (U+200B, U+2060), which no run's own text
+                    // holds. Summing the runs' lengths alone left every later mark that many characters short of its
+                    // run's boundary: inside a word, or splitting a token the joiners hold together.
+                    var position = 0
+                    func isInsertedBreak(_ index: Int) -> Bool {
+                        let unit = line.mutableString.character(at: index)
+                        return unit == 0x200B || unit == 0x2060
+                    }
+                    func insertMark(_ mark: NSAttributedString) {
+                        line.insert(mark, at: min(position, line.length))
+                        position += mark.length
+                    }
                     for (runIndex, run) in runs.enumerated() {
                         for control in printControls where control.run == runIndex {
-                            let mark = printControlMark(control)
-                            line.insert(mark, at: min(offset, line.length))
-                            offset += mark.length
+                            insertMark(printControlMark(control))
                         }
                         if run.ref != nil, run.text.isEmpty {
-                            let mark = markRun("[comment]", paragraph: paragraph, spoken: "comment")
-                            line.insert(mark, at: min(offset, line.length))
-                            offset += mark.length
+                            insertMark(markRun("[comment]", paragraph: paragraph, spoken: "comment"))
                         } else {
-                            offset += run.text.utf16.count
+                            var remaining = run.text.utf16.count
+                            while remaining > 0, position < line.length {
+                                if !isInsertedBreak(position) { remaining -= 1 }
+                                position += 1
+                            }
                         }
                     }
                     for control in printControls where control.run >= runs.count {
@@ -5713,7 +5981,21 @@ enum DocumentRenderer {
                         line.append(printControlMark(control))
                     }
                 }
-                line.append(markRun("¶", paragraph: paragraph, spoken: "hard return"))
+                // Batch 40 (M14): a little room between the line's last glyph and its "¶". The mark sat at the last
+                // glyph's advance, and a glyph's ink can overhang its advance — b40-m14-after2 measured 28 marks on
+                // -README.WS touching the letter before them, by up to 0.68 pt. The room is added after the last
+                // character and taken back from the mark's own advance, so the line is exactly as wide as it was: it
+                // breaks where it broke and nothing on it moves (job 300's ruling, `InvisiblesModernLayoutTests`).
+                let hardReturn = NSMutableAttributedString(attributedString: markRun(
+                    "¶", paragraph: paragraph, spoken: "hard return", font: hardReturnFont))
+                if line.length > 0 {
+                    let last = (line.string as NSString).rangeOfComposedCharacterSequence(at: line.length - 1)
+                    let existing = (line.attribute(.kern, at: last.location, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
+                    line.addAttribute(.kern, value: existing + Double(Self.modernHardReturnRoom), range: last)
+                    hardReturn.addAttribute(.kern, value: -Double(Self.modernHardReturnRoom),
+                                            range: NSRange(location: 0, length: hardReturn.length))
+                }
+                line.append(hardReturn)
                 output.append(line)
                 output.append(lineTerminator(font: bodyFont, paragraph: paragraph))
             case .blank:
@@ -5722,7 +6004,7 @@ enum DocumentRenderer {
                 // already gives AppKit a real glyph on this line's baseline grid (same
                 // font/paragraph as the placeholder would have used) — matching Native's
                 // own blank-hard-return line, which shows only "¶", no leading space.
-                output.append(markRun("¶", paragraph: blankParagraph, spoken: "hard return"))
+                output.append(markRun("¶", paragraph: blankParagraph, spoken: "hard return", font: hardReturnFont))
                 output.append(lineTerminator(font: bodyFont, paragraph: blankParagraph))
             case .pageBreak(let origin):
                 // Job 371 item 3: `origin` is round 20's own restoration (`SemanticItem
@@ -5804,9 +6086,8 @@ enum DocumentRenderer {
 
         // Same paper/margin choice as the plain Modern path (`modernTextFrame` carries the
         // reasoning) — Show Invisibles changes what's drawn, never the page it is drawn on.
-        let paper = state.pageSize.value?.sizeInPoints
-            ?? CGSize(width: modernMetrics(doc).pageWidth, height: modernMetrics(doc).pageHeight)
-        let textFrame = Self.modernTextFrame(doc, paper: paper)
+        let paper = modernPage.paper
+        let textFrame = modernPage.textFrame
 
         return RenderedDocument(
             text: output,
@@ -5848,7 +6129,12 @@ enum DocumentRenderer {
             modernFootnoteEvents: [],
             modernFootnoteSeparator: NSAttributedString(),
             modernEndnoteAppendixStart: nil,
-            pclPrograms: []
+            pclPrograms: [],
+            modernFurniture: modernFurniture,
+            // Passed EXPLICITLY, not left to its default: this is the annotated path (Show Invisibles), and a
+            // `RenderedDocument` that quietly reported `.allOn` would draw the furniture's heads on an export
+            // that asked for none — the same fault, one render path over. See `RenderedDocument.exportFlags`.
+            exportFlags: exportFlags
         )
         }
         return SlicedRender(phases: [SlicedRender.Phase(count: { items.count }, step: itemStep)], finish: finish)
@@ -6246,7 +6532,10 @@ enum DocumentRenderer {
         // and every other run drawn in the resolved face with that run's own bold/italic.
         // Returns `nil` for a line with nothing left to draw once toggles are consumed
         // (`nativeHeadFootRuns`' own empty-runs case).
-        func styledLine(_ rawText: String, entry: FontChange) -> (text: NSAttributedString, leadingOffset: Double, drawOriginOffset: Double)? {
+        // Batch 41: `lineStyle` is the engine's own resolved style for the whole line
+        // (`HeadFootLine.styleAttrs` — a `.h#`/`.f#` style sheet's bold, say), ORed with each
+        // run's toggles exactly as `hfLineOps` does.
+        func styledLine(_ rawText: String, entry: FontChange, lineStyle: Style) -> (text: NSAttributedString, leadingOffset: Double, drawOriginOffset: Double)? {
             let runs = nativeHeadFootRuns(rawText)
             guard !runs.isEmpty else { return nil }
             let result = NSMutableAttributedString()
@@ -6260,7 +6549,7 @@ enum DocumentRenderer {
                     continue
                 }
                 stillLeading = false
-                let runFont = resolvedFont(for: entry, styles: run.styles, fallback: font,
+                let runFont = resolvedFont(for: entry, styles: run.styles.union(lineStyle), fallback: font,
                                            defaultSize: metrics.size, useCourierPrime: true)
                 result.append(NSAttributedString(string: text, attributes: [
                     .font: runFont, .foregroundColor: NSColor.black,
@@ -6304,7 +6593,11 @@ enum DocumentRenderer {
             guard baseline <= metrics.pageHeight else { return nil }
             let pageLeftOffset = resolved.x - leftAnchor
             let entry = resolved.font.flatMap { doc.fonts.indices.contains($0) ? doc.fonts[$0] : nil }
-            if let entry, let styled = styledLine(text, entry: entry) {
+            // Batch 41: the weight and slant the engine resolved for this line (its style sheet's
+            // own attrs, parity applied). Printed draws no underline on a running line, so only
+            // bold and italic are taken.
+            let lineStyle = resolved.styleAttrs.intersection([.bold, .italic])
+            if let entry, let styled = styledLine(text, entry: entry, lineStyle: lineStyle) {
                 return RunningLine(text: styled.text, baselineFromTop: baseline,
                                    drawOriginOffset: styled.drawOriginOffset, kind: kind,
                                    leadingOffset: styled.leadingOffset,
@@ -6341,7 +6634,7 @@ enum DocumentRenderer {
                 for run in runs {
                     let runText = nativeStripControlChars(run.text)
                     guard !runText.isEmpty else { continue }
-                    let runFont = Self.styled(font, with: run.styles)
+                    let runFont = Self.styled(font, with: run.styles.union(lineStyle))
                     result.append(NSAttributedString(string: runText, attributes: [
                         .font: runFont,
                         .foregroundColor: NSColor.black,
@@ -6365,8 +6658,10 @@ enum DocumentRenderer {
             // which uses the same absence (`NSParagraphStyle()`, unconstrained) rather than
             // the body text's lead-pinned style; a running line is drawn at its own natural
             // single-line height, never clamped to the document's `.lead` grid.
+            // Batch 41: a styled line leaves the engine's fast path for its run path, in the same
+            // Courier with the line's own bold/italic — the face `Self.styled` gives here.
             let attributed = NSAttributedString(string: degraded, attributes: [
-                .font: font,
+                .font: lineStyle.isEmpty ? font : Self.styled(font, with: lineStyle),
                 .foregroundColor: NSColor.black,
                 .kern: nativeNoKerning,
                 .ligature: nativeNoLigatures,
@@ -6423,6 +6718,97 @@ enum DocumentRenderer {
     /// already follows for its own Printed literals), header lines walking down from 44pt off
     /// the top edge, footer lines up from 44pt off the bottom (floored at 8pt so a document
     /// with many footer lines can't push one off the page) — `PDFModernLayout.swift:518-532`.
+    /// Batch 41 (C): WordStar's automatic page number as the engine's Modern PDF draws it on this page
+    /// (`ModernPageFurniture.autoPageNumber`) — `nil` when the page is not numbered at all, which the engine
+    /// already decides for the app (`.op`, a footer in use, or page numbers off), so there is no second copy of
+    /// that rule here.
+    ///
+    /// Placed the MODERN way, per M15 (Jon's ruling 2026-09-15), which the engine states on the accessor itself:
+    /// "centred in Modern's own measure on the row a Modern footer line 1 rides, never Printed's `.pc` column or
+    /// its `pl - mb + fm` row". So the x is the engine's own, carried as a `pageLeftOffset` from the text frame's
+    /// left edge exactly as `drawRunningLines` expects, and nothing is re-derived here.
+    ///
+    /// Times at the engine's own `modernNotePt` (11, `PDFModernLayout.swift:20` — vendored as a literal, the same
+    /// "cite the source line, don't import the constant" discipline the replay below already follows). `.kern` and
+    /// `.ligature` off, matching the Printed automatic number's own attributes.
+    /// Batch 41 (F): the running heads and feet the engine's Modern PDF draws on this page, taken from its own
+    /// furniture instead of replayed from `HFEvent`s against a guessed row.
+    ///
+    /// Each line arrives placed — `x` with its alignment ALREADY applied (`modernPlaceLine`), `y` a baseline up
+    /// from the sheet's foot — so nothing here re-derives a column or a row, and a centred head needs no second
+    /// copy of the centring rule. The face and size come off the line too (`family`, `pt`): the engine writes
+    /// Times at `modernNotePt` today and says so outright, but it reports both per line "so a caller never has to
+    /// know that", and taking them is what keeps this right if it ever varies.
+    ///
+    /// WordStar's inline toggle bytes are still in `text`, exactly as the Printed side keeps them, so the line is
+    /// split into runs and each run styled — the same treatment `runningLines(for:pageNo:doc:metrics:)` gives a
+    /// fontless toggled line.
+    ///
+    /// AN INK-LESS LINE IS NEVER REPORTED. The engine drops a head or foot whose tokens come out empty
+    /// (`toks.isEmpty` → `nil`), so a `.f1` that is nothing but print-control bytes stops drawing the blank
+    /// `"  "` the replay used to put on every page of REF/BOOKLET.WS. That judgement is the engine's now, not a
+    /// rule this file keeps its own copy of.
+    internal static func modernFurnitureRunningLines(
+        furniture: ModernPageFurniture, textLeft: Double
+    ) -> [RunningLine] {
+        func built(_ line: ModernHeadFootLine, kind: RunningLine.Kind) -> RunningLine? {
+            let size = CGFloat(line.pt)
+            let base: NSFont
+            switch line.family {
+            case .courier: base = NSFont(name: "Courier New", size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            case .helvetica: base = NSFont(name: "Helvetica", size: size) ?? NSFont.systemFont(ofSize: size)
+            default: base = NSFont(name: "Times New Roman", size: size) ?? NSFont.systemFont(ofSize: size)
+            }
+            let result = NSMutableAttributedString()
+            for run in nativeHeadFootRuns(line.text) {
+                let visible = nativeStripControlChars(run.text)
+                guard !visible.isEmpty else { continue }
+                result.append(NSAttributedString(string: visible, attributes: [
+                    .font: run.styles.isEmpty ? base : Self.styled(base, with: run.styles),
+                    .foregroundColor: NSColor.black,
+                    .kern: nativeNoKerning,
+                    .ligature: nativeNoLigatures,
+                ]))
+            }
+            guard result.length > 0 else { return nil }
+            let drawOriginOffset = Double(firstBaselineOffset(
+                font: base, paragraph: NSParagraphStyle(), width: 500))
+            return RunningLine(text: result, baselineFromTop: furniture.sheetHeight - line.y,
+                               drawOriginOffset: drawOriginOffset, kind: kind,
+                               pageLeftOffset: line.x - textLeft)
+        }
+        var out: [RunningLine] = []
+        for head in furniture.headers {
+            if let line = built(head, kind: .header) { out.append(line) }
+        }
+        for foot in furniture.footers {
+            if let line = built(foot, kind: .footer) { out.append(line) }
+        }
+        return out
+    }
+
+    internal static func modernAutoPageNumberLine(
+        furniture: ModernPageFurniture, textLeft: Double
+    ) -> RunningLine? {
+        guard let auto = furniture.autoPageNumber else { return nil }
+        let size: CGFloat = 11
+        let font = NSFont(name: "Times New Roman", size: size) ?? NSFont.systemFont(ofSize: size)
+        let text = nativeStripControlChars(auto.text)
+        guard !text.isEmpty else { return nil }
+        let attributed = NSAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: NSColor.black,
+            .kern: nativeNoKerning,
+            .ligature: nativeNoLigatures,
+        ])
+        let drawOriginOffset = Double(firstBaselineOffset(
+            font: font, paragraph: NSParagraphStyle(), width: 500))
+        // The furniture's `y` is a baseline up from the sheet's foot; a `RunningLine` is positioned from its top.
+        return RunningLine(text: attributed, baselineFromTop: furniture.sheetHeight - auto.y,
+                           drawOriginOffset: drawOriginOffset, kind: .autoPageNumber,
+                           pageLeftOffset: auto.x - textLeft)
+    }
+
     internal static func modernRunningLines(
         events: [HFEvent], upToOffset offset: Int, pageNo: Int, pageHeight: Double
     ) -> [RunningLine] {

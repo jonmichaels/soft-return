@@ -28,11 +28,33 @@ import Testing
 /// several `Tj` ops — one per word — all sharing one `Td` y). Port of Python's
 /// `_line_ys` test helper.
 private func lineYs(_ pdf: [UInt8]) -> [Double] {
-    var uniq: [Double] = []
+    // M15 (2026-09-15): Modern draws its running feet — and WordStar's own automatic page
+    // number — in the bottom margin zone, at y <= 44. These tests are about BODY leading,
+    // so the zone is skipped rather than each assertion being taught to expect one more
+    // baseline; Modern's body never reaches it.
+    //
+    // The automatic page number is dropped whichever mode drew it: Modern puts it in the
+    // foot zone above, and PRINTED puts it on its own `pl - mb + fm` row, which is well
+    // inside the sheet and which planning #274 moved onto the paper for every document
+    // with a `.lh` above 12pt — these fixtures included. It is recognised the same way
+    // the PCL tier recognises it: a LONE digits-only op on the page's lowest drawn row.
+    let modernFootZone = 44.0
+    var drawn: [(y: Double, text: String)] = []
     for span in contentSpans(pdf) {
         guard let y = span.y else { continue }
-        if uniq.isEmpty || abs(uniq[uniq.count - 1] - y) > 1e-6 {
-            uniq.append(y)
+        drawn.append((y: y, text: span.text))
+    }
+    if let low = drawn.map(\.y).min() {
+        let row = drawn.filter { $0.y == low }
+        if row.count == 1, !row[0].text.isEmpty,
+           row[0].text.allSatisfy({ $0.isNumber }) {
+            drawn.removeAll { $0.y == low }
+        }
+    }
+    var uniq: [Double] = []
+    for span in drawn where span.y > modernFootZone {
+        if uniq.isEmpty || abs(uniq[uniq.count - 1] - span.y) > 1e-6 {
+            uniq.append(span.y)
         }
     }
     return uniq

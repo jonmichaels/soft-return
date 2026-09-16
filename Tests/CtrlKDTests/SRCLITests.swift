@@ -440,13 +440,13 @@ private func noFSEnvironment() -> CLIEnvironment {
     // This repo never carries a dev stamp (DevStamp.swift is nil here; the app's build
     // script injects real values into its own checkout) — so the committed shape is the
     // clean release string, and the dev shape is exercised through the split-out helper.
-    #expect(versionLine(devDate: srDevDate) == "sr v4.2.0")
-    #expect(versionLine(devDate: "2026-08-14") == "sr v4.2.0 (dev 2026-08-14)")
+    #expect(versionLine(devDate: srDevDate) == "sr v4.3.0")
+    #expect(versionLine(devDate: "2026-08-14") == "sr v4.3.0 (dev 2026-08-14)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
     #expect(recorder.out == [versionOutput])
-    #expect(versionOutput.hasSuffix("sr v4.2.0"))
+    #expect(versionOutput.hasSuffix("sr v4.3.0"))
     #expect(versionOutput.contains("_____       ______     ____"))  // the SOFT RETURN Slant banner leads
     #expect(recorder.written.isEmpty)
 
@@ -1004,6 +1004,14 @@ private func noFSEnvironment() -> CLIEnvironment {
     // 217/1000 em at 14pt -- 703.2 -> 706.2, 686.4 -> 689.4, 669.6 -> 672.6, 636.0 -> 639.0.
     // Nothing else in the file moves: same fonts, same x values, same stream length, so the
     // same xref offsets. Re-captured from `convertData` the same way the original was.
+    // RE-RECORDED 2026-09-15 (M15, Jon's ruling that the Modern view shows WordStar's
+    // automatic page number wherever Printed does, ported from ctrl-kd fe03278): this
+    // fixture declares no `.op`, no footer and no `.mb 0`, so it is a numbering document
+    // and its Modern PDF gains one drawn op -- a centred "1" on Modern's own footer row.
+    // The number's plain Times registers before the body's, so every face's /Font slot
+    // shifts by one as well, and the longer stream moves every xref offset after it.
+    // Re-captured from `convertData` the same way the original was, and cross-checked
+    // against ctrl-kd's own Python output on the identical fixture.
     let expectedPDFBase64 = [
         "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIg",
         "MCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFs4IDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBv",
@@ -1018,20 +1026,20 @@ private func noFSEnvironment() -> CLIEnvironment {
         "RW5jb2RpbmcgPj4KZW5kb2JqCjggMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVk",
         "aWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSAzIDAgUiAvRjIgNCAw",
         "IFIgL0YzIDUgMCBSIC9GNCA2IDAgUiAvRjUgNyAwIFIgPj4gPj4gL0NvbnRlbnRzIDkgMCBSID4+CmVu",
-        "ZG9iago5IDAgb2JqCjw8IC9MZW5ndGggNDc2ID4+CnN0cmVhbQpCVCAvRjUgMTQgVGYgMCBUcyA3Mi4w",
-        "IDcwNi4yIFRkICh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4",
-        "eHh4eHh4KSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA0NjAuNSA3MDYuMiBUZCAod29yZHMpIFRqIEVU",
-        "CkJUIC9GNSAxNCBUZiAwIFRzIDcyLjAgNjg5LjQgVGQgKHl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5",
-        "eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5KSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA0MjUuNSA2ODku",
-        "NCBUZCAoY29udGludWluZykgVGogRVQKQlQgL0Y1IDE0IFRmIDAgVHMgNDg4LjkgNjg5LjQgVGQgKGVu",
-        "ZHMpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRzIDcyLjAgNjcyLjYgVGQgKGhlcmUuKSBUaiBFVApCVCAv",
-        "RjUgMTQgVGYgMCBUcyA3Mi4wIDYzOS4wIFRkIChTZWNvbmQpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRz",
-        "IDExNi43IDYzOS4wIFRkIChwYXJhZ3JhcGguKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCAx",
-        "MAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBu",
-        "IAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyMTAgMDAwMDAgbiAKMDAwMDAwMDMxMCAwMDAwMCBu",
-        "IAowMDAwMDAwNDEzIDAwMDAwIG4gCjAwMDAwMDA1MjAgMDAwMDAgbiAKMDAwMDAwMDYxOSAwMDAwMCBu",
-        "IAowMDAwMDAwNzg1IDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgMTAgL1Jvb3QgMSAwIFIgPj4Kc3Rh",
-        "cnR4cmVmCjEzMTIKJSVFT0YK",
+        "ZG9iago5IDAgb2JqCjw8IC9MZW5ndGggNTE4ID4+CnN0cmVhbQpCVCAvRjUgMTEgVGYgMCBUcyAzMDMu",
+        "MiA0NC4wIFRkICgxKSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA3Mi4wIDcwNi4yIFRkICh4eHh4eHh4",
+        "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4KSBUaiBFVApCVCAv",
+        "RjUgMTQgVGYgMCBUcyA0NjAuNSA3MDYuMiBUZCAod29yZHMpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRz",
+        "IDcyLjAgNjg5LjQgVGQgKHl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5",
+        "eXl5eXl5KSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA0MjUuNSA2ODkuNCBUZCAoY29udGludWluZykg",
+        "VGogRVQKQlQgL0Y1IDE0IFRmIDAgVHMgNDg4LjkgNjg5LjQgVGQgKGVuZHMpIFRqIEVUCkJUIC9GNSAx",
+        "NCBUZiAwIFRzIDcyLjAgNjcyLjYgVGQgKGhlcmUuKSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA3Mi4w",
+        "IDYzOS4wIFRkIChTZWNvbmQpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRzIDExNi43IDYzOS4wIFRkIChw",
+        "YXJhZ3JhcGguKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCAxMAowMDAwMDAwMDAwIDY1NTM1",
+        "IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAw",
+        "IG4gCjAwMDAwMDAyMTAgMDAwMDAgbiAKMDAwMDAwMDMxMCAwMDAwMCBuIAowMDAwMDAwNDEzIDAwMDAw",
+        "IG4gCjAwMDAwMDA1MjAgMDAwMDAgbiAKMDAwMDAwMDYxOSAwMDAwMCBuIAowMDAwMDAwNzg1IDAwMDAw",
+        "IG4gCnRyYWlsZXIKPDwgL1NpemUgMTAgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjEzNTQKJSVFT0YK",
     ].joined()
     let expectedPDF = try #require(Data(base64Encoded: expectedPDFBase64))
     #expect(recorder.written["/out/PAPER.pdf"] == Array(expectedPDF))

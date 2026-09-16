@@ -45,16 +45,75 @@ private func paraStructures(_ doc: Document) -> [RowStructure] {
         + "<dt>LONGLABEL:</dt><dd>longer label, same column.</dd></dl>"))
 }
 
-@Test func deflistSingleEntryNeedsNoRepetition() {
-    // Edge case: unlike a bullet marker (a bare glyph could just be punctuation, so it
-    // needs a repeated sibling to be trusted), one label+gap+description line alone is
-    // already unambiguous.
+@Test func deflistSingleEntryIsOrdinaryProse() {
+    // SUPERSEDED AND RE-PINNED (Jon's ruling 2026-09-15). This test was
+    // `deflistSingleEntryNeedsNoRepetition` and read "unlike a bullet marker (a bare
+    // glyph could just be punctuation, so it needs a repeated sibling to be trusted),
+    // one label+gap+description line alone is already unambiguous."
+    //
+    // It is not unambiguous. Any prose paragraph opening `Word:` and the era's own
+    // double space matched it, and got a hanging indent for it — sawyer/REF/CTRL-K.H1's
+    // filler paragraph opens "Space:  The final frontier. These are the voyages...",
+    // and so do real callout paragraphs ("Important:  If you're using WordStar 5.0...").
+    // A def list is a SHAPE and one row is not a shape, so a def row now needs a sibling
+    // at its own label column, exactly as a bullet needs one at its own marker column.
     let data = bytes("Note:  a single hanging label, alone in its own document.") + HARD
     let doc = modernDoc(data)
     let s = paraStructures(doc)[0]
-    #expect(s.kind == .def)
-    #expect(s.label == "Note:")
-    #expect(s.body == "a single hanging label, alone in its own document.")
+    #expect(s.kind == nil)
+    #expect(s.label == nil)
+    #expect(s.body == nil)
+}
+
+@Test func deflistNeedsASiblingAtItsOwnLabelColumn() {
+    // Two rows whose labels start at the SAME column are a list; the same two rows at
+    // different columns are two paragraphs that happen to open with a colon
+    // (sawyer/ARTICLES/YOURWAY.WS's three centred headings sit at columns 13, 21, 17).
+    var same = bytes("A:     first.") + HARD
+    same += bytes("BB:    second.") + HARD
+    #expect(paraStructures(modernDoc(same)).map { $0.kind } == [.def, .def])
+    var apart = bytes("A:     first.") + HARD
+    apart += bytes("    BB:    second.") + HARD
+    #expect(paraStructures(modernDoc(apart)).allSatisfy { $0.kind == nil })
+}
+
+@Test func deflistRunOfOneRepeatedLabelIsNotAList() {
+    // A definition list defines DIFFERENT terms (Athena's ruling 2026-09-15, refining
+    // the run rule above). Sharing a label column is necessary but not sufficient:
+    // `sawyer/REF/BOOKLET.WS` is 37 copies of one filler paragraph, every one of them
+    // opening "Space:  The final frontier..." at column 5, and the column rule alone
+    // passed all 37 — handing a repeated PARAGRAPH the hanging indent of a list. One
+    // term stated 37 times is one paragraph typed 37 times, not 37 definitions.
+    var same = bytes("Space:  the final frontier.") + HARD
+    same += bytes("Space:  the final frontier.") + HARD
+    same += bytes("Space:  the final frontier.") + HARD
+    #expect(paraStructures(modernDoc(same)).allSatisfy { $0.kind == nil })
+    // One distinct sibling among them is enough to make it a list again, and the
+    // repeated rows come back with it — the run is judged whole.
+    var mixed = bytes("Space:  the final frontier.") + HARD
+    mixed += bytes("Space:  the final frontier.") + HARD
+    mixed += bytes("Time:   the other one.") + HARD
+    #expect(paraStructures(modernDoc(mixed)).map { $0.kind } == [.def, .def, .def])
+}
+
+@Test func aDefListSurvivesBlankLinesBetweenItsEntries() {
+    // A 1990 author separates definition entries with blank lines. Blanks carry no
+    // column of their own and never reach `classifyRows`, so the two rows are still
+    // adjacent as far as the run rule is concerned.
+    var data = bytes("A:     first.") + HARD
+    data += HARD
+    data += HARD
+    data += bytes("BB:    second.") + HARD
+    #expect(paraStructures(modernDoc(data)).map { $0.kind } == [.def, .def])
+}
+
+@Test func aHardBreakEndsTheDefRun() {
+    // `.pa` is a real break in flow. Two lone labels on either side of one are two
+    // paragraphs, not a two-entry list spanning the break.
+    var data = bytes("A:     first.") + HARD
+    data += bytes(".pa") + HARD
+    data += bytes("A:     second.") + HARD
+    #expect(paraStructures(modernDoc(data)).allSatisfy { $0.kind == nil })
 }
 
 @Test func bareColonAloneIsNotADeflistLabel() {
@@ -79,18 +138,24 @@ private func paraStructures(_ doc: Document) -> [RowStructure] {
     // Rule 2: a def-list nested INSIDE a bullet list -- the same column-geometry
     // mechanism as rule 1, one level deeper. CONVERT.WS's own 'Peter Mierau...:
     // WSASC.COM: ...' shape.
-    let data = bytes(".lm 2") + HARD
-        + bytes("* First bullet item.") + HARD
-        + bytes("* Second bullet, introduces a sub-list:") + HARD
-        + bytes(" LABEL:  nested description.") + HARD
-        + bytes("* Third bullet, back at the outer level.") + HARD
+    //
+    // The nested list carries TWO entries since Jon's 2026-09-15 ruling that a def row
+    // needs a sibling at its own label column -- which is what CONVERT.WS's own
+    // sub-list has, and what this fixture should always have had.
+    var data = bytes(".lm 2") + HARD
+    data += bytes("* First bullet item.") + HARD
+    data += bytes("* Second bullet, introduces a sub-list:") + HARD
+    data += bytes(" LABEL:  nested description.") + HARD
+    data += bytes(" OTHER:  a second nested description.") + HARD
+    data += bytes("* Third bullet, back at the outer level.") + HARD
     let doc = modernDoc(data)
     let html = emitHTML(doc, mode: .modern)
     // `+=` statements, never a chained `+` expression (macOS CI type-checker
     // times out on it -- see this repo's own CLAUDE.md).
     var expected = "<ul><li>First bullet item.</li>"
     expected += "<li>Second bullet, introduces a sub-list:"
-    expected += "<dl><dt>LABEL:</dt><dd>nested description.</dd></dl></li>"
+    expected += "<dl><dt>LABEL:</dt><dd>nested description.</dd>"
+    expected += "<dt>OTHER:</dt><dd>a second nested description.</dd></dl></li>"
     expected += "<li>Third bullet, back at the outer level.</li></ul>"
     #expect(html.contains(expected))
 }
@@ -99,15 +164,20 @@ private func paraStructures(_ doc: Document) -> [RowStructure] {
     // Edge case: nesting recurses to arbitrary depth, not just one level -- a bullet
     // list containing a nested bullet list containing a nested def-list, three columns
     // deep.
-    let data = bytes(".lm 2") + HARD
-        + bytes("* Outer bullet one.") + HARD
-        + bytes("* Outer bullet two, introduces inner list:") + HARD
-        + bytes("  # Inner one") + HARD
-        + bytes("  # Inner two, introduces a def-list:") + HARD
-        + bytes("   LABEL:  deepest.") + HARD
+    //
+    // The deepest list carries TWO entries since Jon's 2026-09-15 ruling that a def row
+    // needs a sibling at its own label column; with one it was not a list at all, and
+    // the third level this test exists to prove never opened.
+    var data = bytes(".lm 2") + HARD
+    data += bytes("* Outer bullet one.") + HARD
+    data += bytes("* Outer bullet two, introduces inner list:") + HARD
+    data += bytes("  # Inner one") + HARD
+    data += bytes("  # Inner two, introduces a def-list:") + HARD
+    data += bytes("   LABEL:  deepest.") + HARD
+    data += bytes("   OTHER:  deepest too.") + HARD
     let doc = modernDoc(data)
     let structures = paraStructures(doc)
-    #expect(structures.map { $0.level } == [1, 1, 2, 2, 3])
+    #expect(structures.map { $0.level } == [1, 1, 2, 2, 3, 3])
     let html = emitHTML(doc, mode: .modern)
     // `+=` statements, never a chained `+` expression (macOS CI type-checker
     // times out on it -- see this repo's own CLAUDE.md).
@@ -115,7 +185,8 @@ private func paraStructures(_ doc: Document) -> [RowStructure] {
     expected += "<li>Outer bullet two, introduces inner list:"
     expected += "<ul><li>Inner one</li>"
     expected += "<li>Inner two, introduces a def-list:"
-    expected += "<dl><dt>LABEL:</dt><dd>deepest.</dd></dl></li></ul></li></ul>"
+    expected += "<dl><dt>LABEL:</dt><dd>deepest.</dd>"
+    expected += "<dt>OTHER:</dt><dd>deepest too.</dd></dl></li></ul></li></ul>"
     #expect(html.contains(expected))
 }
 

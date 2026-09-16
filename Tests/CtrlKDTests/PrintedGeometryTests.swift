@@ -260,28 +260,35 @@ private func geoDoc(
 
     // NOT a no-op. The `.fo` is anchored off the page's own height
     // (`attachHeadFootLinesPrinted` reads `resolvedPageHeight(doc, printed: true)`), so on
-    // the 792pt sheet the parsed document still has room for it under a 55-line body and on
-    // the 612pt rotated sheet it does not -- the body itself already runs past the bottom
-    // edge there (`.pl` is a LINE COUNT; a landscape sheet does not shrink it). Whether
-    // WordStar would really drop the footer is not what this test claims; it claims the
-    // façade and the emitter answer that question the SAME way, which they did not before.
+    // the 792pt sheet the parsed document's footer row lands at 60.0 and on the 612pt
+    // rotated sheet the SAME row count lands 180pt below the paper (`.pl` is a LINE
+    // COUNT; a landscape sheet does not shrink it). Whether WordStar would really print
+    // a footer there is not what this test claims; it claims the façade and the emitter
+    // answer that question the SAME way, which they did not before.
+    //
+    // The row is no longer DROPPED for falling past the paper (planning #274 follow-up,
+    // 2026-09-15): real WS7 commands it wherever the arithmetic puts it and the printer
+    // clips it -- measured for the automatic page number, which rides this same row.
+    // Both sides now report it off the sheet instead of both pretending it is not there.
     #expect(rotated != asParsed, "the rotation reaches the laid-out model, not just the box")
     #expect(asParsed[0].footerLines?.first?.y == 60.0, "11in sheet: room below a 55-line body")
-    #expect(rotated[0].footerLines == nil, "8.5in sheet: the body has already run off it")
+    #expect(rotated[0].footerLines?.first?.y == -120.0, "8.5in sheet: 180pt below the paper")
 
     // The independent side: the emitted bytes. `emitPDF` agrees with the ROTATED model.
     let pdf = emitPDF(doc, mode: .printed)
     let spans = contentSpans(pdf)
-    #expect(!spans.contains { $0.text == "Footer" })
+    let footerSpan = spans.first { $0.text == "Footer" }
+    #expect(footerSpan?.y == -120.0, "the emitter puts it exactly where the model says")
     // First body line, placed from the metrics the app would draw it with: `emitPDF` opens
     // its content stream at `pageHeight - top - size` (a PDF `Td` positions a BASELINE),
     // 612 - 36 - 12 = 564. The pre-fix façade reported a 792pt page and would have put it
-    // at 744 -- the whole defect, in one number.
+    // at 744 -- the whole defect, in one number. Found by NAME, not by position: the
+    // running foot is written into the stream ahead of the body.
     let m = printedMetrics(doc)
-    #expect(spans.first?.text == "Line 1 of prose")
-    #expect(spans.first?.y == 564.0)
-    #expect(spans.first?.y == m.pageHeight - m.top - Double(m.size))
-    #expect(spans.first?.x == m.left, "`.po` 8 columns * 7.2pt = 57.6")
+    let firstBody = spans.first { $0.text == "Line 1 of prose" }
+    #expect(firstBody?.y == 564.0)
+    #expect(firstBody?.y == m.pageHeight - m.top - Double(m.size))
+    #expect(firstBody?.x == m.left, "`.po` 8 columns * 7.2pt = 57.6")
 
     // One page box per paginated page, all on the rotated sheet.
     var boxes = 0

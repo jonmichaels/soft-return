@@ -735,6 +735,36 @@ public struct Document: Hashable, Sendable {
     /// styles unconditionally.
     public var headerStyleAttrs: [Int: Style] = [:]
     public var footerStyleAttrs: [Int: Style] = [:]
+    /// M16 (2026-09-15, six WS7 probes against sawyer/REF/BOOKLET.WS): the RIGHT MARGIN
+    /// the head/foot line's own style declares, in print columns at 10 CPI
+    /// (`rightMarginHMI / 180`), absent when the style declares none.
+    ///
+    /// A right- or centre-aligned running head aligns against THIS, measured from `.po`
+    /// — not against the document's `.rm`, not against the column grid, and not against
+    /// the sheet. Measured: turning BOOKLET.WS's `.co 2` off, and turning it into a
+    /// `.co 3` with a `.rm` of 2.50" instead of 4.50", both leave its "Header Odd 1"
+    /// exactly where the unmodified document prints it; moving `.po` from 0.2in to 1.2in
+    /// moves it by exactly 1.00in. Its "Header Odd" style declares 18000 HMI = 100
+    /// columns = 10.00in, and `.po` 0.2 + 10.00 = 10.20in is where the line's last glyph
+    /// ends, to half a point.
+    ///
+    /// Every other corpus document with an aligned head declares a style right margin
+    /// EQUAL to its own `.rm`, which is why the `.rm` reading was right everywhere else.
+    public var headerStyleRM: [Int: Double] = [:]
+    public var footerStyleRM: [Int: Double] = [:]
+    /// M16: the LINE HEIGHT in force where this head/foot line was DEFINED, in 48ths of
+    /// an inch — the step between successive running-head lines, and 0 when the document
+    /// asked for zero.
+    ///
+    /// Measured (probe B1): removing BOOKLET.WS's own `.lh 0` — which sits immediately
+    /// before its `.f1`/`.h1`/`.h2` and is cancelled by a `.lh12` immediately after —
+    /// makes real WS7 print its two header lines on two rows 1/6in apart instead of both
+    /// on one row, with the columns left in place. Turning the columns off instead
+    /// leaves them on one row. The block is anchored on its LAST line either way (probe
+    /// B5: a one-line head prints on the row the second of two occupies), so a zero step
+    /// stacks every line onto that row.
+    public var headerLeads: [Int: Double] = [:]
+    public var footerLeads: [Int: Double] = [:]
     /// Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state, alongside
     /// the flat `headers`/`footers` above (still last-in-source-order-wins, unchanged —
     /// Modern/RTF/plain-text export stay parity-unaware, reported not implemented this

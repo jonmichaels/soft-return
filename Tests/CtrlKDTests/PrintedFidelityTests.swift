@@ -58,12 +58,20 @@ import Testing
     #expect(contains(pdf, bytes("/MediaBox [0 0 792 612]")))
 }
 
-@Test func prLandscapeNeverReachesModernPDF() throws {
+@Test func prLandscapeReachesModernPDFToo() throws {
+    // Jon's ruling 2026-09-15 ("Yes. Fix it."): Modern PDF keeps the document's own
+    // sheet ORIENTATION.
+    //
+    // This test used to pin the OPPOSITE -- it was named
+    // `prLandscapeNeverReachesModernPDF` and asserted the landscape document came out
+    // 612x792 like the portrait one. Renamed and re-pinned rather than silently
+    // changed, the same treatment planning #256 gave the superseded style-leading
+    // pair.
+    //
     // Soft returns (not plain hard-returned lines) so `detect()` reads this as ws4/
     // ws5+ prose rather than a `printstream` -- otherwise `isPrinted(doc)` forces
-    // printed rendering regardless of the requested mode (D5, cli.py's own override),
-    // which is a DIFFERENT mechanism than the one this test targets: that .pr or=l's
-    // orientation itself must never leak into a genuine modern reflow.
+    // printed rendering regardless of the requested mode (D5), which is a DIFFERENT
+    // mechanism than the one this test targets.
     let prose = bytes("word") + SOFT + bytes("word") + SOFT + bytes("word") + SOFT
         + bytes("Portrait text.") + HARD
     let dataPlain = prose
@@ -71,7 +79,14 @@ import Testing
     let modernPlain = emitPDF(parseWS(dataPlain), mode: .modern)
     let modernLandscape = emitPDF(parseWS(dataLandscape), mode: .modern)
     #expect(contains(modernPlain, bytes("/MediaBox [0 0 612 792]")))
-    #expect(contains(modernLandscape, bytes("/MediaBox [0 0 612 792]")))
+    #expect(contains(modernLandscape, bytes("/MediaBox [0 0 792 612]")))
+
+    // M17b (2026-09-15): and the Modern RTF declares the same sheet its PDF draws. It
+    // used to write a square `\paperw12240\paperh12240` and no `\landscape` — an RTF
+    // its own PDF could not print. The column half lives in ModernColumnsTests.swift.
+    let rtfModern = emitRTF(parseWS(dataLandscape), mode: .modern, options: EmitOptions())
+    #expect(rtfModern.contains(#"\landscape"#))
+    #expect(rtfModern.contains(#"\paperw15840\paperh12240"#))
 }
 
 @Test func prLandscapeSetsRTFPaperAndLandscapeKeyword() throws {
@@ -974,6 +989,79 @@ private func pgnumOps(_ pdf: [UInt8]) -> [(x: Double, y: Double, n: String)] {
     let x1 = pgnumOps(emitPDF(oneDigit, mode: .printed, options: EmitOptions(pageNumbers: .auto)))[0].x
     let x2 = pgnumOps(emitPDF(threeDigit, mode: .printed, options: EmitOptions(pageNumbers: .auto)))[0].x
     #expect(x1 == 122.4 && x2 == 122.4)
+}
+
+// ------ planning #274 follow-up: the number's own `.po`, page by page
+// The formula above was always right; the `.po` it read was the DOCUMENT's, so every
+// page whose own offset differs was numbered in the wrong column. Captures behind each
+// case: `autoPageNumberXPt`.
+
+@Test func pageNumbersFollowThePagesOwnPoePoo() throws {
+    // `REF/BOOKLET.RJS`'s own shape -- `.poe 3` / `.poo 58` and no plain `.po` --
+    // numbers odd pages from 58 columns and even ones from 3. Measured: 651.6pt /
+    // 255.6pt in the WS7 capture, where this engine drew both at the document
+    // default's 291.6pt.
+    var data = bytes(".poe 3")
+    data += HARD
+    data += bytes(".poo 58")
+    data += HARD
+    for i in 1...60 {
+        data += bytes("PARITY-\(String(format: "%03d", i))")
+        data += HARD
+    }
+    let doc = parseWS(data)
+    let ops = pgnumOps(emitPDF(doc, mode: .printed, options: EmitOptions(pageNumbers: .auto)))
+    // (58 + 33.5 - 1) * 7.2 = 651.6 ; (3 + 33.5 - 1) * 7.2 = 255.6
+    #expect(ops.count == 2)
+    #expect(ops[0].x == 651.6 && ops[0].n == "1")
+    #expect(ops[1].x == 255.6 && ops[1].n == "2")
+}
+
+@Test func pageNumbersFollowAMidDocumentPo() throws {
+    // `REF/FONTS.REF`'s own shape: a `.po` that changes part-way numbers the pages
+    // after it from the NEW offset, page by page (WS7: 248.4 / 284.4 / ... alternating
+    // with the document's own `.po.2i`/`.po.7i`), while the document's opening `.po`
+    // alone gives one column throughout.
+    var data = bytes(".po 2")
+    data += HARD
+    for i in 1...60 {
+        data += bytes("A-\(String(format: "%03d", i))")
+        data += HARD
+    }
+    data += bytes(".po 20")
+    data += HARD
+    for i in 1...60 {
+        data += bytes("B-\(String(format: "%03d", i))")
+        data += HARD
+    }
+    let doc = parseWS(data)
+    let ops = pgnumOps(emitPDF(doc, mode: .printed, options: EmitOptions(pageNumbers: .auto)))
+    // page 1 closes under `.po 2` -> (2 + 32.5) * 7.2 = 248.4
+    // pages 2-3 close under `.po 20` -> (20 + 32.5) * 7.2 = 378.0
+    #expect(ops.count == 3)
+    #expect(ops[0].x == 248.4 && ops[0].n == "1")
+    #expect(ops[1].x == 378.0 && ops[1].n == "2")
+    #expect(ops[2].x == 378.0 && ops[2].n == "3")
+}
+
+@Test func pageNumbersReadThePoInForceWhereThePageEnds() throws {
+    // `REF/REFORM.DOT` is the oracle that separates "the page's opening `.po`" from
+    // "the page's closing one": its `.po 1i` lands two lines before the page's own
+    // break, WS7 prints that page's last body line at the new offset AND its number at
+    // 306.0pt = `(10 + 33.5 - 1) * 7.2`.
+    var data: [UInt8] = []
+    for i in 1...19 {
+        data += bytes("R-\(String(format: "%03d", i))")
+        data += HARD
+    }
+    data += bytes(".po 10")
+    data += HARD
+    data += bytes("LAST LINE")
+    data += HARD
+    let doc = parseWS(data)
+    let ops = pgnumOps(emitPDF(doc, mode: .printed, options: EmitOptions(pageNumbers: .auto)))
+    #expect(ops.count == 1)
+    #expect(ops[0].x == 306.0 && ops[0].n == "1")
 }
 
 @Test func pageNumbersDeclaredFooterSuppressesIt() throws {

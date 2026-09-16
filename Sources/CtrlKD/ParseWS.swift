@@ -578,6 +578,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var footerAlign: [Int: Alignment] = [:]
     var headerStyleAttrs: [Int: Style] = [:]
     var footerStyleAttrs: [Int: Style] = [:]
+    // M16 (2026-09-15): see `Document.headerStyleRM` / `Document.headerLeads`.
+    var headerStyleRM: [Int: Double] = [:]
+    var footerStyleRM: [Int: Double] = [:]
+    var headerLeads: [Int: Double] = [:]
+    var footerLeads: [Int: Double] = [:]
     // planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state -- see
     // `Document.headersParity`'s own doc comment.
     var headersParity: [Int: [HFParity: String]] = [:]
@@ -1088,6 +1093,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
             var hfAlign: Alignment? = nil
             var hfStyleFontIdx: Int? = nil
             var hfStyleAttrs: Style = []
+            var hfStyleRM: Double? = nil
             for (_, mark) in physical.marks {
                 if case .style(let w0) = mark, (w0 >> 8) == 0x02,
                    let entry = styleSlots[w0 & 0xFF] {
@@ -1099,6 +1105,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
                                                             typestyle: font.typestyle)
                         }
                         hfStyleAttrs = record.attrs
+                        // M16: the same 180-HMI-per-column conversion a BODY block's
+                        // own style right margin already goes through.
+                        if let rm = record.rightMarginHMI, rm != 0 {
+                            hfStyleRM = Double(rm) / 180.0
+                        }
                     }
                     break
                 }
@@ -1109,6 +1120,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
                          headerTabs: &headerTabs, footerTabs: &footerTabs,
                          headerAlign: &headerAlign, footerAlign: &footerAlign,
                          headerStyleAttrs: &headerStyleAttrs, footerStyleAttrs: &footerStyleAttrs,
+                         headerStyleRM: &headerStyleRM, footerStyleRM: &footerStyleRM,
+                         headerLeads: &headerLeads, footerLeads: &footerLeads,
                          headersParity: &headersParity, footersParity: &footersParity,
                          headerFontsParity: &headerFontsParity,
                          footerFontsParity: &footerFontsParity,
@@ -1123,6 +1136,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
                          hfEventsWithin: &hfEventsWithin,
                          anchor: hfAnchor, within: hfWithin, fontIdx: hfFontIdx ?? hfStyleFontIdx,
                          tabMark: hfTabMark, align: hfAlign, styleAttrs: hfStyleAttrs,
+                         // M16: the `.lh` in force RIGHT HERE, which is what the step
+                         // between running-head lines turns out to be — `hfLead48` and
+                         // not `lead48`, because a `.lh 0` leaves the latter standing.
+                         styleRMCols: hfStyleRM, lead48: fmt.hfLead48,
                          pctlMarks: hfPctlMarks)
             // The index of the block this entry POINTS AT — the one that follows it,
             // which is the block still open (if it has content) or the next to open.
@@ -1885,6 +1902,11 @@ public func parseWS(_ data: [UInt8]) -> Document {
     doc.footerAlign = footerAlign
     doc.headerStyleAttrs = headerStyleAttrs
     doc.footerStyleAttrs = footerStyleAttrs
+    // M16 (2026-09-15)
+    doc.headerStyleRM = headerStyleRM
+    doc.footerStyleRM = footerStyleRM
+    doc.headerLeads = headerLeads
+    doc.footerLeads = footerLeads
     // planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state.
     doc.headersParity = headersParity
     doc.footersParity = footersParity
@@ -2526,6 +2548,8 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
                    headerTabs: inout [Int: HFTabMark], footerTabs: inout [Int: HFTabMark],
                    headerAlign: inout [Int: Alignment], footerAlign: inout [Int: Alignment],
                    headerStyleAttrs: inout [Int: Style], footerStyleAttrs: inout [Int: Style],
+                   headerStyleRM: inout [Int: Double], footerStyleRM: inout [Int: Double],
+                   headerLeads: inout [Int: Double], footerLeads: inout [Int: Double],
                    headersParity: inout [Int: [HFParity: String]],
                    footersParity: inout [Int: [HFParity: String]],
                    headerFontsParity: inout [Int: [HFParity: Int]],
@@ -2544,6 +2568,7 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
                    anchor: Int, within: HFWithin? = nil, fontIdx: Int? = nil,
                    tabMark: (offset: Int, absHMI: Int, leader: UInt8, cols: Int)? = nil,
                    align: Alignment? = nil, styleAttrs: Style = [],
+                   styleRMCols: Double? = nil, lead48: Double? = nil,
                    pctlMarks: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = []) {
     guard cmd.count >= 3 else { return }
     let first = asciiUppercased(cmd[1])
@@ -2646,12 +2671,23 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     // `headerAlign`/`headerStyleAttrs` (+ parity) exactly like `fontIdx`/`tabValue`
     // above -- absent key means WordStar's own ordinary left-aligned default, the same
     // "presence, not a sentinel value" convention this function already uses.
+    // M16 (2026-09-15): the style's own right margin and the `.lh` in force, on the
+    // same "presence, not a sentinel" terms — see `Document.headerStyleRM` and
+    // `Document.headerLeads` for the probes behind them.
     if kind == .header {
         if let align { headerAlign[line] = align } else { headerAlign.removeValue(forKey: line) }
         headerStyleAttrs[line] = styleAttrs
+        if let styleRMCols { headerStyleRM[line] = styleRMCols }
+        else { headerStyleRM.removeValue(forKey: line) }
+        if let lead48 { headerLeads[line] = lead48 }
+        else { headerLeads.removeValue(forKey: line) }
     } else {
         if let align { footerAlign[line] = align } else { footerAlign.removeValue(forKey: line) }
         footerStyleAttrs[line] = styleAttrs
+        if let styleRMCols { footerStyleRM[line] = styleRMCols }
+        else { footerStyleRM.removeValue(forKey: line) }
+        if let lead48 { footerLeads[line] = lead48 }
+        else { footerLeads.removeValue(forKey: line) }
     }
     // Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o` ALSO write their own parity-split
     // state, on top of the ordinary flat write above (kept for Modern/RTF/plain-text,

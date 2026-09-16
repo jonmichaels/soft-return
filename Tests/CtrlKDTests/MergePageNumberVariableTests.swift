@@ -305,11 +305,17 @@ private func modernPageWords(_ doc: Document,
     var pages: [[String]] = []
     for chunk in text.components(separatedBy: "endstream") {
         var words: [String] = []
-        var rest = Substring(chunk)
-        while let open = rest.firstIndex(of: "("),
-              let close = rest[open...].range(of: ") Tj") {
-            words.append(String(rest[rest.index(after: open)..<close.lowerBound]))
-            rest = rest[close.upperBound...]
+        // M15 (2026-09-15): Modern draws WordStar's own automatic page number in the
+        // bottom margin zone (y <= 44). These tests are about the MERGE variable in the
+        // body, so that zone is skipped — otherwise every page's word list grows a
+        // leading page number that has nothing to do with `&#&`.
+        for line in chunk.components(separatedBy: "\n") {
+            guard let open = line.firstIndex(of: "("),
+                  let close = line[open...].range(of: ") Tj") else { continue }
+            let fields = line.components(separatedBy: " ")
+            if let tsIdx = fields.firstIndex(of: "Ts"), fields.count > tsIdx + 2,
+               let y = Double(fields[tsIdx + 2]), y <= 44.0 { continue }
+            words.append(String(line[line.index(after: open)..<close.lowerBound]))
         }
         if !words.isEmpty { pages.append(words) }
     }

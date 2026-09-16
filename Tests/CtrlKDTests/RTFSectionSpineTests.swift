@@ -15,12 +15,13 @@
 ///       redefinition: that is the ordinary case section 1 already carried, with
 ///       `\titlepg` when it starts after page 1.
 ///
-/// PRINTED ONLY for columns, and the reason is a standing ruling rather than a
-/// limitation: Modern PDF has no column model at all, and 2026-08-05 ruled "Modern PDF
-/// needs to be the printed version of the Modern RTF" — a columnar Modern RTF would be a
-/// Modern RTF its own PDF could not render. Modern's own flow drops `.cb` outright, so
-/// `\column` is Printed-only for the same reason. A13 reaches BOTH modes: Modern keeps
-/// running heads (ruling M5, 2026-08-06).
+/// BOTH MODES since M17b (2026-09-15). R1 built the column half Printed-only on a
+/// standing ruling rather than a limitation: Modern PDF had no column model at all, and
+/// 2026-08-05 ruled "Modern PDF needs to be the printed version of the Modern RTF" — a
+/// columnar Modern RTF would have been a Modern RTF its own PDF could not render. M17
+/// gave Modern PDF a column model, so the same ruling read the same way now says the
+/// opposite, and `\cols`/`\colsx`/`\column` reach Modern too. A13 always reached both
+/// modes: Modern keeps running heads (ruling M5, 2026-08-06).
 ///
 /// Port of ctrl-kd's `tests/test_rtf_section_spine.py`. Synthetic fixtures.
 import Foundation
@@ -116,12 +117,15 @@ private func sectionColumns(_ rtf: String) -> [String] {
     #expect(sectionColumns(rtf) == [#"\sect\sectd\cols2\colsx720"#, #"\sect\sectd"#])
 }
 
-@Test func modernRTFStaysOneColumn() {
-    // Not an omission: Modern PDF has no column model, and Modern PDF is ruled to be the
-    // printed form of the Modern RTF.
+@Test func modernRTFCarriesTheColumnRegimeToo() {
+    // SUPERSEDED AND RE-PINNED, M17b (2026-09-15). This test was
+    // `modernRTFStaysOneColumn` and read "Not an omission: Modern PDF has no column
+    // model, and Modern PDF is ruled to be the printed form of the Modern RTF." The
+    // first half stopped being true when M17 gave Modern PDF a column model, and the
+    // second half then says the opposite of what it used to: a ONE-column Modern RTF is
+    // the one its own PDF cannot print. Renamed rather than silently changed.
     let rtf = emitRTF(spineDocument("One.\r\n.co 3, 5\r\nTwo.\r\n"), mode: .modern)
-    #expect(!rtf.contains(#"\cols"#))
-    #expect(sectionOpeners(rtf).isEmpty)
+    #expect(sectionColumns(rtf) == [#"\sect\sectd\cols3\colsx720"#])
 }
 
 @Test(arguments: [EmitMode.printed, .modern])
@@ -151,9 +155,17 @@ func aDocumentWithNoCoAtAllOpensNoSection(mode: EmitMode) {
     #expect(!rtf.contains(#"\column"#))
 }
 
-@Test func cbWritesNothingInModern() {
+@Test func cbIsAColumnBreakInModernToo() {
+    // SUPERSEDED AND RE-PINNED, M17b (2026-09-15): was `cbWritesNothingInModern`.
+    // Modern PDF's own column cursor takes `.cb` to the next column since M17, so its
+    // RTF says so.
     let rtf = emitRTF(spineDocument(".co 2, 5\r\nOne.\r\n.cb\r\nTwo.\r\n"), mode: .modern)
-    #expect(!rtf.contains(#"\column"#))
+    #expect(rtf.contains(#"\column "#))
+    let one = rtf.range(of: "One.")!
+    let col = rtf.range(of: #"\column "#)!
+    let two = rtf.range(of: "Two.")!
+    #expect(one.upperBound < col.lowerBound)
+    #expect(col.upperBound < two.lowerBound)
 }
 
 @Test func aPAInsideAColumnarRegionIsAbsorbed() {

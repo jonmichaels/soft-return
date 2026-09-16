@@ -79,8 +79,16 @@ import Testing
     // Modern geometry; the box ladder, the page breaks and every x are unchanged, which is
     // why only one of these four hashes moves. Again the identical digest ctrl-kd's own
     // re-pinned fixture carries (9fb1677).
+    //
+    // Re-pinned a SEVENTH time 2026-09-15 (this MODERN hash ONLY -- the three PRINTED
+    // hashes are untouched): M15, Jon's ruling that the Modern view shows WordStar's
+    // automatic page number wherever Printed does. This fixture declares no `.op`, no
+    // footer and no `.mb 0`, so it is a numbering document and its Modern PDF gains one
+    // drawn op per page -- a centred number on Modern's own footer row. Nothing else
+    // about it moves. The PRINTED hashes cannot move, because Printed already drew this
+    // number. Again the identical digest ctrl-kd's own re-pinned fixture carries.
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .modern))
-        == "cd3760328da8b4ffadd366e6d253a8e9cf3adbe1981fa68f7f1c5a8bc472c87b")
+        == "fbb4a53b849f6fd06036c7b7ff9f5aa551b981f62444374d7f6ce66219959e08")
     // Re-pinned a SIXTH time 2026-09-14 (this `styled` PRINTED hash ONLY -- the other
     // three are untouched): a run that is all whitespace no longer gets a text-showing
     // op of its own (`lineOpsPrinted`, planning #270 item 39). Blanks put no ink on

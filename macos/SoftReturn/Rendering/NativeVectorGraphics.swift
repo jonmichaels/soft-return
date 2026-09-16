@@ -791,7 +791,95 @@ func softReturnLayoutManager() -> NSLayoutManager {
 /// so the run is laid out inside the envelope (`.baselineOffset`) and only its drawing moves:
 /// every fragment, caret, selection and hit test stays where layout put it. Both platforms draw
 /// pages in flipped coordinates, so a rise is a smaller y.
+///
+/// Batch 40 (M12, Jon: "the Native underline is REALLY fat. It's pushing the lower line down a bit."): a single
+/// underline is Printed's rule — `underlineThickness` (0.6 pt) centred `underlineDrop` (1.5 pt) below the baseline,
+/// the engine PDF's `0.6 w … y - 1.5` stroke (`PDFWriter.rule`) — whatever the face. AppKit drew the face's own:
+/// system Courier Bold's is 1.10 pt thick at 1.73 pt down, reaching into the gap above the next line. The rule is
+/// drawing only: no fragment, baseline or line advance moves.
 final class ScriptRiseLayoutManager: NSLayoutManager {
+    /// Printed's underline: its stroke width and its drop below the baseline, in points.
+    static let underlineThickness: CGFloat = 0.6
+    static let underlineDrop: CGFloat = 1.5
+
+    override func drawUnderline(forGlyphRange glyphRange: NSRange, underlineType underlineVal: NSUnderlineStyle,
+                                baselineOffset: CGFloat, lineFragmentRect lineRect: CGRect,
+                                lineFragmentGlyphRange lineGlyphRange: NSRange, containerOrigin: CGPoint) {
+        guard glyphRange.length > 0, underlineVal.rawValue & 0xFF == NSUnderlineStyle.single.rawValue,
+              textContainer(forGlyphAt: glyphRange.location, effectiveRange: nil) != nil
+        else {
+            super.drawUnderline(forGlyphRange: glyphRange, underlineType: underlineVal, baselineOffset: baselineOffset,
+                                lineFragmentRect: lineRect, lineFragmentGlyphRange: lineGlyphRange,
+                                containerOrigin: containerOrigin)
+            return
+        }
+        // Batch 40 (M20, Jon: "Fix it"): the rule runs from the run's first inked glyph to the end of its last, as
+        // Printed's does (`PDFWriter`'s continuous span underline: `ulX0` at the first inked piece, `ulX1` at the end of
+        // the last). AppKit hands over the whole attribute run on the line — a trailing space, the line's own break, a
+        // zero-width mark or a spacer attachment included — and its bounding box ran about a character past the last
+        // letter. A run with no ink gets no rule, as `PDFWriter.rules` gives a whitespace-only run none. Native and
+        // Modern alike.
+        guard let inked = inkedGlyphRange(glyphRange) else { return }
+        // The rule's ends: where the first inked glyph is set, and where the last one's own advance ends. Not the
+        // range's bounding box: on -ATTRIB.TST's "Bold Underline" that reached 5.75 pt past the last letter even once
+        // the range stopped at it (b40-m20), taking in space the line puts after that glyph. A glyph's location is
+        // relative to its line fragment's origin, and so is the baseline.
+        let lastGlyph = NSMaxRange(inked) - 1
+        let left = lineFragmentRect(forGlyphAt: inked.location, effectiveRange: nil).minX + location(forGlyphAt: inked.location).x
+        let right = lineFragmentRect(forGlyphAt: lastGlyph, effectiveRange: nil).minX + location(forGlyphAt: lastGlyph).x
+            + ownAdvance(ofGlyph: lastGlyph)
+        let extent = CGRect(x: left, y: 0, width: max(0, right - left), height: 0)
+        let baseline = lineRect.minY + location(forGlyphAt: inked.location).y
+        let characterIndex = characterIndexForGlyph(at: inked.location)
+        let colour = (textStorage?.attribute(.underlineColor, at: characterIndex, effectiveRange: nil)
+            ?? textStorage?.attribute(.foregroundColor, at: characterIndex, effectiveRange: nil)) as? NSColor
+            ?? NSColor.black
+        colour.setFill()
+        NSBezierPath(rect: CGRect(x: containerOrigin.x + extent.minX,
+                                        y: containerOrigin.y + baseline + Self.underlineDrop - Self.underlineThickness / 2,
+                                        width: extent.width, height: Self.underlineThickness)).fill()
+    }
+
+    /// Batch 40 (M20): the part of `glyphRange` from its first inked glyph through its last. Whitespace, line breaks,
+    /// control characters, zero-width marks (U+200B, U+2060) and attachment spacers (U+FFFC) at either end carry no
+    /// rule; between inked glyphs they keep it, as Printed's rule covers the spaces between words. `nil` when nothing
+    /// in the range is inked.
+    func inkedGlyphRange(_ glyphRange: NSRange) -> NSRange? {
+        guard let storage = textStorage else { return glyphRange }
+        let string = storage.string as NSString
+        var first: Int?
+        var last: Int?
+        for glyph in glyphRange.location..<NSMaxRange(glyphRange) {
+            if notShownAttribute(forGlyphAt: glyph) { continue }
+            let character = characterIndexForGlyph(at: glyph)
+            guard character < string.length else { continue }
+            if let scalar = Unicode.Scalar(string.character(at: character)), Self.carriesNoRule(scalar) { continue }
+            if first == nil { first = glyph }
+            last = glyph
+        }
+        guard let first, let last else { return nil }
+        return NSRange(location: first, length: last - first + 1)
+    }
+
+    /// Batch 40 (M20): how far `glyph` advances in its own face, without any kern set on its character.
+    func ownAdvance(ofGlyph glyph: Int) -> CGFloat {
+        let character = characterIndexForGlyph(at: glyph)
+        guard let storage = textStorage, character < storage.length,
+              let font = storage.attribute(.font, at: character, effectiveRange: nil) as? NSFont
+        else { return 0 }
+        // Core Text, so the same line reads on the iPhone, where the font is a UIFont.
+        var cgGlyph = self.cgGlyph(at: glyph)
+        var advance = CGSize.zero
+        CTFontGetAdvancesForGlyphs(font as CTFont, .horizontal, &cgGlyph, &advance, 1)
+        return advance.width
+    }
+
+    /// A character an underline does not start or end on.
+    static func carriesNoRule(_ scalar: Unicode.Scalar) -> Bool {
+        CharacterSet.whitespacesAndNewlines.contains(scalar) || CharacterSet.controlCharacters.contains(scalar)
+            || scalar == "\u{200B}" || scalar == "\u{2060}" || scalar == "\u{FFFC}"
+    }
+
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
         guard glyphsToShow.length > 0, let storage = textStorage else {
             super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)

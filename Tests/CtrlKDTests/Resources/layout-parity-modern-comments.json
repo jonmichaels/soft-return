@@ -1,6 +1,6 @@
 {
  "format": "ctrl-kd-layout",
- "version": 10,
+ "version": 11,
  "meta": {
   "variant": "ws5+",
   "producer": null,
@@ -781,7 +781,8 @@
       "text": "Byte Parity Gazette                                    page 1",
       "x": 57.6,
       "y": 768.0,
-      "font": null
+      "font": null,
+      "style": []
      }
     ],
     "footer_lines": [
@@ -789,7 +790,8 @@
       "text": "- 1 -",
       "x": 57.6,
       "y": 48.0,
-      "font": null
+      "font": null,
+      "style": []
      }
     ]
    },
@@ -814,7 +816,8 @@
       "text": "Byte Parity Gazette                                    page 2",
       "x": 57.6,
       "y": 768.0,
-      "font": null
+      "font": null,
+      "style": []
      }
     ],
     "footer_lines": [
@@ -822,7 +825,8 @@
       "text": "- 2 -",
       "x": 57.6,
       "y": 48.0,
-      "font": null
+      "font": null,
+      "style": []
      }
     ]
    },
@@ -882,7 +886,8 @@
       "text": "Byte Parity Gazette                                    page 3",
       "x": 57.6,
       "y": 768.0,
-      "font": null
+      "font": null,
+      "style": []
      }
     ],
     "footer_lines": [
@@ -890,7 +895,8 @@
       "text": "- 3 -",
       "x": 57.6,
       "y": 48.0,
-      "font": null
+      "font": null,
+      "style": []
      }
     ]
    }

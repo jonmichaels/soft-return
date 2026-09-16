@@ -159,12 +159,154 @@ enum ModernFlowItem {
     case image(pixIndex: Int, widthPt: Double, heightPt: Double)
 }
 
+/// `doc.page` as MODERN reads it: the document's own declared sheet, with `.pr or=l`'s
+/// landscape swap applied. Port of `_modern_page_dict`.
+///
+/// Jon's ruling 2026-09-15 ("Yes. Fix it."): Modern PDF keeps the document's sheet
+/// ORIENTATION. That is the paged-surface doctrine's own point 2 (2026-08-17, "honor
+/// `.pr or=l` landscape in ALL paged surfaces") finally reaching the one paged surface
+/// it had not, and it follows from the 2026-08-05 ruling that Modern PDF is the printed
+/// form of the Modern RTF — a landscape document printed portrait is not a printing of
+/// anything the document says.
+///
+/// IDEMPOTENT, deliberately. `landscapePage` recomputes the height/width pair fresh from
+/// the page's own `.pl` rather than swapping whatever height it is handed, so this
+/// answers the same thing whether or not `resolvedGeometryDocument` has already rotated
+/// the document — which matters because `emitLayout` reaches `modernStreams` (through
+/// `attachGraphicCellsModern`) with the document as parsed, and the two passes must
+/// compose the same pages.
+/// Does WordStar's AUTOMATIC page number appear on a Modern page whose content ends at
+/// block `bi`? Port of `_modern_auto_pageno_shows`.
+///
+/// Jon's ruling M15 (2026-09-15): "I think it should in Modern View... it looks weird
+/// that it suddenly goes away. Now on Export that's different. There's a flag if people
+/// want Page Number or not." So the Modern view shows the number wherever Printed does,
+/// and Modern exports obey `--page-numbers` auto/on/off exactly as Printed does — which
+/// is the same thing said twice, because the view IS the `auto` export.
+///
+/// THE THREE SILENCERS, and they are the document's, not Modern's
+/// (research/2026-09-15_ws7-missing-auto-page-number.md, measured across 308 real WS7
+/// captures with zero counter-examples):
+///
+///   1. `.op` — and `.pn`/`.pg` turn it back on, from where THEY sit. Read here through
+///      `pgnumAt`, the same block-granular state Printed reads.
+///   2. ANY footer command (`.fo`, `.f1`-`.f8`), with text, bare, or carrying only
+///      invisible characters. The footer REPLACES the number.
+///   3. `.mb 0` — no footer row on the sheet at all. `autoPagenoRowY` is the one
+///      definition of that, shared with Printed.
+///
+/// `pageNumbers` is the export flag: `.off` and `.on` force it either way (`on` even over
+/// a document's own `.op`, `off` even over `.pn`), and `.auto` — the default, and what
+/// the app's own Modern view renders — asks the document. The footer and `.mb 0` rules
+/// are NOT flag-gated: they are what WordStar itself does, and `--page-numbers on` cannot
+/// conjure a row onto a sheet that has none or overwrite a footer that occupies it.
+func modernAutoPagenoShows(_ doc: Document, bi: Int,
+                           pageNumbers: EmitOptions.PageNumberMode,
+                           pgnumCheckpoints cps: [PgnumCheckpoint],
+                           footerInUse: Bool) -> Bool {
+    if pageNumbers == .off || footerInUse { return false }
+    // A page that closed with no content of its own (an explicit break with nothing
+    // after it) has no position to read; it falls back to the document's opening state.
+    let bi = max(bi, 0)
+    let pl = plAt(plCheckpoints(doc), bi)
+    let mb = mtMbAt(mtMbCheckpoints(doc), bi).mb
+    let fm = doc.page?.fmLines ?? 2.0
+    guard autoPagenoRowY(pageHeight: resolvedPageHeight(doc, printed: true),
+                         pl: pl, mb: mb, fm: fm, size: printedSize(doc)) != nil else {
+        return false
+    }
+    if pageNumbers == .on { return true }
+    return pgnumAt(cps, bi)
+}
+
+func modernPageDict(_ doc: Document) -> PageGeometry? {
+    guard let page = doc.page else { return nil }
+    return doc.formatting.orientation == .landscape ? landscapePage(page) : page
+}
+
+/// The height of the sheet Modern composes on, in points: the document's OWN declared
+/// sheet, always — and the same number `emitPDF` writes into the Modern MediaBox, so the
+/// page Modern draws on and the page it says it drew on can never disagree. Port of
+/// `_modern_sheet_h`.
+///
+/// M18 (Jon's queue 2026-09-15). This used to answer Letter's own 792 for every portrait
+/// document whatever the file declared, and M17 corrected only the landscape half of
+/// that ("a landscape sheet is genuinely shorter than Letter, and laying out from 792 on
+/// one draws every line above the top of the page"), naming the portrait half as a real,
+/// separate defect in this docstring: "a label/envelope template (`.pl 4.17"`) gets a
+/// 612x300 MediaBox with every line drawn at y >= 552 — the whole page blank." That is
+/// this fix. MAILLIST/ENVELOPE.LST rendered every one of its pages blank; so did the
+/// rest of the label/envelope/Rolodex template family, and an A4 document (`.pl 11.69"`)
+/// lost the 50pt its taller sheet gives it.
+///
+/// THE SHEET IS NOT SOMETHING MODERN RE-DECIDES. Modern's own choices are typographic —
+/// its fonts, its 1.2 line height, its margins, its running heads — and the MediaBox has
+/// read the document's declared height since 2026-08-06 ("the page is the document's
+/// declared size (Letter/Legal/A4)"). Only the composing ORIGIN was hardcoded, which is
+/// why the defect reads as a blank page rather than as a wrong page size: the text was
+/// drawn, at coordinates off the top of the sheet it was drawn on.
+///
+/// `.pl 0` IS NOT A SHEET. It is WordStar's "page breaks off" (bug 12284,
+/// `textLinesPerPage`), and the text model already never breaks, so the page BOX falls
+/// back to Letter — a truly unbounded page is not expressible in PDF. That is verbatim
+/// what Printed has done since `resolvedPrintedPageHeight` was written, quoted here
+/// rather than re-decided. Before this fix it gave Modern a ZERO-HEIGHT MediaBox.
+///
+/// The floor is Printed's own, for Printed's own reason: a page has to hold the footnote
+/// floor's worth of lines (`footnoteFloor + 1`).
+func modernSheetH(_ doc: Document) -> Double {
+    let heightIn = modernPageDict(doc)?.heightIn ?? 11.0
+    if heightIn == 0 { return Double(PDFMetrics.pageHeight) }
+    let floorPoints = PDFMetrics.lead * (footnoteFloor + 1)
+    return Double(max(floorPoints, roundHalfToEven(heightIn * 72.0)))
+}
+
+/// `(one column's own measure, the gutter)` in points, inside Modern's text frame —
+/// `.co n, gutter` as MODERN reads it. Port of `_modern_column_width`.
+///
+/// Modern PDF is the printed form of the Modern RTF (ruled 2026-08-05), and
+/// `\cols n\colsx g` says exactly this to a reader: divide THIS section's own text area
+/// into n equal columns separated by g. So Modern divides its OWN measure — Modern's
+/// margins scaled to the sheet — rather than re-deriving the column from the document's
+/// `.rm` the way Printed does. Those are the same measure stated twice: `applyColumns`
+/// reads the column off `.rm` precisely because "an author who wants n real columns sets
+/// `.rm` to ONE column's own width first", and BOOKLET.WS proves the pair agree
+/// (`.po .2i` + `.rm 4.50"` + a 1.00" gutter fills an 11in landscape sheet almost
+/// exactly as this division does). Applying the `.rm` cut ON TOP of the division would
+/// narrow every column twice, which is why a columnar region's lines take the column as
+/// their measure and not the block's own cut.
+///
+/// The gutter is print columns at 10 CPI — WordStar's own unit for it, the same `.po`
+/// uses — and an author who names none gets one print column: the identical reading
+/// `rtfColsControl` gives the very same `.co` pair when it writes `\colsx`.
+func modernColumnWidth(_ width: Double, cols: Int, gutter: Double?)
+    -> (columnWidth: Double, gutterPt: Double) {
+    guard cols > 1 else { return (width, 0.0) }
+    let g = gutter ?? 0
+    let gutterPt = (g != 0 ? g : 1) * pdfPtPerCol
+    return (max(36.0, (width - Double(cols - 1) * gutterPt) / Double(cols)), gutterPt)
+}
+
 /// `(left, topMargin, bottomMargin, textWidth)` in points. The document's declared
 /// geometry wins (governing principle); silence is the modern page: 1in margins on
-/// Letter. The right margin is always 1in — WordStar's right edge is a text measure
-/// (`.rm`), not a page property. Port of `_modern_geometry`.
+/// Letter.
+///
+/// THE RIGHT MARGIN MIRRORS THE LEFT (Jon's ruling 2026-09-15, "Yes to mirror
+/// margin"). It used to be a flat 1in while Modern RTF mirrored `.po` into `\margr`
+/// (`rtfPageSetup`: `margr = margl`), so the same document's two Modern surfaces
+/// disagreed about where its text ended -- `sawyer/REF/BOOKLET.WS` measured 763.2pt
+/// wide in RTF and 705.6 in PDF. One rule, both surfaces: whatever `.po` the document
+/// declares is the margin on both sides, 1in the fallback on both when it declares
+/// none. WordStar's own `.rm` is still not consulted on either: it is a text measure,
+/// not a page property.
+///
+/// The alternative was measured first, at Jon's instruction: forcing a LITERAL 1in on
+/// both sides regardless of `.po` blanks 6 label documents on 1in-tall sheets, moves
+/// envelope address blocks by up to 5.5in and collapses the two space-set character
+/// charts (research/2026-09-15_modern-one-inch-margins-impact.md). Mirroring the
+/// DECLARED value harms none of those. Port of `_modern_geometry`.
 public func modernGeometry(_ doc: Document) -> (left: Double, top: Double, bottom: Double, width: Double) {
-    let page = doc.page
+    let page = modernPageDict(doc)
     let mtDeclared = (page?.mtSource ?? .default) != .default
     let mbDeclared = (page?.mbSource ?? .default) != .default
     let poDeclared = (page?.poSource ?? .default) != .default
@@ -172,7 +314,7 @@ public func modernGeometry(_ doc: Document) -> (left: Double, top: Double, botto
     let margb = mbDeclared ? (page?.mbLines ?? 6.0) * 12.0 : 72.0
     let margl = poDeclared ? (page?.poCols ?? 10.0) * 7.2 : 72.0
     let pageW = (page?.pwIn ?? 8.5) * 72.0     // A4 files are narrower (2026-08-06)
-    let width = max(144.0, pageW - margl - 72.0)
+    let width = max(144.0, pageW - margl - margl)
     return (margl, margt, margb, width)
 }
 
@@ -598,6 +740,69 @@ func modernStructureIndentHang(_ structure: RowStructure, colPt: Double, toks: [
     return (indent, hang)
 }
 
+/// What the column-range recorder needs from `modernFlow` and nothing else does
+/// (planning #276 follow-up, 2026-09-15).
+///
+/// `tokenOffsets` is keyed by FLOW index (not by semantic index, and not a parallel
+/// array): only a `.para` item can be split mid-item by a column boundary, so only a
+/// `.para` item has an entry, and a dictionary says that without asking every other
+/// `flow.append` site below to remember to append an empty list beside it. Each value is
+/// parallel to that item's own `toks`: the UTF-16 offset, into the SEMANTIC item's own
+/// `runs.map(\.text).joined()`, that the token's text came from.
+///
+/// `itemCount` is `sem.items.count` — the exclusive end the document's last column range
+/// reports, and not derivable from the flow (a trailing `.tabs` item produces no flow
+/// entry at all).
+struct ModernFlowSource {
+    var tokenOffsets: [Int: [Int]] = [:]
+    var itemCount = 0
+}
+
+/// A forward-only cursor over one semantic item's own `runs.map(\.text).joined()`, handing
+/// each token the UTF-16 offset of the source text it draws.
+///
+/// WHY A SEARCH RATHER THAN ARITHMETIC. The tokens a `.para` item renders are not a
+/// partition of its run texts: `sentenceSpacingRuns` rewrites a run's spaces, a def row's
+/// label/gap/body is re-sliced out of the joined text (`modernDefRuns`), `modernTokFont`
+/// transliterates a piece into a different string entirely, and `symbolFallbackSplit`
+/// splits one piece into several. Counting characters through all of that would be a
+/// second model of five transforms; searching FORWARD for the piece from where the last
+/// one ended is one rule that is exact wherever the text survived a transform (the
+/// overwhelming majority — the match is found at the cursor itself, so this is O(n) in
+/// practice) and monotone, never backward, wherever it did not.
+/// Searched over UTF-16 code units directly rather than through Foundation's
+/// `String.range(of:)`: the offsets this reports ARE UTF-16 offsets (that is the unit the
+/// apps index text in), and a code-unit comparison can never disagree with them the way a
+/// canonical-equivalence match could.
+struct ModernSourceCursor {
+    private let units: [UInt16]
+    private var at = 0
+
+    init(_ text: String) {
+        units = Array(text.utf16)
+    }
+
+    /// The offset `piece` was drawn from, and the cursor moved past it. A piece the
+    /// source does not contain verbatim (a transliteration, a def row's synthetic
+    /// two-space gap) leaves the cursor where it was and reports it — the next piece that
+    /// DOES survive re-synchronises the walk.
+    mutating func take(_ piece: String) -> Int {
+        let needle = Array(piece.utf16)
+        guard !needle.isEmpty, at + needle.count <= units.count else { return at }
+        var i = at
+        while i + needle.count <= units.count {
+            var k = 0
+            while k < needle.count, units[i + k] == needle[k] { k += 1 }
+            if k == needle.count {
+                at = i + needle.count
+                return i
+            }
+            i += 1
+        }
+        return at
+    }
+}
+
 /// The MEASURED Modern flow: `modernSemanticFlow`'s semantic items (the single
 /// implementation of the M-rules — see `Layout.swift`'s contract) converted to this
 /// emitter's tokens. This adapter adds exactly what a PDF needs — font resolution, AFM
@@ -632,12 +837,28 @@ func modernStructureIndentHang(_ structure: RowStructure, colPt: Double, toks: [
 /// appends exactly one `flow` entry per `sem.items` entry, in the same order, so this is
 /// pure bookkeeping alongside the existing loop, never a parallel re-derivation of what
 /// that loop already decides.
+///
+/// `blockIndexOfItem` (Jon's ruling 2026-09-15, Modern columns): the same shape, one
+/// entry per element of the returned flow -- the `doc.blocks` index that produced it
+/// (`SemanticItem.para` already carries `bi`), or `nil` for an item that has no block of
+/// its own (a blank, a break, a running-head change, an end-matter note).
+/// `modernStreams` reads the `.co n` regime in force, and the `.cb` column breaks sitting
+/// between two blocks, off the IR with it. An out-parameter for the same reason
+/// `semIndexOfItem` is one: the item values ARE the `layout` JSON contract, and this
+/// ruling moves no schema.
+///
+/// `src` (planning #276 follow-up, 2026-09-15): `nil` for every ordinary render call,
+/// otherwise filled with what `ModernColumnRange` needs and nothing else does — see
+/// `ModernFlowSource`. Gated, because its per-token source-offset walk is real work
+/// (`ModernSourceCursor`) that an export has no use for.
 func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 noteRefs: NoteRefs = .word, pixResults: [PixResult] = [],
                 pictures: EmitOptions.PixMode = .off,
                 textWidthPt: Double = 0.0, sentenceSpacing: Bool = false,
                 semIndexOfItem: inout [Int]?,
-                semCached: SemanticFlow? = nil) -> [ModernFlowItem] {
+                semCached: SemanticFlow? = nil,
+                blockIndexOfItem: inout [Int?]?,
+                src: UnsafeMutablePointer<ModernFlowSource>? = nil) -> [ModernFlowItem] {
     let embedImages = pictures != .off && !pixResults.isEmpty
     let pixMap: [Int: PixResult] = embedImages
         ? Dictionary(uniqueKeysWithValues: pixResults.map { ($0.index, $0) }) : [:]
@@ -654,6 +875,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
     // READ here, never mutated, so sharing one is exact, not approximate; a caller
     // that cannot promise the same arguments passes nothing and gets a fresh call.
     let sem = semCached ?? modernSemanticFlow(doc, notes: keep, noteRefs: noteRefs)
+    src?.pointee.itemCount = sem.items.count
     // one WordStar column in points, at the document's own `.cw`
     let colPt = (doc.page?.cw120 ?? 12.0) * 0.6
     let blankH = modernLine * Double(modernBodyPt)
@@ -685,15 +907,19 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
         case .blank:
             flow.append(.blank(blankH))
             semIndexOfItem?.append(semI)
+            blockIndexOfItem?.append(nil)
         case .pageBreak:
             flow.append(.pageBreak)
             semIndexOfItem?.append(semI)
+            blockIndexOfItem?.append(nil)
         case .cond(let lines):
             flow.append(.cond(lines))
             semIndexOfItem?.append(semI)
+            blockIndexOfItem?.append(nil)
         case .hf(let which, let line, let text):
             flow.append(.hf(kind: which, line: line, text: text))
             semIndexOfItem?.append(semI)
+            blockIndexOfItem?.append(nil)
         case .tabs:
             continue          // editor-time state: no rendered consequence (task #19)
         case .noteSeparator:
@@ -709,6 +935,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                               noWrap: false, pageMarker: false, endNotesStart: true,
                               tight: false, hang: 0.0))
             semIndexOfItem?.append(semI)
+            blockIndexOfItem?.append(nil)
         case .note(let ni, _, let label, let text):
             let noteText = sentenceSpacing ? sentenceSpacingTexts([text])[0] : text
             flow.append(.para(toks: modernNoteToks(label: label, text: noteText,
@@ -717,6 +944,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                               noWrap: false, pageMarker: false, endNotesStart: false,
                               tight: false, hang: 0.0))
             semIndexOfItem?.append(semI)
+            blockIndexOfItem?.append(nil)
         case .para(let align, let indentCols, let cutCols, let runs, let footnotes,
                   let structure, let isVerse, let bi):
             if embedImages, !runs.contains(where: { $0.ref != nil }),
@@ -725,6 +953,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 flow.append(.image(pixIndex: sub.pixIndex, widthPt: sub.wPt,
                                    heightPt: sub.hPt))
                 semIndexOfItem?.append(semI)
+                blockIndexOfItem?.append(bi)
                 continue
             }
             // planning #263: a def row renders as LABEL + a two-space gap + body, not as
@@ -748,6 +977,15 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
             // a sentence-ending character.
             if sentenceSpacing { paraRuns = sentenceSpacingRuns(paraRuns) }
             var toks: [ModernToken] = []
+            // Parallel to `toks` from here to the `flow.append` below, INCLUDING the
+            // padding strips further down -- every `toks.removeFirst()`/`removeLast()`
+            // takes this array's own element with it, or an offset would be reported
+            // against the wrong token. Left EMPTY (and every write to it skipped) when
+            // nothing asked for the provenance, so an ordinary export allocates nothing
+            // and runs no cursor: hence the `isEmpty` guards on the two strips, which are
+            // the only places the two arrays could fall out of step.
+            var tokOff: [Int] = []
+            var cursor = src != nil ? ModernSourceCursor(runs.map(\.text).joined()) : nil
             for run in fixedRuns + paraRuns {
                 var styles = run.styles
                 if run.ref != nil {
@@ -764,9 +1002,14 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                                                  pt: modernBodyPt, entry: nil, printedPt: printedPt)
                     toks.append(ModernToken(text: run.text, styles: styles, family: .times,
                                             pt: modernBodyPt, entry: nil, width: width))
+                    if cursor != nil { tokOff.append(cursor!.take(run.text)) }
                     continue
                 }
                 for piece in modernTokenize(run.text) {
+                    // Taken ONCE per source piece: a fallback split below turns one piece
+                    // into several tokens, and all of them are drawn from the same place
+                    // in the source.
+                    let pieceOff = cursor != nil ? cursor!.take(piece) : 0
                     let resolved = modernTokFont(piece, font: run.font, fonts: doc.fonts,
                                                  nonpropFallback: nonpropFallback)
                     // round 2026-09-07 (ported from ctrl-kd pdf.py's b26-modern item 4):
@@ -785,6 +1028,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                         toks.append(ModernToken(text: fbText, styles: styles,
                                                 family: fbFamily, pt: resolved.pt,
                                                 entry: resolved.entry, width: width))
+                        if cursor != nil { tokOff.append(pieceOff) }
                     }
                 }
             }
@@ -860,8 +1104,14 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 // (M3) and its align is already `.center`, so both steps below are no-ops.
                 // The whole effect is on undeclared, spaces-padded rows.
                 lineAlign = .center
-                while let first = toks.first, first.text.trimmed().isEmpty { toks.removeFirst() }
-                while let last = toks.last, last.text.trimmed().isEmpty { toks.removeLast() }
+                while let first = toks.first, first.text.trimmed().isEmpty {
+                    toks.removeFirst()
+                    if !tokOff.isEmpty { tokOff.removeFirst() }
+                }
+                while let last = toks.last, last.text.trimmed().isEmpty {
+                    toks.removeLast()
+                    if !tokOff.isEmpty { tokOff.removeLast() }
+                }
             } else if let structure, structure.kind != nil {
                 // the ladder REPLACES the block's own `.lm` indent (that is the whole
                 // point of it), so the row's residual leading spaces go with it -- left
@@ -869,7 +1119,10 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                 // on. Dropped BEFORE the hang is measured: a bullet's hang is the advance
                 // of the row's own first two characters, which are its marker and gap only
                 // once the padding is gone.
-                while let first = toks.first, first.text.trimmed().isEmpty { toks.removeFirst() }
+                while let first = toks.first, first.text.trimmed().isEmpty {
+                    toks.removeFirst()
+                    if !tokOff.isEmpty { tokOff.removeFirst() }
+                }
                 (indent, hang) = modernStructureIndentHang(structure, colPt: colPt, toks: toks,
                                                           printedPt: printedPt)
             } else {
@@ -898,11 +1151,13 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
             // has gained its label/gap prefix by now, and the rule reads the text the page
             // will actually carry. Never clears a `noWrap` an earlier rule set.
             noWrap = noWrap || modernClipsRow(toks)
+            if src != nil { src!.pointee.tokenOffsets[flow.count] = tokOff }
             flow.append(.para(toks: toks, align: lineAlign, notes: notes,
                               indent: indent, cut: cut,
                               noWrap: noWrap, pageMarker: pageMarker, endNotesStart: false,
                               tight: tight, hang: hang))
             semIndexOfItem?.append(semI)
+            blockIndexOfItem?.append(bi)
         }
     }
     return flow
@@ -932,27 +1187,44 @@ private func sentenceSpacingRuns(_ runs: [SemanticRun]) -> [SemanticRun] {
 /// after the first to the right WITHOUT moving the right edge, so those lines wrap at a measure
 /// narrower by exactly that much — the same thing a head-indent does in any real text stack,
 /// and the reason a hang changes a row's line COUNT as well as its look.
-func modernWrap(_ toks: [ModernToken], width: Double, hang: Double = 0.0) -> [[ModernToken]] {
+///
+/// `indices` (planning #276 follow-up, 2026-09-15): `nil` to record nothing (every caller
+/// but the column-range recorder), otherwise filled with the `toks` INDEX of each token
+/// kept on each visual line — the same nesting as the returned lines, one index per token.
+/// A swallowed wrap-point space contributes no index, which is exactly what makes this
+/// usable as a source map: the first index of line `vi` is the token that STARTS that
+/// line, and `ModernColumnRange`'s own `startOffset` is that token's source offset. Stated
+/// as an out-parameter on the one wrap definition rather than as a second index-only wrap
+/// function: a second copy of this greedy loop is a drift waiting to be found in a column
+/// that filled differently from the page that drew it.
+func modernWrap(_ toks: [ModernToken], width: Double, hang: Double = 0.0,
+                indices: UnsafeMutablePointer<[[Int]]>? = nil) -> [[ModernToken]] {
     var lines: [[ModernToken]] = []
     var cur: [ModernToken] = []
+    var idxLines: [[Int]] = []
+    var idxCur: [Int] = []
     var curw = 0.0
-    for tok in toks {
+    for (ti, tok) in toks.enumerated() {
         let hasInk = !tok.text.trimmed().isEmpty
         let limit = lines.isEmpty ? width : max(36.0, width - hang)
         if !cur.isEmpty, curw + tok.width > limit, hasInk {
             lines.append(cur)
             cur = []
+            if indices != nil { idxLines.append(idxCur); idxCur = [] }
             curw = 0.0
         }
         if cur.isEmpty, !hasInk, !lines.isEmpty {
             continue                          // swallow the wrap-point space
         }
         cur.append(tok)
+        if indices != nil { idxCur.append(ti) }
         curw += tok.width
     }
     if !cur.isEmpty || lines.isEmpty {
         lines.append(cur)
+        if indices != nil { idxLines.append(idxCur) }
     }
+    indices?.pointee = idxLines
     return lines
 }
 
@@ -998,8 +1270,54 @@ func modernNoteLines(label: String, text: String, width: Double, kind: NoteKind 
 /// `printedPt` (planning #254): threaded to `modernLineOps` only for the graphic-cell
 /// cases neither header nor footer text has ever been observed to carry -- see that
 /// parameter's own doc comment.
-func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Double,
-                 res: FontResources, tzState: inout Int, printedPt: Int) -> [[UInt8]] {
+///
+/// `align`: the line's own declared alignment, resolved by `modernHFAlign` — `.left`
+/// unless the document's own `.h#`/`.f#` style says centre or right, in which case the
+/// line is centred or right-aligned in MODERN's measure (`left` to `left + width`), never
+/// against a `.po` or a style margin Modern does not have. A head keeps its own baked
+/// spaces either way, because that is how a 1990 head positioned its parts; a
+/// left-aligned line is therefore byte-identical to every version of this function before
+/// alignment was read at all. WordStar's own AUTOMATIC page number passes `.center`
+/// directly (M15): it has no typed spaces to honour, and Modern's own reading of "bottom
+/// centre" is a real centring in Modern's measure, not Printed's `.pc` column.
+///
+/// Which family `modernHFAlign` reads.
+enum ModernHFKind { case header, footer }
+
+/// One running head/foot line's own alignment, for Modern. Port of `_modern_hf_align`.
+///
+/// M5 ruled that Modern keeps the running heads; nothing ever ruled that it flattens
+/// them. Every head and foot line was drawn left at Modern's own left margin whatever its
+/// own `.h#`/`.f#` style declared, so `sawyer/REF/BOOKLET.WS`'s right-aligned "Header
+/// Odd" sat on top of its left-aligned "Header Even" at the same x — and its own Modern
+/// RTF, which has carried `\qr` since planning #264 item 4 (row A4), said otherwise.
+/// Modern PDF is ruled to be that RTF's printed form (2026-08-05), so the two have to
+/// agree.
+///
+/// WHAT IT ALIGNS AGAINST IS MODERN'S, not WordStar's. M16's rule — an aligned head
+/// aligns to `.po` plus ITS OWN STYLE's right margin — is a PRINTED-fidelity rule about a
+/// WordStar page this view does not draw: Modern has no `.po` and no style margin, it has
+/// its own measure. So the DECISION ("this line is right-aligned") is the document's,
+/// read from the same `headerAlign`/`footerAlign` the Printed path and the RTF both read,
+/// and the GEOMETRY is Modern's — `margl` to `margl + width`, exactly as a body line's
+/// own alignment resolves.
+///
+/// PARITY IS NOT READ HERE, and is not this rule's gap: Modern's flow carries no parity
+/// at all (`modernFlow`'s own `hf` items are keyed by line number, never by side), so a
+/// `.h1o`/`.h1e` document already shows one flat head on both sides in Modern. Reading
+/// the flat `headerAlign` alongside the flat head TEXT keeps the two consistent; reading
+/// the parity table here would align a line the other side's text. Pre-existing, named,
+/// untouched.
+func modernHFAlign(_ doc: Document, _ which: ModernHFKind, _ lno: Int) -> Alignment {
+    let align = (which == .header ? doc.headerAlign : doc.footerAlign)[lno]
+    return (align == .center || align == .right) ? align! : .left
+}
+
+/// One running head/foot line's own Modern tokens -- `#` substituted for `pageNo`,
+/// toggle-byte runs kept, in the Times face and `modernNotePt` size Modern's furniture
+/// uses. Split out so `modernPageFurniture` reports the SAME text and the same measured
+/// width the drawn line has (`modernPlaceLine`), never a re-derivation of either.
+func modernHFToks(_ txt: String, pageNo: Int) -> [ModernToken] {
     var toks: [ModernToken] = []
     for run in hfRuns(txt) {
         let runText = run.text.replacingAll("#", with: String(pageNo))
@@ -1011,11 +1329,53 @@ func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Dou
                                     pt: modernNotePt, entry: nil, width: w))
         }
     }
+    return toks
+}
+
+func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Double,
+                 res: FontResources, tzState: inout Int, printedPt: Int,
+                 align: Alignment = .left) -> [[UInt8]] {
+    let toks = modernHFToks(txt, pageNo: pageNo)
     if toks.isEmpty { return [] }
     var discardedGraphicCells: [PageLine.GraphicCellPlacement]? = nil
-    return modernLineOps(toks, left: left, y: y, width: width, align: .left,
+    return modernLineOps(toks, left: left, y: y, width: width, align: align,
                          res: res, tzState: &tzState, printedPt: printedPt,
                          recordGraphicCells: &discardedGraphicCells)
+}
+
+/// Where one Modern visual line STARTS, and the tokens that survive to be drawn --
+/// trailing whitespace tokens trimmed, then `left` shifted by the line's own alignment
+/// inside `width`.
+///
+/// ONE DEFINITION, two readers: `modernLineOps` draws from it, and
+/// `modernPageFurniture` reports the very same x to the apps without re-deriving it.
+/// Extracting it is what lets that accessor be an answer about the drawn page rather
+/// than a second opinion about it.
+///
+/// `neumaierSum`, not a plain `reduce(+)`: the reference is Python's `sum()`, which on
+/// CPython 3.12+ compensates float error exactly the way this helper does, and a naive
+/// left-to-right total differs from it in the last bits. That used to be invisible -- a
+/// left-aligned line never spends `lineWidth` on a drawn coordinate -- but a CENTRED
+/// line's own start is `left + (width - lineWidth) / 2`, so one ULP here can move a
+/// later token across a `%.1f` rounding boundary and print an x 0.1pt away from the
+/// reference's. Measured: a 21-token row summing to 327.768 naively and to
+/// 327.76800000000003 compensated, which moved three drawn x values on one archive
+/// document. Same reason `PDFWriter.swift`'s own justification total already uses it.
+func modernPlaceLine(_ toksIn: [ModernToken], left: Double, width: Double,
+                     align: Alignment) -> (x: Double, toks: [ModernToken]) {
+    var toks = toksIn
+    var lineWidth = neumaierSum(toks.map(\.width))
+    while let last = toks.last, last.text.trimmed().isEmpty {
+        lineWidth -= last.width
+        toks.removeLast()
+    }
+    var x = left
+    if align == .center {
+        x += max(0.0, (width - lineWidth) / 2)
+    } else if align == .right {
+        x += max(0.0, width - lineWidth)
+    }
+    return (x, toks)
 }
 
 /// Content-stream ops for one modern visual line. One op per word keeps a viewer's
@@ -1045,27 +1405,9 @@ func modernLineOps(
     res: FontResources, tzState: inout Int, printedPt: Int,
     recordGraphicCells: inout [PageLine.GraphicCellPlacement]?
 ) -> [[UInt8]] {
-    var toks = toksIn
-    // `neumaierSum`, not a plain `reduce(+)`: the reference is Python's `sum()`, which on
-    // CPython 3.12+ compensates float error exactly the way this helper does, and a naive
-    // left-to-right total differs from it in the last bits. That used to be invisible --
-    // a left-aligned line never spends `lineWidth` on a drawn coordinate -- but a CENTRED
-    // line's own start is `left + (width - lineWidth) / 2`, so one ULP here can move a
-    // later token across a `%.1f` rounding boundary and print an x 0.1pt away from the
-    // reference's. Measured: a 21-token row summing to 327.768 naively and to
-    // 327.76800000000003 compensated, which moved three drawn x values on one archive
-    // document. Same reason `PDFWriter.swift`'s own justification total already uses it.
-    var lineWidth = neumaierSum(toks.map(\.width))
-    while let last = toks.last, last.text.trimmed().isEmpty {
-        lineWidth -= last.width
-        toks.removeLast()
-    }
-    var x = left
-    if align == .center {
-        x += max(0.0, (width - lineWidth) / 2)
-    } else if align == .right {
-        x += max(0.0, width - lineWidth)
-    }
+    let placed = modernPlaceLine(toksIn, left: left, width: width, align: align)
+    let toks = placed.toks
+    var x = placed.x
     var ops: [[UInt8]] = []
     for tok in toks {
         let (spt, rise) = sized(tok.styles, tok.pt)
@@ -1248,10 +1590,217 @@ struct MergePagenoRecord {
     var notes: [Int] = []
 }
 
+// MARK: - Modern page furniture, for the apps (planning #276)
+
+/// One running head or foot line on one Modern page, exactly as the Modern PDF draws
+/// it: `#` already substituted for this page's number, the x its own alignment resolved
+/// to inside Modern's measure, and the baseline y it is drawn at.
+public struct ModernHeadFootLine: Hashable, Sendable {
+    /// The `.h#`/`.f#` slot this line came from, 1-based.
+    public let line: Int
+    /// The drawn text, `#` substituted and any trailing whitespace token trimmed --
+    /// WordStar's inline style TOGGLE BYTES are still in it, exactly as
+    /// `HeadFootLine.text` keeps them on the Printed side. Run it through `hfRuns` to
+    /// style it.
+    public let text: String
+    /// Left edge in points, alignment already applied (`modernPlaceLine`).
+    public let x: Double
+    /// Baseline y in points, from the bottom of the sheet.
+    public let y: Double
+    /// Modern draws its furniture in Times at `modernNotePt`; both are stated rather
+    /// than assumed so a caller never has to know that.
+    public let family: PDFFamily
+    public let pt: Int
+    /// `.left`, `.center` or `.right` -- the alignment ALREADY applied to `x`, reported
+    /// so a caller re-laying the text at a different measure can reproduce it.
+    public let align: Alignment
+}
+
+/// WordStar's own automatic page number on one Modern page -- the one `.pc` positions
+/// on the Printed page, placed the Modern way (M15, Jon's ruling 2026-09-15): centred
+/// in Modern's own measure on the row a Modern footer line 1 rides, never Printed's
+/// `.pc` column or its `pl - mb + fm` row.
+public struct ModernAutoPageNumber: Hashable, Sendable {
+    public let text: String
+    public let x: Double
+    public let y: Double
+}
+
+/// WHY one column of one Modern page stopped taking content (planning #276 follow-up,
+/// 2026-09-15). The app fills a column by walking the same items the engine walked, so it
+/// needs the engine's own reason as well as the engine's own boundary: a column that ran
+/// out of room and a column an author ended with `.cb` look identical from the range
+/// alone, and only the second one must survive a re-measure at a different font size.
+///
+///   `overflow`     the next piece of content did not fit. Includes the end of the
+///                  document (the last column stops because there is nothing left) and a
+///                  `.cp n` whose requested lines did not fit.
+///   `columnBreak`  a `.cb` between two blocks, inside a live `.co n>1` region.
+///   `pageBreak`    a break that ends the SHEET whatever column it was on: a `.pa` or a
+///                  form feed outside a columnar region, a change of `.co` regime, and
+///                  the two forced breaks Modern makes for itself (a screenplay page
+///                  marker, and the end-matter block opening after a page that already
+///                  carries footnotes).
+public enum ModernColumnEnd: String, Hashable, Sendable {
+    case overflow, columnBreak, pageBreak
+}
+
+/// The slice of the Modern flow that one column of one page actually holds.
+///
+/// WHY THIS EXISTS. The app's Modern view must fill its columns exactly as the engine's
+/// Modern pagination does — one source of layout truth, the app never re-deriving
+/// (Jon's rule). Everything about WHERE a column sits was already reported by
+/// `ModernPageFurniture`; WHAT goes in it was not, so the app was making its own
+/// column-fill decisions and disagreeing with the engine the moment the rules were
+/// subtle. `sawyer/REF/BOOKLET.WS` is the measured case: it stores four form feeds
+/// mid-paragraph, which the engine ABSORBS under its `.co 2` (three pages) and the app
+/// broke on (nine).
+///
+/// `startItem`/`endItem` index `modernSemanticFlow(doc).items` — the flow `modernStreams`
+/// lays out, the same order as the `layout` JSON's own `modern.items`. `endItem` is
+/// EXCLUSIVE: it is where the next column (or the next page's first column) starts, so
+/// the ranges are contiguous across columns and across pages, and the last one ends at
+/// `items.count` with a `0` offset.
+///
+/// `startOffset`/`endOffset` are UTF-16 offsets into that item's own
+/// `runs.map(\.text).joined()`, and are `0` whenever the boundary is a whole item — a
+/// column that starts at the top of an item reports `0`, never the offset of its first
+/// drawn glyph, so a centred row whose leading padding the engine strips still reports
+/// the item's own start. A non-zero offset means exactly one thing: this item was split
+/// across the boundary at a VISUAL LINE, and the offset is where the first line placed on
+/// this side of it begins.
+///
+/// An item that draws nothing at a column top (a blank the paginator drops there, a form
+/// feed a columnar region absorbs, a running-head change) sits INSIDE the range that
+/// follows it, never at a boundary of its own. A column that took no content at all is
+/// not reported: its items roll into the next column that did, which is what keeps the
+/// ranges contiguous with no holes.
+public struct ModernColumnRange: Hashable, Sendable {
+    /// `0..<columns` on this page.
+    public let column: Int
+    public let startItem: Int
+    public let startOffset: Int
+    public let endItem: Int
+    public let endOffset: Int
+    public let ended: ModernColumnEnd
+}
+
+/// Everything the Modern PDF draws on one page that is NOT body text: the sheet, the
+/// column geometry, the resolved running heads and feet, and the automatic page number.
+///
+/// WHY THIS EXISTS. The Mac and iOS apps draw Modern's own page furniture themselves,
+/// and were re-deriving all of it -- which sheet, which margins, how wide a column,
+/// where a centred running head starts, whether this page is numbered at all. Every one
+/// of those is a decision the engine has already made, and a second derivation of a
+/// decision is a disagreement waiting to be found in a screenshot. These values are
+/// recorded BY `modernStreams` itself, at the moment each drawing op is built, from the
+/// same numbers that op uses; there is no parallel model here to drift.
+///
+/// `columnTopOffset` is ALWAYS 0.0 and is reported for symmetry with Printed's own
+/// `Page.columnTopOffsetPt`, which is not: Printed's columns begin below whatever
+/// non-columnar prefix opened the sheet, while every Modern column restarts at the text
+/// frame's own top (`modernStreams`' `close()` sets `y = sheetH - margt` for each).
+///
+/// The RIGHT margin is `marginLeft + textWidth`, i.e. `modernGeometry` as it stands
+/// today. A ruling on whether Modern's right margin should mirror `.po` or stay a flat
+/// 1in is pending (register 2026-09-15); this accessor reports what is drawn, and will
+/// keep doing so when that changes.
+public struct ModernPageFurniture: Hashable, Sendable {
+    /// 0-based index into the emitted pages.
+    public let pageIndex: Int
+    /// The number printed on this page (`.pn`'s own start plus the index).
+    public let pageNumber: Int
+    /// The sheet the Modern PDF's MediaBox declares, in points -- the document's own
+    /// declared page with `.pr or=l`'s landscape swap already applied.
+    public let sheetWidth: Double
+    public let sheetHeight: Double
+    /// Modern's own text frame on that sheet (`modernGeometry`).
+    public let marginLeft: Double
+    public let marginTop: Double
+    public let marginBottom: Double
+    public let textWidth: Double
+    /// `.co n` as Modern reads it (`modernColumnWidth`): 1 and 0.0 and the full
+    /// `textWidth` on an ordinary page.
+    public let columns: Int
+    public let columnGutter: Double
+    public let columnWidth: Double
+    public let columnTopOffset: Double
+    /// Ascending by `.h#`/`.f#` slot. Empty when the page has none.
+    public let headers: [ModernHeadFootLine]
+    public let footers: [ModernHeadFootLine]
+    /// `nil` when this page is not numbered -- the document carries `.op`, a footer is
+    /// in use, or `--page-numbers off` (`modernAutoPagenoShows`).
+    public let autoPageNumber: ModernAutoPageNumber?
+    /// What each column of this page holds, ascending by `column` -- see
+    /// `ModernColumnRange`. Empty for a page that took no body content at all.
+    public let columnRanges: [ModernColumnRange]
+    /// The `modernSemanticFlow(doc).notes` (`SemanticNoteRow`) indices whose entries this
+    /// page's own foot block draws, in the order they were committed to it. Empty on a
+    /// page with no footnotes. A note is committed to the page its reference's own first
+    /// visual line LANDED on, which is not always the page that line was first tried on.
+    public let footnoteRows: [Int]
+}
+
+/// What the Modern PDF draws on each page besides body text -- see
+/// `ModernPageFurniture`.
+///
+/// Computed by RUNNING the Modern emitter (`modernStreams`) and recording each value
+/// where the op that draws it is built, then discarding the streams. It is the drawn
+/// page's own answer, not a model of it.
+///
+/// `pageNumbers` is `EmitOptions.pageNumbers` and means what it means everywhere else:
+/// `.auto` (the default) lets the document's own `.op`/`.pn`/`.pg` decide, `.on` forces
+/// the number, `.off` suppresses it.
+///
+/// Convenience spelling of the `options:` overload below, for the caller whose only
+/// departure from the defaults is the page-number flag. Anything else the export sets --
+/// `pageSettings` above all, since a `--page-settings` preset MOVES the margins and the
+/// sheet this accessor reports -- must go through `options:`, or this would answer about
+/// a differently-laid-out page than the one being exported.
+public func modernPageFurniture(_ doc: Document,
+                                pageNumbers: EmitOptions.PageNumberMode = .auto)
+    -> [ModernPageFurniture] {
+    modernPageFurniture(doc, options: EmitOptions(pageNumbers: pageNumbers))
+}
+
+/// The same accessor over the WHOLE option set the export will use.
+///
+/// Added 2026-09-15 because the `pageNumbers:` spelling built its own `EmitOptions()` and
+/// therefore silently dropped every other option -- `pageSettings` in particular, the
+/// `--page-settings`/`pageSettings` preset that `resolvedGeometryDocument` folds into the
+/// page before `emitPDF(.modern)` lays a single line out. An app exporting under a preset
+/// got furniture measured on the UNPRESET page: the wrong margins, the wrong top, and
+/// running heads drawn where nothing is.
+///
+/// Pass the document as it came out of `parseWS` -- NOT `printedDocument(doc)`. The
+/// geometry fold below is the same one that façade performs, so a pre-resolved document
+/// would have `.pr or=l`'s landscape swap applied to it twice.
+public func modernPageFurniture(_ doc: Document, options: EmitOptions)
+    -> [ModernPageFurniture] {
+    // The SAME two geometry steps `emitPDF` applies before it lays anything out
+    // (`.pr or=l`'s landscape swap, any `--page-settings` preset) and the SAME
+    // page-number merge-variable resolution, or this accessor would answer about a
+    // different page than the one the app is looking at.
+    var prepared = resolvedGeometryDocument(doc, printed: false, options: options)
+    if options.pageNumbers == .off {
+        prepared = mergePagenoDropped(prepared)
+    } else {
+        prepared = mergePagenoModern(prepared, options: options)
+    }
+    var furniture: [ModernPageFurniture] = []
+    var cells: [Int: [PageLine.GraphicCellPlacement]]? = nil
+    withUnsafeMutablePointer(to: &furniture) { out in
+        _ = modernStreams(prepared, options: options, res: FontResources(),
+                          attachGraphicCells: &cells, recordFurniture: out)
+    }
+    return furniture
+}
+
 func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                    attachGraphicCells: inout [Int: [PageLine.GraphicCellPlacement]]?,
                    semCached: SemanticFlow? = nil,
-                   recordMergePages: UnsafeMutablePointer<MergePagenoRecord>? = nil)
+                   recordMergePages: UnsafeMutablePointer<MergePagenoRecord>? = nil,
+                   recordFurniture: UnsafeMutablePointer<[ModernPageFurniture]>? = nil)
     -> [[UInt8]] {
     // Python: `frozenset(options.get('notes', ())) or frozenset((...))` — an EMPTY set
     // (however it got that way, `--no-notes` included) falls back to the default three.
@@ -1263,6 +1812,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     let keep: Set<NoteKind> = options.notes.isEmpty
         ? [.footnote, .endnote, .annotation] : options.notes
     let (margl, margt, margb, width) = modernGeometry(doc)
+    let sheetH = modernSheetH(doc)
     // planning #254: threaded to every `modernLineOps`/`modernHFOps` call below -- see
     // `modernTokenWidth`'s own doc comment.
     let printedPt = printedSize(doc)
@@ -1277,11 +1827,32 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     // by construction -- `emitPDF`'s own `else` branch), so 'auto' always resolves to
     // single here.
     let ssOn = resolveSentenceSpacing(options.sentenceSpacing, printed: false)
-    var semIndexOfItem: [Int]? = attachGraphicCells != nil ? [] : nil
-    let flow = modernFlow(doc, keep: keep, noteRefs: options.noteRefs,
-                          pixResults: options.pixResults, pictures: options.pictures,
-                          textWidthPt: width, sentenceSpacing: ssOn,
-                          semIndexOfItem: &semIndexOfItem, semCached: semCached)
+    // Also armed by `recordFurniture`: `ModernColumnRange` reports SEMANTIC item indices,
+    // and this is where the flow's own items are mapped back to them. Arming it changes
+    // no emitted byte -- the recorded index only ever reaches `BodyLine.semIndex`, which
+    // the drawing loop reads exclusively when `attachGraphicCells` asked for cells.
+    var semIndexOfItem: [Int]? = (attachGraphicCells != nil || recordFurniture != nil) ? [] : nil
+    // The per-token source offsets and the semantic item count the column-range recorder
+    // needs -- see `ModernFlowSource`. Never built for an ordinary export.
+    var flowSrc = ModernFlowSource()
+    // `.co n` reaches Modern (Jon's ruling 2026-09-15). The regime in force at every
+    // block, and where the `.cb` hard column breaks sit, come off the IR through the
+    // SAME helper Printed RTF's own section spine reads (`rtfColumnsState`) -- one
+    // definition of "which column regime is this block in", never a second one that
+    // could drift from it.
+    var blockIndexOfItem: [Int?]? = []
+    let colState = rtfColumnsState(doc)
+    let colbreakBis = Set(doc.blocks.indices.filter { doc.blocks[$0].kind == .colbreak })
+    let flow = withUnsafeMutablePointer(to: &flowSrc) { srcOut in
+        modernFlow(doc, keep: keep, noteRefs: options.noteRefs,
+                   pixResults: options.pixResults, pictures: options.pictures,
+                   textWidthPt: width, sentenceSpacing: ssOn,
+                   semIndexOfItem: &semIndexOfItem, semCached: semCached,
+                   blockIndexOfItem: &blockIndexOfItem,
+                   src: recordFurniture != nil ? srcOut : nil)
+    }
+    let blockOfItem = blockIndexOfItem ?? []
+    let semOfItem = semIndexOfItem ?? []
     let noteLead = modernLine * Double(modernNotePt)
     let sepH = noteLead
 
@@ -1297,7 +1868,17 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                           indent: Double, cut: Double, image: PageLine.ImageRef?,
                           semIndex: Int?)
     var pages: [(body: [BodyLine], notes: [[ModernToken]],
-                 headers: [Int: String], footers: [Int: String])] = []
+                 headers: [Int: String], footers: [Int: String],
+                 endBlock: Int,
+                 // The `.co` regime in force when this page closed -- recorded here
+                 // because it is the only place it is known per PAGE (it changes as the
+                 // flow walks blocks). Read by `recordFurniture` only; the drawing loop
+                 // below still uses the live `curCols`/`colW`/`colGap`, unchanged.
+                 cols: Int, gutterPt: Double, columnWidth: Double,
+                 // planning #276 follow-up: what each column of this page holds, and the
+                 // note rows its foot block draws. Recorded by `close()` and by the
+                 // note-commit site below -- the same two places that decide them.
+                 ranges: [ModernColumnRange], noteRows: [Int])] = []
     var body: [BodyLine] = []
     var notesLines: [[ModernToken]] = []
     // Dedup by the note's index in `inlineReferenceNotes` — the stable identity Python's
@@ -1329,12 +1910,54 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     // bounds through NSLayoutManager -- and the app itself has not yet adopted the AFM
     // form of it (it is waiting on `afmInkTops`). Changing it here would move the engine's
     // spacers AWAY from the app's measured 3.70/3.71/3.94 on the archive's README.
-    var y = Double(PDFMetrics.pageHeight) - margt
+    var y = sheetH - margt
     var curH: [Int: String] = [:]          // running-head state as events replay
     var curF: [Int: String] = [:]
     var pageH: [Int: String] = [:]         // state when the OPEN page took content
     var pageF: [Int: String] = [:]
     var opened = false
+    // Q9 TIMING FOR THE FOOTER (2026-09-15). A HEADER is emitted at the TOP of a page, so
+    // a `.he`/`.h#` read after the page's first line cannot reach it — that is
+    // `openPage`'s snapshot, and it is right. A FOOTER is emitted at the BOTTOM, so a
+    // `.fo`/`.f#` read ANYWHERE before the page ends still governs that page; Printed has
+    // read it that way since the 8MAC measurement (`docToPagelines`' own
+    // `kind == .footer && !pageAlreadyFull(li)`), and Modern took the header's rule for
+    // both, which put every mid-page footer change one page late in Modern alone.
+    //
+    // `pageAlreadyFull` IS THE HALF THAT MATTERS, and it is why this is a PENDING state
+    // rather than a snapshot taken at the event: a footer read when the page can take no
+    // more content belongs to the NEXT page. Printed answers that by peeking at the next
+    // line; Modern cannot peek (its own line heights are resolved during placement, not
+    // before it), so it answers the same question by WAITING — the footer state a `.fo`
+    // declares is handed to whichever page actually takes the next piece of content, and
+    // to any page that closes for a reason OTHER than running out of room.
+    //
+    // ONE LIMIT WORTH NAMING, pre-existing and untouched: Modern's flow is BLOCK-granular
+    // (`modernFlow` walks `doc.blocks.enumerated()` and hangs each `hf` event on its
+    // anchor block), so a `.fo` typed between two physical lines of ONE paragraph has no
+    // block to hang on and never reaches this loop at all. Q9 in Modern is therefore only
+    // as fine-grained as a block boundary. Every corpus document this rule moves anchors
+    // its `.fo` at one.
+    var pendingF: [Int: String]? = nil
+    // The newspaper-column cursor. A document begins outside any columnar region, so
+    // `curCols` is 1 and every line below takes the full measure and sits at `colI == 0`
+    // -- exactly the arithmetic that was here before this ruling, which is why a document
+    // with no `.co` anywhere in it emits the bytes it always did.
+    var curCols = 1
+    var curGutter: Double? = nil
+    var colW = width
+    var colGap = 0.0
+    var colI = 0                           // 0-based column of the open sheet
+    var colBody = false                    // has THIS column taken content yet
+    var lastBi = -1                        // last block that reached the page
+    // M15 (2026-09-15): the LAST block whose content reached this page. WordStar's
+    // automatic page number is a per-PAGE answer to a positional question, and Printed
+    // resolves it at the position the page had READ UP TO when it closed
+    // (`checkpointsByPage`), not at the page's start — its own `.op`/`.pn`/`.pg` is read
+    // on the page it physically sits on. Modern's flow carries block indices and no
+    // source line indices, so this is `checkpointByBlock`'s granularity exactly: the
+    // highest block index the page carries. -1 until the page takes content.
+    var pageEndBi = -1
     // b26-modern item 4 (ctrl-kd c402094): a blank line's own advance must scale with
     // the SURROUNDING text's font size, same principle as Printed's established "a
     // blank advances at the preceding block's own leading" rule (StyleLeadingTests.swift)
@@ -1351,6 +1974,20 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     // next blank, falling back to the 14pt default only when nothing has been placed yet
     // (unchanged behavior for a leading blank).
     var lastH = modernLine * Double(modernBodyPt)
+    // THE COLUMN-RANGE RECORDER (planning #276 follow-up, 2026-09-15). All of it is dead
+    // weight -- three vars and one `append` inside `close()` -- unless `recordFurniture`
+    // asked for it; nothing here is read by the drawing loop or reaches a single emitted
+    // byte.
+    //
+    // `cursor` is the position of the NEXT piece of content, in the SEMANTIC item indices
+    // `ModernColumnRange` reports: set to each flow item's own semantic index as the loop
+    // reaches it, and advanced to a visual line's own source offset inside a `.para` just
+    // before that line is fitted. A `close()` therefore always reads the exact point the
+    // column stopped at, because it is called at the moment the paginator decides to stop.
+    var colStart = (item: 0, offset: 0)
+    var cursor = (item: 0, offset: 0)
+    var pageRanges: [ModernColumnRange] = []
+    var pageNoteRows: [Int] = []
 
     func noteBlockH() -> Double {
         notesLines.isEmpty ? 0.0 : sepH + noteLead * Double(notesLines.count)
@@ -1365,32 +2002,135 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
             opened = true
         }
     }
-    func close() {
+    /// Hand the page now taking content the footer state a `.fo` read earlier on it
+    /// declared — see the Q9 note above.
+    func takePendingFoot() {
+        if let pending = pendingF {
+            pageF = pending
+            pendingF = nil
+        }
+    }
+    /// End the current COLUMN. On the last column of a `.co n` sheet -- and on every page
+    /// of an ordinary one-column document, where n is 1 and this is the only branch that
+    /// ever runs -- that ends the physical page too.
+    ///
+    /// `hard: true` ends the physical page whatever column it was on: the callers are a
+    /// change of column regime, which starts its own sheet the same way `docToPagelines`'
+    /// own block loop forces a break on every `columns` state change, and the end of the
+    /// document. A trailing group of fewer than n columns is simply left short --
+    /// WordStar does not balance (planning #227 §5, measured on WINGDING.CHT's own short
+    /// last column), and neither does this.
+    ///
+    /// `overflow: true` is Printed's own "already full" case — the page ended because the
+    /// next piece of content did not fit — and leaves the pending footer for the page
+    /// that does take it. Every other close (an explicit `.pa`, a `.cp` that breaks, a
+    /// column-regime change, the end of the document) ends a page that was still open, so
+    /// the footer is its own.
+    ///
+    /// `ended` (planning #276 follow-up) is the reason this column stopped, for the range
+    /// recorded below -- see `ModernColumnEnd`. It defaults to `.overflow` because that is
+    /// what "the paginator decided there was no more room" means at every unmarked call
+    /// site, the end of the document included.
+    ///
+    /// A COLUMN THAT TOOK NO CONTENT IS NOT RECORDED (`colBody == false` on entry): it has
+    /// no first drawn item to start at, and leaving `colStart` where it is rolls whatever
+    /// it swallowed into the next column that did take something, which is what keeps the
+    /// ranges contiguous with no holes.
+    func close(hard: Bool = false, overflow: Bool = false,
+               ended: ModernColumnEnd = .overflow) {
+        if recordFurniture != nil, colBody {
+            pageRanges.append(ModernColumnRange(
+                column: colI, startItem: colStart.item, startOffset: colStart.offset,
+                endItem: cursor.item, endOffset: cursor.offset, ended: ended))
+            colStart = cursor
+        }
+        if !overflow { takePendingFoot() }
         openPage()
-        pages.append((body, notesLines, pageH, pageF))
+        colBody = false
+        y = sheetH - margt
+        if !hard, curCols > 1, colI + 1 < curCols {
+            colI += 1
+            return                       // same sheet, next column
+        }
+        pages.append((body, notesLines, pageH, pageF, pageEndBi,
+                      curCols, colGap, colW, pageRanges, pageNoteRows))
         body = []
         notesLines = []
-        y = Double(PDFMetrics.pageHeight) - margt
+        pageRanges = []
+        pageNoteRows = []
+        colI = 0
         opened = false
+        pageEndBi = -1
     }
 
     for (fi, item) in flow.enumerated() {
         let semI = semIndexOfItem?[fi]
+        if recordFurniture != nil {
+            // The boundary a break taken HERE reports sits before this item, so the item
+            // that forced the break (a `.cb`'s own block, a `.co` regime change) opens the
+            // next column rather than closing the one before it.
+            cursor = (item: fi < semOfItem.count ? semOfItem[fi] : cursor.item, offset: 0)
+        }
+        if fi < blockOfItem.count, let bi = blockOfItem[fi] {
+            // `.cb` (a `colbreak` block) between the last block that put something on the
+            // page and this one: a hard break to the next column, and -- exactly as
+            // `rtfColsControl`'s twin writes nothing for a `.cb` outside a columnar
+            // region -- a no-op outside one. Read off the IR here rather than carried as
+            // a flow item because the Modern flow IS the `layout` JSON contract and this
+            // ruling moves no schema.
+            if curCols > 1, lastBi + 1 < bi,
+               (lastBi + 1..<bi).contains(where: { colbreakBis.contains($0) }) {
+                close(ended: .columnBreak)
+            }
+            let want = bi < colState.count ? colState[bi] : (cols: 1, gutter: nil)
+            if want.cols != curCols || want.gutter != curGutter {
+                if !body.isEmpty || !notesLines.isEmpty || colBody {
+                    close(hard: true, ended: .pageBreak)
+                }
+                curCols = want.cols
+                curGutter = want.gutter
+                (colW, colGap) = modernColumnWidth(width, cols: curCols, gutter: curGutter)
+                colI = 0
+            }
+            lastBi = bi
+        }
         switch item {
         case .hf(let kind, let line, let text):
-            if kind == .header { curH[line] = text } else { curF[line] = text }
+            if kind == .header {
+                curH[line] = text
+            } else {
+                curF[line] = text
+                pendingF = curF                  // Q9, see `takePendingFoot`
+            }
         case .pageBreak:
-            close()
+            // A bare `.pa` INSIDE a live `.co n>1` region is absorbed, not taken -- the
+            // identical reading Printed has carried since planning #227 (measured
+            // against WINGDING.CHT's own real WS7 capture: the author's `.pa` markers
+            // are a manual column simulation that predates the real `.co` governing the
+            // same content, and honouring them fragments one real column) and that
+            // Printed RTF adopted with its section spine.
+            if curCols <= 1 {
+                // The break item is CONSUMED by the page it ends, so the boundary sits
+                // after it -- or the next page would open on a break it would take again.
+                // `.tabs` produces no flow entry, so the next flow item's own semantic
+                // index is read rather than assumed to be this one plus one.
+                if recordFurniture != nil {
+                    cursor = (item: fi + 1 < semOfItem.count ? semOfItem[fi + 1]
+                                                             : flowSrc.itemCount,
+                              offset: 0)
+                }
+                close(ended: .pageBreak)
+            }
         case .cond(let n):
             let need = Double(n) * modernLine * Double(modernBodyPt)
-            if !body.isEmpty, y - (margb + noteBlockH()) < need {
+            if colBody, y - (margb + noteBlockH()) < need {
                 close()
             }
         case .blank:
-            guard !body.isEmpty else { continue }         // no blank at a page top
+            guard colBody else { continue }              // no blank at a column top
             let h = lastH
             if y - h < margb + noteBlockH() {
-                close()
+                close(overflow: true)
                 continue
             }
             y -= h
@@ -1410,13 +2150,17 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
             // 7 x 16.8 = 117.6pt 14pt-body leading). `lastH` is left exactly as it was
             // -- the most recently placed TEXT line's own leading, or the 14pt default
             // if no text has been placed yet.
-            if !body.isEmpty, y - hPt < margb + noteBlockH() {
-                close()
+            if colBody, y - hPt < margb + noteBlockH() {
+                close(overflow: true)
             }
             openPage()
+            takePendingFoot()
+            pageEndBi = max(pageEndBi, lastBi)
             y -= hPt
-            body.append((y, [], .left, 0.0, 0.0,
+            let imgColOff = Double(colI) * (colW + colGap)
+            body.append((y, [], .left, imgColOff, -imgColOff,
                          PageLine.ImageRef(pixIndex: pixIndex, widthPt: wPt, heightPt: hPt), semI))
+            colBody = true
         case .para(let toks, let align, let notes, let indent, let cut, let noWrap, let pageMarker,
                   let endNotesStart, let paraTight, let hang):
             if pageMarker, !body.isEmpty {
@@ -1429,7 +2173,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                 // extra -- `close()` on an empty page would just insert a spurious
                 // blank one, so this only fires when there is something to separate
                 // FROM.
-                close()
+                close(ended: .pageBreak)
             }
             if endNotesStart, !body.isEmpty, !notesLines.isEmpty {
                 // Jon's ruling 2026-09-07 (RULINGS-LEDGER.md verbatim): "endnotes go
@@ -1444,15 +2188,30 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                 // body line/image. `!body.isEmpty` guards the same way `pageMarker`'s
                 // check does: a fresh, still-empty page needs no extra break (nothing
                 // to separate FROM).
-                close()
+                close(ended: .pageBreak)
             }
             // rule (c): a screenplay slugline carrying its own right-hand scene number
             // never wraps -- an unbounded width means `modernWrap`'s greedy break
             // condition can never trigger, so the whole line places as ONE visual line
             // regardless of its natural width, exactly as real screenplay software
             // keeps a slugline unbroken.
-            let lineW = noWrap ? Double.infinity : max(36.0, width - indent - cut)
-            let vis = modernWrap(toks, width: lineW, hang: hang)
+            // INSIDE A COLUMNAR REGION THE COLUMN IS THE MEASURE, and the block's own
+            // `.rm` cut is not spent on top of it -- the two are the same measure stated
+            // twice (see `modernColumnWidth`), and taking both would narrow every column
+            // by the amount the division already took off.
+            let effCut = curCols > 1 ? width - colW : cut
+            let lineW = noWrap ? Double.infinity : max(36.0, width - indent - effCut)
+            // `visIdx` (planning #276 follow-up): which `toks` index starts each visual
+            // line, asked of the wrap itself rather than re-derived from the placed
+            // tokens -- a swallowed wrap-point space is invisible in `vis` and would
+            // silently shift a source offset by one token if this were counted here.
+            var visIdx: [[Int]] = []
+            let vis = recordFurniture != nil
+                ? withUnsafeMutablePointer(to: &visIdx) {
+                      modernWrap(toks, width: lineW, hang: hang, indices: $0)
+                  }
+                : modernWrap(toks, width: lineW, hang: hang)
+            let tokOff = recordFurniture != nil ? (flowSrc.tokenOffsets[fi] ?? []) : []
             // planning #263, job 437: a tightened paragraph that actually WRAPS renders at
             // the body's ordinary leading throughout instead. The tightening is about how a
             // verse or centred LINE reads against its neighbours; a paragraph long enough
@@ -1472,11 +2231,17 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                 spacer = modernLeadingSpacer(toks, face.family, face.pt)
             }
             var newNoteLines: [[ModernToken]] = []
+            var newNoteRows: [Int] = []
             var newNoteMerges = 0
             for entry in notes where !seenNotes.contains(entry.index) {
                 if recordMergePages != nil {
                     newNoteMerges += mergePagenoCount(entry.text)
                 }
+                // `entry.index` IS the `SemanticNoteRow` index (`modernFlow` built these
+                // entries off `sem.notes[fn.index]`), which is what `footnoteRows`
+                // reports -- collected here, committed to a page below at the same
+                // moment `notesLines` is.
+                newNoteRows.append(entry.index)
                 newNoteLines += modernNoteLines(label: entry.label, text: entry.text, width: width)
             }
             for (vi, vline) in vis.enumerated() {
@@ -1504,20 +2269,44 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                 } else {
                     extra = 0.0
                 }
-                if !body.isEmpty, y - h < margb + noteBlockH() + extra {
-                    close()
+                // WHERE THIS LINE STARTS IN THE SOURCE, resolved BEFORE the fit test: if
+                // the line does not fit, the column that just closed ends exactly here
+                // and the next one starts exactly here. `vi == 0` reports the item's own
+                // start (0), never its first drawn token's offset -- a centred row whose
+                // leading padding was stripped still begins at the item.
+                if recordFurniture != nil {
+                    cursor.offset = vi == 0 ? 0
+                        : (visIdx.indices.contains(vi) ? (visIdx[vi].first.flatMap {
+                               tokOff.indices.contains($0) ? tokOff[$0] : nil
+                           } ?? cursor.offset)
+                         : cursor.offset)
+                }
+                if colBody, y - h < margb + noteBlockH() + extra {
+                    close(overflow: true)
                 }
                 openPage()
+                takePendingFoot()
+                pageEndBi = max(pageEndBi, lastBi)
                 y -= h
                 // `lastH` is a LEADING memory (what the next blank item should advance by),
                 // so it records the line's own height, never the one-off headroom spent
                 // above it.
                 lastH = lead
+                // WHICH COLUMN THIS LINE SITS IN, resolved here because the fit test just
+                // above may have moved it to the next one. The offset is added to the
+                // line's own indent and taken back off its cut, so the frame MOVES
+                // without changing width: the drawing loop below spends `margl + indent`
+                // and `width - indent - cut`, and those two come out as the column's own
+                // left edge and the column's own measure. `colGap`/`colW` are 0/`width`
+                // outside a columnar region, where this is a no-op by arithmetic.
+                let colOff = Double(colI) * (colW + colGap)
                 // THE PAGE BASELINE MODEL (planning #263): `y` is this line BOX's own
                 // bottom edge -- the next box's top -- and the baseline sits one face
                 // DESCENT above it, never on it. See the note at the head of this function.
                 body.append((y + modernDescent(face.family, face.pt), vline, align,
-                             indent + (vi > 0 ? hang : 0.0), cut, nil, semI))
+                             indent + colOff + (vi > 0 ? hang : 0.0), effCut - colOff,
+                             nil, semI))
+                colBody = true
                 if let record = recordMergePages {
                     // planning #270 item 42: this visual line is now ON the page being
                     // composed (`pages.count` is its index -- the page is appended by
@@ -1533,6 +2322,8 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                 }
                 if vi == 0, !newNoteLines.isEmpty {
                     notesLines.append(contentsOf: newNoteLines)
+                    pageNoteRows.append(contentsOf: newNoteRows)
+                    newNoteRows = []
                     for entry in notes { seenNotes.insert(entry.index) }
                     if let record = recordMergePages, newNoteMerges > 0 {
                         // Recorded HERE, not where the note's lines were built: a note
@@ -1548,12 +2339,49 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
             }
         }
     }
-    close()
+    // The document is over, so the sheet is over whichever column it had reached --
+    // `hard`, or a columnar document's own last sheet would advance to an empty column
+    // instead of being handed to the page list.
+    // The last column's range ends past the last item, at offset 0 -- the document is
+    // over, so there is no next piece of content to name.
+    if recordFurniture != nil { cursor = (item: flowSrc.itemCount, offset: 0) }
+    close(hard: true)
     while pages.count > 1, pages[pages.count - 1].body.isEmpty, pages[pages.count - 1].notes.isEmpty {
         pages.removeLast()
     }
 
     let startNo = doc.page?.pnStart ?? 1
+    // M15: the `.op`/`.pn`/`.pg` state, resolved once for the document and read per page
+    // at that page's own block — the same checkpoints the Printed writer reads.
+    let pageNumbersMode = options.pageNumbers
+    let pgnumCps = pgnumCheckpoints(doc)
+    // M15: WHERE EACH FOOTER COMMAND WAS READ, off the document's own `hfEvents` rather
+    // than off the page's `curF` snapshot. Two reasons, both measured:
+    //   * "A FOOTER is emitted at the BOTTOM, so a `.fo`/`.f#` read ANYWHERE before the
+    //     page ends still governs that page" (`docToPagelines`' own rule, WS7
+    //     v4/PRISTINE.EXE) — so the anchor is compared against the page's LAST block.
+    //   * A `.fo` typed after the document's last block (`sawyer/REF/BUGS.WS`: two
+    //     blocks, footer anchored at block 2) never reaches the Modern FLOW at all
+    //     (`modernFlow` walks `doc.blocks.enumerated()`), so `curF` could never say so.
+    let footAnchors = doc.hfEvents.filter { $0.kind == .footer }.map { $0.blockAnchor }.sorted()
+    // `--headers off` reaches Modern too. The flag governs the RUNNING HEADS AND FEET on
+    // every paged surface (register, "Flag UI + defaults"; ruled again 2026-09-14,
+    // planning #264 R7) — Printed PDF and both RTF modes have honoured it since ctrl-kd
+    // `722b877`/sr `4f673db`, and Modern PDF was the one paged surface still drawing its
+    // heads under `off`. M5 ("Modern keeps running heads", ruled 2026-08-06) is the
+    // DEFAULT this flag turns off, never a refusal of the flag.
+    //
+    // `footerInUse` below is deliberately NOT gated with it: "in use" is a property of
+    // the DOCUMENT (a declared `.fo`), never of what we draw — the same rule, and the
+    // same hazard, `4f673db` spells out for the Printed writer's own call site.
+    // Suppressing a footer's DRAWING must not conjure an automatic number the document
+    // never had. And the automatic number itself answers to `--page-numbers` alone, so
+    // it is drawn below under `--headers off` exactly as it is under `on`.
+    //
+    // `recordFurniture` follows the ops because it IS this loop: a head that is not
+    // drawn is not reported, so `modernPageFurniture` never hands the apps a line the
+    // PDF does not have.
+    let showHeaders = options.headers
     var streams: [[UInt8]] = []
     for (pi, page) in pages.enumerated() {
         var tzState = hundredths(tzDefault)
@@ -1562,24 +2390,106 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
         // running heads live in the margin zones: header lines walk down from ~0.6in off
         // the top edge, footer lines sit ~0.6in off the bottom — inside Modern's 1in
         // margins, clear of the body
-        for lno in page.headers.keys.sorted() {
-            guard let txt = page.headers[lno], !txt.isEmpty else { continue }
-            let hy = Double(PDFMetrics.pageHeight) - 44.0 - Double(lno - 1) * noteLead
-            ops += modernHFOps(euroText(txt, euro), pageNo: pageNo, left: margl, y: hy,
-                               width: width, res: res, tzState: &tzState, printedPt: printedPt)
+        // `recordFurniture` (planning #276, 2026-09-15): the Mac and iOS apps draw
+        // Modern's own running heads, feet and automatic number, and had to re-derive
+        // where they go. They read `modernPageFurniture` now, which is THIS loop --
+        // every value below is recorded at the moment the op that draws it is built,
+        // from the same `y`, the same substituted text and the same
+        // `modernPlaceLine` x. There is no second placement model to drift from it.
+        var furnHeaders: [ModernHeadFootLine] = []
+        var furnFooters: [ModernHeadFootLine] = []
+        var furnAuto: ModernAutoPageNumber? = nil
+        /// `nil` for a line that PUTS NO INK ON THE PAGE -- exactly the case
+        /// `modernHFOps` returns no ops for (`toks.isEmpty`). A `.f1` whose whole
+        /// content is 0x0F user print controls is the real one: `REF/BOOKLET.WS`
+        /// declares one, and reporting it as furniture would have the apps drawing a
+        /// line the PDF does not.
+        func furnitureLine(_ txt: String, lno: Int, y: Double,
+                           align: Alignment) -> ModernHeadFootLine? {
+            let toks = modernHFToks(txt, pageNo: pageNo)
+            if toks.isEmpty { return nil }
+            let placed = modernPlaceLine(toks, left: margl, width: width, align: align)
+            return ModernHeadFootLine(
+                line: lno, text: placed.toks.map(\.text).joined(),
+                x: placed.x, y: y, family: .times, pt: modernNotePt, align: align)
         }
-        for lno in page.footers.keys.sorted() {
+        for lno in (showHeaders ? page.headers.keys.sorted() : []) {
+            guard let txt = page.headers[lno], !txt.isEmpty else { continue }
+            let hy = sheetH - 44.0 - Double(lno - 1) * noteLead
+            let align = modernHFAlign(doc, .header, lno)
+            if recordFurniture != nil,
+               let f = furnitureLine(euroText(txt, euro), lno: lno,
+                                     y: hy, align: align) {
+                furnHeaders.append(f)
+            }
+            ops += modernHFOps(euroText(txt, euro), pageNo: pageNo, left: margl, y: hy,
+                               width: width, res: res, tzState: &tzState, printedPt: printedPt,
+                               align: align)
+        }
+        for lno in (showHeaders ? page.footers.keys.sorted() : []) {
             guard let txt = page.footers[lno], !txt.isEmpty else { continue }
             let fy = max(8.0, 44.0 - Double(lno - 1) * noteLead)
+            let align = modernHFAlign(doc, .footer, lno)
+            if recordFurniture != nil,
+               let f = furnitureLine(euroText(txt, euro), lno: lno,
+                                     y: fy, align: align) {
+                furnFooters.append(f)
+            }
             ops += modernHFOps(euroText(txt, euro), pageNo: pageNo, left: margl, y: fy,
-                               width: width, res: res, tzState: &tzState, printedPt: printedPt)
+                               width: width, res: res, tzState: &tzState, printedPt: printedPt,
+                               align: align)
+        }
+        // M15 (Jon's ruling 2026-09-15): WordStar's own AUTOMATIC page number — the one
+        // `.pc` positions, never a `#` an author typed into a real `.he`/`.fo`, which
+        // `modernHFOps` has always substituted. Modern RTF has carried it since M5 (a
+        // `\footer` group of `\chpgn`, centred, in the body face); Modern PDF is ruled to
+        // be that RTF's printed form (2026-08-05) and was the one surface still dropping
+        // it, so the app's Modern view showed a document's numbering vanish the moment
+        // you switched to it.
+        //
+        // PLACEMENT IS MODERN'S OWN, exactly as the ruling says ("placed the Modern
+        // way"): the row a Modern footer line 1 rides, centred in Modern's own measure,
+        // in the face and size Modern's running feet already use — never Printed's `.pc`
+        // column or its `pl - mb + fm` row. WHETHER it shows is the document's answer,
+        // and `modernAutoPagenoShows` is where that is read.
+        let footerInUse = !footAnchors.isEmpty
+            && (footAnchors[0] <= page.endBlock || pi == pages.count - 1)
+        if page.endBlock >= 0,
+           modernAutoPagenoShows(doc, bi: page.endBlock, pageNumbers: pageNumbersMode,
+                                 pgnumCheckpoints: pgnumCps, footerInUse: footerInUse) {
+            if recordFurniture != nil {
+                let placed = modernPlaceLine(modernHFToks(String(pageNo), pageNo: pageNo),
+                                             left: margl, width: width, align: .center)
+                furnAuto = ModernAutoPageNumber(text: String(pageNo), x: placed.x, y: 44.0)
+            }
+            ops += modernHFOps(String(pageNo), pageNo: pageNo, left: margl, y: 44.0,
+                               width: width, res: res, tzState: &tzState,
+                               printedPt: printedPt, align: .center)
+        }
+        if let recordFurniture {
+            let sheet = modernPageDict(doc)
+            recordFurniture.pointee.append(ModernPageFurniture(
+                pageIndex: pi, pageNumber: pageNo,
+                sheetWidth: Double(roundHalfToEven((sheet?.pwIn ?? 8.5) * 72.0)),
+                sheetHeight: sheetH,
+                marginLeft: margl, marginTop: margt, marginBottom: margb,
+                textWidth: width,
+                columns: page.cols, columnGutter: page.gutterPt,
+                columnWidth: page.columnWidth, columnTopOffset: 0.0,
+                headers: furnHeaders, footers: furnFooters,
+                autoPageNumber: furnAuto,
+                columnRanges: page.ranges, footnoteRows: page.noteRows))
         }
         for line in page.body {
             if let img = line.image {
                 // Round 22: the XObject draw — same operator shape (and `%.2f`
                 // formatting) as Printed's `pageStream`, bottom edge at this line's y.
+                // `margl + line.indent` rather than a bare `margl`: an image in a
+                // columnar region carries its own column's offset as an indent, exactly
+                // as a text line does. Every image outside one carries an indent of 0.0,
+                // so this is byte-identical everywhere the previous form was reached.
                 var op = Array("q \(fixedTwoDecimals(img.widthPt)) 0 0 \(fixedTwoDecimals(img.heightPt)) ".utf8)
-                op += Array("\(fixedTwoDecimals(margl)) \(fixedTwoDecimals(line.y)) cm /Im\(img.pixIndex) Do Q".utf8)
+                op += Array("\(fixedTwoDecimals(margl + line.indent)) \(fixedTwoDecimals(line.y)) cm /Im\(img.pixIndex) Do Q".utf8)
                 ops.append(op)
                 continue
             }

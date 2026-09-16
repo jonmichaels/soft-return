@@ -1,5 +1,65 @@
 # Known-Issues Register
 
+### 2026-09-15 — `openAndPageChangeTimings`: the main-thread stretch bound is machine-marginal (batch 41)
+
+- **Test:** `HolymacTimingTests.openAndPageChangeTimings()` in `SoftReturnTests`. No `withKnownIssue`
+  wrapper: the assertion stands, and this entry records that it sits on a bound this machine straddles.
+- **What it asserts:** no main-thread stretch of 100 ms or more while a document opens and its pages come.
+- **Measured tonight, on the same tree, in four separate runs:**
+  - `b41-a2` (before the furniture work): FAILED at 100.9 ms — nine tenths of a millisecond over.
+  - `b41-colsr4` / `b41-lead5` / `b41-cols-proof`: PASSED, 0 over 100 ms.
+  - `b41-slice-base` on the pushed tree (9258df1): PASSED, 0 over 100 ms — LYING.WS 93.2 cold / 89.4 warm,
+    -HOLYMAC.WS 91.2 cold / 96.3 warm.
+  - `b41-release-mac` (the Corpus gate, same commit a8f883c): FAILED at 102.0 ms ("a run-loop turn while
+    Modern's first page comes") and 112.3 ms ("...while Show Invisibles off's first page comes").
+- **So it fails about one run in two on this machine, at the same commit**, with the worst stretch moving
+  between 89 and 112 ms depending on what else the box is doing. The Corpus gate runs the whole plan and is
+  the heaviest of the four, which is where it lands hardest.
+- **Not one stretch but two, and they differ between runs:** "a run-loop turn while Modern finishes", "while
+  Modern's first page comes", "while Show Invisibles off's first page comes". Anything that slices only one
+  of them leaves the others, which is why batch 41 carries the headroom work as a residual rather than a fix.
+- **Residual, batch 41:** the further ask — p95 under 70 ms on -HOLYMAC across four runs — is carried with
+  these figures as its baseline. Getting there needs instrumentation INSIDE those stretches first: the
+  per-phase intervals the timing harness emits are either cumulative spans over the whole progressive build
+  (`open.allPages` 4294 ms) or already well under the target (`render.chunk`, 28-34 ms each), so nothing in
+  them is a 90 ms turn to slice.
+- **Status:** OPEN — machine-marginal bound, named so the release gate accounts for it by name rather than
+  as an unexplained failure.
+
+
+### 2026-09-15 — Modern's page counts differ from the engine's: the two set the body in different FACES (batch 41)
+
+- **Tests:** `ModernSheetAndColumnsFollowTheEngineTests` (macOS + `SoftReturnIOSTests/IOSTestRun` twin),
+  `ModernAutoPageNumberFollowsTheEngineTests`, `ModernFooterTimingFollowsTheEngineTests`. No `withKnownIssue`
+  wrapper: the affected expectations are printed as `MODERN-COLUMNS-RESIDUAL` / `MODERN-AUTONO-RESIDUAL` /
+  `MODERN-TIMING-RESIDUAL` lines, and everything the face does not change is still asserted.
+- **What was measured** (REF/BOOKLET.WS, runs b41-colfix, b41-colfix2, b41-colwin, b41-lead4, b41-lead5, and the
+  engine's own Modern PDF read directly):
+  - The engine's Modern PDF sets its body in **Times-Roman** — base-14, unembedded, `Times-Roman`/`Times-Italic`
+    on `sr`'s own Modern output. The app's Modern view sets **Georgia 14**.
+  - Same size, same advance: both step **16.8pt** a line on a 14pt body (1.2 x, the library's own `modernLine`
+    and the app's `modernLibraryLineFactor`), and both lay a column **482.4pt** tall and **345.6pt** wide — the
+    engine's own `sheetHeight - marginTop - marginBottom` and `columnWidth`.
+  - Times is the narrower face. Page 1 column 0: the engine draws **28 lines / 1225 glyphs**; the view draws
+    **28 lines / 872 characters** — about **44 characters a line against Georgia's 31**.
+  - So a column holds different amounts of text on the two sides, and the page counts cannot agree: BOOKLET.WS
+    view 9 against engine 3, PRINT.TST view 8 against 6, BOOKLET.HOW view 12 against 10, NOVEL.WS view 43
+    against 44.
+- **Why it is not a pagination fault:** the engine's `columnRanges` are correct (`endItem`/`endOffset` is the
+  next column's start, absorbed empties rolled forward) and the view's mapper resolves each boundary to the
+  right place in the right item — page 1 column 0's boundary is engine item 11 offset 176, which the view
+  resolves to 1675, its item 11 start (1501) plus 174. Every container is handed the engine's own boundary;
+  the forced page breaks the engine absorbs inside `.co` are correctly not applied. The column simply reaches
+  its last line sooner in a wider face.
+- **What is still asserted**, because the face does not change it: the sheet, the text frame, the column count,
+  each column's x and width, contiguity between columns (whatever a column took, the next opens exactly there),
+  the automatic page number's text, x and baseline against the furniture (including its absence where the
+  engine reports none), and heads and feet by page index.
+- **Status:** OPEN — font-substitution exception. Which face Modern should use is Jon's call; until then the
+  page counts are recorded here rather than asserted. Raised 2026-09-15, ruled the same night: handle it as a
+  named font-substitution exception, do not block the batch on it.
+
+
 ## 2026-09-14 (v4.2.0 release run): the Swift PCL-fidelity tier, enumerated
 
 Rewritten from the actual run on the bumped tree, as
@@ -10,27 +70,44 @@ moved a long way between the two: 96 issues then, 62 now, and the
 (`vault WordStar/research/2026-09-12_pcl-v4-untriaged-triage.md`, rounds
 1-7).
 
-### 2026-09-14 — iOS 26: the home tab selection capsule jumps instead of sliding (`tabSelectionAnimation`, masked)
+### 2026-09-14 — iOS 26: the home tab selection capsule "jumps instead of sliding" — MISREAD, fixed 3c8c3c8 (batch 38)
 
 - **Test:** `NativeScreenshotTests.tabSelectionAnimation(style:)` in `SoftReturnIOSTests`, iOS 26 branch, light and dark.
-  Its two sideways-slide expectations are wrapped in `withKnownIssue`. That is a masked failure, cited here, and not a
-  pass. Because the known issue is not intermittent, the test fails the day the slide starts working.
-- **What is wrong:** on iOS 26 the lighter selection capsule behind the selected home tab (Recent · Shared · Browse)
-  jumps to the newly chosen tab instead of sliding to it.
-  - Its placement at rest is correct.
-  - With Reduce Motion the change crossfades, as it should.
-  - iOS 16–18, where the selected glyph bounces instead, are not affected.
-- **Measured** (iPhone 17 / iOS 26.3 simulator, light and dark, on two separate runs):
-  - choosing Browse moves the capsule's model at once from midX 54 to 218 pt;
-  - summed over every animation on the capsule's layer, 0.0 of that 164 pt move is animated;
-  - the only spring is additive: position (0, 0.67) → (0, 0) and bounds.size (0, 1.33) → (0, 0), 0.5 s, damping ratio
-    0.7.
-- **Fix attempts, neither moved it:**
-  - f8dda3c laid out the glass view's content view, the capsule's superview, inside the spring.
-  - b3637ea animated the capsule's frame explicitly from its old frame to the new one.
-  - Both times the sideways move still took effect outside the animation.
-- **Status:** open — needs a diagnostic round; not a release blocker for the Mac 4.2.0 release (iOS is TestFlight-only);
-  Jon decides whether build 2 ships with the jump.
+  The `withKnownIssue` wrapper is gone (3c8c3c8); the slide's expectations are plain assertions again.
+- **What was registered (batch 37):** on iOS 26 the selection capsule jumped to the new tab. That was a misreading.
+- **What batch 38 measured** (iPhone 17 / iOS 26.3; runs b38-diag1c, b38-diag2, b38-diag3, with temporary instruments that
+  were never committed):
+  - Inside a `UIGlassEffect`'s content view, the capsule view owns two layers: its own, inside a `_UIMultiLayer` that the
+    same view owns. `setFrame:` goes through `-[UIView _updateSublayerGeometry]`. The outer layer carries the position; the
+    view's own layer only ever gets (width/2, height/2).
+  - Every layout ran inside the animation block. The outer layer got the sideways spring, and its presentation moved.
+  - Batch 37's test read only the view's own layer, whose only springs were the 0.67 pt position and 1.33 pt size offsets,
+    and took the slide for a jump. The two batch 37 attempts, f8dda3c and b3637ea (a27f299 and 29c2791), changed nothing on
+    screen.
+- **Fix (3c8c3c8):**
+  - `TabPillView` is back on Apple's documented constraint animation: the constraints move, then the content view is laid
+    out inside the spring.
+  - The test reads every layer the capsule owns, and samples the shown position through the slide.
+  - Reduce Motion's no-slide check looks at every owned layer too.
+- **Proof** (armed, `DOC` unset, `NativeScreenshotTests` + `ArtboardScreenshotTests`, on 3c8c3c8):
+  - b38-proof-ios26 (iPhone 17 / iOS 26.3): rc=0, 22 tests in 4 suites passed, no known issues. Method level: 22 passed, 0 failed, 0 skipped, 0 expected failures; 34 of 34 leaves.
+    - The capsule owns a `CALayer` and a `_UIMultiLayer`. The outer layer's position spring is an additive
+      `CASpringAnimation` from (−164, 0) to 0, duration 0.5: it covers 164 of the 164 pt move.
+    - Shown position (the outer layer's presentation x), light: 54.0 at the tap, 113.8 at 0.073 s, 163.8 at 0.110 s, a
+      peak of 225.5 at 0.234 s (7.5 pt past 218), then 218.2 by 0.395 s. Dark matches within 1.5 pt.
+    - Reduce Motion: no animation on either owned layer; the pill's contents crossfade ("transition").
+  - b38-proof-ios16 (iPhone 14 / iOS 16.0): the run's own xcodebuild log. It reads `** TEST SUCCEEDED **` at 09:26:48,
+    with `NativeScreenshotTests` and `ArtboardScreenshotTests` passed, 22 tests in 4 suites. Its wrapper was killed
+    when `coder update` unloaded the drop-box agent, so the run has no rc and no summary. The one re-run,
+    b38-proof-ios16b, ran no tests: rc=70, because runner REV 24's UI-target gate skipped the app-hosted unit-test bundle.
+    Athena ruled that batch 38 stands on this log and b38-proof-ios26.
+    - The pop is unchanged: Browse's glyph at scale 1.148 at 110 ms, a 0.844 s pop, then scale 1.0 on the image view
+      that is shown. Light and dark match.
+    - Reduce Motion: no animation on the capsule layer; the pill's contents crossfade ("transition").
+- **What the proof cannot show:** the f0/f1 captures are drawn from model values, so they show only the start and the end,
+  never motion. The slide is shown by the attached spring's values and by the shown-position samples. Jon judges the motion
+  itself on the device after build 2.
+- **Status:** FIXED (3c8c3c8); the known issue was a misreading.
 
 ### 2026-09-15 — Mac app: Native LJ6DTP exact-drift (`AppNativeFidelityTests`, parked)
 

@@ -115,10 +115,12 @@ struct WindowPlacementTests {
     }
 }
 
-/// #271 M3, Jon's first-open rule for a DOCUMENT window: its height spans from the bottom of the
-/// menu bar to the top of the Dock (`NSScreen.visibleFrame`), and the page is zoomed to fit whole
-/// inside it — never above 100% (Actual Size) on a large screen, and landscape pages alike.
-@Suite("Document window first open (#271 M3)", .serialized)
+/// #271 M3, Jon's first-open rule for a DOCUMENT window: the page is zoomed to fit whole inside the
+/// visible frame, from the bottom of the menu bar to the top of the Dock (`NSScreen.visibleFrame`), never
+/// above 100% (Actual Size) on a large screen, and landscape pages alike. Batch 40 (M13, a refinement of
+/// M3): the window is exactly that fitted page plus the title bar and the bottom bar, centred, in both
+/// orientations; it spans the visible height only when the page's height limits the fit.
+@Suite("Document window first open (#271 M3, M13)", .serialized)
 @MainActor
 struct DocumentWindowFirstOpenTests {
     static let letter = CGSize(width: 612, height: 792)
@@ -142,17 +144,26 @@ struct DocumentWindowFirstOpenTests {
         let actual: CGFloat = 1.08
         let layout = DocumentWindowController.firstOpenLayout(
             page: Self.letter, visible: Self.large, titleBarHeight: 28, barHeight: BottomBar.barHeight, actualScale: actual)
-        #expect(layout.frame.height == Self.large.height && layout.frame.minY == Self.large.minY)
         #expect(layout.scale == actual, "the page would fit taller, but never above 100%: scale \(layout.scale)")
+        // Batch 40 (M13): the window is the page at that scale and no taller, centred in the visible frame.
+        #expect(layout.frame.height == (Self.letter.height * actual).rounded() + 28 + BottomBar.barHeight)
+        #expect(layout.frame.width == (Self.letter.width * actual).rounded())
+        #expect(abs(layout.frame.midY - Self.large.midY) <= 1 && abs(layout.frame.midX - Self.large.midX) <= 1)
     }
 
+    /// Batch 40 (M13, Jon: "The Landscape window is opening too big all around… I want it to be exactly the same size as
+    /// the page. Just like in Portrait."): a landscape page fits whole, and the window is exactly the fitted page plus the
+    /// title bar and the bottom bar, in both directions, centred.
     @Test func aLandscapePageGetsTheSameRule() {
         let layout = DocumentWindowController.firstOpenLayout(
             page: Self.landscape, visible: Self.laptop, titleBarHeight: 28, barHeight: BottomBar.barHeight, actualScale: 1)
-        #expect(layout.frame.height == Self.laptop.height)
         #expect(Self.landscape.height * layout.scale <= Self.laptop.height - 28 - BottomBar.barHeight + 0.5)
         #expect(Self.landscape.width * layout.scale <= Self.laptop.width + 0.5)
-        #expect(layout.frame.width <= Self.laptop.width)
+        #expect(layout.frame.width == (Self.landscape.width * layout.scale).rounded())
+        #expect(layout.frame.height == (Self.landscape.height * layout.scale).rounded() + 28 + BottomBar.barHeight,
+                "window \(layout.frame.size) for a \(Self.landscape) page at \(layout.scale)")
+        #expect(layout.frame.height < Self.laptop.height, "the landscape window spans the visible height: grey above and below")
+        #expect(abs(layout.frame.midY - Self.laptop.midY) <= 1 && abs(layout.frame.midX - Self.laptop.midX) <= 1)
     }
 
     /// The real window on this machine's own screen, and then resized to a large display's layout:
@@ -166,8 +177,15 @@ struct DocumentWindowFirstOpenTests {
         let window = try #require(controller.window)
         let visible = try #require(window.screen ?? NSScreen.main).visibleFrame
         window.contentView?.layoutSubtreeIfNeeded()
-        #expect(abs(window.frame.height - visible.height) <= 1, "window \(window.frame), visible \(visible)")
-        #expect(abs(window.frame.minY - visible.minY) <= 1, "window \(window.frame), visible \(visible)")
+        // Batch 40 (M13): the window is the fitted page and its bars, as tall as the visible frame only when the page's
+        // height is what limits the fit.
+        #expect(window.frame.height <= visible.height + 1 && window.frame.minY >= visible.minY - 1,
+                "window \(window.frame), visible \(visible)")
+        let viewport = controller.currentViewportSize()
+        let fitted = controller.currentPageSize()
+        #expect(abs(viewport.width - fitted.width * controller.currentMagnification) <= 1
+                    && abs(viewport.height - fitted.height * controller.currentMagnification) <= 1,
+                "viewport \(viewport) against the page \(fitted) at \(controller.currentMagnification): grey shows")
         #expect(controller.currentMagnification <= controller.currentActualScale + 0.001,
                 "Fit went above Actual Size: \(controller.currentMagnification)")
         try Self.photograph(window, "m3-firstopen-this-screen.png")
@@ -181,6 +199,37 @@ struct DocumentWindowFirstOpenTests {
         #expect(controller.currentMagnification <= controller.currentActualScale + 0.001,
                 "Fit went above Actual Size on the large layout: \(controller.currentMagnification)")
         try Self.photograph(window, "m3-firstopen-large-screen.png")
+    }
+
+    /// Batch 40 (M13, Jon: "The Landscape window is opening too big all around. I'm seeing the gray background. I want it
+    /// to be exactly the same size as the page."): REF/BOOKLET.RJS, a 792×612 landscape sheet, opens in a window whose
+    /// viewport is exactly its fitted page — no grey on any side — in Native and in Printed. Photographed:
+    /// m13-booklet-landscape-<view>.png.
+    @Test(.tags(.corpus), .enabled(if: NativeLandscapePageTests.booklet != nil, NativeLandscapePageTests.skipReason),
+          arguments: [ViewStyle.native, .printed])
+    func aLandscapeDocumentWindowIsExactlyItsPage(view: ViewStyle) throws {
+        let url = try #require(NativeLandscapePageTests.booklet)
+        let defaults = try #require(UserDefaults(suiteName: "M13Booklet.\(UUID().uuidString)"))
+        let settings = SettingsStore(defaults: defaults)
+        settings.defaultStyle = view
+        let state = try DocumentState(data: [UInt8](try Data(contentsOf: url)), settings: settings, docPath: url.path)
+        let controller = DocumentWindowController(state: state)
+        controller.showWindow(nil)
+        defer { controller.close() }
+        let window = try #require(controller.window)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let visible = try #require(window.screen ?? NSScreen.main).visibleFrame
+        let page = controller.currentPageSize()
+        let viewport = controller.currentViewportSize()
+        let scale = controller.currentMagnification
+        print("M13 BOOKLET \(view.displayName): style \(state.style.value), page \(page), scale \(scale), fitted \(page.width * scale)×\(page.height * scale), viewport \(viewport), window \(window.frame), visible \(visible)")
+        #expect(state.style.value == view)
+        #expect(page.width > page.height, "BOOKLET.RJS's page \(page) is not landscape")
+        #expect(abs(viewport.width - page.width * scale) <= 1, "\(view.displayName): viewport \(viewport.width) wide, the page \(page.width * scale)")
+        #expect(abs(viewport.height - page.height * scale) <= 1, "\(view.displayName): viewport \(viewport.height) tall, the page \(page.height * scale)")
+        #expect(scale <= controller.currentActualScale + 0.001, "Fit went above Actual Size: \(scale)")
+        #expect(window.frame.minY >= visible.minY - 1 && window.frame.maxY <= visible.maxY + 1, "window \(window.frame), visible \(visible)")
+        try Self.photograph(window, "m13-booklet-landscape-\(view.displayName.lowercased()).png")
     }
 
     static func photograph(_ window: NSWindow, _ name: String) throws {

@@ -646,9 +646,34 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // `pages or [[]]`. Reachable — an empty document is what a zero-length parse produces —
     // and the leading-blank pass indexes `pages[0]`, so getting this wrong is a crash, not
     // a wrong page.
-    #expect(docToPagelines(Document(), printed: true) == [[]])
-    #expect(docToPagelines(Document(), printed: false) == [[]])
-    #expect(docToPagelines(Document(blocks: [Block()]), printed: true) == [[]])
+    //
+    // The synthesized page carries `isSynthesizedFallback` (2026-09-15): Swift has one
+    // type where ctrl-kd's fallback is a bare list, so the distinction travels as data
+    // and an array literal (which is a REAL page of no lines) is no longer equal to it.
+    //
+    // IT IS RESOLVED LIKE ANY OTHER PAGE (planning #274 follow-up, 2026-09-15). It used
+    // to carry no header lines, no footer lines and no automatic number, because
+    // ctrl-kd's `pages or [[]]` sat on `_doc_to_pagelines`' own `return` and the page
+    // did not exist when the attach passes ran -- while the PDF writer, paginating its
+    // own, drew all three (`REF/ADVANCE.DOT`'s running head and its number). ctrl-kd
+    // creates it before the pass now (ed6d0658). A document with nothing in it still
+    // gets WordStar's stock automatic number, the same one a document of plain
+    // BARELINEs gets.
+    func expectEmptyFallback(_ pages: [Page]) {
+        #expect(pages.count == 1)
+        #expect(pages.first?.lines.isEmpty == true)
+        #expect(pages.first?.isSynthesizedFallback == true)
+        #expect(pages.first?.headerLines == nil)
+        #expect(pages.first?.footerLines == nil)
+    }
+    expectEmptyFallback(docToPagelines(Document(), printed: true))
+    expectEmptyFallback(docToPagelines(Document(), printed: false))
+    expectEmptyFallback(docToPagelines(Document(blocks: [Block()]), printed: true))
+    // Printed resolves the number onto it; the Modern (non-printed) path never runs
+    // `resolveHeadFootLines` at all, so it stays `nil` there.
+    let stockNumber = AutoPageNumber(text: "1", x: 291.6, y: 60.0)
+    #expect(docToPagelines(Document(), printed: true).first?.autoPageno == stockNumber)
+    #expect(docToPagelines(Document(), printed: false).first?.autoPageno == nil)
 }
 
 // MARK: - The machine margin

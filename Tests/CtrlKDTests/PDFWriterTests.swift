@@ -128,8 +128,12 @@ import Testing
     //      holds for a genuine two-sided block quote, where both margins narrow the measure.
     let pdf = emitPDF(parseWS(data), mode: .modern)
     #expect(contains(pdf, bytes("/BaseFont /Times-Bold")))
-    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 72.0 706.2 Td (Chapter) Tj ET")))
-    #expect(contains(pdf, bytes("BT /F5 14 Tf 0 Ts 125.3 706.2 Td (One) Tj ET")))
+    // Re-pinned 2026-09-15 on the RESOURCE SLOT only (M15, Jon's ruling that Modern shows
+    // WordStar's automatic page number): the number is drawn before the body, so
+    // Times-Roman registers first and takes F5, pushing this heading's Times-Bold to F6.
+    // Same face, same size, same x, same y, same words — only the slot number moved.
+    #expect(contains(pdf, bytes("BT /F6 14 Tf 0 Ts 72.0 706.2 Td (Chapter) Tj ET")))
+    #expect(contains(pdf, bytes("BT /F6 14 Tf 0 Ts 125.3 706.2 Td (One) Tj ET")))
     #expect(contains(pdf, bytes("(realistic.)")))
 }
 
@@ -181,8 +185,11 @@ import Testing
     // at 12pt — the Courier-only Modern died with the WS4 lens. F5 is the first slot past
     // the Courier four (F1-F4), the only route there from a document with one font run.
     let pdf = latin1(emitPDF(doc, mode: .modern))
+    // Re-pinned 2026-09-15 (M15): WordStar's automatic page number is drawn first and
+    // registers plain Times in F5, so this heading's Times-BoldItalic is F6. Same face,
+    // same size — only the slot number moved.
     #expect(pdf.contains("/BaseFont /Times-BoldItalic"))
-    #expect(pdf.contains("/F5 14 Tf"))
+    #expect(pdf.contains("/F6 14 Tf"))
 }
 
 @Test func trailingDoublePageBreakDoesNotLeaveABlankSheet() {

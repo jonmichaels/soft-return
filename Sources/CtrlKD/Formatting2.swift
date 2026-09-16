@@ -58,6 +58,17 @@ struct FormatState {
     /// between baselines, not a property of a paragraph, which is also why it is NOT part of
     /// `blockFormat` and therefore never closes a block.
     var lead48: Double? = nil
+    /// M16 (2026-09-15): the `.lh` in force for a RUNNING HEAD or FOOT defined right
+    /// here — the same value as `lead48`, except that a `.lh 0` writes 0 here and leaves
+    /// `lead48` standing.
+    ///
+    /// Measured against real WS7 (probes B0/B1/B2, see
+    /// `Document.headerLeads`): `sawyer/REF/BOOKLET.WS`'s `.lh 0` sits immediately
+    /// before its `.f1`/`.h1`/`.h2` and is cancelled by a `.lh12` immediately after, and
+    /// it makes WordStar print the two header lines on ONE row. A zero BODY leading is
+    /// not something the pagination arithmetic can use and no evidence says WordStar
+    /// applies it there, so it is recorded on its own key for the head to read.
+    var hfLead48: Double? = nil
 
     /// `.po` — page offset (left origin), in print columns, as RUNNING state. Register b31.
     ///
@@ -348,7 +359,11 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
         if let resolved = resolveLhArg(value, unit) {
             state.lead48 = resolved
+            state.hfLead48 = resolved
             state.lhAuto = false
+        } else if value == 0 {
+            // M16: see `FormatState.hfLead48`.
+            state.hfLead48 = 0.0
         }
     case "PO":
         // Page offset (left origin), print columns — RUNNING state, unlike the page

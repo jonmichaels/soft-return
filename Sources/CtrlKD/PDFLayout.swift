@@ -329,6 +329,18 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     /// re-derivation. Port of ctrl-kd's `PageLine.graphic_cells`.
     public var graphicCells: [GraphicCellPlacement]?
 
+    /// This line's own `.po` in PRINT COLUMNS -- the same value `left` above is the
+    /// (clamped, points) rendering of, kept unrounded and unclamped because `closePage`
+    /// positions the automatic page number in columns from it (`autoPageNumberXPt`). It
+    /// comes from core's own per-line `.po` state (`Line.poCols`), which is why it is the
+    /// right source and a dot-command scan is not: the parser EVALUATES `.if`/`.ei`, so a
+    /// `.po` inside a false conditional (`sawyer/REF/REFORM.DOT`, `sawyer/FONTS/PS/
+    /// ERROR.WS`: `.po 1i` then `.if 1=0` / `.po .7i` / `.ei`) never reaches a line, while
+    /// `Document.dotPositions` lists it like any other. `nil` for a line built outside the
+    /// body path (TOC/index, wrapped overflow) -- "no opinion". Port of ctrl-kd's
+    /// `PageLine.po_cols`.
+    public var poCols: Double?
+
     public init() {
         spans = []
         lead = nil
@@ -348,6 +360,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         justifyWordX = nil
         lineNo = nil
         graphicCells = nil
+        poCols = nil
     }
 
     public init(_ spans: [Span], soft: Bool = false, lead: Double? = nil,
@@ -357,7 +370,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
                 left: Double? = nil, roll: Double? = nil, justifyRightX: Double? = nil,
                 parityLeft: ParityLeft? = nil, col: Int? = nil,
                 justifyWordX: [JustifyWordPiece]? = nil, lineNo: LineNumberLabel? = nil,
-                graphicCells: [GraphicCellPlacement]? = nil) {
+                graphicCells: [GraphicCellPlacement]? = nil, poCols: Double? = nil) {
         self.spans = spans
         self.soft = soft
         self.lead = lead
@@ -376,6 +389,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         self.justifyWordX = justifyWordX
         self.lineNo = lineNo
         self.graphicCells = graphicCells
+        self.poCols = poCols
     }
 
     public init(arrayLiteral elements: Span...) {
@@ -813,12 +827,26 @@ public struct HeadFootLine: Hashable, Sendable {
     public var x: Double
     public var y: Double
     public var font: Int?
+    /// The SELECTED STYLE's own baseline span attrs for this line -- the exact value
+    /// `hfLineOps` ORs into every run's own toggle-byte styles before drawing (planning
+    /// #255), with this page's `.h1e`/`.h1o` parity variant already applied. Empty when
+    /// the line selects no style, which is almost every line in the corpus.
+    ///
+    /// THIS IS WHAT THE LINE IS, not how one emitter happens to draw it. A
+    /// running head can be BOLD with no toggle byte anywhere in its text -- the weight
+    /// coming from the `.h#` argument's own 0x11 style select --  and `font` cannot say
+    /// so: it names the style's FACE. `sawyer/REF/BOOKLET.WS`'s two heads are exactly
+    /// that, and every consumer drawing the printed page from this model drew them
+    /// light. `layout` JSON version 11 publishes it as `style`, a sorted tag list.
+    public var styleAttrs: Style
 
-    public init(text: String, x: Double, y: Double, font: Int?) {
+    public init(text: String, x: Double, y: Double, font: Int?,
+                styleAttrs: Style = []) {
         self.text = text
         self.x = x
         self.y = y
         self.font = font
+        self.styleAttrs = styleAttrs
     }
 }
 
@@ -927,6 +955,12 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     /// plain `.po`) -- its own running head rendered at the document default 57.6pt
     /// instead of the declared 14.4pt. Port of Python's `Page.po_parity`.
     public var poParity: Bool
+    /// The `.po` in force where WordStar STAMPS this page's automatic page number --
+    /// the page's own LAST line, not its first. `nil` for "no page-specific answer, use
+    /// the document's" (every page of every document that never moves `.po`/`.poe`/
+    /// `.poo`). See `autoPageNumberXPt` for the captures behind the rule, and
+    /// `closePage` for where this is resolved. Port of ctrl-kd's `Page.auto_pageno_po`.
+    public var autoPagenoPo: Double?
     /// #228 (research/2026-09-08_trailing-pa-rule.md, planning #228): a trailing `.pa`
     /// followed by at least one more real content paragraph -- even a blank one --
     /// before EOF opens a final page with no body; real WS7 still stamps its running
@@ -970,6 +1004,19 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     /// page of every document whose running heads carry none.
     public var headerPcl: [Int: [HFPrintControl]] = [:]
     public var footerPcl: [Int: [HFPrintControl]] = [:]
+    /// True ONLY for the one page `finalizePages` synthesizes when pagination produced
+    /// none at all (Python's `pages or [[]]`). In ctrl-kd that fallback is a BARE LIST,
+    /// not a `Page`, and every model-attach pass and every layout-JSON field that reads a
+    /// resolved attribute off a page skips it for that reason alone
+    /// (`isinstance(pg, Page)`, `getattr(page, ..., None)`). Swift has one type, so the
+    /// distinction has to be carried as data.
+    ///
+    /// `page.isEmpty` used to stand in for it and cannot: `sawyer/REF/CODES` is a REAL
+    /// paginated page that happens to carry no lines -- a document that is all dot
+    /// commands and running heads -- and planning #274 gives such a page a real automatic
+    /// number, which the proxy silently dropped from the layout JSON while ctrl-kd kept
+    /// it. Found via `AnswerKeyParityTests`.
+    public var isSynthesizedFallback: Bool = false
     /// `headerLines`/`footerLines`/`autoPageno` (planning #251(d), 2026-09-10): this
     /// page's own RESOLVED running head/foot -- `#` substituted, fontless right-tab
     /// realignment baked, `y`/`x`/`font` attached -- set ONLY by
@@ -1000,6 +1047,7 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         fmLines = nil
         poCols = nil
         poParity = false
+        autoPagenoPo = nil
         explicitBreak = false
         explicitBreakBI = nil
         columns = nil
@@ -1033,6 +1081,7 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.fmLines = fmLines
         self.poCols = poCols
         self.poParity = poParity
+        self.autoPagenoPo = nil
         self.explicitBreak = explicitBreak
         self.explicitBreakBI = explicitBreakBI
         self.columns = columns
@@ -1410,6 +1459,7 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
         merged.fmLines = pg.fmLines
         merged.poCols = pg.poCols
         merged.poParity = pg.poParity
+        merged.autoPagenoPo = pg.autoPagenoPo
         merged.explicitBreak = pg.explicitBreak
         merged.explicitBreakBI = pg.explicitBreakBI
         // planning #227 follow-up (2026-09-09): this page's own column geometry,
@@ -1904,12 +1954,21 @@ private func finalizePages(_ rawPages: [Page], printed: Bool, isPrintStream: Boo
         // Python's `pages or [[]]`, with the running-head fallback ported alongside it —
         // see this function's own doc comment.
         var pg = Page([], headers: fallbackHeaders, footers: fallbackFooters)
+        pg.isSynthesizedFallback = true
         pg.headHfOverride = fallbackHeadOverride
         pg.footHfOverride = fallbackFootOverride
         // Planning #255: this fallback page's own `.poe`/`.poo`-resolved left origin
         // -- see `parityResolvedFallbackHeadFoot`'s own doc comment.
         if let fallbackPoCols { pg.poCols = fallbackPoCols }
         pg.poParity = fallbackPoParity
+        // ...and its automatic page number's own offset, which for a page with no
+        // lines at all can only be that same block-0 answer -- `closePage`'s
+        // page-close reading needs a last line to read. GALLEYS.DOT/ADVANCE.DOT
+        // declare `.poe`/`.poo` before any block would ever open, so block 0 is not
+        // an approximation here, it is the answer. A document with no parity
+        // override leaves this `nil` and `autoPageNumberXPt` reads the document
+        // default, exactly as before.
+        if fallbackPoParity { pg.autoPagenoPo = fallbackPoCols }
         return [pg]
     }
 
@@ -2468,7 +2527,7 @@ private func resolvePrintedBody(
                                             overprint: line.overprint, bi: bi,
                                             image: .init(pixIndex: sub.pixIndex,
                                                          widthPt: sub.wPt, heightPt: sub.hPt),
-                                            left: ownLeft),
+                                            left: ownLeft, poCols: line.poCols),
                                    due: due))
                 continue
             }
@@ -2517,7 +2576,8 @@ private func resolvePrintedBody(
                                         overprint: line.overprint, bi: bi,
                                         kerning: line.kerning, left: ownLeft,
                                         justifyRightX: justifyRightX,
-                                        parityLeft: ownParityLeft), due: due))
+                                        parityLeft: ownParityLeft,
+                                        poCols: line.poCols), due: due))
         }
     }
     return items
@@ -2530,7 +2590,11 @@ private func resolvePrintedBody(
 /// `_printed_cap` (pdf.py:37-60). The unrelated literal `3` a little further down (the
 /// "first three lines of body are unconditional" rule in `layoutPrintedPages`) is the same
 /// WordStar constant but is left as-is here to keep this fix's diff to the actual bug.
-private let footnoteFloor = 3
+///
+/// `internal` since M18 (2026-09-15): `modernSheetH` applies the same floor to Modern's
+/// own sheet, for the same reason, and must read the same constant rather than a second
+/// copy of it.
+let footnoteFloor = 3
 
 /// Port of Python's `round()` (round-half-to-even / banker's rounding), which differs from
 /// Swift's `FloatingPoint.rounded()` default (round-half-away-from-zero) — and `.rounded()`
@@ -2594,9 +2658,15 @@ func landscapePage(_ page: PageGeometry) -> PageGeometry {
 /// `doc.meta['page']`. The CLI applies the same thing once per document (`Run.swift`) via
 /// the same `effectivePage` (EmitOptions.swift).
 ///
-/// The rotation is PRINTED-ONLY (b24 round 17, RULINGS-LEDGER row 2), same doctrine as
-/// every other Printed-only geometry item, and lands AFTER `pageSettings` — matching
-/// ctrl-kd: page-settings replacement geometry, then orientation swap on top of it.
+/// The rotation lands AFTER `pageSettings` — matching ctrl-kd: page-settings replacement
+/// geometry, then orientation swap on top of it. It was PRINTED-ONLY (b24 round 17,
+/// RULINGS-LEDGER row 2) until Jon's ruling 2026-09-15 ("Yes. Fix it.") took `.pr or=l`
+/// to Modern as well: the paged-surface doctrine's own point 2 ("honor .pr or=l landscape
+/// in ALL paged surfaces", 2026-08-17) reaching the last paged surface that ignored it,
+/// and the 2026-08-05 ruling that Modern PDF is the printed form of the Modern RTF.
+/// `printed` therefore no longer selects anything here; the parameter stays because this
+/// function is the one place mode-specific page geometry belongs, and because
+/// `printedDocument` is the public façade that says which mode it is asking about.
 ///
 /// WHY IT IS A FUNCTION (planning #271 M2). Both steps used to be written inline at the top
 /// of `emitPDF`, and the public façade the app draws its on-screen Printed page from
@@ -2614,7 +2684,7 @@ func resolvedGeometryDocument(_ doc: Document, printed: Bool, options: EmitOptio
     if let pageSettings = options.pageSettings, let page = out.page {
         out.page = effectivePage(page, settings: pageSettings)
     }
-    if printed, out.formatting.orientation == .landscape, let page = out.page {
+    if out.formatting.orientation == .landscape, let page = out.page {
         out.page = landscapePage(page)
     }
     return out
@@ -2628,6 +2698,87 @@ func resolvedGeometryDocument(_ doc: Document, printed: Bool, options: EmitOptio
 ///
 /// Modern renders on the document's declared sheet (Letter/Legal/A4 -- ruled
 /// 2026-08-06); silence is Letter, exactly as before.
+///
+/// M18 (2026-09-15): Modern has its own answer now, `modernSheetH`, and `emitPDF`'s
+/// Modern branch calls THAT — the same number `modernStreams` composes on, with `.pl 0`
+/// and the footnote floor handled the way Printed handles them. The `printed == false`
+/// branch below is the shape of this function's contract, never a live Modern render.
+/// True when NOT ONE line on any page carries a block index — a document with no body at
+/// all. The corpus's examples are galley and manuscript TEMPLATES, one page each, nothing
+/// but dot commands and a pair of `.h1o`/`.h1e` running heads. See
+/// `pgnumForBodilessPage`. Port of `_pgnum_is_bodiless`.
+func pgnumIsBodiless(_ pages: [Page]) -> Bool {
+    !pages.contains { $0.contains { $0.bi != nil } }
+}
+
+/// Whether WordStar numbers a page that carries no `.bi` of its own. Port of
+/// `_pgnum_for_bodiless_page`.
+///
+/// `explicitBreakBI` (planning #228) is the `.pa` block's own index and stands in for
+/// "wherever the document's own state was when this page opened" on a confirmed
+/// trailing-`.pa` page, which DOES need a number (WS7 stamps one). That case is unchanged.
+///
+/// A page with NEITHER used to answer a hard `false`, which is not a fallback but a
+/// different rule. Planning #274 (2026-09-15): a document that is ALL HEAD AND NO BODY got
+/// no number on its one page even though nothing in it ever asked for `.op`, while real
+/// WS7 stamps one at the exact row this engine already computes. For such a document the
+/// opening state IS the page's state: there is no later block whose `.op`/`.pn`/`.pg`
+/// could have been read, so checkpoint 0 is not an approximation, it is the answer.
+///
+/// THAT IS WHY `bodilessDoc` IS A WHOLE-DOCUMENT TEST and not a per-page one. A page that
+/// merely came out EMPTY inside a document that does have blocks — a run of blank lines,
+/// `finalizePages` having stripped them — is a different thing: answering it from
+/// checkpoint 0 would ignore every command read since, which is exactly the misnumbering
+/// the 2026-09-15 research note names. Those pages keep the previous answer.
+func pgnumForBodilessPage(_ checkpoints: [PgnumCheckpoint], fallbackBi: Int?,
+                          bodilessDoc: Bool) -> Bool {
+    if let fallbackBi { return pgnumAt(checkpoints, fallbackBi) }
+    return bodilessDoc ? pgnumAt(checkpoints, 0) : false
+}
+
+/// The baseline y (points) of WordStar's automatic page-number row — the SAME row a
+/// `.fo` line 1 rides, `pl - mb + fm` — or nil when the sheet has no such row at all.
+/// Port of `_auto_pageno_row_y`.
+///
+/// ONE DEFINITION, two readers. Printed DRAWS at this y (`resolveHeadFootLines`). Modern
+/// only asks whether it is nil, because "the Modern view shows WordStar's automatic page
+/// number wherever Printed does" (Jon's ruling M15, 2026-09-15) is a question about
+/// WHETHER WordStar numbers this page, never about where Modern then puts it — Modern
+/// places it in its own margin model. Deriving that answer twice is how the two views
+/// would come to disagree about the same document.
+///
+/// THE STEP IS A WORDSTAR PAGE LINE, 1/6 IN, NEVER THE DOCUMENT'S `.lh` (planning #274,
+/// 2026-09-15). `.pl`/`.mb`/`.fm` count PAGE lines — the fixed 6-LPI grid WordStar
+/// measures a sheet in — and this arithmetic used to multiply that count by
+/// `printedLead(doc)`, the document's own body leading. The two are the same number for
+/// every document that leaves `.lh` alone (the default 8/48in IS 12pt), which is why it
+/// went unnoticed; a document that sets `.lh` higher pushed the row down by
+/// (lh - 12) x ~60 lines and off the paper entirely, and the number simply vanished.
+/// MEASURED against all 212 WS7 captures that print an automatic number: the 1/6in step
+/// agrees with 211 of them, the `.lh` step with 200. The one disagreement under either
+/// rule is the corpus's own `.pl 0` document, whose behaviour WordStar leaves undefined
+/// and which Jon removed from all further work on 2026-09-10 (planning #261).
+///
+/// THE COUNTS ARE REAL PAGE LINES, never truncated: `.mb 1.8`/`.fm 1.14` are ordinary
+/// corpus values and rounding them moves the row by most of an inch.
+///
+/// nil IS THE `.mb 0` RULE (research 2026-09-15, rule 3: "no bottom margin — there is no
+/// footer line on the sheet at all, so there is nowhere to put a number"; in this corpus,
+/// label stock, Rolodex cards and mail-merge format files — 24 captures, not one of them
+/// numbered). It is TESTED FOR, since 2026-09-15. It used to fall out of the arithmetic
+/// instead — MAILLIST/LABELA is `.pl 6 .mb 0 .fm 0` on a 72pt sheet, so the row landed at
+/// y = -12 and a blanket "must be on the paper" guard dropped it — and that guard was
+/// wrong about the OTHER class it caught. Real WS7 does not clamp the row to the sheet:
+/// with `.mb 1.8 .fm 2` on a 66-line page it commands the number 806.4pt from the top of
+/// a 792pt sheet, 14.4pt PAST the bottom edge. So the row is returned wherever the
+/// arithmetic puts it and the page clips it exactly as the printer does; only a document
+/// with NO bottom margin has no row at all.
+func autoPagenoRowY(pageHeight: Int, pl: Double, mb: Double, fm: Double,
+                    size: Int) -> Double? {
+    if mb <= 0 { return nil }
+    return Double(pageHeight) - (pl - mb + fm) * Double(PDFMetrics.lead) - Double(size)
+}
+
 func resolvedPageHeight(_ doc: Document, printed: Bool) -> Int {
     printed ? resolvedPrintedPageHeight(doc)
         : roundHalfToEven((doc.page?.heightIn ?? 11.0) * 72.0)
@@ -3360,9 +3511,35 @@ let autoPagenoDefaultCol = 33.5
 /// Left edge (points) of the automatic page number's text, from `.po`/`.pc` -- see
 /// `autoPagenoDefaultCol`'s doc comment for the formula's own measurement. `pcCol` 0 or
 /// unset (both measured identical) uses the fixed default; an explicit non-zero `.pc N`
-/// overrides it. Port of ctrl-kd's `_auto_pageno_x_pt`.
-func autoPageNumberXPt(_ doc: Document) -> Double {
-    let po = doc.page?.poCols ?? 8.0    // WS7 manual's own default page offset --
+/// overrides it.
+///
+/// `poCols` IS THIS PAGE'S OWN PRINT OFFSET, and the document's default is only the
+/// fallback for a caller with no page in hand. The number rides the running foot's own
+/// left origin -- the same `.po`/`.poe`/`.poo` state `emitPDF`'s per-page `pageLeft`
+/// resolves -- never the document's opening `.po`. Reading the document default here put
+/// the number at the WRONG COLUMN on every page whose own offset differs, which this
+/// corpus produces three separate ways, all measured against real WS7:
+///
+///   * `.poe`/`.poo` (an even/odd offset pair). `sawyer/REF/ADVANCE.DOT` `.poo 5.6"` ->
+///     637.2pt, `GALLEYS.DOT` `.poo 5.8125"` -> 652.3pt (predicted 652.5, a 2-decipoint
+///     driver residual -- its own running head carries the same 0.2pt),
+///     `REF/BOOKLET.HOW` 644.4pt odd / 248.4pt even, `REF/BOOKLET.RJS` and its
+///     byte-identical twin `REF/-HOW-TO.RJS` 651.6pt odd / 255.6pt even -- every one
+///     EXACTLY `(po + pc - 1) * 7.2` once the page's own parity offset is used. This
+///     engine drew all five at 291.6pt, the Letter-portrait `.po 8` default. All five
+///     are also `.pr or=l` landscape, which is a coincidence of who in this corpus uses
+///     `.poe`/`.poo` and NOT part of the rule: the number is not centred on the sheet,
+///     and nothing about it reads the sheet's width.
+///   * a MID-DOCUMENT `.po`. `sawyer/REF/FONTS.REF` alternates `.po.2i`/`.po.7i`: WS7
+///     numbers its pages 248.4 / 284.4 / 248.4 / 284.4... page by page, while the
+///     document default (`.po.2i`) alone gives 248.4 throughout.
+///   * a `.po` the document's OPENING state never sees at all. `sawyer/REF/REFORM.DOT`'s
+///     own `.po 1i` lands past block 0, so the document default stays at WordStar's
+///     `.po 8`; WS7 numbers its one page at 306.0pt, which is `.po 1i` = 10 columns.
+///
+/// Port of ctrl-kd's `_auto_pageno_x_pt`.
+func autoPageNumberXPt(_ doc: Document, poCols: Double? = nil) -> Double {
+    let po = poCols ?? doc.page?.poCols ?? 8.0  // WS7 manual's own default page offset --
                                         // `ParseWS.swift`'s `defaultPoCols`, private there
     let pcRaw = doc.page?.pcCol
     let pc = (pcRaw != nil && pcRaw != 0) ? Double(pcRaw!) : autoPagenoDefaultCol
@@ -5210,7 +5387,7 @@ private func resolvePlainBody(
                                             overprint: line.overprint, bi: bi,
                                             image: .init(pixIndex: sub.pixIndex,
                                                          widthPt: sub.wPt, heightPt: sub.hPt),
-                                            left: ownLeft)))
+                                            left: ownLeft, poCols: line.poCols)))
                 firstLineOfBlock = false
                 substituted = true
             }
@@ -5264,7 +5441,8 @@ private func resolvePlainBody(
                                             ws4Spacing: ws4SpacingLine,
                                             kerning: line.kerning, left: ownLeft, roll: ownRoll,
                                             justifyRightX: justifyRightX,
-                                            parityLeft: ownParityLeft)))
+                                            parityLeft: ownParityLeft,
+                                            poCols: line.poCols)))
                 firstLineOfBlock = false
             }
         }
@@ -5556,6 +5734,44 @@ func layoutPrintedPagesPlain(
             // built to exclude a HOLYMAC-style transient `.po` -- lets it through
             // regardless. See `Page.poParity`.
             pg.poParity = curPoe != nil || curPoo != nil
+        }
+        // THE AUTOMATIC NUMBER IS STAMPED WHERE THE PAGE ENDS, not where it began -- so
+        // its `.po` is the one in force at this page's LAST line, and `curPo` (the
+        // page-OPEN snapshot every other field here carries) is the wrong question to
+        // ask for it. The oracle is `sawyer/REF/REFORM.DOT`: its `.po 1i` lands two
+        // lines before the page's own `.pa`, WS7 prints the LAST body line at 72.0pt
+        // (10 columns -- the new offset, live) and that same page's number at 306.0pt,
+        // `(10 + 33.5 - 1) * 7.2`. Reading the page's opening `.po 8` instead put the
+        // number at 291.6pt. `sawyer/REF/FONTS.REF` (alternating `.po.2i`/`.po.7i`, ten
+        // numbered pages at 248.4 / 284.4 page by page) agrees under both readings and
+        // so does not separate them; REFORM does.
+        //
+        // Read off `PageLine.poCols` -- the parser's own `.if`-aware per-line state --
+        // and NEVER `poCheckpoints`, which lists a `.po` inside a FALSE `.if` block like
+        // any other and would answer `REF/REFORM.DOT` and `FONTS/PS/ERROR.WS` with the
+        // `.po .7i` WordStar never executes (WS7 numbers both at 306.0pt, the `.po 1i`
+        // before the conditional; the checkpoint scan says 284.4).
+        //
+        // NO CHECKPOINT FALLBACK either. `PageLine.poCols` `nil` on every line of the
+        // page means what it means everywhere else here -- "this page agrees with the
+        // document's own default" -- and `autoPageNumberXPt` reads that default itself
+        // when handed `nil`. `FONTS/PS/ERROR.WS` is `.po 1i` + `.if 1=0`/`.po .7i`/`.ei`
+        // and NOTHING else, so no line ever carries an override, the document default is
+        // the correct 10 columns, and the checkpoint scan's own answer is the dead 7.
+        //
+        // PARITY STILL WINS, resolved at the same block: `.poe`/`.poo` are the page's
+        // own even/odd offsets whatever `.po` says (planning #231).
+        let pageBIs = pg.lines.compactMap { $0.bi }
+        if let endBI = pageBIs.max() {
+            let endPo = pg.lines.reversed().compactMap { $0.poCols }.first
+            let endPoe: Double? = poeCheckpointsList.isEmpty
+                ? nil : poAt(poeCheckpointsList, endBI)
+            let endPoo: Double? = pooCheckpointsList.isEmpty
+                ? nil : poAt(pooCheckpointsList, endBI)
+            if endPo != nil || endPoe != nil || endPoo != nil {
+                pg.autoPagenoPo = leftForParity(endPo ?? docPo, endPoe, endPoo,
+                                                isEven: isEvenPage)
+            }
         }
         // Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o` -- this page's own PARITY
         // (`isEvenPage`, just resolved above) picks its real line-1 text the same way

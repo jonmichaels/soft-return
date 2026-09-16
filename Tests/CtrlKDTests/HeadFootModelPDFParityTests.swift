@@ -232,8 +232,23 @@ import Testing
                     }
                     let wantBytes = drawnRuns.flatMap { degrade($0.text) }
                     guard !wantBytes.isEmpty else { continue }
-                    let row = spans.filter { $0.y != nil && tenth($0.y!) == wantY }
+                    // M16 (2026-09-15): TWO model lines can share one PDF row. A
+                    // document whose `.lh 0` is in force where its `.h1`/`.h2` are
+                    // defined prints them on the same baseline (measured against real
+                    // WS7 — sawyer/REF/BOOKLET.WS, probes B0/B1/B2), so "the spans at
+                    // this y" is no longer "this line's spans". Take the ones at or
+                    // after this line's own x, and only as many of them as this line's
+                    // own text accounts for; a row with one line on it is unaffected,
+                    // because every span on it is at or after that line's x anyway.
+                    let rowAll = spans.filter { $0.y != nil && tenth($0.y!) == wantY }
                         .sorted { ($0.x ?? 0) < ($1.x ?? 0) }
+                    let fromHere = rowAll.filter { ($0.x ?? 0) >= wantX - 0.05 }
+                    var row: [ShownSpan] = []
+                    var taken = 0
+                    for span in fromHere where taken < wantBytes.count {
+                        row.append(span)
+                        taken += rawBytes(span.text).count
+                    }
                     guard !row.isEmpty else {
                         var msg = "page \(pi + 1): \(kind)Lines[\(li)] "
                         msg += "\"\(entry.text)\" at y=\(wantY) -- no PDF text drawn on "

@@ -10,7 +10,11 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 4.2.0 is the v4.2.0 minor release: sr carries ctrl-kd
+/// CLI's user-visible contract. 4.3.0 is the v4.3.0 minor release: sr carries ctrl-kd
+/// 4.8.0's Modern round — the document's own sheet and newspaper columns in Modern PDF and
+/// RTF, short sheets, the automatic page number in Modern, head alignment and footer timing,
+/// the distinct-label definition rule, page-number placement from the page's own `.po`,
+/// a mirrored Modern right margin and `.pl 0` RTF paper; 4.2.0 was the v4.2.0 minor release: sr carries ctrl-kd
 /// 4.7.0's layout model — RTF/HTML catch-up (page numbers, facing heads, sections and
 /// columns, exact leading, print stylesheet), WS7-measured running-head/foot and
 /// auto-leading rules, `.pf on` re-wrap, column geometry, mail-merge page-number
@@ -83,7 +87,7 @@ import CtrlKD
 /// capacity/top/lead from `.pl`/`.mt`/`.mb`/`.lh`, with `.hm`/`.fm`/`.ls` in --diagnose);
 /// 1.1.0 added the note-selection flags and the expanded --diagnose fields; 1.0.0 was the
 /// first CLI release.
-public let srVersion = "4.2.0"
+public let srVersion = engineVersion   // the literal lives in CtrlKD/EngineVersion.swift (one source)
 
 
 /// `sr v2.0.0`.
@@ -716,8 +720,11 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             --force) in a script or pipeline -- ctrl-kd itself
                             always overwrites silently; this is the one place
                             sr's own defaults diverge from it ("it's a Mac")
-      --headers {on,off}    headers, footers, and page numbers in the paged
-                            surfaces (Printed/Native PDF and RTF). Default: on
+      --headers {on,off}    the document's own running heads and feet (.he/.fo)
+                            in the paged surfaces -- Printed PDF, Modern PDF
+                            and both RTF modes. WordStar's own automatic page
+                            number is --page-numbers' business alone.
+                            Default: on
       --line-numbers {on,off}
                             the document's own .l# line-number gutter in the
                             paged surfaces; no effect on a document that never
@@ -748,21 +755,22 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
       --page-numbers {auto,on,off}
                             WordStar's own AUTOMATIC page number -- the one
                             .pc positions, a separate mechanism from a # the
-                            author placed inside a real .he/.fo (that always
-                            prints, unaffected by this flag). Printed PDF
-                            only. auto (DEFAULT): the document's own dot
+                            author placed inside a real .he/.fo (that goes with
+                            its head, under --headers, never this flag). Every
+                            paged surface. auto (DEFAULT): the document's own dot
                             commands decide -- .pn/.pg turn it on, .op turns
                             it off, exactly like real WordStar; a document
-                            that never touches any of the four gets no
-                            number, byte-identical to before this flag
-                            existed. on: force stock default numbering
+                            that never touches any of them gets stock
+                            WordStar 7's own number, which is ON.
+                            on: force stock default numbering
                             (bottom row a footer would use; .pc repositions
                             it) even on a silent document. off: suppress it
                             unconditionally. A declared footer always
                             pre-empts it, in every mode (WSFORMAT.WS: "active
-                            only when the footers are not in use").
-                            --headers off also suppresses it, per --headers'
-                            own documented scope.
+                            only when the footers are not in use") -- a
+                            property of the document, so --headers off does
+                            not lift it, and does not suppress the number
+                            either.
       --sentence-spacing {auto,keep,single}
                             the typewriter double space after a sentence-ending '.',
                             '?', or '!'. auto (DEFAULT): follows --mode -- modern

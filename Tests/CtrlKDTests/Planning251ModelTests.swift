@@ -38,7 +38,7 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON.
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 10"))
+    #expect(json.contains("\"version\": 11"))
     #expect(json.contains("\"justify_word_x\""))
 }
 
@@ -80,7 +80,7 @@ import Testing
     #expect(pages[0].contains { $0.lineNo == nil })
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 10"))
+    #expect(json.contains("\"version\": 11"))
     #expect(json.contains("\"line_no\""))
 }
 
@@ -145,7 +145,7 @@ import Testing
     #expect(middle.map(\.char) == ["\u{2502}", "\u{2502}"])   // only the two bars
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 10"))
+    #expect(json.contains("\"version\": 11"))
     #expect(json.contains("\"graphic_cells\""))
 }
 
@@ -182,7 +182,7 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON's `modern.items`.
     let json = emitLayout(doc, mode: .modern)
-    #expect(json.contains("\"version\": 10"))
+    #expect(json.contains("\"version\": 11"))
     #expect(json.contains("\"graphic_cells\""))
     #expect(json.contains("\"page\": 1"))
 }
@@ -263,10 +263,15 @@ import Testing
     let doc = parseWS(src)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.count == 2)
-    #expect(pages[0].headerLines == [HeadFootLine(text: "Header Text", x: 57.6, y: 780.0, font: nil)])
-    #expect(pages[0].footerLines == [HeadFootLine(text: "Footer Text", x: 57.6, y: 60.0, font: nil)])
+    // `styleAttrs` defaults to empty -- this document selects no style, which is the
+    // overwhelming majority (planning #274 follow-up, `layout` JSON version 11).
+    #expect(pages[0].headerLines == [HeadFootLine(text: "Header Text", x: 57.6, y: 780.0,
+                                                 font: nil)])
+    #expect(pages[0].footerLines == [HeadFootLine(text: "Footer Text", x: 57.6, y: 60.0,
+                                                 font: nil)])
     #expect(pages[0].autoPageno == nil)     // a real footer is in force -> no auto number
     #expect(pages[1].headerLines == [HeadFootLine(text: "Header Text", x: 57.6, y: 780.0, font: nil)])
+    #expect(pages[0].headerLines?.first?.styleAttrs == [])
 
     let pdf = emitPDF(doc, mode: .printed)
     let streams = pdfContentStreams(pdf)
@@ -344,7 +349,7 @@ import Testing
     #expect(pages[0].footerLines == nil)
     #expect(pages[0].autoPageno == nil)
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 10"))
+    #expect(json.contains("\"version\": 11"))
     #expect(!json.contains("\"header_lines\""))
     #expect(!json.contains("\"footer_lines\""))
     #expect(!json.contains("\"auto_page_number\""))

@@ -243,6 +243,44 @@ func hfAlignX(_ align: Alignment?, text: String, fontIdx: Int?, doc: Document, s
 /// same "one resolved answer, page-1-shaped" rule mt/mb/hm/fm/po already follow at
 /// this same document-level scope. Direct port of Python's `_printed_hf_right`
 /// (ctrl-kd pdf.py).
+/// The right edge one head/foot LINE aligns against, in points. Port of `_hf_line_right`.
+///
+/// M16 (2026-09-15, ruled by evidence rather than by reading): the line's OWN STYLE's
+/// right margin, measured from this page's `.po` origin — and the document's
+/// `.rm`-derived edge only when the style declares none. Six probes printed by real
+/// WordStar 7 under DOSBox-X against sawyer/REF/BOOKLET.WS settle it (see
+/// `Document.headerStyleRM`): turning its `.co 2` off, and turning it into a `.co 3`
+/// with a narrower `.rm`, both leave its right-aligned "Header Odd 1" at exactly the x
+/// the unmodified document prints; moving `.po` moves it by exactly the same amount. So
+/// the reference is neither the column grid nor `.rm` nor the sheet — it is `.po` plus
+/// the style's own right margin, 18000 HMI = 100 columns = 10.00in for this document.
+///
+/// Every other corpus document with a right-aligned head declares a style right margin
+/// EQUAL to its own `.rm`, so this changes nothing for any of them.
+func hfLineRight(_ doc: Document, kind: HFKind, line: Int,
+                 left: Double, docRight: Double?) -> Double? {
+    let styleRM = (kind == .header ? doc.headerStyleRM : doc.footerStyleRM)[line]
+    guard let styleRM else { return docRight }
+    return left + styleRM * pdfPtPerCol
+}
+
+/// The vertical step BELOW one head/foot line, in points — the `.lh` in force where that
+/// line was defined, and WordStar's own 1/6in default when the document never said.
+/// Port of `_hf_line_step_pt`.
+///
+/// M16: this was a flat `PDFMetrics.lead` (12pt), which is the same number for every
+/// document that leaves `.lh` alone — all but one in the corpus. It is not the same
+/// number for `sawyer/REF/BOOKLET.WS`, whose `.lh 0` immediately precedes its
+/// `.f1`/`.h1`/`.h2` (and is cancelled by a `.lh12` immediately after): real WS7 prints
+/// its two header lines on ONE row, and prints them on two rows 1/6in apart the moment
+/// that `.lh 0` is removed with everything else left alone. See `Document.headerLeads`.
+func hfLineStepPt(_ doc: Document, kind: HFKind, line: Int) -> Double {
+    guard let lh48 = (kind == .header ? doc.headerLeads : doc.footerLeads)[line] else {
+        return Double(PDFMetrics.lead)
+    }
+    return lh48 * 72.0 / 48.0
+}
+
 func printedHfRight(_ doc: Document, left: Double) -> Double? {
     guard let rmCols = doc.page?.rmCols else { return nil }
     return left + rmCols * pdfPtPerCol
@@ -379,7 +417,8 @@ func resolveHeadFootLines(
     headHfOverride: [Int: HFOverride]? = nil, footHfOverride: [Int: HFOverride]? = nil,
     footerInUse: Bool? = nil,
     headersPcl: [Int: [HFPrintControl]]? = nil,
-    footersPcl: [Int: [HFPrintControl]]? = nil
+    footersPcl: [Int: [HFPrintControl]]? = nil,
+    poCols: Double? = nil
 ) -> ResolvedHeadFoot? {
     // Planning #250: a document with NO real body blocks at all (GALLEYS.DOT/
     // ADVANCE.DOT -- pseudogalley templates) never builds a real per-page `Page` via
@@ -436,9 +475,20 @@ func resolveHeadFootLines(
     //
     // This was implemented backwards on both sides, and the test asserted the backwards
     // behaviour while its docstring quoted the exempting clause. See ctrl-kd 88a0c43.
-    let pl = Int(doc.page?.plLines ?? defaultPlLines)
-    let mb = Int(doc.page?.mbLines ?? defaultMbLines)
-    let fm = Int(doc.page?.fmLines ?? 2)
+    // THE FOOT ROW IS READ IN REAL PAGE LINES. It used to be read twice, and the other
+    // reading truncated these three to integers (planning #274 + its follow-up, both
+    // 2026-09-15). `.mb 1.8`/`.fm 1.14` are ordinary corpus values and truncating them
+    // moves the row by most of an inch. Measured: with the fractions kept and the 1/6in
+    // page-line step of `autoPagenoRowY`, the predicted row matches 211 of the 212 WS7
+    // captures that print a number, to within the captures' own decipoint rounding.
+    //
+    // THE FOOTER-TEXT LOOP READS THE SAME THREE. It used to truncate them and step by
+    // the document's own `.lh` -- the same class of defect, left named rather than fixed
+    // on a guess until the row itself had been measured. It has been: that loop now
+    // calls `autoPagenoRowY` directly, one definition for one row.
+    let autoPl = doc.page?.plLines ?? defaultPlLines
+    let autoMb = doc.page?.mbLines ?? defaultMbLines
+    let autoFm = doc.page?.fmLines ?? 2.0
 
     // `#` -> the page number. Written by hand because this module imports nothing —
     // `replacingOccurrences` is Foundation, which CtrlKD deliberately does without.
@@ -622,11 +672,26 @@ func resolveHeadFootLines(
     let rightEdge = printedHfRight(doc, left: left)
 
     var resolvedHeaders: [(n: Int, text: String, y: Double, fontIdx: Int?, x: Double, styleAttrs: Style)] = []
+    // M16 (2026-09-15): the header block is anchored on its LAST line — `headBase` is
+    // `mt - hm - topHead`, so line `topHead` always lands at `mt - hm - 1` whatever the
+    // line count, and real WS7 agrees (probe B5: a one-line head prints on the row the
+    // second of two occupies). What was wrong was the STEP between the lines: a flat
+    // `PDFMetrics.lead`, where WordStar uses the `.lh` in force at each line's own
+    // command. Identical for every document that leaves `.lh` alone (the default 8/48in
+    // IS 12pt), and 0 for the one that asks for 0.
+    let lastHeadY = Double(pageHeight) - (headBase + topHead - 1.0)
+        * Double(PDFMetrics.lead) - Double(size)
     for n in Set(headers.keys).union(headersPcl.keys).sorted() {
         let txt = headers[n] ?? ""
         guard !txt.isEmpty || !(headersPcl[n] ?? []).isEmpty else { continue }
-        let y = Double(pageHeight) - (headBase + Double(n - 1)) * Double(PDFMetrics.lead)
-            - Double(size)
+        var y = lastHeadY
+        // `topHead` is a Double (it feeds `headBase`'s own arithmetic); the loop over
+        // the lines BELOW this one wants the line numbers themselves.
+        var k = n
+        while Double(k) < topHead {
+            y += hfLineStepPt(doc, kind: .header, line: k)
+            k += 1
+        }
         guard y >= 0 else { continue }
         let fontIdx: Int?
         let tabRec: HFTabMark?
@@ -645,7 +710,10 @@ func resolveHeadFootLines(
         }
         let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: tabRec)
         let x = hfAlignX(align, text: text, fontIdx: fontIdx, doc: doc, size: size,
-                         left: left, rightEdge: rightEdge, styleAttrs: styleAttrs)
+                         left: left,
+                         rightEdge: hfLineRight(doc, kind: .header, line: n,
+                                                left: left, docRight: rightEdge),
+                         styleAttrs: styleAttrs)
         resolvedHeaders.append((n: n, text: text, y: y, fontIdx: fontIdx, x: x, styleAttrs: styleAttrs))
     }
     // b26-header-baseline: `fm` is deliberately UNCHANGED -- checked for the same
@@ -659,13 +727,42 @@ func resolveHeadFootLines(
     // argues AGAINST extending the header's fix here by symmetry -- it is real, if
     // dated, evidence that a default `.fm` already participates in the footer's own
     // placement, unlike a default `.hm` in the header's. Reported, not acted on.
-    let footLine = pl - mb + fm
+    // THE FOOTER TEXT RIDES THE SAME ROW THE AUTOMATIC NUMBER DOES, so it is the same
+    // function, not a second arithmetic (planning #274 follow-up, 2026-09-15). This loop
+    // used to compute `pl - mb + fm` from TRUNCATED integers, step it by the DOCUMENT'S
+    // OWN `.lh`, and drop any line the result put off the paper -- all three of the
+    // causes #274 measured and fixed for the number, against 211 of the 212 WS7 captures
+    // that print one.
+    //
+    // WHAT THIS MOVES, measured across all 194 captures: NOTHING VISIBLE. Only 7
+    // captured documents declare a footer at all, and the three with real TEXT in it
+    // (`REF/BUGS.WS`, `REF/WSFORMAT.WS`, `RTF-RJS/NOVEL.WS`) are all `.pl 66 .mb 8 .fm
+    // 2` at the default 12pt lead, where the old and new arithmetic agree EXACTLY -- 65
+    // of 68 comparable footer rows matched WS7 before this change and the same 65 after.
+    // The captured documents whose geometry this really does change -- `REF/BOOKLET.WS`
+    // (`.pl 51 .mb 5.4 .fm 1.14`, an 18pt `.lh`), `fixtures-ws5/LJ6DTP.WS` (a 14pt
+    // `.lh`), `MICKEE/MICKEE.WS` -- all carry a footer whose entire content is 0x0F
+    // print-control bytes with no visible glyph, which is exactly why the defect
+    // survived a corpus-wide comparison.
+    //
+    // `.mb 0` -> no row, so no footer line: `autoPagenoRowY`'s own rule ("no bottom
+    // margin -- there is nowhere to put it"), and the SAME outcome the removed
+    // `y >= 0` guard already produced for that case.
+    let firstFootY = autoPagenoRowY(pageHeight: pageHeight, pl: autoPl, mb: autoMb,
+                                    fm: autoFm, size: size)
     var resolvedFooters: [(n: Int, text: String, y: Double, fontIdx: Int?, x: Double, styleAttrs: Style)] = []
     for n in Set(footers.keys).union(footersPcl.keys).sorted() {
         let txt = footers[n] ?? ""
         guard !txt.isEmpty || !(footersPcl[n] ?? []).isEmpty else { continue }
-        let y = Double(pageHeight) - Double(footLine + n - 1) * lead - Double(size)
-        guard y >= 0 else { continue }
+        guard let firstFootY else { continue }
+        // The step BETWEEN footer lines is each line's own `.lh`, the rule M16 measured
+        // for the head block (`hfLineStepPt`) -- identical to the flat `lead` this used
+        // for every document that never moves `.lh`, which is every multi-line-footer
+        // document in this corpus.
+        var y = firstFootY
+        if n > 1 {
+            for k in 1..<n { y -= hfLineStepPt(doc, kind: .footer, line: k) }
+        }
         let fontIdx: Int?
         let tabRec: HFTabMark?
         let align: Alignment?
@@ -683,7 +780,10 @@ func resolveHeadFootLines(
         }
         let text = resolveLineText(txt, fontIdx: fontIdx, tabRec: tabRec)
         let x = hfAlignX(align, text: text, fontIdx: fontIdx, doc: doc, size: size,
-                         left: left, rightEdge: rightEdge, styleAttrs: styleAttrs)
+                         left: left,
+                         rightEdge: hfLineRight(doc, kind: .footer, line: n,
+                                                left: left, docRight: rightEdge),
+                         styleAttrs: styleAttrs)
         resolvedFooters.append((n: n, text: text, y: y, fontIdx: fontIdx, x: x, styleAttrs: styleAttrs))
     }
     var auto: (text: String, x: Double, y: Double)? = nil
@@ -696,9 +796,9 @@ func resolveHeadFootLines(
         // use (WSFORMAT.WS's own "active only when the footers are not in use"), so this
         // never collides with the loop just above — at most one of the two ever fires
         // for a given page.
-        let y = Double(pageHeight) - Double(footLine) * lead - Double(size)
-        if y >= 0 {
-            auto = (text: String(pageNo), x: autoPageNumberXPt(doc), y: y)
+        if let y = autoPagenoRowY(pageHeight: pageHeight, pl: autoPl, mb: autoMb,
+                                  fm: autoFm, size: size) {
+            auto = (text: String(pageNo), x: autoPageNumberXPt(doc, poCols: poCols), y: y)
         }
     }
     return ResolvedHeadFoot(headers: resolvedHeaders, footers: resolvedFooters, auto: auto)
@@ -728,7 +828,8 @@ func runningOps(
     headHfOverride: [Int: HFOverride]? = nil, footHfOverride: [Int: HFOverride]? = nil,
     footerInUse: Bool? = nil,
     headersPcl: [Int: [HFPrintControl]]? = nil,
-    footersPcl: [Int: [HFPrintControl]]? = nil
+    footersPcl: [Int: [HFPrintControl]]? = nil,
+    poCols: Double? = nil
 ) -> [[UInt8]] {
     guard let resolved = resolveHeadFootLines(doc, pageNo: pageNo, pageHeight: pageHeight,
                                               lead: lead, size: size, left: left,
@@ -738,7 +839,8 @@ func runningOps(
                                               footHfOverride: footHfOverride,
                                               footerInUse: footerInUse,
                                               headersPcl: headersPcl,
-                                              footersPcl: footersPcl)
+                                              footersPcl: footersPcl,
+                                              poCols: poCols)
     else { return [] }
 
     /// One already-resolved header/footer LINE's ops (register C6). `fontIdx` is the
@@ -2487,8 +2589,20 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
     let pageHeight = resolvedPageHeight(doc, printed: true)
     let pgnumCheckpointsList = pgnumCheckpoints(doc)
     let pgnumOnPage = pgnumByPage(pgnumCheckpointsList, pages)
+    let bodilessDoc = pgnumIsBodiless(pages)
     let pageNumbers = resolvePageNumbers(pnCheckpoints(doc), pages)
     for pi in pages.indices {
+        // THE SYNTHESIZED FALLBACK PAGE IS RESOLVED LIKE ANY OTHER (planning #274
+        // follow-up, 2026-09-15). This used to `continue` on it, mirroring ctrl-kd,
+        // where `pages or [[]]` sat on the `return` so that page did not yet exist
+        // when the attach passes ran. Reported by the app coder: `REF/ADVANCE.DOT`
+        // and `REF/GALLEYS.DOT` -- content-free `.DOT` templates, all dot commands
+        // and running heads -- showed one printed page, zero lines and a null
+        // automatic page number in the `layout` JSON, while `runningOps` drew the
+        // head at 666.2 and the number at 637.2 in the Printed PDF. ctrl-kd now
+        // creates its fallback page BEFORE the pass (ed6d0658); this is the same
+        // fix on this side. See `Page.isSynthesizedFallback`, which still marks the
+        // page for every other consumer.
         // planning #251 part d fix (found by the app coder, job 348 follow-up:
         // ctrl-kd's own sawyer/-SCREEN.WS page 1, the app's own BOTHNOTE.WS page 1):
         // this used to SKIP every notes-aware-path page with no `explicitBreakBI` and
@@ -2554,17 +2668,23 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
         let autoPageNumber: Bool
         if page.compactMap(\.bi).max() != nil {
             autoPageNumber = pgnumOnPage[pi]
-        } else if let fallbackBi = page.explicitBreakBI {
-            autoPageNumber = pgnumAt(pgnumCheckpointsList, fallbackBi)
         } else {
-            autoPageNumber = false
+            autoPageNumber = pgnumForBodilessPage(
+                pgnumCheckpointsList, fallbackBi: page.explicitBreakBI,
+                bodilessDoc: bodilessDoc)
         }
         guard let resolved = resolveHeadFootLines(
             pageDoc, pageNo: pageNumbers[pi], pageHeight: pageHeight, lead: lead, size: size,
             left: pageLeft, printed: true, headers: headersIn, footers: footersIn,
             autoPageNumber: autoPageNumber,
             headHfOverride: headHfOverrideIn, footHfOverride: footHfOverrideIn,
-            footerInUse: page.footerInUse)
+            footerInUse: page.footerInUse,
+            // The automatic page number's own offset, in COLUMNS and resolved at the
+            // page's CLOSE (`Page.autoPagenoPo`) -- never `pageLeft`, which is points
+            // and clamped inside a Letter sheet (`REF/BOOKLET.RJS`'s `.poo` is 58
+            // columns and its number's column is past that clamp), and never the
+            // head/foot's own page-OPEN `.po`. See `autoPageNumberXPt`.
+            poCols: page.autoPagenoPo)
         else { continue }
         // Planning #255: `styleAttrs` is a PDF-render-time concern only, applied by
         // `runningOps`'s `hfLineOps` -- the page-lines MODEL keeps its pre-existing
@@ -2575,12 +2695,14 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
         // `left` unchanged for the overwhelmingly common case.
         if !resolved.headers.isEmpty {
             pages[pi].headerLines = resolved.headers.map {
-                HeadFootLine(text: $0.text, x: $0.x, y: $0.y, font: $0.fontIdx)
+                HeadFootLine(text: $0.text, x: $0.x, y: $0.y, font: $0.fontIdx,
+                             styleAttrs: $0.styleAttrs)
             }
         }
         if !resolved.footers.isEmpty {
             pages[pi].footerLines = resolved.footers.map {
-                HeadFootLine(text: $0.text, x: $0.x, y: $0.y, font: $0.fontIdx)
+                HeadFootLine(text: $0.text, x: $0.x, y: $0.y, font: $0.fontIdx,
+                             styleAttrs: $0.styleAttrs)
             }
         }
         if let auto = resolved.auto {
@@ -2657,10 +2779,17 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     // computes it once in `emit_pdf` and uses it for both the MediaBox and the content
     // stream's Y-origin. A page that paginates at a custom `.pl`'s resolved capacity but
     // still declares a Letter-size MediaBox would be internally inconsistent: the right
-    // number of lines, drawn on the wrong-size sheet of paper. Modern is always Letter
-    // (`resolvedPageHeight` already returns the fixed height when `printed` is false), like
-    // the Modern RTF's own page setup.
-    let pageHeight = resolvedPageHeight(doc, printed: printed)
+    // number of lines, drawn on the wrong-size sheet of paper. Modern reads the
+    // document's own declared sheet, which since Jon's ruling 2026-09-15 includes
+    // `.pr or=l`'s landscape swap: `doc` here is already `resolvedGeometryDocument`'s
+    // rotated copy.
+    // M18 (2026-09-15): ONE definition of Modern's sheet height, shared with
+    // `modernStreams`' own composing origin. It used to be computed here a second time,
+    // straight off `heightIn` with no `.pl 0` guard and no floor, while the composing
+    // origin was a hardcoded Letter 792 — so a short portrait sheet got a correct, short
+    // MediaBox and every line drawn above the top of it.
+    let pageHeight = printed ? resolvedPageHeight(doc, printed: true)
+        : Int(modernSheetH(doc))
     // Width joined the page model 2026-08-06 ("the 3 main page sizes"): inferred from
     // the height -- A4-tall pages are 210mm wide, everything else is the 8.5in sheet --
     // so a default document stays exactly 612.
@@ -2729,6 +2858,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         let pageNumbersMode = options.pageNumbers
         let pgnumCheckpointsList = pageNumbersMode == .auto ? pgnumCheckpoints(doc) : nil
         let pgnumOnPage = pgnumCheckpointsList.map { pgnumByPage($0, pages) }
+        let bodilessDoc = pgnumIsBodiless(pages)
         var built: [[UInt8]] = []
         for (i, page) in pages.enumerated() {
             // Per-page header/footer state, replayed from `doc.hfEvents` through
@@ -2842,15 +2972,17 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                 autoPageNumber = true
             } else if let onPage = pgnumOnPage, page.compactMap(\.bi).max() != nil {
                 autoPageNumber = onPage[i]
-            } else if let checkpoints = pgnumCheckpointsList, let fallbackBi = page.explicitBreakBI {
-                // #228: a page with no lines at all has no `.bi` to read -- true
-                // of both an ordinary degenerate page (kept `false`, as before)
-                // and our confirmed trailing-`.pa` page, which DOES need a
-                // number (WS7 stamps one). `explicitBreakBI` (the `.pa`
-                // block's own index, or an endnote-only page's own fallback --
-                // see `endnotePages`) stands in for "wherever the document's
-                // own state was when this page opened."
-                autoPageNumber = pgnumAt(checkpoints, fallbackBi)
+            } else if let checkpoints = pgnumCheckpointsList {
+                // #228: a page with no lines at all has no `.bi` to read.
+                // `explicitBreakBI` (the `.pa` block's own index, or an
+                // endnote-only page's own fallback -- see `endnotePages`) stands
+                // in for "wherever the document's own state was when this page
+                // opened" on a confirmed trailing-`.pa` page, which DOES need a
+                // number (WS7 stamps one). Planning #274 handles the page with
+                // NEITHER -- see `pgnumForBodilessPage`.
+                autoPageNumber = pgnumForBodilessPage(
+                    checkpoints, fallbackBi: page.explicitBreakBI,
+                    bodilessDoc: bodilessDoc)
             } else {
                 autoPageNumber = false
             }
@@ -2871,7 +3003,12 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                      // exactly `!footers.isEmpty` to `runningOps`.
                                      footerInUse: page.footerInUse ?? !page.footers.isEmpty,
                                      headersPcl: options.headers ? page.headerPcl : nil,
-                                     footersPcl: options.headers ? page.footerPcl : nil)
+                                     footersPcl: options.headers ? page.footerPcl : nil,
+                                     // The automatic page number's own offset --
+                                     // columns, resolved at the page's CLOSE. Twin of
+                                     // the one in `attachHeadFootLinesPrinted`; see
+                                     // `autoPageNumberXPt`.
+                                     poCols: page.autoPagenoPo)
             built.append(pageStream(page, top: pageTop, pageHeight: pageHeight, lead: lead,
                                     size: size, left: left, running: running,
                                     fonts: fonts, res: res, colourMap: colourMap,

@@ -209,7 +209,7 @@ private func midRegionRMFixture() -> Document {
     let doc = columnsFixture()
     let json = try JSONSerialization.jsonObject(
         with: Data(Array(emitLayout(doc, mode: .printed).utf8))) as! [String: Any]
-    #expect(json["version"] as? Int == 10)
+    #expect(json["version"] as? Int == 11)
     let pages = (json["printed"] as! [String: Any])["pages"] as! [[String: Any]]
     let columnar = pages.filter { $0["columns"] != nil }
     #expect(!columnar.isEmpty)

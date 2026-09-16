@@ -56,7 +56,7 @@ private func loadResource(_ name: String, ext: String) throws -> Data {
     #expect(emitLayout(doc, mode: .modern, options: options) == expected)
 }
 
-@Test func layoutJSONOfAContentFreeDocumentBlanksHeadersFootersLikeThePythonOracle() throws {
+@Test func layoutJSONOfAContentFreeDocumentCarriesItsResolvedHeadFootLikeThePythonOracle() throws {
     // Companion to PDFWriterTests' `printedPDFOfAContentFreeDocumentStillHonoursItsOwnMarginsAndHeader`
     // (REF/ADVANCE.DOT / REF/GALLEYS.DOT, Sawyer WS7 archive): b56040b made
     // `finalizePages`'s `pages.isEmpty` fallback synthesize a REAL `Page` carrying the
@@ -68,15 +68,26 @@ private func loadResource(_ name: String, ext: String) throws -> Data {
     // duck-typing gap the PDF fix worked around, left unpatched on ctrl-kd's JSON path, so
     // matching it byte-for-byte means blanking headers/footers here too -- the same
     // treatment `notesPath` already gets for its own analogous gap (see the doc comment
-    // above `jsonHFDict`'s call site in `emitLayout`). Before this fix this test failed:
+    // above `jsonHFDict`'s call site in `emitLayout`). Before that fix this test failed:
     // sr's JSON carried a real "1": "HEADER-#" entry where ctrl-kd's has `{}`.
+    //
+    // REWRITTEN 2026-09-15 (planning #274 follow-up). The RAW `headers`/`footers` dict
+    // is still blank on that page in both engines, and still checked here. What changed
+    // is the RESOLVED lines: ctrl-kd used to invent its fallback page AFTER every attach
+    // pass, so `header_lines`/`footer_lines`/`auto_page_number` were absent from the
+    // JSON while the PDF writer drew all three -- two answers to one question. It
+    // creates the page BEFORE the pass now (ed6d0658), so those keys are real here, and
+    // this test says so instead of asserting the gap.
     let doc = parseWS(bytes(".mt .7i\r\n.mb .6i\r\n.he HEADER-#\r\n.fo FOOTER-#\r\n"))
     for mode in [EmitMode.modern, .printed] {
         let json = emitLayout(doc, mode: mode)
-        #expect(json.contains("\"headers\": {}"),
-                "content-free document's printed page must have BLANK headers in the JSON (ctrl-kd's own `pages or [[]]` fallback has no `.headers` attribute), even though the PDF driver keeps the real header for rendering")
+        // The RAW dict stays blank on this page in both engines -- ctrl-kd's own
+        // fallback is a bare list with no `.headers` attribute and `emit_layout`'s
+        // `getattr(page, 'headers', {})` yields `{}`.
+        #expect(json.contains("\"headers\": {}"))
         #expect(json.contains("\"footers\": {}"))
-        #expect(!json.contains("HEADER-1"), "the real header text must not leak into the JSON")
-        #expect(!json.contains("FOOTER-1"), "the real footer text must not leak into the JSON")
+        // The RESOLVED lines are real, in both engines.
+        #expect(json.contains("HEADER-1"), "the resolved running head reaches the JSON")
+        #expect(json.contains("FOOTER-1"), "the resolved running foot reaches the JSON")
     }
 }

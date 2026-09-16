@@ -400,7 +400,7 @@ func syntheticRTFIsStructurallySound(mode: EmitMode) {
     #expect(rtfBraceErrors(rtf) == [])
     #expect(rtfUnknownControlWords(rtf) == [])
     #expect(rtfSectionOpenerCount(rtf)
-            == rtfSectionBreaks(doc, printed: mode == .printed || isPrinted(doc)).count)
+            == rtfSectionBreaks(doc).count)
 }
 
 @Test(arguments: [EmitMode.printed, .modern])
@@ -430,7 +430,7 @@ func curatedRTFIsStructurallySound(name: String, mode: EmitMode) throws {
     #expect(rtfBraceErrors(rtf) == [], "\(name)")
     #expect(rtfUnknownControlWords(rtf) == [], "\(name)")
     #expect(rtfSectionOpenerCount(rtf)
-            == rtfSectionBreaks(doc, printed: mode == .printed || isPrinted(doc)).count,
+            == rtfSectionBreaks(doc).count,
             "\(name)")
 }
 

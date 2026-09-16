@@ -425,8 +425,11 @@ public final class DocumentState {
 
     /// Resolves the `.PIX` tags again against `docPath` — after the app has been given the folder
     /// the pictures live in (#272 I8). The parse is unchanged; only `pixResults` is recomputed.
-    public func resolvePictures() {
-        pixResults = DocumentPictures.resolve(document, docPath: docPath)
+    ///
+    /// `linked: false` (batch 39, the iPhone's Unlink): every tag reads `.unresolved`, as it does for a
+    /// document with no path to search from, whatever files sit beside the document.
+    public func resolvePictures(linked: Bool = true) {
+        pixResults = DocumentPictures.resolve(document, docPath: linked ? docPath : "")
     }
 
     /// The options Printed is laid out with for this document — the Margins choice and the

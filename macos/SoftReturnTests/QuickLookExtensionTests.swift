@@ -52,21 +52,23 @@ import Testing
         let ext = try #require(plist["NSExtension"] as? [String: Any],
                                "Info.plist carries no NSExtension dict")
         #expect(ext["NSExtensionPointIdentifier"] as? String == "com.apple.quicklook.preview")
-        #expect(ext["NSExtensionPrincipalClass"] as? String == "SoftReturnQuickLook.PreviewProvider")
+        // Batch 40 (M11): a view-based preview, an NSViewController conforming to QLPreviewingController.
+        #expect(ext["NSExtensionPrincipalClass"] as? String == "SoftReturnQuickLook.PreviewViewController")
 
         let attributes = try #require(ext["NSExtensionAttributes"] as? [String: Any],
                                       "Info.plist carries no NSExtensionAttributes dict")
         let types = try #require(attributes["QLSupportedContentTypes"] as? [String])
         #expect(types == ["me.beforeti.wordstar-document", "me.beforeti.wordstar-pix"],
                 "preview claims OUR UTIs and nothing else — Jon ruled 2026-08-08: no hijacking .txt previews")
-        #expect(attributes["QLIsDataBasedPreview"] as? Bool == true,
+        #expect(attributes["QLIsDataBasedPreview"] == nil,
                 """
-                TRUE = "uses the data-based QLPreviewProvider API", which PreviewProvider is. \
-                false shipped in builds a-k and made Apple's view-based wrapper assert \
-                (QLPreviewExtensionViewController.m:139, caught live on a real Mac 2026-08-08) — \
-                the eternal-spinner root cause. This test asserted the broken value for weeks; \
-                it pins the CONSOLE-VERIFIED one now.
+                QLIsDataBasedPreview declares the data-based QLPreviewProvider API. The preview is view-based since \
+                batch 40 (M11), and a data-based flag on a view controller principal class would ask Quick Look for a \
+                reply it never gets. (Set false with a QLPreviewProvider principal class, 2026-08-08, it asserted in \
+                QLPreviewExtensionViewController.m:139: the wrong kind of principal class for a view-based preview.)
                 """)
+        #expect(!FileManager.default.fileExists(atPath: url.deletingLastPathComponent().appendingPathComponent("PreviewProvider.swift").path),
+                "the data-based PreviewProvider.swift is still in the extension")
     }
 
     /// The appex actually exists on disk, embedded where LaunchServices looks for it — the

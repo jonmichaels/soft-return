@@ -18,30 +18,29 @@
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.quicklook.preview</string>
+		<!-- Batch 40 (M11): a VIEW-based preview. The principal class is an NSViewController
+		     conforming to QLPreviewingController (preparePreviewOfFile(at:completionHandler:)),
+		     which shows page 1 as soon as it is made and appends the rest. A data-based
+		     QLPreviewProvider has to return one finished PDF, so nothing showed until every page
+		     was made (-HOLYMAC.WS: 5.3 s). QLIsDataBasedPreview is gone: it declares the
+		     data-based API, and set false with a QLPreviewProvider principal class it asserted in
+		     QLPreviewExtensionViewController.m:139 (2026-08-08) — that failure was the wrong
+		     KIND of principal class for a view-based preview, which this is not. -->
 		<key>NSExtensionPrincipalClass</key>
-		<string>SoftReturnQuickLook.PreviewProvider</string>
+		<string>SoftReturnQuickLook.PreviewViewController</string>
 		<key>NSExtensionAttributes</key>
 		<dict>
 			<key>QLSupportedContentTypes</key>
 			<array>
 				<!-- Our exported UTI ONLY. Jon ruled 2026-08-08: no hijacking .txt previews —
-				     with the extension actually working (QLIsDataBasedPreview fix), claiming
-				     public.plain-text would put our preview on every .txt on the Mac. -->
+				     claiming public.plain-text would put our preview on every .txt on the Mac. -->
 				<string>me.beforeti.wordstar-document</string>
 				<!-- Job 374 (QL-PIX): standalone `.PIX` images, same extension point,
-				     dispatched content-first inside PreviewProvider itself. -->
+				     dispatched content-first inside PreviewViewController itself. -->
 				<string>me.beforeti.wordstar-pix</string>
 			</array>
-			<!-- TRUE means "this extension uses the data-based QLPreviewProvider API"
-			     (providePreview(for:) returning a QLPreviewReply) — which is exactly what
-			     PreviewProvider.swift is. It does NOT mean "input arrives as in-memory data";
-			     request.fileURL is the normal input for data-based providers too. With this
-			     false, macOS wraps the principal class in its view-based
-			     QLPreviewExtensionViewController, asserts (observed live at
-			     QLPreviewExtensionViewController.m:139 on a real Mac, 2026-08-08), cancels the XPC
-			     connection, and the host spins forever — the dev-a..k spinner. -->
-			<key>QLIsDataBasedPreview</key>
-			<true/>
+			<key>QLSupportsSearchableItems</key>
+			<false/>
 		</dict>
 	</dict>
 </dict>

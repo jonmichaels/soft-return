@@ -226,6 +226,17 @@ public enum StructureEntry: Hashable, Sendable {
     case hard
 }
 
+/// ONE LABEL ALONE IS NOT A LIST (Jon's ruling 2026-09-15). Matching this shape is
+/// necessary and not sufficient: a def row also needs a sibling at its own label column
+/// in the same block, exactly as a bullet needs one at its own marker column. Any prose
+/// paragraph opening `Word:` and the era's own double space matches the shape —
+/// `sawyer/REF/CTRL-K.H1`'s filler opens "Space:  The final frontier. These are the
+/// voyages..." and got a hanging indent for it, which became conspicuous once M17 put
+/// such documents into narrow columns. See `classifyRows`' own `defRuns`, which
+/// additionally requires the run's labels to DIFFER from each other (a definition list
+/// defines different terms; 37 copies of one paragraph share a label column but define
+/// nothing).
+///
 /// Matches Python's `_DEFLIST_RE = re.compile(r'^(\S+:)( {2,})(\S.*)$')`: the label is
 /// the row's own FIRST whitespace-delimited word, and it must itself end in ':'. Since
 /// `\S+` can only span that one contiguous word, the regex's backtracking reduces to a
@@ -387,6 +398,60 @@ public func classifyRows(_ entries: [StructureEntry]) -> [RowStructure?] {
     }
     let bulletCols = Set(counts.filter { $0.value >= 2 }.keys)
 
+    // A DEF LIST IS A SHAPE, AND ONE ROW IS NOT A SHAPE (Jon's ruling 2026-09-15; see
+    // `deflistMatch`'s own doc comment for what this replaces). The same run rule the
+    // bullet marker above earns its marker with, with the LABEL COLUMN standing in for
+    // the glyph: a `word:  description` row reads as a def row only when another row in
+    // the same block starts its own label at the same column. A lone match is ordinary
+    // prose that happens to open with a colon and the era's own double space.
+    //
+    // WITHIN THE SAME BLOCK, which here means "between two hard resets": `modernFlow`
+    // emits a `.hard` entry for a real break or a conditional page and NOTHING AT ALL
+    // for a blank line (blanks, tabs, head/foot and note carriers are dropped before
+    // this function sees them), so consecutive `para` rows in `entries` are exactly
+    // "adjacent def rows, blank lines allowed between them" — which is how a 1990 author
+    // actually types a definition list.
+    //
+    // AND THE LABELS MUST DIFFER (Athena's ruling 2026-09-15, under Jon's "I don't want
+    // to waste time on obvious things you should be handling"): a genuine definition
+    // list defines DIFFERENT terms. Sharing a label column is necessary but not
+    // sufficient — `sawyer/REF/BOOKLET.WS` is 37 copies of one filler paragraph, every
+    // one of them opening "Space:  The final frontier..." at the same column, so the
+    // column rule alone passes all 37 and hands a repeated PARAGRAPH the hanging indent
+    // of a definition list. Only the labels' own content can tell a repeated paragraph
+    // from a repeated label, so a run at a column counts only when at least two DISTINCT
+    // labels appear there. One term stated 37 times is not a list of 37 definitions; it
+    // is one paragraph typed 37 times.
+    var defRuns = Set<Int>()
+    var runLabels: [Double: [String]] = [:]
+    var runRows: [Int] = []
+    func closeDefRun() {
+        for i in runRows {
+            let labs = runLabels[rows[i]!.col.value] ?? []
+            // Two rules, spelled out separately though the second implies the first:
+            // >=2 rows at this label column (dcef60f's ancestor c7bd094), and >=2
+            // DISTINCT labels among them (this one).
+            if labs.count >= 2, Set(labs).count >= 2 {
+                defRuns.insert(i)
+            }
+        }
+        runLabels.removeAll()
+        runRows.removeAll()
+    }
+    for i in rows.indices {
+        guard let row = rows[i] else {          // a hard reset ends the run
+            closeDefRun()
+            continue
+        }
+        let isBullet = isMarkerCandidate(row.text)
+            && bulletCols.contains(ColMarkerKey(col: row.col.value, ch: row.text[0]))
+        if !isBullet, let m = deflistMatch(row.text) {
+            runLabels[row.col.value, default: []].append(m.label)
+            runRows.append(i)
+        }
+    }
+    closeDefRun()
+
     for i in rows.indices {
         guard var row = rows[i] else { continue }
         let isBullet = isMarkerCandidate(row.text)
@@ -396,7 +461,7 @@ public func classifyRows(_ entries: [StructureEntry]) -> [RowStructure?] {
             row.marker = String(row.text[0])
             row.label = nil
             row.body = String(row.text[2...])
-        } else if let m = deflistMatch(row.text) {
+        } else if defRuns.contains(i), let m = deflistMatch(row.text) {
             row.kind = .def
             row.marker = nil
             row.label = m.label
@@ -1487,6 +1552,11 @@ private func jsonHeadFootLine(_ line: HeadFootLine) -> LayoutJSONValue {
         ("x", .double(roundToOneDecimal(line.x))),
         ("y", .double(roundToOneDecimal(line.y))),
         ("font", line.font.map { LayoutJSONValue.int($0) } ?? .null),
+        // `style` (version 11, 2026-09-15): the selected style's own baseline attrs,
+        // the same sorted tag list a modern run's `styles` uses, and ALWAYS present
+        // (`[]` for the overwhelming majority) rather than omitted, so a consumer reads
+        // one shape. See `HeadFootLine.styleAttrs` for why `font` could not say it.
+        ("style", .array(pythonStyleTags(line.styleAttrs).map { LayoutJSONValue.string($0) })),
     ])
 }
 
@@ -1816,14 +1886,30 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         // single line, the footer digit '6', no body") must NOT be, or its real
         // automatic page number silently disappears even though `attachHeadFootLines
         // Printed` correctly resolved one for it. Found via `AnswerKeyParityTests`.
-        let blankResolvedHF = page.isEmpty && !page.explicitBreak
-        if !blankResolvedHF, let headerLines = page.headerLines {
+        // `isSynthesizedFallback`, not `page.isEmpty && !page.explicitBreak`
+        // (2026-09-15): that proxy also caught a REAL paginated page that happens to
+        // carry no lines -- `sawyer/REF/CODES` is all dot commands and running heads,
+        // and planning #274 gives it a real automatic page number, which the proxy
+        // dropped here while ctrl-kd kept it. See `Page.isSynthesizedFallback` for why
+        // this is data rather than a shape test. The `blankHF` gate above still reads
+        // `page.isEmpty`: it blanks the RAW headers/footers dict, is green across the
+        // whole corpus as it stands, and is left alone deliberately.
+        // NO `isSynthesizedFallback` GATE ANY MORE (planning #274 follow-up,
+        // 2026-09-15). It mirrored ctrl-kd, where `pages or [[]]` sat on
+        // `docToPagelines`' own `return` so the synthesized page did not exist when
+        // the attach passes ran and nothing could resolve onto it. ctrl-kd creates it
+        // BEFORE that pass now (ed6d0658), so this page carries a real running head
+        // and a real automatic page number in both engines -- `REF/ADVANCE.DOT` and
+        // `REF/GALLEYS.DOT`, the content-free `.DOT` templates, whose Printed PDF
+        // has always drawn both. The `blankHF` gate above (the RAW headers/footers
+        // dict) still reads `page.isEmpty` and is left alone.
+        if let headerLines = page.headerLines {
             pageFields.append(("header_lines", .array(headerLines.map(jsonHeadFootLine))))
         }
-        if !blankResolvedHF, let footerLines = page.footerLines {
+        if let footerLines = page.footerLines {
             pageFields.append(("footer_lines", .array(footerLines.map(jsonHeadFootLine))))
         }
-        if !blankResolvedHF, let auto = page.autoPageno {
+        if let auto = page.autoPageno {
             pageFields.append(("auto_page_number", .object([
                 ("text", .string(auto.text)),
                 ("x", .double(roundToOneDecimal(auto.x))),
@@ -1857,7 +1943,7 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                                                       semCached: flow)
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
-        ("version", .int(10)),
+        ("version", .int(11)),
         ("meta", jsonMeta(doc)),
         ("page", jsonPage(doc.page)),
         ("fonts", .array(doc.fonts.map(jsonFont))),

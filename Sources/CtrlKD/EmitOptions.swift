@@ -123,8 +123,13 @@ public struct EmitOptions: Hashable, Sendable {
     public var noteRefs: NoteRefs
 
     /// b24 engine wave, round 17 (RULINGS-LEDGER row 1, register B1/B2 + Paged-surface
-    /// doctrine point 1): headers, footers, and page numbers in the paged surfaces
-    /// (Printed/Native PDF and RTF). Port of ctrl-kd's `--headers {on,off}`/`headers=`.
+    /// doctrine point 1): the document's own running heads and feet (`.he`/`.fo`) in the
+    /// paged surfaces — Printed PDF, Modern PDF and both RTF modes. It does NOT govern
+    /// WordStar's own automatic page number, which is `pageNumbers`' subject alone
+    /// (planning #264 R7, ruled 2026-09-14). Modern PDF joined the flag last, in the
+    /// release-blocking fix that followed: M5 ("Modern keeps running heads") is the
+    /// DEFAULT this turns off, never a refusal of the flag.
+    /// Port of ctrl-kd's `--headers {on,off}`/`headers=`.
     /// Default true (ruled flag default, "headers/footers ON"). PDF already rendered
     /// these for Printed before this flag existed (`runningOps` itself is `guard printed`
     /// already) — this only adds the OFF path (pass `[:]`/`[:]`, not `nil`, since
@@ -194,9 +199,9 @@ public struct EmitOptions: Hashable, Sendable {
     /// a footer would use; `.pc` repositions it) even on a document that explicitly
     /// turned it off with `.op`. `.off` suppresses it unconditionally. A declared footer (even with no
     /// `#` of its own) always pre-empts it, in every mode (WSFORMAT.WS's own text:
-    /// "active only when the footers are not in use") -- a header does not. `--headers
-    /// off`'s own documented scope ("headers, footers, and page numbers") reaches this
-    /// too.
+    /// "active only when the footers are not in use") -- a header does not, and it is a
+    /// property of the DOCUMENT, so `--headers off` neither lifts it nor suppresses the
+    /// number (planning #264 R7, ruled 2026-09-14: the two flags, two subjects).
     public enum PageNumberMode: String, Hashable, Sendable {
         case auto
         case on

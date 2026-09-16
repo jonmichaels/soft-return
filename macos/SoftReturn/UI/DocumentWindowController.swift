@@ -37,6 +37,9 @@ final class DocumentWindowController: NSWindowController {
     /// Set once the window has been sized from its document. The geometry rule applies to
     /// the FIRST presentation only — after that the window is the user's.
     private var hasAppliedFirstOpenGeometry = false
+    /// Batch 40 (M10): the local event monitor that turns pages for a scroll in Single Page (`PagedDocumentView.flipPages`),
+    /// removed when the window closes.
+    private var scrollMonitor: Any?
     /// The scale the first-open rule chose, kept so `snapToViewport()` knows what size the
     /// page is meant to be on screen once the real viewport is known.
     private var firstOpenScale: CGFloat = 1
@@ -194,6 +197,20 @@ final class DocumentWindowController: NSWindowController {
         // document repeats page after page.
         pagedView.pageDidChange = { [weak self] _ in
             self?.refreshPageIndicator()
+        }
+        // Batch 40 (M10): Single Page's scroll-to-flip, from a local monitor rather than a `scrollWheel(with:)`
+        // override on the pages view — an override takes the scroll view out of responsive scrolling, which
+        // Continuous Scroll needs. An event over this window's pages is consumed only when it turned pages.
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            // The isolated part answers only whether pages turned: its result must be Sendable, and an NSEvent is not.
+            let turnedPages = MainActor.assumeIsolated { () -> Bool in
+                guard let self, let window = self.window, event.window === window,
+                      self.pagedView.flipsPagesOnScroll, !self.scrollView.isHidden,
+                      self.scrollView.bounds.contains(self.scrollView.convert(event.locationInWindow, from: nil))
+                else { return false }
+                return self.pagedView.flipPages(for: event)
+            }
+            return turnedPages ? nil : event
         }
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.setAccessibilityIdentifier("document-scroll-view")
@@ -536,14 +553,18 @@ final class DocumentWindowController: NSWindowController {
     /// Batch 27: Modern's Show Invisibles render, progressively.
     private func renderModernAnnotatedProgressively(token: Int) {
         let document = documentState.document
+        let options = DocumentRenderer.modernEngineOptions(documentState)
         let start = DispatchTime.now().uptimeNanoseconds
         Task.detached(priority: .userInitiated) {
             let flow = modernSemanticFlow(document)
+            // Batch 41 (A): the engine's Modern page furniture runs the whole Modern emitter — made here, off the main
+            // thread, beside the flow, with the Modern export's own options.
+            let furniture = modernPageFurniture(document, options: options)
             MainRunLoop.perform { [weak self] in
                 guard let self, self.loadToken == token else { return }
                 PerformanceSignposts.record("render.engine", startedAt: start)
                 let render = PerformanceSignposts.measure("render.session") {
-                    DocumentRenderer.modernAnnotatedRender(self.documentState, flow: flow)
+                    DocumentRenderer.modernAnnotatedRender(self.documentState, flow: flow, furniture: furniture)
                 }
                 self.renderSliced(render, token: token)
             }
@@ -632,9 +653,10 @@ final class DocumentWindowController: NSWindowController {
     /// turn's budget at a time. Modern's pages are AppKit's to find, so nothing of it shows until it is whole.
     private func renderModernProgressively(token: Int) {
         let document = documentState.document
+        let options = DocumentRenderer.modernEngineOptions(documentState)
         let start = DispatchTime.now().uptimeNanoseconds
         Task.detached(priority: .userInitiated) {
-            let work = ModernEngineWork.make(document: document)
+            let work = ModernEngineWork.make(document: document, options: options)
             MainRunLoop.perform { [weak self] in
                 self?.modernEngineWorkDone(work, token: token, startedAt: start)
             }
@@ -869,7 +891,7 @@ final class DocumentWindowController: NSWindowController {
     /// `PDFDocument` for Printed, `DocumentRenderer`'s AppKit layout for Native/Modern. The
     /// one place `applyFirstOpenGeometry`/`snapToViewport`/`applyZoom` all ask "how big is
     /// the page", so none of the three can disagree about which view is authoritative.
-    private func currentPageSize() -> CGSize {
+    func currentPageSize() -> CGSize {
         // Batch 26: while a progressive load has nothing of this style on screen yet, the named page size
         // stands in. Rendering the whole document here only to measure its page is the very block the load
         // exists to avoid; the real size replaces the stand-in when the content arrives (`contentDidAppear`).
@@ -896,7 +918,7 @@ final class DocumentWindowController: NSWindowController {
     /// view for Native/Modern, `pdfView`'s own bounds for Printed (it manages its own
     /// scrolling internally, so its bounds ARE its viewport, the same role the clip view
     /// plays for `scrollView`).
-    private func currentViewportSize() -> CGSize {
+    func currentViewportSize() -> CGSize {
         documentState.style.value == .printed ? pdfView.bounds.size : scrollView.contentView.frame.size
     }
 
@@ -941,18 +963,26 @@ final class DocumentWindowController: NSWindowController {
     /// own screen — so a test can open a document "on" a screen of another size.
     var firstOpenVisibleFrameOverride: NSRect?
 
-    /// Jon's first-open rule (#271 M3), as arithmetic. The window spans the screen's visible frame
-    /// vertically — from the bottom of the menu bar to the top of the Dock (`visibleFrame`) — and
-    /// the page is zoomed to fit whole inside it, never above 100% (Actual Size), portrait or
-    /// landscape alike. The window is as wide as the fitted page, never wider than the visible
-    /// frame, and centred across it.
+    /// Jon's first-open rule (#271 M3), as arithmetic. The page is zoomed to fit whole inside the
+    /// screen's visible frame — from the bottom of the menu bar to the top of the Dock
+    /// (`visibleFrame`), less the title bar and the bottom bar — never above 100% (Actual Size),
+    /// portrait or landscape alike.
+    ///
+    /// Batch 40 (M13, Jon: "The Landscape window is opening too big all around. I'm seeing the gray
+    /// background. I want it to be exactly the same size as the page. Just like in Portrait."): the
+    /// window is exactly the fitted page, plus the title bar and the bottom bar, in both directions —
+    /// never larger than the visible frame, and centred in it. A page the visible height limits (a
+    /// portrait Letter page on a laptop) still spans that height, as before; one that Actual Size or
+    /// the width limits (landscape) gets a window no taller than itself, where M3's window spanned the
+    /// whole height and showed grey above and below the page.
     static func firstOpenLayout(page: CGSize, visible: NSRect, titleBarHeight: CGFloat,
                                 barHeight: CGFloat, actualScale: CGFloat) -> (frame: NSRect, scale: CGFloat) {
         let pageAreaHeight = visible.height - titleBarHeight - barHeight
         let scale = max(0.05, min(actualScale, pageAreaHeight / page.height, visible.width / page.width))
         let width = min(visible.width, (page.width * scale).rounded())
-        let frame = NSRect(x: (visible.midX - width / 2).rounded(), y: visible.minY,
-                           width: width, height: visible.height)
+        let height = min(visible.height, (page.height * scale).rounded() + titleBarHeight + barHeight)
+        let frame = NSRect(x: (visible.midX - width / 2).rounded(), y: (visible.midY - height / 2).rounded(),
+                           width: width, height: height)
         return (frame, scale)
     }
 
@@ -1002,16 +1032,25 @@ final class DocumentWindowController: NSWindowController {
         let wanted = NSSize(width: page.width * firstOpenScale,
                             height: page.height * firstOpenScale)
         let viewport = currentViewportSize()
+        // Sub-point differences are rounding, not scrollers. Batch 40 (M13): the height is grown too, now that a window
+        // is only as tall as its page — but never past the visible frame, which already holds the fitted page whole.
+        let visible = firstOpenVisibleFrameOverride ?? window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
         let shortfallX = wanted.width - viewport.width
-        // Sub-point differences are rounding, not scrollers. Only the WIDTH is ever grown: the
-        // first-open rule (#271 M3) already spans the visible frame's full height, so a vertical
-        // shortfall has nowhere to go and the fitted page already fits inside it.
+        let roomY = visible.map { $0.height - window.frame.height } ?? 0
+        let shortfallY = min(wanted.height - viewport.height, max(roomY, 0))
         hasSnappedToViewport = true
-        guard shortfallX > 0.5 else { return }
+        guard shortfallX > 0.5 || shortfallY > 0.5 else { return }
 
         var frame = window.frame
-        frame.size.width += shortfallX
-        frame.origin.x -= (shortfallX / 2).rounded()
+        if shortfallX > 0.5 {
+            frame.size.width += shortfallX
+            frame.origin.x -= (shortfallX / 2).rounded()
+        }
+        if shortfallY > 0.5 {
+            frame.size.height += shortfallY
+            frame.origin.y -= (shortfallY / 2).rounded()
+            if let visible { frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height) }
+        }
         window.setFrame(frame, display: false)
         window.contentView?.layoutSubtreeIfNeeded()
     }
@@ -1204,6 +1243,10 @@ extension DocumentWindowController: NSWindowDelegate {
     /// with nothing left to describe.
     func windowWillClose(_ notification: Notification) {
         documentInfoWindowController?.close()
+        if let scrollMonitor {
+            NSEvent.removeMonitor(scrollMonitor)
+            self.scrollMonitor = nil
+        }
     }
 
     func windowDidResize(_ notification: Notification) {

@@ -1124,6 +1124,15 @@ private func loadJob013Vectors() throws -> Job013VectorFile {
     // content and byte-length change (every object offset after the affected streams
     // moves), not incidental. Cross-checked directly against ctrl-kd's own Python output
     // on the identical `input_hex` before landing.
+    //
+    // `modern_ws4`'s `expected_hex` was RE-TAKEN a second time (2026-09-15, against the
+    // live Python reference on the identical `input_hex`, same method as before): M15,
+    // Jon's ruling that the Modern view shows WordStar's automatic page number wherever
+    // Printed does. This vector sets none of `.op`/`.fo`/`.mb 0`, so it is a numbering
+    // document and its Modern PDF now carries a centred number on Modern's own footer
+    // row — one more drawn op, and therefore a new stream length and new xref offsets.
+    // A deliberate, ruled content change, not incidental. `printed_stream` is untouched:
+    // Printed already drew this number.
     let vectors = try loadJob012Vectors().emitPDF
     #expect(vectors.count == 2)
     for v in vectors {

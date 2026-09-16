@@ -622,10 +622,13 @@ func rtfKeepPlan(_ doc: Document) -> [Int: (keep: Bool, keepn: Bool)] {
 ///
 /// TWO things open one:
 ///
-///   A7  a change of newspaper-column regime (`.co n, gutter`). PRINTED ONLY. Modern PDF
-///       has no column model at all, and the 2026-08-05 ruling is that "Modern PDF needs
-///       to be the printed version of the Modern RTF" — so a columnar Modern RTF would be
-///       a Modern RTF its own PDF could not render. Modern stays one column by design.
+///   A7  a change of newspaper-column regime (`.co n, gutter`). BOTH MODES since M17b
+///       (2026-09-15). R1 made this Printed-only on the stated grounds that "Modern PDF
+///       has no column model at all, and the 2026-08-05 ruling is that Modern PDF needs
+///       to be the printed version of the Modern RTF — so a columnar Modern RTF would be
+///       a Modern RTF its own PDF could not render". Modern PDF has a column model now
+///       (M17, `modernColumnWidth`), so the same ruling read the same way now says the
+///       opposite: a ONE-column Modern RTF is the one its own PDF cannot render.
 ///       (Modern HTML's `column-count` is a separate, older surface and is untouched.)
 ///   A13 a running head or foot REDEFINED mid-document. The new section carries its own
 ///       `\header`/`\footer` groups.
@@ -643,20 +646,18 @@ struct RTFSection {
     let footerSlots: [Int: [HFParity?: String]]
 }
 
-func rtfSectionBreaks(_ doc: Document, printed: Bool) -> [Int: RTFSection] {
+func rtfSectionBreaks(_ doc: Document) -> [Int: RTFSection] {
     var anchors = rtfHFRedefinitions(doc)
-    let state = printed ? rtfColumnsState(doc) : []
-    if printed {
-        for (bi, block) in doc.blocks.enumerated() {
-            // Only a REAL block opens a column regime: a sentinel inherits the state
-            // around it and must not read as a change.
-            guard block.columns != nil, bi > 0 else { continue }
-            if state[bi] != state[bi - 1] { anchors.insert(bi) }
-        }
+    let state = rtfColumnsState(doc)
+    for (bi, block) in doc.blocks.enumerated() {
+        // Only a REAL block opens a column regime: a sentinel inherits the state
+        // around it and must not read as a change.
+        guard block.columns != nil, bi > 0 else { continue }
+        if state[bi] != state[bi - 1] { anchors.insert(bi) }
     }
     var out: [Int: RTFSection] = [:]
     for bi in anchors where bi > 0 && bi < doc.blocks.count {
-        let pair: (cols: Int, gutter: Double?) = printed ? state[bi] : (1, nil)
+        let pair: (cols: Int, gutter: Double?) = state[bi]
         out[bi] = RTFSection(cols: pair.cols, gutter: pair.gutter,
                              headerSlots: rtfHFSlotsAt(doc, .header, anchor: bi),
                              footerSlots: rtfHFSlotsAt(doc, .footer, anchor: bi))
@@ -757,6 +758,26 @@ private let rtfHFAlign: [Alignment: String] = [.right: #"\qr"#, .center: #"\qc"#
 /// be expressed here (that needs the section spine, packet section 3, deliberately not
 /// built). `.on`/`.off` force it either way, exactly as for the PDF. Port of
 /// `_rtf_auto_page_number`.
+/// Is a FOOTER declared at all — with text, bare, or carrying only invisible characters?
+/// Port of `_rtf_footer_in_use`.
+///
+/// The question WordStar's automatic page number turns on ("active only when the footers
+/// are not in use", WSFORMAT.WS), and deliberately NOT the same question as "is there
+/// footer text to draw". `hfSlots` is the drawing answer and drops an event with no text;
+/// this is the declaration answer and counts it, matching `closePage`'s own
+/// `footerInUse = !pageFtrs.isEmpty` taken before the empty slots are dropped.
+///
+/// `slots` is `rtfRunningHeads`' own argument: nil for the document (section 1, which is
+/// the whole document for every file that opens no later section), or a resolved
+/// head/foot pair for a later section — in which case that section's own already-resolved
+/// footer slots are the answer, because `rtfHFSlotsAt` is what decided them.
+func rtfFooterInUse(_ doc: Document,
+                    slots: (header: [Int: [HFParity?: String]],
+                            footer: [Int: [HFParity?: String]])?) -> Bool {
+    if let slots { return !slots.footer.isEmpty }
+    return doc.hfEvents.contains { $0.kind == .footer }
+}
+
 func rtfAutoPageNumber(_ doc: Document, _ mode: EmitOptions.PageNumberMode) -> Bool {
     switch mode {
     case .off: return false
@@ -820,7 +841,19 @@ private func rtfRunningHeads(_ doc: Document, headers: Bool = true,
     // 2026-09-14): `headers` no longer enters into it at all. The first RTF batch made
     // `--headers off` swallow the automatic number too; that is reverted here, on both
     // surfaces.
-    let showAutoNum = autoPageNumber && ftrAll.isEmpty
+    //
+    // M15 FOLLOW-UP (2026-09-15): that is what the paragraph above says, and `ftrAll` was
+    // not it. `hfSlots` drops an event with NO text at all, so a document whose only
+    // footer command is a BARE `.fo` read as "no footer in use" and RTF printed the
+    // automatic number on it — while both PDFs, reading `footerInUse` off the un-dropped
+    // slots, printed none. Real WS7 prints none: "That holds whether the footer has text,
+    // is bare, or contains only invisible characters"
+    // (research/2026-09-15_ws7-missing-auto-page-number.md, rule 2; the same rule the
+    // PDF's own triage cause 1 fixed on 2026-09-12). Five documents in the public archive
+    // are that shape — MACROS/HOLYMAC/4MAC2, 4MAC3, 7MAC2, 7MAC3 and LSRBOX/LSRBOX.WS,
+    // four of them named in that research as WS7 printing no number on any of their
+    // 41/53/35/35 pages — and their `rtf.printed` and `rtf.modern` both move with it.
+    let showAutoNum = autoPageNumber && !rtfFooterInUse(doc, slots: slots)
     let hdrSlots = headers ? hdrAll : [:]
     let ftrSlots = headers ? ftrAll : [:]
     let (headery, footery) = rtfHeadFootDistance(doc.page,
@@ -842,14 +875,12 @@ private func rtfRunningHeads(_ doc: Document, headers: Bool = true,
                _ aligns: [Int: Alignment], _ attrs: [Int: Style]) -> String {
         if lines.isEmpty { return "" }
         var rendered: [String] = []
-        var alignControl = ""
+        var lineAligns: [String] = []
         for n in lines.keys.sorted() {
             let text = subst.map { $0(lines[n]!, faces[n]) } ?? lines[n]!
             let runs = hfRuns(text)
             if runs.isEmpty { continue }                 // control-bytes-only head (M10)
-            if rendered.isEmpty {
-                alignControl = aligns[n].flatMap { rtfHFAlign[$0] } ?? ""
-            }
+            lineAligns.append(aligns[n].flatMap { rtfHFAlign[$0] } ?? "")
             // planning #264 item 5 (planning #255's `headerStyleAttrs`): the print
             // attributes the head's OWN style turns on. A `.h#`/`.f#` argument can name
             // a style-sheet entry, and that entry's bold/italic/underline belong to
@@ -866,8 +897,25 @@ private func rtfRunningHeads(_ doc: Document, headers: Bool = true,
             }.joined())
         }
         if rendered.isEmpty { return "" }
-        let body = rendered.joined(separator: #"\line "#)
-        return #"{\\#(name) \pard\plain \#(alignControl)\f0\fs22 \#(body)\par}"#
+        // ONE PARAGRAPH while every rendered line agrees on its alignment — which is
+        // every head and foot in the corpus but one, so this is byte-identical to the
+        // single-paragraph group RTF has always written. Planning #264 item 4 (row A4)
+        // applied the FIRST line's alignment to the whole group on the stated grounds
+        // that "no corpus document declares two head lines with different alignments";
+        // `sawyer/REF/BOOKLET.WS` does (a right-aligned "Header Odd" over a left-aligned
+        // "Header Even"), and the group right-aligned both. `\line` is a break INSIDE a
+        // paragraph and cannot carry a second alignment, so the lines that disagree get
+        // a paragraph each — the only form RTF has for this — and the reader lays them
+        // out exactly as Modern PDF now draws them (2026-08-05: Modern PDF is the
+        // printed form of the Modern RTF).
+        if Set(lineAligns).count <= 1 {
+            let body = rendered.joined(separator: #"\line "#)
+            return #"{\\#(name) \pard\plain \#(lineAligns[0])\f0\fs22 \#(body)\par}"#
+        }
+        let paras = zip(lineAligns, rendered)
+            .map { #"\pard\plain \#($0)\f0\fs22 \#($1)\par"# }
+            .joined()
+        return #"{\\#(name) \#(paras)}"#
     }
 
     /// One head/foot family, as `\headerl`/`\headerr` when the document declares a parity
@@ -1444,9 +1492,8 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // what opens a section and what deliberately does not. A document whose geometry
     // never changes gets an empty dictionary here and emits exactly the bytes it always
     // did.
-    let sectionBreaks = rtfSectionBreaks(doc, printed: printed)
-    let columnsState: [(cols: Int, gutter: Double?)]? =
-        printed ? rtfColumnsState(doc) : nil
+    let sectionBreaks = rtfSectionBreaks(doc)
+    let columnsState: [(cols: Int, gutter: Double?)]? = rtfColumnsState(doc)
     // planning #264 R2 (packet row A8): `.cp n`/`.cc n` -> `\keep`/`\keepn` on the
     // paragraphs they asked to hold together. See `rtfKeepPlan`.
     let keepPlan = rtfKeepPlan(doc)
@@ -1484,12 +1531,11 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         }
         if block.kind == .colbreak {
             // planning #264 R1 (packet row A9): `.cb` breaks to the next column — the
-            // reader's own `\column`. PRINTED ONLY, and inside a columnar region only:
-            // Modern has no columns (`rtfSectionBreaks`) and Modern's own flow drops
-            // `.cb` entirely (`semanticFlow` makes a break item for `pagebreak` alone),
-            // so a `\column` there would be a page break Modern PDF does not take.
-            // Outside a region the control would mean the same thing to a reader, which
-            // is not what WordStar did with it either — nothing is written.
+            // reader's own `\column`. Inside a columnar region only; outside one the
+            // control would mean a break a reader could still take, which is not what
+            // WordStar did with it either, so nothing is written. BOTH MODES since
+            // M17b: Modern PDF's own column cursor takes `.cb` to the next column
+            // (`modernStreams`), so its RTF says the same.
             quoteOpen = false
             quoteFiCols = nil
             if let state = columnsState, state[bi].cols > 1 {
@@ -1503,9 +1549,9 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             if bi == skipPA { continue }
             // planning #264 R1: a bare `.pa` INSIDE an active `.co n>1` region is
             // absorbed, not honoured — the identical reading the Printed PDF has carried
-            // since planning #227, measured against WINGDING.CHT's own WS7 capture. RTF
-            // had no columns to fragment before this commit, which is why it could keep
-            // the break; now it has.
+            // since planning #227, measured against WINGDING.CHT's own WS7 capture.
+            // Modern PDF absorbs it on the same evidence since M17, so Modern RTF does
+            // too.
             if let state = columnsState, state[bi].cols > 1 { continue }
             parts.append(pageControl)
             continue
@@ -1756,14 +1802,37 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // b24 round 17 (RULINGS-LEDGER row 2, register C18, Paged-surface doctrine point 2):
     // `.pr or=l` swaps the PAPER dimensions only (heightIn/pwIn, which is all `paperh`/
     // `paperw` below read) — `.mt`/`.mb`/`.po`-derived margins are left exactly as
-    // declared, only the CANVAS they sit against changes shape. Printed only: Modern's
-    // page is its own fixed Letter regardless of the document's declared orientation
-    // (same doctrine as every other Printed-only geometry item). A local copy — no `doc`
-    // mutation needed, unlike Python's save/restore dance around a shared dict.
-    let landscape = printed && doc.formatting.orientation == .landscape
+    // declared, only the CANVAS they sit against changes shape. BOTH MODES since M17b
+    // (2026-09-15): this used to be Printed-only, on the reading that "Modern's page is
+    // its own fixed Letter". M17 retired that reading for Modern PDF — a landscape
+    // document's Modern MediaBox is 792x612 now — and Modern PDF is the printed form of
+    // THIS file (ruled 2026-08-05), so a square 8.5x8.5 Modern RTF would be an RTF its
+    // own PDF does not print. It is also the paged-surface doctrine's point 2 read
+    // literally: "honor `.pr or=l` in ALL paged surfaces", and Modern RTF is one. A
+    // local copy — no `doc` mutation needed, unlike Python's save/restore dance around
+    // a shared dict.
+    let landscape = doc.formatting.orientation == .landscape
     let page = (landscape ? doc.page.map(landscapePage) : doc.page)
     func twipsLines(_ value: Double?, default defaultLines: Double) -> Int {
         roundHalfToEven((value ?? defaultLines) * 240.0)     // 1 line at 6 LPI = 240 twips
+    }
+    /// A declared sheet height in inches -> `\paperh` twips, with `.pl 0` falling back
+    /// to Letter.
+    ///
+    /// `.pl 0` IS NOT A SHEET. It is WordStar's "page breaks off" (bug 12284,
+    /// `textLinesPerPage`), and this emitter's text model already never breaks, so the
+    /// PAGE BOX falls back to Letter -- the rule Printed PDF has carried since
+    /// `resolvedPageHeight` was written and Modern PDF adopted in M18
+    /// (`modernSheetH`), quoted here rather than re-decided.
+    ///
+    /// RTF was the surface still writing the arithmetic straight through: `\paperh0`,
+    /// which LibreOffice refuses to open at all. Five documents:
+    /// `LSRBOX/LSRBOXES.MRG`, `LSRBOX/LSRLINES.MRG`, `RTF-RJS/1-5LINES.WS`,
+    /// `RTF-RJS/1-SINGLE.WS`, `RTF-RJS/2-DOUBLE.WS`, plus `REF/-PATCHES.WS`. A document
+    /// that declares any real height is untouched.
+    func paperTwips(_ heightIn: Double?) -> Int {
+        let twips = roundHalfToEven((heightIn ?? 11.0) * 1440.0)
+        return twips > 0 ? twips : 15840
     }
     let margt: Int
     let margb: Int
@@ -1773,7 +1842,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         margt = twipsLines(page?.mtLines, default: 3.0)
         margb = twipsLines(page?.mbLines, default: 8.0)
         margl = roundHalfToEven((page?.poCols ?? 8.0) * 144.0)
-        paperh = roundHalfToEven((page?.heightIn ?? 11.0) * 1440.0)
+        paperh = paperTwips(page?.heightIn)
     } else {
         // Modern mode only trusts a field the document (or a --page-settings override,
         // which is applied as though it were the document's own — see `effectivePage`)
@@ -1785,8 +1854,13 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         margt = mtDeclared ? twipsLines(page?.mtLines, default: 6.0) : 1440
         margb = mbDeclared ? twipsLines(page?.mbLines, default: 6.0) : 1440
         margl = poDeclared ? roundHalfToEven((page?.poCols ?? 10.0) * 144.0) : 1440
-        paperh = (page?.sizeSource ?? .default) != .default
-            ? roundHalfToEven((page?.heightIn ?? 11.0) * 1440.0) : 15840
+        // A LANDSCAPE sheet is a declared sheet whatever `.pl` says, so it is never the
+        // 11in default: `page` above is already the swapped, orientation-aware pair (a
+        // `.pl 8.5"` resolves to 8.5 tall x 11 wide, not to the un-landscape-aware
+        // 8.5x8.5 SQUARE the portrait resolution gives). Modern PDF composes on exactly
+        // that height (`modernSheetHeight`), which is what makes the two agree.
+        paperh = (landscape || (page?.sizeSource ?? .default) != .default)
+            ? paperTwips(page?.heightIn) : 15840
     }
     // width joined the page model 2026-08-06: A4-tall documents get the 210mm sheet;
     // everything else (and every default) stays 12240 twips
@@ -1834,9 +1908,9 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // planning #264 R1 (packet row A7): the FIRST section's own column regime. `\cols`
     // is a section property and the page setup is section 1's; a document that opens
     // outside a columnar region (all but a handful) resolves to one column and writes
-    // nothing, so its bytes do not move. Printed only — see `rtfSectionBreaks` for why
-    // Modern stays single-column.
-    if printed, let first = rtfColumnsState(doc).first {
+    // nothing, so its bytes do not move. BOTH MODES since M17b — see
+    // `rtfSectionBreaks`.
+    if let first = rtfColumnsState(doc).first {
         pageSetup += rtfColsControl(first.cols, first.gutter)
     }
 

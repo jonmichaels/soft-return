@@ -16,8 +16,10 @@ import SoftReturnShared
 final class PagedDocumentView: NSView {
     /// Gap between pages in continuous scroll, and the margin around a single page. Only
     /// ever visible once the user has zoomed or resized — first open fills the window
-    /// exactly, per the spec's geometry rule.
-    private static let pageGap: CGFloat = 20
+    /// exactly, per the spec's geometry rule. Batch 40 (M10): the one number for the gap, in page
+    /// points (so it shrinks and grows with the zoom). Batch 41: 10, Preview's own spacing between
+    /// pages (Jon, from a Preview screenshot: "The gap is small but not 0"); it was 20.
+    static let pageGap: CGFloat = 10
 
     /// Continuous Scroll only: local page `index`'s own cumulative top, `pageGap` plus
     /// every earlier page's own `pageSize.height` plus every page THROUGH `index`'s own
@@ -46,7 +48,12 @@ final class PagedDocumentView: NSView {
     ///
     /// A capture states its page rather than being guessed at. Set around the capture by
     /// `ExportEngine` and `QuickLookNativeRenderer`, the only two callers.
-    var capturingPageIndex: Int?
+    var capturingPageIndex: Int? {
+        didSet {
+            // Batch 40 (M10): the page a capture asks for is shown, wherever the scroll is.
+            if let capturingPageIndex { setPagesShown(near: rect(ofPage: capturingPageIndex), hidingTheRest: false) }
+        }
+    }
 
     /// Job 396 (391 root cause 5): extra blank canvas `RenderedDocument.leadingHeadroom`
     /// says local page `index` needs ABOVE its own nominal top, or `0` when `rendered` is
@@ -145,17 +152,25 @@ final class PagedDocumentView: NSView {
     }
 
     private var storage = NSTextStorage()
-    private var layoutManager = softReturnLayoutManager()
-    private var containers: [NSTextContainer] = []
+    // Batch 41 (columns): read-only outside, as the iPhone's `PageLayout` holds its own — a test that asks where a
+    // column's glyphs really ended needs the manager that laid them.
+    private(set) var layoutManager = softReturnLayoutManager()
+    private(set) var containers: [NSTextContainer] = []
     /// Which page and which of its columns each container in `containers` belongs to — item
     /// 19. The layout delegate matches a fragment's own `PinnedBaseline.page`/`.column`
     /// against these to know whether the container it is being asked to lay into is the one
     /// that fragment belongs in.
-    private var containerPage: [Int] = []
-    private var containerColumn: [Int] = []
+    // Batch 41 (columns): read-only outside, as the iPhone's `PageLayout` already declares its own three — a test
+    // that holds the view's columns to the engine's ranges has to see where each container really ended.
+    private(set) var containerPage: [Int] = []
+    private(set) var containerColumn: [Int] = []
     /// Per page, the text views for its SECOND and later columns — `pageViews` keeps the
     /// first, so every page-indexed thing in this file still means what it did.
     private var columnViews: [[NSTextView]] = []
+    /// Batch 41 (columns): which column each of `columnViews[page]` holds, in the same order. Native's later columns
+    /// are simply 1, 2, …; a Modern page the engine partitions can skip one it left empty, and a view's own x depends
+    /// on the real column, not its ordinal.
+    private var columnViewColumns: [[Int]] = []
     /// Job 412: `true` only while `buildExplicitPages`'s own throwaway, whole-document probe
     /// container is attached — see that call site's own doc comment for why the
     /// `NSLayoutManagerDelegate` conformance below must stay a no-op there.
@@ -204,6 +219,106 @@ final class PagedDocumentView: NSView {
         set { _ = newValue }
     }
 
+    // MARK: - Batch 40 (M10): Continuous Scroll shows only the pages near the screen
+
+    /// How far above and below the visible rect, in screens, page views stay shown in Continuous Scroll.
+    ///
+    /// b40-m10-diag: one view of -HOLYMAC.WS (302 pages) drew in 248.9 ms, and in 4.07 ms with the 300 page text views
+    /// off the screen hidden. AppKit visits every shown subview on every draw — about 0.8 ms each there, whatever it
+    /// ends up drawing — while the pages view's own drawing took 0.43 ms and the two text views on screen 2.28 ms. So
+    /// a page far from the screen is hidden and shown again before a scroll reaches it: the clip view reports each
+    /// bounds change as it happens, and two screens either side keep a fast scroll's next strip shown already.
+    static let pagesShownAroundTheScreen: CGFloat = 2
+
+    private weak var followedClipView: NSClipView?
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        followClipView()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        followClipView()
+        showOnlyPagesNearTheScreen()
+    }
+
+    private func followClipView() {
+        let clip = enclosingScrollView?.contentView
+        guard clip !== followedClipView else { return }
+        if let followedClipView {
+            NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: followedClipView)
+        }
+        followedClipView = clip
+        guard let clip else { return }
+        clip.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(clipViewBoundsDidChange(_:)),
+                                               name: NSView.boundsDidChangeNotification, object: clip)
+    }
+
+    @objc private func clipViewBoundsDidChange(_ notification: Notification) {
+        showOnlyPagesNearTheScreen()
+    }
+
+    /// Continuous Scroll in a window's scroll view: the pages within `pagesShownAroundTheScreen` screens of the visible
+    /// rect shown, the rest hidden. Anywhere else — Single Page, a view outside a window (print, export, Quick Look), a
+    /// capture in progress — nothing is hidden here.
+    private func showOnlyPagesNearTheScreen() {
+        guard display == .continuousScroll, capturingPageIndex == nil, window != nil, enclosingScrollView != nil else { return }
+        let visible = visibleRect
+        guard !visible.isEmpty else { return }
+        let reach = visible.height * Self.pagesShownAroundTheScreen
+        setPagesShown(near: visible.insetBy(dx: 0, dy: -reach), hidingTheRest: true)
+    }
+
+    /// Shows every page view (and its later columns) whose sheet reaches `region`; with `hidingTheRest`, hides the others.
+    private func setPagesShown(near region: NSRect, hidingTheRest: Bool) {
+        guard display == .continuousScroll else { return }
+        for (index, view) in pageViews.enumerated() where pageTops.indices.contains(index) {
+            let near = rect(ofPage: index).intersects(region)
+            if near, view.isHidden {
+                (view as? PageTextView)?.didDrawSinceShown = false
+                view.isHidden = false
+                syncColumnViews(atPage: index, frame: nil, hidden: false)
+            } else if !near, hidingTheRest, !view.isHidden {
+                view.isHidden = true
+                syncColumnViews(atPage: index, frame: nil, hidden: true)
+            }
+        }
+    }
+
+    // A capture draws what it asks for, wherever the scroll is: the pages it reaches are shown first.
+    override func cacheDisplay(in rect: NSRect, to bitmapImageRep: NSBitmapImageRep) {
+        setPagesShown(near: rect, hidingTheRest: false)
+        super.cacheDisplay(in: rect, to: bitmapImageRep)
+    }
+
+    override func displayIgnoringOpacity(_ rect: NSRect, in context: NSGraphicsContext) {
+        setPagesShown(near: rect, hidingTheRest: false)
+        super.displayIgnoringOpacity(rect, in: context)
+    }
+
+    override func dataWithPDF(inside rect: NSRect) -> Data {
+        setPagesShown(near: rect, hidingTheRest: false)
+        return super.dataWithPDF(inside: rect)
+    }
+
+    override func beginDocument() {
+        setPagesShown(near: bounds, hidingTheRest: false)
+        super.beginDocument()
+    }
+
+    /// Every page stays in the accessibility tree: a page hidden to spare drawing is still part of the document.
+    override func accessibilityChildren() -> [Any]? {
+        guard display == .continuousScroll, pageViews.contains(where: { $0.isHidden }) else { return super.accessibilityChildren() }
+        var children: [Any] = []
+        for (index, view) in pageViews.enumerated() {
+            children.append(view)
+            if columnViews.indices.contains(index) { children.append(contentsOf: columnViews[index] as [Any]) }
+        }
+        return children
+    }
+
     // MARK: - Content
 
     /// Replace the displayed document. Rebuilds the container chain, because page size and
@@ -229,7 +344,12 @@ final class PagedDocumentView: NSView {
         containers = []
         containerPage = []
         containerColumn = []
+        // Batch 40 (M10): a page's later columns are views of their own. Emptying the list alone left every one
+        // in the view, at its old frame, on the old layout's containers — ghost text over the new pages after
+        // every rebuild of a multi-column document.
+        columnViews.joined().forEach { $0.removeFromSuperview() }
         columnViews = []
+        columnViewColumns = []
         if let old = storage.layoutManagers.first { storage.removeLayoutManager(old) }
 
         storage = NSTextStorage(attributedString: rendered.text)
@@ -247,7 +367,10 @@ final class PagedDocumentView: NSView {
         // Printed keeps it: its fragments are pinned through the layout-manager delegate
         // rather than by the paragraph clamp alone, and changing what AppKit adds underneath
         // that is a separate question from this one.
-        layoutManager.usesFontLeading = rendered.clipsLines
+        // Batch 40 (M14): not for a Native render nothing pins — Show Invisibles'. There the paragraph's clamp is the
+        // whole line height, and the face's leading added on top made every line taller than the lead its page's budget
+        // counted, so the text crept down its page and into what the page draws at fixed places.
+        layoutManager.usesFontLeading = Self.usesFontLeading(rendered)
         // A viewer never edits, so nothing needs the extra glyph generation that
         // non-contiguous layout trades away — and turning it off makes the page-count loop
         // below exact rather than eventually-consistent.
@@ -408,8 +531,31 @@ final class PagedDocumentView: NSView {
             let size = intrinsicContentSize
             if frame.size != size { setFrameSize(size) }
         }
+        // Batch 40 (M10): the new pages' paper. Their text views draw only their text area; the white sheet, its
+        // margins, running lines and footnotes are this view's own `draw(_:)`, and growing the frame marked none of
+        // it — the desk showed through the new pages' margins (grey, near-black in Dark Mode) until something else
+        // redrew them. Only the new pages' strip is marked, not the whole view.
+        if display == .continuousScroll, firstNewPage < pageViews.count, pageTops.indices.contains(firstNewPage) {
+            let top = max(0, rect(ofPage: firstNewPage).minY - Self.pageGap)
+            let strip = NSRect(x: 0, y: top, width: bounds.width, height: max(0, bounds.height - top))
+            setNeedsDisplay(strip)
+            lastMarkedForDisplay = strip
+        }
         return done
     }
+
+    /// Batch 40 (M10): the strip the last layout turn marked for display, for the tests — a view outside a window
+    /// answers `needsToDraw(_:)` true for every rect, so the mark cannot be read back from AppKit there.
+    private(set) var lastMarkedForDisplay: NSRect?
+
+    /// Whether a layout of `rendered` adds each face's own leading: a pinned Native render keeps it (its fragments are
+    /// placed through the delegate); Modern and Show Invisibles' Native render do not (batch 40, M14).
+    nonisolated static func usesFontLeading(_ rendered: RenderedDocument) -> Bool {
+        rendered.clipsLines && !rendered.pinnedBaselines.isEmpty
+    }
+
+    /// Batch 40 (M10): how many later-column text views the pages hold, for the tests.
+    var columnViewCount: Int { columnViews.reduce(0) { $0 + $1.count } }
 
     /// Batch 27: the unpinned probe's line-fragment tops and bottoms for a whole flow.
     struct ExplicitProbe: Sendable {
@@ -443,7 +589,7 @@ final class PagedDocumentView: NSView {
         init(rendered: RenderedDocument) {
             storage = NSTextStorage(attributedString: rendered.text)
             manager = softReturnLayoutManager()
-            manager.usesFontLeading = rendered.clipsLines
+            manager.usesFontLeading = PagedDocumentView.usesFontLeading(rendered)
             manager.allowsNonContiguousLayout = false
             container = NSTextContainer(size: CGSize(width: max(1, rendered.textFrame.size.width),
                                                      height: .greatestFiniteMagnitude))
@@ -534,7 +680,10 @@ final class PagedDocumentView: NSView {
         // does. A no-op for every other render (`hfEvents` empty). Replayed over the pages built
         // so far each time the chain grows (batch 26) — only the new ones — so a page shows its heads as soon
         // as it exists.
-        if !rendered.hfEvents.isEmpty {
+        // Batch 41 (C): OR the engine laid furniture. A document numbered only by WordStar's automatic page
+        // number carries no `.h#`/`.f#` at all, so `hfEvents` alone would have switched the resolver off on
+        // exactly the documents that item is about, and the number would silently never draw.
+        if !rendered.hfEvents.isEmpty || !rendered.modernFurniture.isEmpty {
             let replayed = self.rendered?.runningLines ?? []
             self.rendered?.runningLines = resolvedModernRunningLines(for: rendered, after: replayed)
         }
@@ -542,7 +691,22 @@ final class PagedDocumentView: NSView {
 
     /// One page of Modern's chain — the body of the loop that used to build every page at once.
     private func buildNextModernPage(_ chain: inout ModernChain, rendered: RenderedDocument) {
-            let containerSize = rendered.textFrame.size
+            let pageIndex = pageViews.count
+            // Batch 41 (columns): the engine's own partition of this page, when it lays one — each reported column's
+            // end in this view's own text (`RenderedDocument.modernColumnBreaks`). Where it covers the page the view
+            // takes every break from it and decides none of its own; where it does not (no furniture), the chain of
+            // forced breaks, `.cp` tests and blank collapses below is what paginates, as it always did.
+            // ONLY WHERE THE ENGINE LAYS MORE THAN ONE COLUMN. Every document has furniture, so testing for its
+            // presence alone handed the engine the page breaks of every ordinary single-column document too —
+            // measured as -PRINT.TST at 11 pages against the engine's 6, a short page in FORMFEED.WS, and the
+            // Modern finishing turn running long. The partition is what this commit is about; a single-column
+            // page keeps the view's own pagination exactly as it was.
+            let engineColumns: [ModernColumnBreak]? = rendered.modernColumns(onPage: pageIndex) > 1
+                && rendered.modernColumnBreaks.indices.contains(pageIndex)
+                ? rendered.modernColumnBreaks[pageIndex] : nil
+            // Batch 41 (A): one column's width on a page the engine lays in newspaper columns.
+            let containerSize = CGSize(width: rendered.modernColumnWidth(onPage: pageIndex),
+                                       height: rendered.textFrame.height)
             let maxPages = Self.maxModernPages
             let container = BreakingTextContainer(size: containerSize)
             // The default 5pt padding would shift every line right of where the library
@@ -553,14 +717,15 @@ final class PagedDocumentView: NSView {
             // The NEXT pending break, if any — always strictly ahead of whatever this
             // container has placed so far (see the consumption check below, which pops a
             // break only once some container's real content has actually reached it).
-            container.forcedBreakOffset = chain.pendingBreaks.first
+            container.forcedBreakOffset = engineColumns.map { $0.first?.end ?? nil } ?? chain.pendingBreaks.first
             layoutManager.addTextContainer(container)
             containers.append(container)
-            containerPage.append(pageViews.count)
-            containerColumn.append(0)
+            containerPage.append(pageIndex)
+            containerColumn.append(engineColumns?.first?.column ?? 0)
             columnViews.append([])
+            columnViewColumns.append([])
 
-            let view = makePageView(container: container, rendered: rendered, pageIndex: pageViews.count)
+            let view = makePageView(container: container, rendered: rendered, pageIndex: pageIndex)
             pageViews.append(view)
             addSubview(view, positioned: .below, relativeTo: overlayView)
 
@@ -577,6 +742,10 @@ final class PagedDocumentView: NSView {
                 footnoteEntries = reserveFootnoteBlock(in: container, fullHeight: containerSize.height,
                                                        rendered: rendered)
             }
+            // Batch 41 (columns): the endnote-appendix and `.cp` rules below, the blank collapse and the pending-break
+            // consumption are the view's OWN pagination. On a page the engine partitions they would fight it, so they
+            // run only where it does not.
+            let viewPaginates = engineColumns == nil
 
             // Planning #221 (Jon's ruling 2026-09-07, verbatim): "endnotes go right at the
             // end of text / image on the last page unless there are footnotes on that page.
@@ -594,7 +763,7 @@ final class PagedDocumentView: NSView {
             // begins this page, breaking would open an empty page rather than move anything;
             // and once the break is taken the next container begins AT the appendix, so its
             // own `location` check cannot fire a second time.
-            if let appendixStart = rendered.modernEndnoteAppendixStart, !footnoteEntries.isEmpty {
+            if viewPaginates, let appendixStart = rendered.modernEndnoteAppendixStart, !footnoteEntries.isEmpty {
                 let laid = layoutManager.characterRange(
                     forGlyphRange: layoutManager.glyphRange(for: container), actualGlyphRange: nil)
                 if appendixStart > laid.location, appendixStart < laid.location + laid.length {
@@ -636,7 +805,7 @@ final class PagedDocumentView: NSView {
             // foot took the collapsed blank and the 3.70pt leading spacer behind it, leaving
             // page 19's heading to open with its own headroom stranded on the page before.
             func applyConditionalBreak() {
-                guard !rendered.modernConditionalBreaks.isEmpty,
+                guard viewPaginates, !rendered.modernConditionalBreaks.isEmpty,
                       container.forcedBreakOffset == nil else { return }
                 let glyphs = layoutManager.glyphRange(for: container)
                 let chars = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
@@ -657,6 +826,35 @@ final class PagedDocumentView: NSView {
             }
             applyConditionalBreak()
 
+            // Batch 41 (columns): THE PAGE'S LATER NEWSPAPER COLUMNS. A Modern page the engine lays in
+            // `.co` columns fills its first column, then each next one from the text frame's own top,
+            // before the next page begins. Each is a container of one column's width with a view of
+            // its own lying over the page's sheet (`paintsSheet` off) at its column's x
+            // (`syncColumnViews`), and it ends where the engine's own pagination ended that column
+            // (`ModernColumnBreak`). A column the engine left empty is not reported and gets no
+            // container of its own. Where no furniture covers the page, one container holds it, as
+            // before, and the page-level rules below read the page's LAST column.
+            var lastColumn: BreakingTextContainer = container
+            let laterColumns: [ModernColumnBreak] = engineColumns.map { Array($0.dropFirst()) } ?? []
+            for entry in laterColumns {
+                let next = BreakingTextContainer(size: containerSize)
+                next.lineFragmentPadding = 0
+                next.widthTracksTextView = false
+                next.heightTracksTextView = false
+                next.forcedBreakOffset = entry.end
+                layoutManager.addTextContainer(next)
+                containers.append(next)
+                containerPage.append(pageIndex)
+                containerColumn.append(entry.column)
+                let columnView = makePageView(container: next, rendered: rendered, pageIndex: pageIndex)
+                (columnView as? PageTextView)?.paintsSheet = false
+                columnViews[pageIndex].append(columnView)
+                columnViewColumns[pageIndex].append(entry.column)
+                addSubview(columnView, positioned: .below, relativeTo: overlayView)
+                layoutManager.ensureLayout(for: next)
+                lastColumn = next
+            }
+
             // A BLANK LINE AT A PAGE TOP COSTS NOTHING (`RenderedDocument
             // .modernBlankLineRanges`). This container has just been laid out, so where the
             // NEXT one will begin is now known — and if that is a recorded blank, the
@@ -672,12 +870,12 @@ final class PagedDocumentView: NSView {
             // Each collapse is re-laid before the next offset is read, so this converges on
             // the first non-blank — and cannot loop, since each pass consumes one recorded
             // blank strictly ahead of the last.
-            if !chain.blankRanges.isEmpty {
+            if viewPaginates, !chain.blankRanges.isEmpty {
                 var collapsed = 0
-                while let next = nextContainerStart(for: container),
+                while let next = nextContainerStart(for: lastColumn),
                       let blank = chain.blankRanges[next], collapsed < maxPages {
                     collapseBlankLine(blank)
-                    layoutManager.ensureLayout(for: container)
+                    layoutManager.ensureLayout(for: lastColumn)
                     chain.blankRanges[next] = nil
                     collapsed += 1
                 }
@@ -692,10 +890,13 @@ final class PagedDocumentView: NSView {
             // far past what this container would have held naturally has no effect above
             // (the container simply runs out of room first) and stays pending, unconsumed,
             // for the container after this one to try again.
-            if let nextBreak = chain.pendingBreaks.first {
-                let glyphRange = layoutManager.glyphRange(for: container)
-                let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
-                if charRange.location + charRange.length >= nextBreak {
+            if viewPaginates, let nextBreak = chain.pendingBreaks.first {
+                // Batch 41 (A): the page's content ends in its last column that holds any.
+                let first = layoutManager.characterRange(
+                    forGlyphRange: layoutManager.glyphRange(for: container), actualGlyphRange: nil)
+                let last = lastColumn === container ? first : layoutManager.characterRange(
+                    forGlyphRange: layoutManager.glyphRange(for: lastColumn), actualGlyphRange: nil)
+                if max(NSMaxRange(first), NSMaxRange(last)) >= nextBreak {
                     chain.pendingBreaks.removeFirst()
                 }
             }
@@ -818,10 +1019,40 @@ final class PagedDocumentView: NSView {
                 lastOffset = layoutManager.characterRange(
                     forGlyphRange: glyphRange, actualGlyphRange: nil).location
             }
-            result.append(DocumentRenderer.modernRunningLines(
+            var lines = DocumentRenderer.modernRunningLines(
                 events: rendered.hfEvents, upToOffset: lastOffset,
                 pageNo: rendered.pageNumberStart + index,
-                pageHeight: Double(rendered.pageSize.height)))
+                pageHeight: Double(rendered.pageSize.height))
+            // Batch 41 (F): where the engine laid furniture for THIS page, its own heads and feet REPLACE the
+            // replay — placed where it placed them, and an ink-less line simply absent, because the engine never
+            // reported one. Furniture record `index`, as Athena ruled the mapping (app page i takes record i).
+            //
+            // Where it laid none — a page past the engine's last record — the replay still runs. The draft said
+            // such a page "draws no furniture"; blanking the heads outright is the more literal reading, and it
+            // is the one that fails silently if the two page counts ever disagree. The replay is what this file
+            // did before F and it is the safe half of the ruling, so that is what a page past the end keeps.
+            //
+            // AND ONLY WHEN THIS RENDER WAS ASKED FOR HEADS. Suppression used to be a property of the text —
+            // no `.hf` events recorded, so nothing to draw — and the furniture describes the page whatever the
+            // export asked for, so the flag has to be honoured HERE, where the lines are consumed
+            // (`RenderedDocument.exportFlags`). Without this an export with headers off still drew them: two
+            // PDFs kept their running head and a page put ink 44pt from its foot, below its own container.
+            if rendered.exportFlags.headers, rendered.modernFurniture.indices.contains(index) {
+                lines = DocumentRenderer.modernFurnitureRunningLines(
+                    furniture: rendered.modernFurniture[index],
+                    textLeft: Double(rendered.textFrame.origin.x))
+            }
+            // Batch 41 (C): and the engine's own automatic page number for this page. The engine decides whether
+            // the page is numbered at all — `nil` for `.op`, a footer in use, or page numbers off.
+            //
+            // NOT gated on `headers`: the automatic number is `pageNumbers`' business, and a document may
+            // legitimately number its pages with running heads switched off.
+            if rendered.modernFurniture.indices.contains(index),
+               let auto = DocumentRenderer.modernAutoPageNumberLine(
+                furniture: rendered.modernFurniture[index], textLeft: Double(rendered.textFrame.origin.x)) {
+                lines.append(auto)
+            }
+            result.append(lines)
         }
         return result
     }
@@ -1044,11 +1275,17 @@ final class PagedDocumentView: NSView {
             if column == 0 {
                 pageViews.append(view)
                 columnViews.append([])
+                columnViewColumns.append([])
             } else {
                 // A later column draws its own glyphs over the same sheet its page's own
                 // view already painted, so it must not paint a second one on top of it.
-                view.drawsBackground = false
+                // Batch 41: NOT `drawsBackground = false`. Text views on one layout manager
+                // share that setting, so the next page view's `true` put it back on every
+                // column view, and a column's full-page frame painted the sheet white over
+                // the column before it — REF/BOOKLET.WS drew only its second column.
+                (view as? PageTextView)?.paintsSheet = false
                 columnViews[pageIndex].append(view)
+                columnViewColumns[pageIndex].append(column)
             }
             addSubview(view, positioned: .below, relativeTo: overlayView)
             layoutManager.ensureLayout(for: container)
@@ -1212,6 +1449,10 @@ final class PagedDocumentView: NSView {
     /// The page size of the content on screen, once there is some (#271 M7).
     var renderedPageSize: CGSize? { rendered?.pageSize }
 
+    /// Batch 41: each page's running lines as this view draws them. Modern's are resolved here, after its pages are laid,
+    /// so they exist only on this view's own copy of the rendered document.
+    var drawnRunningLines: [[RunningLine]] { rendered?.runningLines ?? [] }
+
     /// Item 19: the text views for local page `index`'s SECOND and later newspaper columns,
     /// in column order — empty for every ordinary page. Internal for the same "a test needs
     /// this page's own content directly" reason `runningLines(atPageIndex:)` below is.
@@ -1365,10 +1606,25 @@ final class PagedDocumentView: NSView {
     /// missingInActual where it belonged.
     private func syncColumnViews(atPage index: Int, frame: NSRect?, hidden: Bool) {
         guard columnViews.indices.contains(index) else { return }
-        for view in columnViews[index] {
-            if let frame { view.frame = frame }
+        for (offset, view) in columnViews[index].enumerated() {
+            // Which column this view holds (`columnViewColumns`), not its ordinal: a Modern page the engine
+            // partitions can skip a column it left empty.
+            let column = columnViewColumns.indices.contains(index)
+                && columnViewColumns[index].indices.contains(offset)
+                ? columnViewColumns[index][offset] : offset + 1
+            if let frame { view.frame = columnFrame(frame, column: column, page: index) }
             view.isHidden = hidden
         }
+    }
+
+    /// Batch 41 (A): a later column's frame. Every Native column shares its page's frame — the engine's own x is in
+    /// its lines — while a Modern column the engine lays in `.co` columns starts at its own x
+    /// (`RenderedDocument.modernColumnOffset`) and runs to the frame's right edge.
+    private func columnFrame(_ pageFrame: NSRect, column: Int, page: Int) -> NSRect {
+        guard let rendered, rendered.modernColumns(onPage: page) > 1 else { return pageFrame }
+        let offset = rendered.modernColumnOffset(column, onPage: page)
+        return NSRect(x: pageFrame.minX + offset, y: pageFrame.minY,
+                      width: max(1, pageFrame.width - offset), height: pageFrame.height)
     }
 
     /// Batch 26: `applyDisplayMode()` for the pages from `start` on — those a turn of progressive layout just
@@ -1387,6 +1643,7 @@ final class PagedDocumentView: NSView {
             }
             syncColumnViews(atPage: index, frame: view.frame, hidden: view.isHidden)
         }
+        showOnlyPagesNearTheScreen()
     }
 
     private func applyDisplayMode() {
@@ -1408,6 +1665,7 @@ final class PagedDocumentView: NSView {
                 syncColumnViews(atPage: index, frame: view.frame, hidden: view.isHidden)
             }
         }
+        showOnlyPagesNearTheScreen()
         logPageDiagnostics(event: "applyDisplayMode(\(display))")
     }
 
@@ -1596,14 +1854,21 @@ final class PagedDocumentView: NSView {
     ///
     /// `accumulatedScroll` exists because trackpad events arrive as a stream of small deltas;
     /// without it one flick would flip a dozen pages.
+    ///
+    /// Batch 40 (M10): no `scrollWheel(with:)` override any more. A document view that overrides it takes the
+    /// scroll view out of AppKit's responsive scrolling, so Continuous Scroll drew every newly exposed strip on
+    /// the main thread as it scrolled. `DocumentWindowController` hands scroll events here from a local event
+    /// monitor instead, and only while Single Page shows.
     private var accumulatedScroll: CGFloat = 0
     private static let scrollPerPage: CGFloat = 50
 
-    override func scrollWheel(with event: NSEvent) {
-        guard display == .singlePage, pageViews.count > 1 else {
-            super.scrollWheel(with: event)
-            return
-        }
+    /// Whether this view can flip pages for a scroll event: Single Page, with more than one page.
+    var flipsPagesOnScroll: Bool { display == .singlePage && pageViews.count > 1 }
+
+    /// A scroll event in Single Page turns pages; false, and nothing done, in Continuous Scroll or with one page.
+    @discardableResult
+    func flipPages(for event: NSEvent) -> Bool {
+        guard flipsPagesOnScroll else { return false }
         // A new gesture starts a fresh count, so a previous flick cannot carry over.
         if event.phase == .began { accumulatedScroll = 0 }
         accumulatedScroll += event.scrollingDeltaY
@@ -1615,12 +1880,13 @@ final class PagedDocumentView: NSView {
             let target = currentPageIndex + step
             guard target >= 0, target < pageViews.count else {
                 accumulatedScroll = 0
-                return
+                return true
             }
             showPage(target)
             pageDidChange?(target)
             accumulatedScroll -= CGFloat(step) * -Self.scrollPerPage
         }
+        return true
     }
 
     /// Called whenever the displayed page changes, so the window controller can revalidate
@@ -1696,6 +1962,11 @@ final class PagedDocumentView: NSView {
                 if let capturingPageIndex, index != capturingPageIndex { continue }
                 let rect = self.rect(ofPage: index)
                 if rect.intersects(dirtyRect) {
+                    // Batch 40 (M10, Jon's "big black bar"): white set for EVERY sheet, not once before the loop. Drawing
+                    // a page's running lines draws text, and drawing text leaves the text's colour as the fill colour —
+                    // so when one draw reached two pages, the second sheet was filled black under its text. Measured on
+                    // -HOLYMAC.WS at pages 151–152 and 301–302 (b40-m10), where the first page carries a running foot.
+                    NSColor.white.setFill()
                     rect.fill()
                     let nominalTop = pageTops.indices.contains(index) ? pageTops[index] : rect.origin.y
                     drawRunningLines(rendered: rendered, pageIndex: index,
@@ -2005,6 +2276,12 @@ final class PagedDocumentView: NSView {
         for (pageIndex, view) in pageViews.enumerated() {
             guard !view.isHidden, rendered.oversizedSelfPasses.indices.contains(pageIndex) else { continue }
             guard capturingPageIndex == nil || capturingPageIndex == pageIndex else { continue }
+            // Batch 40 (M10): only a page the dirty rect reaches, with a gap's room either side for a pass that
+            // bleeds past its sheet. Every visible page's oversized lines were laid out and drawn on every draw —
+            // in Continuous Scroll, every page of the document for each strip a scroll exposed.
+            guard capturingPageIndex != nil
+                || rect(ofPage: pageIndex).insetBy(dx: -Self.pageGap, dy: -Self.pageGap).intersects(dirtyRect)
+            else { continue }
             let selfPasses = rendered.oversizedSelfPasses[pageIndex]
             guard selfPasses.contains(where: { $0 != nil }) else { continue }
             guard let layoutManager = view.layoutManager, let textContainer = view.textContainer else { continue }
@@ -2484,6 +2761,17 @@ private final class PageTextView: NSTextView {
     /// a `SRDiagnostics=1` log line answering `didDraw=NO` means exactly "AppKit has not painted
     /// this page since it became current," not merely "has never painted it, ever."
     var didDrawSinceShown = false
+
+    /// Batch 41: false for a page's later columns, which lie over the sheet their page's own view paints. This view's
+    /// own, unlike `drawsBackground`, which every text view on the layout manager shares.
+    var paintsSheet = true
+
+    override var isOpaque: Bool { paintsSheet && super.isOpaque }
+
+    override func drawBackground(in rect: NSRect) {
+        guard paintsSheet else { return }
+        super.drawBackground(in: rect)
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         didDrawSinceShown = true
