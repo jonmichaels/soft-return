@@ -405,19 +405,24 @@ struct RenderedDocument {
     /// (`modernPageFurniture`, engine be5fefb) — the sheet, the text frame, the newspaper columns.
     /// Empty for every non-Modern render.
     var modernFurniture: [ModernPageFurniture] = []
-    /// Batch 41 (after the release gate): the flags THIS render was asked for, so the view can honour them when
-    /// it draws the furniture's running lines.
+    /// The flags THIS render was asked for, carried so the view can check them against what the furniture holds.
     ///
-    /// Suppression of Modern's heads used to be a property of the TEXT: `guard exportFlags.headers else
-    /// { return }` skipped recording the `.hf` events, and the view drew its running lines from those events, so
-    /// no events meant no heads. Items C and F moved the view onto the engine's furniture, which describes the
-    /// page whatever the export asked for — and rightly so; the furniture is not an export decision. The flag
-    /// therefore has to travel with the render and be honoured where the lines are CONSUMED, which is what the
-    /// resolvers do with this.
+    /// THE ENGINE IS THE DECISION (batch 42). `modernEngineOptions` now asks for the furniture with the run's
+    /// own flags, and engine ce41797 made Modern honour `EmitOptions.headers` — so a render asked for with
+    /// headers off gets furniture carrying no heads, and there is nothing left for the view to suppress.
     ///
-    /// Asking the engine for headerless furniture would be the other shape, and it is not this one: the live
-    /// window always renders `.allOn`, so only the export path has anything to suppress, and a furniture record
-    /// that silently omitted heads would make every geometry test read differently depending on who asked.
+    /// THE RESOLVERS' GATE STAYS, as a defensive assertion rather than the mechanism. It costs one comparison
+    /// and it fails closed: if a furniture record ever arrives with heads on a render that asked for none —
+    /// a stale cached record, a caller that forgot to thread its flags, an engine regression — the view draws
+    /// nothing rather than putting a running head on a page the export said should have none.
+    ///
+    /// The history is worth keeping, because the first fix looked right and did nothing. Suppression used to be
+    /// a property of the TEXT: `guard exportFlags.headers else { return }` skipped recording the `.hf` events,
+    /// and the view drew from those events. Batch 41 moved the view onto the furniture, which then reported its
+    /// heads regardless, and an export with `--headers off` kept them — three failures in the release gate.
+    /// Passing `options.headers` was tried first and changed nothing, because Modern ignored that flag in both
+    /// engines; the flag governed Printed and RTF only. Gating consumption is what actually fixed it, and the
+    /// engine change since has made asking work too. Both halves are now in place, in that order.
     var exportFlags = DocumentRenderer.ExportFlags.allOn
     /// Batch 41 (columns): per Modern page, where each of its columns ends in THIS render's own text — the engine's own
     /// column partition (`ModernPageFurniture.columnRanges`, engine 63fab84) resolved against the text this render
@@ -1956,9 +1961,19 @@ enum DocumentRenderer {
     /// Batch 41 (A, presets): the options Modern's own export lays its pages out with — the bottom bar's page-settings
     /// preset and the Page Numbers setting (`ExportEngine.render`) — so the Modern view reads the same page furniture
     /// (`modernPageFurniture(_:options:)`, engine 93d458d) the export draws.
-    static func modernEngineOptions(_ state: DocumentState) -> EmitOptions {
+    /// `exportFlags` (batch 42): the furniture is asked for with the SAME flags the render was asked for, so the
+    /// engine's own answer is the single decision about what this page carries.
+    ///
+    /// This is the second attempt at the same line, and the first one is worth recording because it looked
+    /// right and did nothing. Batch 41 passed `options.headers` here too — but Modern ignored it: the flag
+    /// reached `modernPageFurniture`, which reported its heads regardless, and an export with `--headers off`
+    /// kept them. `EmitOptions.headers` governed Printed and RTF only. Engine ce41797 closed that, so asking is
+    /// now worth doing.
+    static func modernEngineOptions(_ state: DocumentState,
+                                    exportFlags: ExportFlags = .allOn) -> EmitOptions {
         var options = EmitOptions(pageSettings: state.pageSettingsPreset.value?.settings)
         options.pageNumbers = SettingsStore.shared.defaultPageNumbers
+        options.headers = exportFlags.headers
         return options
     }
 
@@ -5001,7 +5016,9 @@ enum DocumentRenderer {
         // is 7.20pt in the library (12 x 0.6) and was 8.40 here (14 x 0.6), so every one of
         // those rows started 1.20pt right of the library's and lost its last word.
         let modernPrintedPt = printedSize(doc)
-        let work = engine ?? ModernEngineWork.make(document: doc, options: Self.modernEngineOptions(state))
+        // Batch 42: asked with THIS render's own flags — see `modernEngineOptions`.
+        let work = engine ?? ModernEngineWork.make(
+            document: doc, options: Self.modernEngineOptions(state, exportFlags: exportFlags))
         var flow = work.flow
         // b34 N1 (job 529): same collapse `modernParagraphContent`'s own citation
         // explains, applied to note/footnote text — `PDFModernLayout.swift`'s
@@ -5786,7 +5803,9 @@ enum DocumentRenderer {
         // Batch 41 (A): the same engine page `renderModern` lays out on (`modernPage`) — made off
         // the main thread by a window, with the flow (`engineFurniture`), since it runs the whole
         // Modern emitter: made here it held -HOLYMAC.WS's main thread 1.7 s (b41-a).
-        let modernFurniture = engineFurniture ?? modernPageFurniture(doc, options: Self.modernEngineOptions(state))
+        // Batch 42: asked with this render's own flags, as the plain session asks — see `modernEngineOptions`.
+        let modernFurniture = engineFurniture
+            ?? modernPageFurniture(doc, options: Self.modernEngineOptions(state, exportFlags: exportFlags))
         let modernPage = Self.modernPage(state, furniture: modernFurniture)
         let modernTextWidthPt: Double = max(1, Double(modernPage.measure))
         let blankParagraph = Self.modernParagraphStyle(colPt: colPt, size: size, align: .left,

@@ -111,6 +111,30 @@ PAT_PRIVGROUP='(j[o]n-floppies|w[s]7-private|fixtures-w[s]5)-v4-[0-9]'
 
 PAT="($PAT_NAMES|$PAT_SHAPE|$PAT_HOSTS|$PAT_NET|$PAT_DOCNAMES|$PAT_PRIVGROUP)"
 
+# 6. DEVELOPMENT WORDING THAT MUST NOT SHIP INSIDE AN ARTIFACT (batch 43,
+#    v4.3.0 post-publish audit). Deliberately NOT part of PAT above, and that
+#    separation is the point: PAT is about LEAKS -- a path, a machine, a
+#    private document -- and a hit there stops a release because material got
+#    out. This is about POLISH: the app shipped a sample-document README that
+#    was a job-by-job changelog, and an AppleScript dictionary whose
+#    user-visible descriptions cited "job 313B", "Job 504" and "the CLI's own
+#    D7 ruling" at anyone who opened it in Script Editor. Nothing leaked; it
+#    simply read like our worklog instead of like a product. Mixing the two
+#    would make the scanner report a job number as "private material", which
+#    is both false and the kind of wrong label that gets a real finding
+#    ignored.
+#
+#    SCOPE: the CONTENTS OF SHIPPED ARTIFACTS ONLY -- never this repo's own
+#    tree. This repo is full of legitimate uses: PAT_NEVER_CROSS_FILES below
+#    lists dozens of test files literally named Job267InvisiblesProbe.swift,
+#    docs/ is written in job numbers, and this very comment would match. The
+#    scanner applies it to unpacked artifact files, which is the only place
+#    the wording is a defect rather than the working vocabulary.
+#
+#    "ruling" but not "ruled"/"rule": the first is ours ("Jon's ruling"), the
+#    others are ordinary English a user-facing string may legitimately want.
+PAT_SHIPPED_PROSE='([Jj][o]b [0-9]+|\b[Rr]uling\b|\bvault\b|\bplanning #[0-9]+)'
+
 # Known, reviewed, NON-hostname English usages of the real-word names in
 # category 3. A raw PAT hit inside one of these phrases is a false positive,
 # not a leak -- filtered out by the scanners (grep -v) after the PAT match,

@@ -253,7 +253,7 @@ func le32(_ v: Int) -> [UInt8] {
 /// Python's `_style_record` test helper.
 func styleRecord(left: Int = 1800, tabs: [Int] = [900, 1800], decimalTabs: Int = 0,
                  just: Int = 0, inheritTabs: Bool = false,
-                 attrsOn: Int = 0b1000000, right: Int? = nil,
+                 attrsOn: Int = 0b1000000, attrsOff: Int = 0, right: Int? = nil,
                  font: (width: Int, height: Int, typestyle: Int)? = nil,
                  vmi: Int? = nil) -> [UInt8] {
     var rec = [UInt8](repeating: 0, count: 102)
@@ -278,6 +278,7 @@ func styleRecord(left: Int = 1800, tabs: [Int] = [900, 1800], decimalTabs: Int =
     put(88, le16(vmi ?? 0xFFFF))                  // line height: given, else inherited
     rec[90] = 0xFF                                // spacing: inherit
     put(91, le16(attrsOn))
+    put(93, le16(attrsOff))                       // the OFF word: 0 = inherit every bit
     rec[95] = 0xFF                                // colour: inherit
     return rec
 }

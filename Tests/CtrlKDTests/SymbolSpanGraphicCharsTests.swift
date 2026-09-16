@@ -3,6 +3,14 @@
 /// (3aceb48) -- same fixture shape, same three spans, same assertions, ported to this
 /// project's own Fixtures.swift/PDFReadback.swift helpers.
 ///
+/// PARTLY SUPERSEDED, 2026-09-16: the premise below -- a font block named Brush Script
+/// whose character-set bits read 'math' resolving to the Adobe Symbol face -- is exactly
+/// the misread the 2026-09-16 ruling ends ("a resolved ordinary typeface beats the
+/// character-set bits"; class tests in StyleAttributeRulings20260916Tests.swift). That run
+/// now stays on its own ordinary face. The GEOMETRY guarantee this file was written for is
+/// unchanged and still the point of every test here: box/shade glyphs draw as vector fills
+/// and a middle dot stays a real byte, in every font state a span can be in.
+///
 /// FOUND against the real corpus: sawyer/REF/-LASERJE.FNT line 9 -- twelve cp437 glyphs
 /// ('░▒▓│┤╡╢╖╕╣║╗') typed under a font block whose typestyle is Brush Script, whose own
 /// symbol-map bits read 'math'. `pdfFamily` reads those bits before anything else and
@@ -85,19 +93,29 @@ private func buildDoc() -> Document {
     }
 }
 
-@Test func symbolMappedSpanMiddleDotStillSelectsTheSymbolFont() {
+@Test func symbolMappedSpanNoLongerSelectsTheSymbolFontAtAll() {
+    // SUPERSEDED BY THE 2026-09-16 RULING ("a resolved ordinary typeface beats the
+    // character-set bits"). This case -- typestyle 54, "Brush Script", with the coarse
+    // symbol-map bits reading math -- is the very misread that ruling ends: Brush Script
+    // is a perfectly ordinary named face, so its run now stays on the ordinary text font
+    // and the character-set bits govern only the extended characters, as WordStar
+    // intended.
+    //
+    // What this file's own bug fix guaranteed is unchanged and still checked here: the
+    // twelve box/shade glyphs draw as vector geometry and the middle dot stays a real
+    // 0xB7 text byte, never the '?' degradation. The byte is the same either way --
+    // cp1252 and Adobe Symbol both carry periodcentered at 0xB7 -- so the visible page
+    // does not move; only the font resource does. See
+    // StyleAttributeRulings20260916Tests.swift for the ruling's own class tests.
     let doc = buildDoc()
     let pdf = emitPDF(doc, mode: .printed)
-    let symbolName = fontName(for: "Symbol", in: pdf)
-    #expect(symbolName != nil, "no /BaseFont /Symbol resource registered at all")
-    let spans = contentSpans(pdf)
+    #expect(fontName(for: "Symbol", in: pdf) == nil,
+           "a /BaseFont /Symbol resource was registered for an ordinary named face")
     // The LAST text-showing operator is the third span's middle dot -- one bare 0xB7
-    // byte (Adobe Symbol's periodcentered), under the Symbol resource, never '?'.
-    let last = spans.last
-    #expect(last?.font == symbolName,
-           "last Tj (\(String(describing: last))) is not under the Symbol font resource")
+    // byte, never '?'.
+    let last = contentSpans(pdf).last
     #expect(last?.text == "\u{b7}",
-           "Symbol-mapped middle dot did not encode as periodcentered (0xb7): got \(String(describing: last?.text))")
+           "the middle dot did not survive as a real byte: got \(String(describing: last?.text))")
 }
 
 @Test func fontlessAndOrdinaryFontSpansAreUnaffectedBaseline() {

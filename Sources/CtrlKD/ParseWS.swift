@@ -1466,8 +1466,30 @@ public func parseWS(_ data: [UInt8]) -> Document {
                     // `styleFmt` to a fresh `StyleFormat()` below must not
                     // lose it. Port of Python's `parse_ws` `_prev_vmi` fix.
                     let prevVMI = styleFmt.lineHeightVMI
+                    // Ruling 2026-09-16 ("Style-library strikeout runs until a style
+                    // clears it"): an attribute a style turns ON stays on past that
+                    // paragraph. WSFORMAT.TXT's own rule for the two attribute words is
+                    // "if both corresponding bits are off, then the attribute is
+                    // inherited from the current state" -- so only a later style that
+                    // sets the bit in its attrs_OFF word ends the run. See
+                    // `stickyStyleAttrs` for why the set is strikeout alone.
+                    var sticky = styleFmt.stickyAttrs
+                    if let record = styleSlots[slot]?.record {
+                        for (bit, style) in stickyStyleAttrs {
+                            if record.attrsOn & bit != 0 {
+                                sticky.insert(style)
+                            } else if record.attrsOff & bit != 0 {
+                                sticky.remove(style)
+                            }
+                        }
+                    }
                     styleFmt = StyleFormat()
                     styleFmt.styleID = slot
+                    styleFmt.stickyAttrs = sticky
+                    // Also for an UNRESOLVABLE handle (a 0x03xx editing-temp pool entry,
+                    // or a slot this file's library does not carry): it declares neither
+                    // word, so every attribute inherits, including the running one.
+                    styleFmt.attrs = sticky
                     if let entry = styleSlots[slot] {
                         styleFmt.styleName = entry.name
                         styleFmt.heading = styleHeadingLevel(entry.name)
@@ -1482,7 +1504,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
                             styleFmt.leftMargin = record.leftMarginHMI.map(hmiToColumns)
                             styleFmt.rightMargin = record.rightMarginHMI.map(hmiToColumns)
                             styleFmt.paraMargin = record.paraMarginHMI.map(hmiToColumns)
-                            styleFmt.attrs = record.attrs
+                            // The style's own ON bits, plus every sticky attribute
+                            // still running from an earlier style.
+                            styleFmt.attrs = record.attrs.union(sticky)
                             // line_height_vmi: -2 = auto (the only value the measured
                             // oracle carries), a positive count = explicit VMI
                             // (WSFORMAT.WS: same 1/1440in unit as a font's own height
@@ -3044,6 +3068,25 @@ private let flaggedControls: [UInt8: UInt8] = [0x82: 0x02, 0x8C: 0x0C, 0x94: 0x1
 /// Formatting the ACTIVE paragraph style contributes, if any. Every field is `nil`/empty
 /// when the style's record inherits it, which is exactly when the running dot-command
 /// state should show through instead — see `parseWS`'s `newBlock`.
+/// The style attributes that KEEP RUNNING past the paragraph that turned them on, until a
+/// later style's own `attrsOff` word clears them (ruling 2026-09-16,
+/// WordStar-Feature-Decision-Register, "Style-library strikeout runs until a style clears
+/// it"). Python's `core.STICKY_STYLE_ATTRS`.
+///
+/// WSFORMAT.TXT states the inherit rule for the attribute words as a whole -- "if both
+/// corresponding bits are off, then the attribute is inherited from the current state" --
+/// but the only attribute the WS7 LaserJet captures can actually DEMONSTRATE it for is
+/// strikeout: in every corpus document that turns bold, underline or italic on in a style,
+/// the next style used sets that same bit in its own `attrsOff` word, so an inheriting
+/// model and a reset-per-paragraph model produce identical pages and the captures cannot
+/// choose between them. Strikeout is the one bit no corpus style ever clears, which is
+/// exactly why its run is visible (a 52-page manuscript capture carries the overstrike
+/// dash row on every page). So the rule is applied to strikeout only, on measured
+/// evidence, and the wider question is left open rather than guessed. Add a bit here only
+/// with a capture that shows it.
+let stickyStyleAttrs: [(bit: Int, style: Style)] = [(0x01, .strike)]
+
+
 private struct StyleFormat {
     var styleID: Int? = nil
     var styleName: String? = nil
@@ -3065,6 +3108,11 @@ private struct StyleFormat {
     /// The style's own declared colour index (0-15, WSFORMAT's fixed CGA/EGA palette --
     /// the same space as an inline type-1 colour change). See `Block.styleColour`.
     var styleColour: Int? = nil
+    /// The attributes still RUNNING from an earlier style: turned on by some style and
+    /// not yet cleared by a later one's `attrsOff` word (ruling 2026-09-16, see
+    /// `stickyStyleAttrs`). Survives the reset to a fresh `StyleFormat` at each style
+    /// selection, the same way `lineHeightVMI`'s inherit sentinel does.
+    var stickyAttrs: Style = []
 }
 
 /// HMI (1/1800in) -> print columns at 10 CPI, round-half-to-even like Python's `round()`.

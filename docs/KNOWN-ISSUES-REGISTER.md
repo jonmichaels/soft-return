@@ -1,5 +1,52 @@
 # Known-Issues Register
 
+### 2026-09-16 — `RTF-RJS/NOVEL.WS` lays 43 Modern view pages against the engine's 44: same text, broken differently (batch 42)
+
+- **Test:** `ModernFooterTimingFollowsTheEngineTests.bodyLinesPerPageBesideTheEngines()` (macOS) — a printing
+  measurement, not an assertion: `MODERN-BODY` and `MODERN-PAGESTART` lines.
+- **This IS the font-substitution exception, running the other way** (Athena, 2026-09-16). Every other document
+  in that entry is view-HIGH — BOOKLET.WS 9 against 3, PRINT.TST 8 against 6, BOOKLET.HOW 12 against 10 —
+  because there the view's face is the wider one. NOVEL declares HELVETICA-FAMILY fonts (its own layout JSON's
+  `fonts` block), and each side resolves that family through its own existing mapping: the engine through
+  base-14 Helvetica metrics, the app through its Mac face table. For that family the view's face is the
+  NARROWER one, so the view fits MORE and lays FEWER pages. The direction follows from which face is narrower,
+  not from any choice either side makes. It keeps its own entry because the measurement below is specific to
+  this document, not because the cause is different.
+- **The leading is identical on both sides:** the view advances 14.40 a line and the engine 14.4 — 12pt at the
+  library's own 1.2x — so it is not a leading difference either.
+- **Measured on the engine's own Modern PDF**, with page identity taken from the file's own `/Type /Page`
+  objects and checked against the furniture's count (44 and 44, and PRINT.TST 6 and 6): a full page carries 45
+  body lines, first baseline 84.50 from the sheet top, last 718.10 from the top, commonest gap 14.4 across 44 of
+  44 gaps. The nominal block's floor is y 72 and the last body line sits at y 73.90, inside it — so the engine
+  reserves nothing at the foot for this document's typed footer, whose row is at y 44, out in the margin where
+  the furniture already reports it. `sheetHeight - marginBottom` is already the right answer; no furniture field
+  is needed (Athena, 2026-09-16).
+- **The shape of the loss:** from page 30 onward the view's page N holds exactly what the engine's page N+1
+  holds — 45, 45, 45, 45, 45, 10, 39, 45, 45, 45, 45, 45, 12, matching the engine's p31 through p44 exactly. The
+  page openings say the same thing earlier and by name: the view opens "Praise for The Oppenheimer Alternative"
+  on p11 where the engine opens it on p12, and every section heading after that ("Note for the Copyright Page",
+  "Books by Robert J. Sawyer", "Dedication", "Acknowledgments", "Dramatis Personae", "Author's Note",
+  "Prologue", "Chapter 1") sits one page earlier in the view. So the view is a page behind by p11 and never
+  recovers. Totals: engine 44 pages / 1356 body lines, view 43 / 1310.
+- **The text is IDENTICAL on both sides — nothing is dropped.** Counted as non-whitespace characters, which is
+  the only comparable basis (the engine's Modern PDF stores no space characters at all: spacing there is `Td`/
+  `TJ` positioning, not glyphs), and with the engine's running heads and feet excluded, since those are drawn
+  into its page streams but live outside this view's text storage entirely:
+  - whole document: engine 47676, view 47677 — one character apart in 47676.
+  - everything before the commanded `.pa`: engine p1-p11 11033, view p1-p10 **11033, exactly equal**.
+  - the 2597 characters of running heads and feet are precisely the apparent "shortfall" that counting them
+    produced (50273 against 47677), and a "the view is dropping text" reading of that would have been wrong.
+- **So the cause is LINE BREAKING, not content**, and the per-page ink says where it starts: p1 and p2 match to
+  the character (277, 310), then p3 diverges — the view sets **1536 characters on 30 lines, about 51 to a line**,
+  where the engine sets **1259 on 31 lines, about 41 to a line**. Same 468pt measure, same 14.4 advance, same
+  text. The view's lines simply hold more, so it reaches the commanded break in ten pages where the engine
+  needs eleven, and stays a page ahead to the end.
+- **Status:** OPEN — text identical (11033 = 11033 before the `.pa`); line breaking differs from p3 onward under
+  the font-substitution exception; the view's face is the narrower one for the Helvetica family, so the view
+  fits more. Measured direction stated, nothing pending: font mismatches are a named exception and are not
+  raised (Jon's standing ruling).
+
+
 ### 2026-09-15 — `openAndPageChangeTimings`: the main-thread stretch bound is machine-marginal (batch 41)
 
 - **Test:** `HolymacTimingTests.openAndPageChangeTimings()` in `SoftReturnTests`. No `withKnownIssue`
@@ -43,8 +90,9 @@
   - Times is the narrower face. Page 1 column 0: the engine draws **28 lines / 1225 glyphs**; the view draws
     **28 lines / 872 characters** — about **44 characters a line against Georgia's 31**.
   - So a column holds different amounts of text on the two sides, and the page counts cannot agree: BOOKLET.WS
-    view 9 against engine 3, PRINT.TST view 8 against 6, BOOKLET.HOW view 12 against 10, NOVEL.WS view 43
-    against 44.
+    view 9 against engine 3, PRINT.TST view 8 against 6, BOOKLET.HOW view 12 against 10. (`RTF-RJS/NOVEL.WS`'s
+    43 against 44 was listed here until batch 42 measured it: the view fits MORE there, which a wider face
+    cannot do. It has its own entry above.)
 - **Why it is not a pagination fault:** the engine's `columnRanges` are correct (`endItem`/`endOffset` is the
   next column's start, absorbed empties rolled forward) and the view's mapper resolves each boundary to the
   right place in the right item — page 1 column 0's boundary is engine item 11 offset 176, which the view

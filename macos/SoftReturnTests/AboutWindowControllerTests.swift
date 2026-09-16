@@ -84,6 +84,20 @@ private func rowValueText(_ grid: NSGridView, _ rowIndex: Int) -> String? {
     return nil
 }
 
+/// How far into `view` its first drawn pixel is, in points — where its text's ink starts.
+@MainActor
+private func inkStart(of view: NSView) -> CGFloat? {
+    guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds), view.bounds.width > 0 else { return nil }
+    view.cacheDisplay(in: view.bounds, to: rep)
+    let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+    for x in 0..<rep.pixelsWide {
+        for y in 0..<rep.pixelsHigh where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.3 {
+            return CGFloat(x) / scale
+        }
+    }
+    return nil
+}
+
 @Suite("EngineVersionInfo parsing")
 struct EngineVersionInfoTests {
 
@@ -317,12 +331,85 @@ struct AboutWindowControllerTests {
         let stack = try stackView(in: controller)
         let grid = try infoGrid(in: controller)
         content.layoutSubtreeIfNeeded()
-        let gridCenterInStack = stack.convert(NSPoint(x: grid.frame.midX, y: 0), from: grid).x
+        // `grid.frame` is already in the stack's coordinates. Batch 44: this used to convert it
+        // from the grid's own as well, which counted the grid's inset twice and held only while
+        // the grid was the stack's widest view — M22's narrower equal columns made it not.
+        let gridCenterInStack = grid.frame.midX
         #expect(abs(gridCenterInStack - stack.bounds.midX) < 1.0,
                 "the info grid's own bounding box must be centered on the stack's centerX")
         // Still right/left aligned internally — the axis itself didn't change.
         #expect(grid.column(at: 0).xPlacement == .trailing)
         #expect(grid.column(at: 1).xPlacement == .leading)
+    }
+
+    /// Batch 44 (M22, Jon: "The Version, Build, Engine block needs to be laid out like it is,
+    /// but the center of the break between Title and Data needs to be at the center of the
+    /// window. It's to the left now."): the middle of the gap between the labels' right edge
+    /// and the values' left edge is on the window's centre line, for every row set — no engine
+    /// row, the release banner the engine prints, and the dev banner with its commit link — and
+    /// no value is cut short. Each shape is photographed, with a copy marking the centre line.
+    @Test(arguments: ["no-engine", "release", "dev-commit"])
+    func gapBetweenLabelsAndValuesIsOnTheWindowsCentreLine(shape: String) throws {
+        let banner: String? = switch shape {
+        case "release": EngineVersionInfoTests.cleanBanner
+        case "dev-commit": EngineVersionInfoTests.devBanner
+        default: nil
+        }
+        let info = banner.flatMap(EngineVersionInfo.parse)
+        #expect((info == nil) == (banner == nil), "\(shape): the banner did not parse")
+        let controller = AboutWindowController(
+            engineProbe: FakeEngineVersionProbe(result: info), urlOpener: FakeAboutURLOpener())
+        controller.showWindow(nil)
+        defer { controller.close() }
+        let content = try #require(controller.window?.contentView)
+        content.layoutSubtreeIfNeeded()
+        let grid = try infoGrid(in: controller)
+        let centre = content.bounds.midX
+        var labelRight = -CGFloat.infinity
+        var valueLeft = CGFloat.infinity
+        var valueTextStarts: [CGFloat] = []
+        for row in 0..<grid.numberOfRows {
+            let label = try #require(grid.cell(atColumnIndex: 0, rowIndex: row).contentView as? NSControl)
+            let value = try #require(grid.cell(atColumnIndex: 1, rowIndex: row).contentView as? NSControl)
+            // Alignment rects: what the grid lines up.
+            let labelFrame = content.convert(label.alignmentRect(forFrame: label.frame), from: label.superview)
+            let valueFrame = content.convert(value.alignmentRect(forFrame: value.frame), from: value.superview)
+            let ink = try #require(inkStart(of: value), "\(shape): row \(row)'s value draws nothing")
+            valueTextStarts.append(content.convert(NSPoint(x: value.frame.minX, y: 0), from: value.superview).x + ink)
+            labelRight = max(labelRight, labelFrame.maxX)
+            valueLeft = min(valueLeft, valueFrame.minX)
+            #expect(labelFrame.maxX <= centre, "\(shape): row \(row)'s label runs past the centre line")
+            #expect(valueFrame.minX >= centre, "\(shape): row \(row)'s value starts before the centre line")
+            let needed = try #require(value.cell?.cellSize.width)
+            #expect(value.frame.width >= needed - 0.5,
+                    "\(shape): row \(row)'s value is \(value.frame.width) pt wide, its text needs \(needed)")
+            #expect(valueFrame.maxX <= content.bounds.maxX, "\(shape): row \(row)'s value runs out of the window")
+        }
+        let firstTextStart = valueTextStarts.first ?? 0
+        #expect(valueTextStarts.allSatisfy { abs($0 - firstTextStart) <= 1.0 },
+                "\(shape): the values' text starts at \(valueTextStarts), not one edge")
+        let gapMiddle = (labelRight + valueLeft) / 2
+        print("ABOUT-GUTTER \(shape): window \(content.bounds.width) pt wide, centre \(centre); labels end \(labelRight), values start \(valueLeft), gap middle \(gapMiddle); values' text starts \(valueTextStarts)")
+        #expect(abs(gapMiddle - centre) <= 1.0,
+                "\(shape): the gap's middle is at \(gapMiddle), the window's centre at \(centre)")
+        #expect(grid.column(at: 0).xPlacement == .trailing)
+        #expect(grid.column(at: 1).xPlacement == .leading)
+
+        let proofs = RenderProbeKit.resolveOutputDirectory(
+            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
+            fallbackName: "soft-return-proofs")
+        let png = proofs.appendingPathComponent("m22-about-\(shape).png")
+        #expect(try RenderProbeKit.renderPNG(view: content, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
+        let marked = proofs.appendingPathComponent("m22-about-\(shape)-centre-line.png")
+        let line = NSBox(frame: NSRect(x: centre - 0.5, y: 0, width: 1, height: content.bounds.height))
+        line.boxType = .custom
+        line.borderWidth = 0
+        line.fillColor = .systemRed
+        content.addSubview(line)
+        defer { line.removeFromSuperview() }
+        #expect(try RenderProbeKit.renderPNG(view: content, appearance: NSAppearance(named: .aqua)!, to: marked) > 0)
+        print("PROOF: \(png.path)")
+        print("PROOF: \(marked.path)")
     }
 
     /// Jon's ruling: the Engine row's dev shape wraps — "sr v4.0.0" on line 1, "(dev ...)" on
@@ -447,7 +534,8 @@ struct AboutWindowControllerTests {
         #expect([rowLabel(grid, 0), rowLabel(grid, 1), rowLabel(grid, 2), rowLabel(grid, 3)]
             == ["Version", "Build", "Engine", "Commit"])
         #expect(rowValueText(grid, 2) == "sr v4.0.0\n(dev 2026-08-15)")
-        #expect(rowValueText(grid, 3) == "971b375d6a1fd625368b6368c982fcac938137ca")
+        // Batch 44 (M22): git's 7-character short hash; the link still opens the full hash's page.
+        #expect(rowValueText(grid, 3) == "971b375")
     }
 
     /// Job 335: the Version row drops its parenthetical "(N)" build number — the Build row

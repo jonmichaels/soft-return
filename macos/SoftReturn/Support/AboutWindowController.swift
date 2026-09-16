@@ -6,8 +6,8 @@ import AppKit
 /// `NSApplication` about panel entirely. An untitled title bar (traffic lights only, no
 /// text), icon, name, the "8D0A" easter egg directly under the name, a two-line tagline, then
 /// aligned info rows (Version/Build/Engine/Commit — labels in the regular system font, values
-/// in the monospaced system font, both sized up to Ghostty's own proportions, the whole row
-/// block centered in the window while the label/value axis inside it stays right/left
+/// in the monospaced system font, both sized up to Ghostty's own proportions, the gap between
+/// labels and values on the window's centre line while the label/value axis stays right/left
 /// aligned), then a single GitHub button. No trailing MIT text line, no License button, no
 /// Releases button, and no Parity row — the bundled `LICENSE` file itself is the only MIT
 /// surface now.
@@ -123,7 +123,9 @@ final class AboutWindowController: NSWindowController {
 
         content.layoutSubtreeIfNeeded()
         let fitted = content.fittingSize
-        window.setContentSize(NSSize(width: Self.contentWidth, height: fitted.height))
+        // Wider only when the rows need it: two equal columns of a long value (a dev banner's
+        // commit hash) do not fit the card's usual width.
+        window.setContentSize(NSSize(width: max(Self.contentWidth, fitted.width), height: fitted.height))
         // Job 397 (Jon F9): an unpositioned `NSWindow(contentRect:)` takes its contentRect's
         // origin literally as a SCREEN-space frame — (0, 0) is the screen's bottom-left
         // corner, not "let AppKit decide". A transient, non-resizable window like this one
@@ -153,14 +155,21 @@ final class AboutWindowController: NSWindowController {
         }
 
         // Jon's ruling (job 341): the label/value axis inside the grid stays right/left
-        // aligned per column, but the grid itself hugs its own content width — the outer
-        // stack's `.centerX` alignment (see `buildContent`) then centers that whole block in
-        // the window, Ghostty's exact arrangement.
+        // aligned per column, and the outer stack's `.centerX` alignment (see `buildContent`)
+        // centers the grid in the window. Batch 44 (M22, Jon: "the center of the break between
+        // Title and Data needs to be at the center of the window. It's to the left now."): both
+        // columns are as wide as the widest label or value, so the grid's centre — the
+        // window's — is the middle of the gap between them.
         let grid = NSGridView(views: rows)
         grid.rowSpacing = 4
         grid.columnSpacing = 8
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .leading
+        let columnWidth = rows.joined().map { view in
+            ceil((view as? NSControl)?.cell?.cellSize.width ?? view.fittingSize.width)
+        }.max() ?? 0
+        grid.column(at: 0).width = columnWidth
+        grid.column(at: 1).width = columnWidth
         grid.setAccessibilityIdentifier("about-info-grid")
         return grid
     }
@@ -225,8 +234,12 @@ final class AboutWindowController: NSWindowController {
     /// link-tinted, underlined `NSButton` rather than a plain label: target/action makes the
     /// click testable (`AboutWindowControllerTests` calls `openCommit(_:)` directly) without
     /// depending on `NSTextField`'s own link-attribute click handling.
-    private func rowLinkValue(_ hash: String, url: URL) -> NSButton {
-        let button = NSButton(title: "", target: self, action: #selector(openCommit))
+    ///
+    /// Batch 44 (M22): the value shows git's usual 7-character short hash — the full one made
+    /// the two equal columns too wide for the card — and still opens the full hash's page.
+    private func rowLinkValue(_ fullHash: String, url: URL) -> NSButton {
+        let hash = String(fullHash.prefix(7))
+        let button = TextAlignedLinkButton(title: "", target: self, action: #selector(openCommit))
         button.isBordered = false
         button.bezelStyle = .inline
         button.attributedTitle = NSAttributedString(string: hash, attributes: [
@@ -255,6 +268,19 @@ final class AboutWindowController: NSWindowController {
     @objc private func openCommit(_ sender: Any?) {
         guard let url = engineInfo?.commitURL() else { return }
         urlOpener.open(url)
+    }
+}
+
+/// Batch 44 (M22): a borderless inline button draws its title further in than a label draws
+/// its text, so the Commit link sat right of the other values. Measured on macOS 15 at 13 pt
+/// monospaced: a label's alignment rect starts 2 pt in and its text 0.5 pt after that; this
+/// button's alignment rect starts at its frame and its text 3 pt in. Starting the alignment
+/// rect 2.5 pt in lines the TEXT up in the grid; `AboutWindowControllerTests` checks the ink.
+private final class TextAlignedLinkButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets {
+        var insets = super.alignmentRectInsets
+        insets.left += 2.5
+        return insets
     }
 }
 

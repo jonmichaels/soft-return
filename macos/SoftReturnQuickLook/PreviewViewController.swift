@@ -9,8 +9,8 @@ import SoftReturnShared
 ///
 /// The pages are the NATIVE renderer's own drawing — the same pipeline the app's document window uses (job 247,
 /// Jon's 2026-08-11 ruling: "I never agreed to [QL = engine PDF]") — shown by `QuickLookProgressivePreview`, which puts
-/// page 1 on screen as soon as it is made and appends the rest. Quick Look is told the preview is ready once page 1
-/// is in. A `.PIX` picture shows as its image.
+/// the first pages on screen, opened on page 1 with their thumbnails beside them, and appends the rest without moving
+/// the view. Quick Look is told the preview is ready once those first pages are in. A `.PIX` picture shows as its image.
 final class PreviewViewController: NSViewController, QLPreviewingController {
     private var preview: QuickLookProgressivePreview?
 
@@ -53,7 +53,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         pin(preview.view)
         preview.load(bytes: bytes, docPath: url.path,
                      pageSettingsPreset: QuickLookPageSettingsPreference.resolvedDefault()) { [weak self] error in
-            if error == nil, let size = self?.preview?.pageSize, size != .zero {
+            if error == nil, let size = self?.preview?.preferredContentSize, size != .zero {
                 self?.preferredContentSize = size
             }
             handler(error)

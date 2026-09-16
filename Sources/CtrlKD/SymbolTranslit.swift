@@ -264,15 +264,46 @@ func transliterate(_ text: String, _ kind: SymbolTranslit) -> String {
     return String(view)
 }
 
-/// The transliteration a font run needs, from the block's own symbol-map bits first,
-/// typestyle name as fallback. `nil` = ordinary text font.
+/// Typestyle numbers whose NAME announces a non-text face: the table's own word for the
+/// glyph repertoire, not a typeface a sentence can be set in. 82 (ZapfDingbats) and 192
+/// (Symbol) are matched by name above and never reach this set. Numbers, not substrings:
+/// 'Pica' contains 'pi' and 'Presentations' contains 'ps' -- a substring test on this
+/// table is a trap. Python's `symbolmap.NON_TEXT_TYPESTYLES`.
+let nonTextTypestyles: Set<Int> = [
+    33,    // Borders
+    68,    // LucidaMath
+    143,   // Math-7 (HPLJ)
+    144,   // Math-8 (HPLJ)
+    166,   // PI
+    188,   // Math
+    234,   // TD Logos
+    244,   // Greek (PS (Universal Greek))
+]
+
+/// The transliteration a font run needs, from the typestyle NAME first and the block's own
+/// symbol-map bits only as the fallback for a face the name table cannot resolve.
+/// `nil` = ordinary text font.
 func fontTranslitKind(_ font: FontChange) -> SymbolTranslit? {
     // NAME first: it is the specific signal. The coarse symbol-map bits can say `math`
-    // for BOTH faces (PS.TST's Dingbats row transliterated to Greek until this
-    // ordering); the bits remain the fallback for unnamed fonts.
+    // for BOTH faces (PS.TST's Dingbats row transliterated to Greek until this ordering).
     let name = asciiLowercased(font.typestyleName ?? "")
     if name.hasPrefix("symbol") { return .math }
     if asciiContains(name, "dingbat") { return .symbols }
+    // A RESOLVED ORDINARY FACE WINS over the character-set bits (ruling 2026-09-16).
+    // WordStar's symbol_map bits say which upper-128 (0x80-0xFF) table the EXTENDED
+    // characters of a run use; they were never a "replace the alphabet" switch. A WS7
+    // manuscript's own front-matter styles carry typestyle 3 (Courier) with the math
+    // bits set, and ten pages of ordinary English prose were being redirected through
+    // Adobe Symbol's encoding, so every Latin letter came out as the Greek letter
+    // sitting at its keyboard position. Real WS7's LaserJet output prints those pages
+    // as plain readable Courier. Characters that genuinely have no home in the body
+    // face are still picked up one at a time by the per-character fallback
+    // (`charTranslitKind`), which is what that mechanism was built for.
+    //
+    // The bits stay the fallback for the case the doc comment always claimed: a face
+    // the 245-entry name table cannot resolve, and the handful of named faces that are
+    // themselves non-text repertoires.
+    if !name.isEmpty && !nonTextTypestyles.contains(font.typestyleNumber) { return nil }
     switch font.symbolMap {
     case .math: return .math
     case .symbols: return .symbols

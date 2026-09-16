@@ -47,7 +47,11 @@ struct ModernSheetAndColumnsFollowTheEngineTests {
         if pages.count != furniture.count {
             print("MODERN-COLUMNS-RESIDUAL \(document): view \(pages.count) pages, engine \(furniture.count) — Modern face differs (view Georgia vs engine Times-Roman): font-substitution exception, docs/KNOWN-ISSUES-REGISTER.md 2026-09-15")
         }
-        if let expected = Self.expectedPageCounts[document] {
+        // Batch 42: gated on the counts DIFFERING. This fired whenever an expectation merely existed, so
+        // REF/BOOKLET.RJS printed "the engine lays 14 pages (this test was written against 14)" — a residual
+        // line announcing agreement, which is worse than noise: a grep for this document's residuals returns a
+        // hit on a passing run, and that is exactly how I mistook a clean result for a failing one.
+        if let expected = Self.expectedPageCounts[document], furniture.count != expected {
             print("MODERN-COLUMNS-RESIDUAL \(document): the engine lays \(furniture.count) pages (this test was written against \(expected))")
         }
 
@@ -151,8 +155,73 @@ struct ModernSheetAndColumnsFollowTheEngineTests {
                 // wider face reaches its 28th line sooner, so it cannot end where the engine's ends. What IS
                 // asserted below is contiguity: whatever each column took, the next one must start exactly
                 // where it stopped, with nothing dropped between them.
+                // Batch 42 (2), Athena's ruling: AT AN `.overflow` END, TRAILING WHITESPACE IS TOLERATED.
+                //
+                // REF/BOOKLET.RJS ran two characters ahead of the engine on four of its fourteen pages and
+                // matched on the other ten. The four are exactly the engine's four `overflow` ends. The two
+                // characters are always a trailing space and a newline — but so are the characters at the ends
+                // that AGREE, which is what makes this a convention difference rather than a fault:
+                //
+                //   AGREE  p2   1520:0020 1521:000a 1522:0020<ENGINE 1523:000a
+                //   DIFFER p5             3284:0020<ENGINE 3285:000a 3286:0049<VIEW
+                //
+                // A forced break's offset is recorded BEFORE the leading spacer on purpose (`DocumentRenderer`'s
+                // `paragraphCharOffset`: "the spacer, when present, is this SAME paragraph's own headroom and
+                // must move to the new page with it"), so at a `pageBreak` both sides land on the same offset.
+                // At a natural overflow AppKit fills until it runs out and absorbs the line's trailing space and
+                // newline into the CLOSING container. Same visual place — the next page opens on the same first
+                // real character — with nothing lost and nothing set twice.
+                //
+                // So an overflow end may differ by trailing WHITESPACE and no more; anything else at an overflow,
+                // and any difference at all at a `pageBreak`/`columnBreak`, is reported. The face difference is
+                // unaffected and still reported as the residual it is: BOOKLET.WS's ends differ by hundreds of
+                // characters (engine 1675 against the view's 872), which is Georgia against Times and not this.
+                let engineRange = furniture.indices.contains(page)
+                    ? furniture[page].columnRanges.first { $0.column == entry.column } : nil
                 if let wanted = entry.end, end != wanted {
-                    print("MODERN-COLUMNS-RESIDUAL \(document) p\(page + 1) column \(entry.column): container ends \(end), the engine \(wanted) — Modern face differs (view Georgia vs engine Times-Roman): font-substitution exception, docs/KNOWN-ISSUES-REGISTER.md 2026-09-15")
+                    let text = rendered.text.string as NSString
+                    var trimmed = end
+                    while trimmed > wanted,
+                          let scalar = Unicode.Scalar(text.character(at: trimmed - 1)),
+                          CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                        trimmed -= 1
+                    }
+                    if engineRange?.ended == .overflow, trimmed == wanted {
+                        print("MODERN-COLUMNS-ABSORBED \(document) p\(page + 1) column \(entry.column): container ends \(end), the engine \(wanted) — the \(end - wanted) trailing whitespace character(s) AppKit absorbs at an overflow boundary")
+                    } else {
+                        print("MODERN-COLUMNS-RESIDUAL \(document) p\(page + 1) column \(entry.column): container ends \(end), the engine \(wanted) — Modern face differs (view Georgia vs engine Times-Roman): font-substitution exception, docs/KNOWN-ISSUES-REGISTER.md 2026-09-15")
+                    }
+                }
+                // Batch 42 (2): the same window on EVERY boundary, agreeing or not.
+                //
+                // The first version of this printed only on disagreement, which is the shape that would let me
+                // break ten boundaries to fix four. REF/BOOKLET.RJS disagrees on four pages and AGREES on ten,
+                // and the four are exactly the engine's `overflow` ends; the named characters are a trailing
+                // space and a newline. Whether the fix belongs at the recording site, in the resolver, or only
+                // where a column ended by overflowing depends entirely on whether a MATCHING boundary has the
+                // same two characters sitting in front of it — which only measuring the agreeing ones can say.
+                if let wanted = entry.end {
+                    // Batch 42 (2): NAME the characters between the two ends rather than counting them.
+                    //
+                    // REF/BOOKLET.RJS disagrees by exactly +2 on four of its fourteen pages and matches on the
+                    // other ten, and the four are exactly the engine's four `overflow` boundaries. That
+                    // correlation is not a mechanism, and the obvious mechanism has the WRONG SIGN: Georgia is
+                    // the wider face, so a column set in it should reach its last line having taken FEWER
+                    // characters than Times, not two more. Two characters the view's text carries at an item
+                    // boundary and the engine's flow does not would explain both the size and the direction —
+                    // the two texts are known to run to different lengths inside an item — so print what is
+                    // actually there, code point by code point, with both ends marked.
+                    let text = rendered.text.string as NSString
+                    let low = max(0, min(wanted, end) - 12)
+                    let high = min(text.length, max(wanted, end) + 12)
+                    var span: [String] = []
+                    for index in low..<high {
+                        let unit = text.character(at: index)
+                        let shown = unit == 0x20 ? "_" : (unit < 0x20 || unit > 0x7E ? "·" : String(UnicodeScalar(unit)!))
+                        let mark = index == wanted ? "<ENGINE" : (index == end ? "<VIEW" : "")
+                        span.append("\(index):\(shown):\(String(format: "%04x", unit))\(mark)")
+                    }
+                    print("MODERN-COLUMNS-DELTA \(document) p\(page + 1) column \(entry.column): engine \(wanted), view \(end), scalars: \(span.joined(separator: " "))")
                 }
                 // A `nil` end means "runs to the end of the document" — right for the LAST column of the last page,
                 // and a placement failure anywhere else. The mapper no longer guesses arithmetically when it cannot

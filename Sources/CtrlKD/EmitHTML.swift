@@ -804,6 +804,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
         ? noteRefLabels(refNotes, labels: labels, scheme: .prefixed) : nil
     var parts: [String] = []
     var styleClass: [Int: String] = [:]
+    let styleOwn = styleOwnAttrs(doc)
     if options.styles {
         for entry in doc.styles {
             styleClass[entry.slot] = " class=\"\(styleSlug(entry))\""
@@ -889,6 +890,14 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             continue
         }
         var cls = block.styleID.flatMap { styleClass[$0] } ?? ""
+        if options.styles {
+            // An attribute still running from an EARLIER style (ruling 2026-09-16): the
+            // slot's own rule cannot carry it. See `inheritedAttrCSS`.
+            let running = inheritedAttrs(block, styleOwn)
+            for row in inheritedAttrCSS where running.contains(row.style) {
+                cls = addHTMLClass(cls, "ws-inherit-\(row.slug)")
+            }
+        }
         let keepFlags = keepPlan[bi] ?? (keep: false, keepn: false)
         if keepFlags.keep { cls = addHTMLClass(cls, "ws-keep") }
         if keepFlags.keepn { cls = addHTMLClass(cls, "ws-keepn") }
@@ -1272,6 +1281,37 @@ func styleSlug(_ entry: StyleEntry) -> String {
 /// is a different, much narrower measure. Modern presentation NORMALIZES instead: body
 /// styles get the full reader measure; a quote-classified style's visible inset comes
 /// structurally from `<blockquote>` at the `emitHTML` call site, not from this per-style CSS.
+/// A style attribute a block is RUNNING UNDER without its own style record declaring it --
+/// `stickyStyleAttrs`, ruling 2026-09-16 ("Style-library strikeout runs until a style
+/// clears it"). HTML is the one emitter whose paragraph-level attributes ride a CSS class
+/// keyed to the STYLE SLOT rather than to the block, so an attribute inherited from an
+/// EARLIER style has nowhere to land on this slot's own rule; it gets a class of its own
+/// instead. Every other emitter merges `block.styleAttrs` into its runs
+/// (`effectiveSpanStyles`) and picks the same attribute up for free. The property text is
+/// the same table `styleCSS` writes for a style's own declared attributes, so the two
+/// paths cannot drift. Python's `emit._INHERITED_ATTR_CSS`.
+let inheritedAttrCSS: [(style: Style, slug: String, props: String)] = [
+    (.bold, "b", "font-weight:bold"),
+    (.italic, "i", "font-style:italic"),
+    (.underline, "u", "text-decoration:underline"),
+    (.strike, "strike", "text-decoration:line-through"),
+    (.sub, "sub", "vertical-align:sub;font-size:smaller"),
+    (.sup, "sup", "vertical-align:super;font-size:smaller"),
+]
+
+/// slot -> the attributes that slot's OWN record turns on.
+func styleOwnAttrs(_ doc: Document) -> [Int: Style] {
+    var out: [Int: Style] = [:]
+    for entry in doc.styles { out[entry.slot] = entry.record?.attrs ?? [] }
+    return out
+}
+
+/// The attributes on this block that its own style record does not declare.
+func inheritedAttrs(_ block: Block, _ own: [Int: Style]) -> Style {
+    block.styleAttrs.subtracting(block.styleID.flatMap { own[$0] } ?? [])
+}
+
+
 func styleCSS(_ doc: Document, printed: Bool = true, inlineStyling: Bool = true) -> String {
     var rules: [String] = []
     for entry in doc.styles {
@@ -1363,6 +1403,14 @@ func styleCSS(_ doc: Document, printed: Bool = true, inlineStyling: Bool = true)
             let (r, g, b) = cgaPalette[n % 16]
             rules.append(".ws-colour-\(n) { color:#" + hex2(r) + hex2(g) + hex2(b) + " }")
         }
+    }
+    // One rule per attribute some block actually inherited -- never a fixed six, so a
+    // document with no running attribute gets no extra CSS at all.
+    let own = styleOwnAttrs(doc)
+    var inherited: Style = []
+    for block in doc.blocks { inherited.formUnion(inheritedAttrs(block, own)) }
+    for row in inheritedAttrCSS where inherited.contains(row.style) {
+        rules.append(".ws-inherit-\(row.slug) { \(row.props) }")
     }
     return rules.joined(separator: "\n")
 }

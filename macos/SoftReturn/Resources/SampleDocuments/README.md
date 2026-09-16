@@ -1,41 +1,18 @@
-# Sample Documents (Help ▸ Open Sample Document)
+# Sample Documents
 
-This folder is bundled into the app (`Contents/Resources/SampleDocuments`) and read at
-runtime by `SoftReturn/Support/SampleDocuments.swift`. Every `.WS`-family file placed here
-(`.ws`, `.ws0`-`.ws9`, `.wsd`, `.wsm`) shows up automatically as one item in the Help ▸ Open
-Sample Document ▸ submenu, titled by its own filename — no code change needed to add, remove,
-or refresh a sample.
+Four short public-domain works, saved as WordStar files, so you have something real to open
+the first time you use Soft Return. Open any of them from **Help ▸ Open Sample Document**.
 
-## Job 374 (b24, SAMPLES IN-APP)
+| File | What it is |
+| --- | --- |
+| `LYING.WS` | Mark Twain, "On the Decay of the Art of Lying" (1882) — an essay written for a meeting of the Historical and Antiquarian Club of Hartford. It carries a footnote, so it shows how Soft Return handles those. |
+| `OCAPTAIN.WS` | Walt Whitman, "O Captain! My Captain!" (1865) — the elegy for Abraham Lincoln. |
+| `TWAINLET.WS` | Mark Twain's letter to Walt Whitman, written in Hartford on 24 May 1889 for Whitman's seventieth birthday. |
+| `WARPRAYR.WS` | Mark Twain, "The War Prayer" — written in 1905 and published after his death. |
 
-The brief for this job asked for the four current files from the private vault
-`pd-samples/authored/*.WS` to be copied in here. That vault was not reachable from the
-worker environment job 374 ran in (same class of wall as job 266's DOSBox-X/WS7 ground truth
-and job 279's ctrl-kd clone — see those jobs' memory/reports), so job 374 itself shipped this
-folder EMPTY, as a disclosed gap.
+All four are in the public domain, and they are ordinary WordStar documents: nothing in them is
+special to Soft Return. You can copy them out, edit them, or open them in any other WordStar
+reader.
 
-Bundled since: four public-domain `.WS` files (`DARKNESS.WS`, `OCAPTAIN.WS`, `TWAINLET.WS`,
-`WARPRAYR.WS`) — a different route than the private vault (public-domain literature) closing
-the same gap. `SampleDocuments.items()` now returns these four, sorted by title, and
-`SampleDocuments.buildMenuItem()` returns a real submenu, so the Help ▸ Open Sample Document
-menu item is present. Swapping in a different set later is still a plain file replacement
-here, nothing to update in code.
-
-## Job 400 (F11, sample bundle refresh)
-
-`DARKNESS.WS` removed from this folder per Jon's 2026-08-19 ruling (content bar); its
-replacement essay is selected separately and will be authored in WS7 later. `OCAPTAIN.WS`
-and `TWAINLET.WS` (WS4) and `WARPRAYR.WS` (WS7) are now Jon's own hand-authored versions,
-replacing the machine-authored ones this README previously described. Three files ship
-today, not four — `SampleDocuments.items()` needed no code change (still data-driven off
-this folder's own contents), only the tests/docs below that had hardcoded the count of four
-or DARKNESS.WS's name.
-
-## Job 407 (F11, sample set to 4: LYING.WS)
-
-`DARKNESS.WS`'s replacement essay lands: `LYING.WS`, Mark Twain's "On the Decay of the Art
-of Lying" (1882), Jon-authored in WS7. Four files ship again (`LYING.WS`, `OCAPTAIN.WS`,
-`TWAINLET.WS`, `WARPRAYR.WS`) — again no code change, `SampleDocuments.items()` picks it up
-automatically. `LYING.WS` also carries a real WordStar footnote ("Did not take the prize."),
-restoring the footnote-feature coverage `DARKNESS.WS` carried before job 400
-(`SampleDocumentsTests.lyingWSBundledFootnoteReachesDocumentInfoAndTheNativePage`).
+Adding your own is just as plain. Any WordStar-family file dropped into this folder
+(`.ws`, `.ws0`–`.ws9`, `.wsd`, `.wsm`) appears in the Help menu by its own filename.
