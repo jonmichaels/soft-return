@@ -876,7 +876,12 @@ let euroPatchedDrivers: Set<String> = ["LASERJET", "LJ6DTP", "HP4"]
 /// to even though it never applies the rule itself: the semantic flow above has already
 /// mapped the character by the time the app's Native and Modern renderers see a run. Nothing
 /// else about this function changed — visibility only (planning #266, Native half).
+/// Quirks mode (2026-09-16) names this rule `driver-euro-sign` and lets a reader switch it
+/// off to see the literal peseta even on a patched-driver document. It is an AUTO quirk --
+/// on unless a caller says otherwise -- so a document naming one of the three drivers gets
+/// exactly the same answer it always did.
 public func pesetaMeansEuro(_ doc: Document) -> Bool {
+    guard quirkEnabled(doc, QuirkName.euro) else { return false }
     let name = (doc.printerDriver ?? "").trimmed().uppercased()
     return euroPatchedDrivers.contains(name)
 }
@@ -915,7 +920,12 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
     }
 
     var printControls: [SemanticPrintControl] = []
-    let lj = doc.printerDriver == "LJ6DTP"
+    // planning #266 / quirks mode: the LJ6DTP driver's own two character families are
+    // separately named quirks, each switchable on its own; both are AUTO, so a document
+    // declaring that driver behaves exactly as it always did.
+    let ljTypography = quirkEnabled(doc, QuirkName.ljTypography)
+    let ljCorners = quirkEnabled(doc, QuirkName.ljBoxCorners)
+    let lj = ljTypography || ljCorners
     // b24 completion (C1): the same whole-document context `EmitRTF`/`EmitHTML`/`EmitText`
     // compute for their own `assembleParagraphs`/`isVerse` calls — Modern is never
     // "printed", so `screenplayBlocks` is unconditional (matches those emitters' own
@@ -1078,7 +1088,8 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
                     // an em dash in any century, whichever renderer consumes these items
                     let entry = doc.fonts[fontIndex]
                     if entry.proportional {
-                        text = ljSubstituteText(text, entry: entry)
+                        text = ljSubstituteText(text, entry: entry,
+                                                typography: ljTypography, corners: ljCorners)
                     }
                 }
                 // planning #266: the driver-keyed cp437-158 rule, applied here for the
@@ -1941,9 +1952,29 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
     let modernGraphicCells = attachGraphicCellsModern(doc, notes: options.notes,
                                                       noteRefs: options.noteRefs,
                                                       semCached: flow)
+    // version 12 (2026-09-16, Jon's quirks ruling): two top-level lists,
+    // `quirks_applicable` (every registered quirk this document trips, whether or not
+    // anybody turned it on -- that is what lets a reader be OFFERED a known quirk on a
+    // plain, faithful run instead of having to guess one exists) and `quirks_applied`
+    // (the subset in force for this render). Both OMITTED, not empty, when the document
+    // trips nothing at all, so such a document emits byte-identical JSON to version 11
+    // apart from the version number; a document that trips one carries both lists even
+    // when `quirks_applied` is empty, because "available and off" is exactly the state an
+    // app needs to show. The names are stable identifiers; their one-line user-facing
+    // descriptions and the plain-language REASON each applies come from
+    // `QuirkRegistry.list(for:)`, not from this JSON -- they are properties of the build,
+    // not of the document, and would be dead weight repeated in every file.
+    let decision = quirkDecision(doc)
+    var quirkFields: [(String, LayoutJSONValue)] = []
+    if !decision.applicable.isEmpty {
+        quirkFields = [
+            ("quirks_applicable", .array(decision.applicableNames.map { .string($0) })),
+            ("quirks_applied", .array(decision.applied.map { .string($0) })),
+        ]
+    }
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
-        ("version", .int(11)),
+        ("version", .int(12)),
         ("meta", jsonMeta(doc)),
         ("page", jsonPage(doc.page)),
         ("fonts", .array(doc.fonts.map(jsonFont))),
@@ -1995,7 +2026,7 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                 ])
             })),
         ])),
-    ])
+    ] + quirkFields)
     return jsonSerialize(out) + "\n"
 }
 
@@ -2033,7 +2064,9 @@ func substExempt(_ span: Span) -> Bool {
 /// case — callers skip the whole pass and nothing is copied). Port of
 /// `layout.driver_substituter`.
 func driverSubstituter(_ doc: Document) -> ((String, Int?) -> String)? {
-    let lj = (doc.printerDriver ?? "").trimmed().uppercased() == "LJ6DTP"
+    let ljTypography = quirkEnabled(doc, QuirkName.ljTypography)
+    let ljCorners = quirkEnabled(doc, QuirkName.ljBoxCorners)
+    let lj = ljTypography || ljCorners
     let euro = pesetaMeansEuro(doc)
     guard lj || euro else { return nil }
     let fonts = doc.fonts
@@ -2043,7 +2076,8 @@ func driverSubstituter(_ doc: Document) -> ((String, Int?) -> String)? {
         if lj, let index = fontIndex, index < fonts.count {
             // proportional faces only, Univers corners only — the document's own chart's
             // face rules, the same gate `ljSubstitute` and `modernFlow` apply
-            out = ljSubstituteText(out, entry: fonts[index])
+            out = ljSubstituteText(out, entry: fonts[index],
+                                   typography: ljTypography, corners: ljCorners)
         }
         return euroText(out, euro)
     }

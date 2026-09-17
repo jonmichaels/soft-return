@@ -100,10 +100,15 @@ private let ljSubstUniversSemantic: [Character: Character] = [
 /// the same rule at the token level (ruling 2026-08-06 M7: the driver's patched slots are
 /// CONTENT — an em dash is an em dash in any century — while its page art stays
 /// print-time). Proportional faces only, Univers corners only, per the driver's own chart.
-func ljSubstituteText(_ text: String, entry: FontChange) -> String {
+///
+/// `typography` and `corners` are the two quirks these two tables belong to
+/// (`lj6dtp-typography`, `lj6dtp-box-corners`, `Quirks.swift`), switchable one without the
+/// other. Both default to on, which is what every caller before quirks existed asked for.
+func ljSubstituteText(_ text: String, entry: FontChange,
+                      typography: Bool = true, corners: Bool = true) -> String {
     guard entry.proportional else { return text }
-    var out = String(text.map { ljSubst[$0] ?? $0 })
-    if (entry.typestyleName ?? "").hasPrefix("Univers") {
+    var out = typography ? String(text.map { ljSubst[$0] ?? $0 }) : text
+    if corners, (entry.typestyleName ?? "").hasPrefix("Univers") {
         out = String(out.map { ljSubstUniversSemantic[$0] ?? $0 })
     }
     return out
@@ -145,15 +150,19 @@ private func collapsingDoubled(_ text: String, _ ch: Character, to replacement: 
     return out
 }
 
-func ljSubstitute(_ segs: [LineSegment], kerning: Bool = true) -> [LineSegment] {
+func ljSubstitute(_ segs: [LineSegment], kerning: Bool = true,
+                  typography: Bool = true, corners: Bool = true) -> [LineSegment] {
     segs.map { seg in
         guard let entry = seg.entry, entry.proportional else { return seg }
-        var text = String(seg.text.map { ljSubst[$0] ?? $0 })
-        if kerning {
-            text = collapsingDoubled(text, "\u{2018}", to: "\u{201C}")
-            text = collapsingDoubled(text, "\u{2019}", to: "\u{201D}")
+        var text = seg.text
+        if typography {
+            text = String(text.map { ljSubst[$0] ?? $0 })
+            if kerning {
+                text = collapsingDoubled(text, "\u{2018}", to: "\u{201C}")
+                text = collapsingDoubled(text, "\u{2019}", to: "\u{201D}")
+            }
         }
-        if (entry.typestyleName ?? "").hasPrefix("Univers") {
+        if corners, (entry.typestyleName ?? "").hasPrefix("Univers") {
             text = String(text.map { ljSubstUnivers[$0] ?? $0 })
         }
         var out = seg

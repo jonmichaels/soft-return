@@ -205,6 +205,17 @@ public struct Options: Equatable, Sendable {
     /// overwrite prompt/refusal (D4, the sanctioned Mac-vs-Unix platform divergence — "it's
     /// a Mac"). See `CLIEnvironment`'s `fileExists`/`stdinIsTTY`/`readLine` and `Run.swift`.
     public var force = false
+    /// `--quirk NAME`, repeatable: named departures to turn ON for this conversion.
+    /// A quirk this document does not trip is a no-op, so one standing list can be
+    /// handed to every file; a name this build does not know is a usage error.
+    public var quirksEnabled: [String] = []
+    /// `--no-quirk NAME`, repeatable: named departures to turn OFF.
+    public var quirksDisabled: [String] = []
+    /// `--quirks off|auto|all`: the baseline the two lists above adjust.
+    public var quirksMode: QuirkMode = .auto
+    /// `--list-quirks`: print the quirk catalogue as JSON and stop. With files, each
+    /// file's own row set (applicable, why, in force).
+    public var listQuirks = false
 
     public init() {}
 }
@@ -250,6 +261,10 @@ let pageNumbersChoices = ["auto", "on", "off"]
 /// `--sentence-spacing` (b33 N9, mirrored from ctrl-kd 0750948). Same pattern:
 /// `EmitOptions.SentenceSpacingMode` has exactly these three cases.
 let sentenceSpacingChoices = ["auto", "keep", "single"]
+
+/// `--quirks`. Same pattern as every other choice list here: `QuirkMode` has exactly
+/// these three cases, so the initializer IS the validation and this only spells the error.
+let quirksModeChoices = ["auto", "off", "all"]
 
 /// `--page-settings` presets (ruling 2026-08-05, D8): `default` is the explicit no-op —
 /// WordStar factory geometry IS what an empty settings value means, since a document's own
@@ -589,6 +604,31 @@ public func parseArguments(
             case .failure(let message):
                 return .usageError(message)
             }
+        case "--quirk":
+            guard let value = takeValue(flag, attached: attached) else {
+                return .usageError("argument \(flag): expected one argument")
+            }
+            options.quirksEnabled.append(value)
+        case "--no-quirk":
+            guard let value = takeValue(flag, attached: attached) else {
+                return .usageError("argument \(flag): expected one argument")
+            }
+            options.quirksDisabled.append(value)
+        case "--quirks":
+            guard let value = takeValue(flag, attached: attached) else {
+                return .usageError("argument \(flag): expected one argument")
+            }
+            guard quirksModeChoices.contains(value), let mode = QuirkMode(rawValue: value) else {
+                return .usageError(
+                    "argument \(flag): invalid choice: '\(value)' "
+                        + "(choose from \(quotedList(quirksModeChoices)))")
+            }
+            options.quirksMode = mode
+        case "--list-quirks":
+            if attached != nil {
+                return .usageError("argument \(flag): ignored explicit argument '\(attached!)'")
+            }
+            options.listQuirks = true
         case "--force":
             if attached != nil {
                 return .usageError("argument \(flag): ignored explicit argument '\(attached!)'")
@@ -616,6 +656,12 @@ public func parseArguments(
         index += 1
     }
 
+    // `--list-quirks` is informational and, unlike every other flag here, is meaningful
+    // with no file at all: bare, it prints the catalogue this build carries.
+    if options.listQuirks && files.isEmpty {
+        options.files = []
+        return .run(options)
+    }
     guard !files.isEmpty else {
         return .usageError("the following arguments are required: files")
     }
@@ -665,7 +711,9 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
               [--headers {on,off}] [--line-numbers {on,off}] [--toc {on,off}]
               [--inline-styling {on,off}] [--pictures {off,embed,export}]
               [--page-numbers {auto,on,off}] [--sentence-spacing {auto,keep,single}]
-              [--no-styles] [--no-notes] [--comments] [--diagnose] [--samples DIR]
+              [--quirk NAME] [--no-quirk NAME] [--quirks {off,auto,all}]
+              [--list-quirks] [--no-styles] [--no-notes] [--comments]
+              [--diagnose] [--samples DIR]
               FILE [FILE ...]
 
     Convert WordStar 4-7 documents and print-to-disk files to text, Markdown, HTML,
@@ -782,6 +830,30 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             sentence end. Markdown never emits a trailing double
                             space from this either way (that is CommonMark's own
                             hard-break marker) -- unrelated to this flag, always on.
+      --quirk NAME          turn a named quirk ON for this conversion (repeatable).
+                            A quirk is a NAMED departure from a literal reading of
+                            the bytes -- see --list-quirks for every name this build
+                            knows, what it does, and whether it applies to your
+                            file. Naming a quirk the document does not trip does
+                            nothing (so one standing list can be passed to every
+                            file); naming one that does not exist is an error.
+      --no-quirk NAME       turn a named quirk OFF (repeatable). The quirks that are
+                            on by default are the ones the document itself points at
+                            -- its own last-used printer driver changed what some
+                            characters print as -- so this is how you see the raw
+                            character instead.
+      --quirks {off,auto,all}
+                            the baseline --quirk/--no-quirk then adjust. auto
+                            (DEFAULT): the quirks the document itself points at, and
+                            no others. off: none at all, the most literal reading of
+                            the bytes this converter can give. all: every quirk that
+                            applies to this document, including the ones that are
+                            off by default because they are somebody's judgement
+                            rather than the file's own evidence.
+      --list-quirks         list every quirk this build knows as JSON -- name,
+                            one-line description, and whether it is on by default;
+                            WITH file arguments, also whether each applies to that
+                            file, why, and whether it is in force. No conversion.
       --no-notes            omit footnotes, endnotes and annotations from the output
       --comments            include WordStar comments, which it never printed
                             (author's asides, hidden since the file was written)

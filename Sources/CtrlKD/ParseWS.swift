@@ -760,6 +760,144 @@ public func parseWS(_ data: [UInt8]) -> Document {
         cur = newBlock()
     }
 
+    /// Apply one 0x11 paragraph-style SELECTION, in the stream order it occurs.
+    /// Returns whether it closed a block (the caller's own `styleClosedHere`).
+    ///
+    /// Extracted from the per-line mark loop — still the only caller for a
+    /// selection that lands on a CONTENT line — so the dot-command branch can
+    /// apply one too. A selection whose bytes sit at the very END of a line
+    /// lands at offset 0 of whatever comes next, and when that is a dot-command
+    /// line the mark used to die with it: the same hazard `carriedMarks`
+    /// already names for colour and font, but worse, because ORDER matters
+    /// here. `.lh` and a style's own line height are the same WordStar setting,
+    /// so deferring the selection past the dot line would let the style
+    /// silently win a contest the file says the dot command wins. See the
+    /// dot-command branch's own call. Port of ctrl-kd core.py's `_select_style`.
+    func selectStyle(_ w0: Int, rel: Int,
+                     fontSink: inout [(offset: Int, index: Int)]) -> Bool {
+        // Resolve the handle against the file's own library. Pool tag 0x02 =
+        // this file; anything else (0x03xx editing temps) is unresolvable BY
+        // DESIGN and left unstyled rather than guessed. Heading level comes from
+        // the RESOLVED NAME — the corpus proved slot numbers carry none (see the
+        // 0x11 parse site). Register C1.
+        //
+        // The selection PERSISTS: `styleFmt` stays in force for every following
+        // block until the next 0x11. A recordless entry (the inherit-everything
+        // base, e.g. 'WordStar Defaults') resets formatting to the dot-command
+        // state BY CONSTRUCTION, since it contributes no record fields.
+        if (w0 >> 8) == 0x02 {
+            let slot = w0 & 0xFF
+            // #236 (WORDSTAR.WS/REF/wordstar-file-format.ws title
+            // blocks): a style record's line-height VMI of -1 means
+            // INHERIT, already folded to `nil` by `StyleRecord`.
+            // Measured against WORDSTAR.WS's own capture (Double-
+            // Indented Quote, a style with NO font of its own AND an
+            // inherited line height): its body renders at 16.0pt
+            // leading, not the document's 12pt default -- the SAME
+            // 16.0pt the immediately preceding paragraph style (MS
+            // Body Copy, explicit vmi=320) was already using.
+            // 'Inherit' means carry the AMBIENT (previously active)
+            // value forward, not reset to nothing -- resetting
+            // `styleFmt` to a fresh `StyleFormat()` below must not
+            // lose it. Port of Python's `parse_ws` `_prev_vmi` fix.
+            // Falls back to the ACTIVE value, so a document that never writes a
+            // `.lh` behaves exactly as before — see `StyleFormat.styleVMIAmbient`.
+            let prevVMI = styleFmt.styleVMIAmbient ?? styleFmt.lineHeightVMI
+            // Ruling 2026-09-16 ("Style-library strikeout runs until a style
+            // clears it"): an attribute a style turns ON stays on past that
+            // paragraph. WSFORMAT.TXT's own rule for the two attribute words is
+            // "if both corresponding bits are off, then the attribute is
+            // inherited from the current state" -- so only a later style that
+            // sets the bit in its attrs_OFF word ends the run. See
+            // `stickyStyleAttrs` for why the set is strikeout alone.
+            var sticky = styleFmt.stickyAttrs
+            if let record = styleSlots[slot]?.record {
+                for (bit, style) in stickyStyleAttrs {
+                    if record.attrsOn & bit != 0 {
+                        sticky.insert(style)
+                    } else if record.attrsOff & bit != 0 {
+                        sticky.remove(style)
+                    }
+                }
+            }
+            styleFmt = StyleFormat()
+            styleFmt.styleVMIAmbient = prevVMI
+            styleFmt.styleID = slot
+            styleFmt.stickyAttrs = sticky
+            // Also for an UNRESOLVABLE handle (a 0x03xx editing-temp pool entry,
+            // or a slot this file's library does not carry): it declares neither
+            // word, so every attribute inherits, including the running one.
+            styleFmt.attrs = sticky
+            if let entry = styleSlots[slot] {
+                styleFmt.styleName = entry.name
+                styleFmt.heading = styleHeadingLevel(entry.name)
+                if let record = entry.record {
+                    // `.left` means EXPLICIT no-justification — it overrides a
+                    // running `.oj`, so it must occupy the align slot rather than
+                    // fall through.
+                    styleFmt.align = record.justification
+                    styleFmt.wrap = record.wordWrap
+                    // HMI 1/1800in -> print columns at 10 CPI, the unit
+                    // `.lm`/`.rm` already use (180 = 1 col).
+                    styleFmt.leftMargin = record.leftMarginHMI.map(hmiToColumns)
+                    styleFmt.rightMargin = record.rightMarginHMI.map(hmiToColumns)
+                    styleFmt.paraMargin = record.paraMarginHMI.map(hmiToColumns)
+                    // The style's own ON bits, plus every sticky attribute
+                    // still running from an earlier style.
+                    styleFmt.attrs = record.attrs.union(sticky)
+                    // line_height_vmi: -2 = auto (the only value the measured
+                    // oracle carries), a positive count = explicit VMI
+                    // (WSFORMAT.WS: same 1/1440in unit as a font's own height
+                    // word). `StyleRecord.lineHeightVMI` already folded -1
+                    // (inherit) to `nil` at parse time, so a bare `if let` is the
+                    // right test here -- 'inherit' never reaches this branch.
+                    if let lh = record.lineHeightVMI {
+                        styleFmt.lineHeightVMI = lh
+                        styleFmt.styleVMIAmbient = lh
+                    } else if let prevVMI {
+                        // -1/inherit: carry the ambient value forward
+                        // (see the #236 comment above this block).
+                        styleFmt.lineHeightVMI = prevVMI
+                        styleFmt.styleVMIAmbient = prevVMI
+                    }
+                    // Register C5: the style's own declared colour index. A
+                    // present-but-0 value is a real, explicit "Black", distinct
+                    // from "the style never set one" -- `StyleRecord.colour`
+                    // already folded the -1 inherit sentinel to `nil` at parse
+                    // time, so a bare `if let` is the right test, exactly as it
+                    // is for `lineHeightVMI` just above.
+                    if let colour = record.colour {
+                        styleFmt.styleColour = colour
+                    }
+                    // The style's font field is the SAME (width, height,
+                    // typestyle) triple as an inline type-2 Font block, and
+                    // selecting the style CHANGES THE ACTIVE FONT the same way.
+                    // An all-zero triple records NO font (distinct from the
+                    // inherit sentinel, which leaves `record.font` `nil` --
+                    // never having been set at all), so it changes nothing.
+                    if let font = record.font,
+                       font.width != 0 || font.height != 0 || font.typestyle != 0 {
+                        let idx = styleFontIndex(width: font.width, height: font.height,
+                                                 typestyle: font.typestyle)
+                        fontSink.append((offset: rel, index: idx))
+                        // The style's own declared size, in points -- captured on
+                        // the BLOCK (not just the span-level `fontAt` mark) so a
+                        // spanless blank line, which carries no font tag of its
+                        // own, can still resolve its style's auto/explicit
+                        // leading.
+                        styleFmt.styleFontPt = Double(font.height) / 20.0
+                    }
+                }
+            }
+        }
+        // `styleFmt` is updated BEFORE this close: the previous block keeps its
+        // old style, the fresh block picks the new one up from `newBlock()`. A
+        // 0x03xx temp-pool handle is unresolvable by design, but a selection is
+        // still a block boundary in the file, so this runs either way.
+        closeBlock()
+        return true
+    }
+
     for (rtIdx, physical) in pass.lines.enumerated() {
         var raw = physical.text
         // this entry's raw separator bytes, and the event count before it — tasks
@@ -948,6 +1086,34 @@ public func parseWS(_ data: [UInt8]) -> Document {
             if !ifActive.isEmpty, !ifActive.allSatisfy({ $0 }) {
                 continue
             }
+            // A style SELECTION whose bytes sit at the very END of the PREVIOUS line
+            // lands at offset 0 of this one (`linesPass`'s `a <= off < a + len` cannot
+            // place it inside the line it follows). A dot-command line is CONSUMED
+            // below, so the mark used to die with it — the same hazard the
+            // `carriedMarks` note further down names for colour and font. Carrying it
+            // forward is NOT enough, because ORDER decides the outcome: `.lh` and a
+            // paragraph style's own line height are the same WordStar setting, and a
+            // style applied AFTER the `.lh` line would undo a dot command the file puts
+            // second. So it is applied HERE, before this line's own command runs —
+            // which is exactly where the bytes are.
+            //
+            // `rel == 0` is what distinguishes the two cases, and it is exact: a dot
+            // line's own first byte is its '.', so nothing of this line's can mark
+            // offset 0, while a style block written INSIDE a `.h1`/`.f1` argument (or a
+            // commented-out `..f1`) always sits past the command letters and marks
+            // rel >= 4. Those belong to the running head, which reads its own mark
+            // (`hfStyleW0` below), and must never reach the body — `sawyer/RTF-RJS/
+            // NOVEL.WS` page 1 renders its whole front-matter block in the FOOTER
+            // style's 6pt Univers if they do.
+            var dotStyleFonts: [(offset: Int, index: Int)] = []
+            for (rel, mark) in physical.marks {
+                if case .style(let w0) = mark, rel == 0 {
+                    _ = selectStyle(w0, rel: 0, fontSink: &dotStyleFonts)
+                }
+            }
+            // The selection's own font reaches the next CONTENT line the way every
+            // other carried state does — at its offset 0.
+            for entry in dotStyleFonts { carriedMarks.append(.font(index: entry.index)) }
             // '..' and '.ig' are COMMENT lines (ruling 2026-08-06 M9): both WordStar
             // comment syntaxes unify into Note(kind: .comment), each emitting a
             // reference mark at its own position — the text is kept verbatim after the
@@ -1165,6 +1331,31 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // block cannot hold both.
             let beforeFmt = fmt.blockFormat
             applyFormatDot(cmd, &fmt)
+            // `.lh` and a paragraph STYLE's own `lineHeightVMI` are the SAME WordStar
+            // setting — a line height — reached two ways, so the one that comes LATER
+            // in the file wins. `styleLeadPt` gives the style's value precedence over
+            // the generic `.lh`, which is right for every document that selects a style
+            // and then leaves the leading alone (LYING.WS, WARPRAYR.WS: no `.lh` at
+            // all). It is wrong the moment a file writes a real `.lh` AFTER the
+            // selection, which is what `sawyer/RTF-RJS/NOVEL.WS` does at each of its
+            // five book-list sections: select 'MS Body Copy' (VMI 480 = 24pt), then
+            // `.lh 12pt`. Real WS7 prints those lists single-spaced at 12pt
+            // (ws7-prints/v4, page 20: baselines 144, 156, 168 ... exactly 12.0pt
+            // apart); the style's 24pt made the section overflow onto a 52nd page the
+            // real print does not have. Dropping the style's ACTIVE value here hands the
+            // following blocks back to `Line.lead48`, which is where a `.lh` already
+            // lives; `styleVMIAmbient` keeps what the next selection's own 'inherit'
+            // must still inherit.
+            if styleFmt.lineHeightVMI != nil,
+               let (lhName, lhArg) = dotCommandNameAndArg(cmd),
+               lhName.count == 2,
+               lhName[0] | 0x20 == 0x6C, lhName[1] | 0x20 == 0x68,      // "lh"
+               !(lhArg.first.map { $0 | 0x20 == 0x61 } ?? false),       // not `.lh a`
+               let (lhValue, lhUnit) = parseDotNumber(lhArg),
+               resolveLhArg(lhValue, lhUnit) != nil {
+                styleFmt.lineHeightVMI = nil
+                closeBlock()
+            }
             // #241 remainder: a same-line `.RR` ruler IMAGE (`.RR--!...R`)
             // updates leftMargin/paraMargin/rightMargin exactly like an
             // explicit `.lm`/`.pm`/`.rm` would — see `applyRulerMargins`'s
@@ -1440,122 +1631,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 // severed real paragraphs. See the 0x0B parse site for the measurement.
                 curLine.softpage = true
             case .style(let w0):
-                // Resolve the handle against the file's own library. Pool tag 0x02 =
-                // this file; anything else (0x03xx editing temps) is unresolvable BY
-                // DESIGN and left unstyled rather than guessed. Heading level comes from
-                // the RESOLVED NAME — the corpus proved slot numbers carry none (see the
-                // 0x11 parse site). Register C1.
-                //
-                // The selection PERSISTS: `styleFmt` stays in force for every following
-                // block until the next 0x11. A recordless entry (the inherit-everything
-                // base, e.g. 'WordStar Defaults') resets formatting to the dot-command
-                // state BY CONSTRUCTION, since it contributes no record fields.
-                if (w0 >> 8) == 0x02 {
-                    let slot = w0 & 0xFF
-                    // #236 (WORDSTAR.WS/REF/wordstar-file-format.ws title
-                    // blocks): a style record's line-height VMI of -1 means
-                    // INHERIT, already folded to `nil` by `StyleRecord`.
-                    // Measured against WORDSTAR.WS's own capture (Double-
-                    // Indented Quote, a style with NO font of its own AND an
-                    // inherited line height): its body renders at 16.0pt
-                    // leading, not the document's 12pt default -- the SAME
-                    // 16.0pt the immediately preceding paragraph style (MS
-                    // Body Copy, explicit vmi=320) was already using.
-                    // 'Inherit' means carry the AMBIENT (previously active)
-                    // value forward, not reset to nothing -- resetting
-                    // `styleFmt` to a fresh `StyleFormat()` below must not
-                    // lose it. Port of Python's `parse_ws` `_prev_vmi` fix.
-                    let prevVMI = styleFmt.lineHeightVMI
-                    // Ruling 2026-09-16 ("Style-library strikeout runs until a style
-                    // clears it"): an attribute a style turns ON stays on past that
-                    // paragraph. WSFORMAT.TXT's own rule for the two attribute words is
-                    // "if both corresponding bits are off, then the attribute is
-                    // inherited from the current state" -- so only a later style that
-                    // sets the bit in its attrs_OFF word ends the run. See
-                    // `stickyStyleAttrs` for why the set is strikeout alone.
-                    var sticky = styleFmt.stickyAttrs
-                    if let record = styleSlots[slot]?.record {
-                        for (bit, style) in stickyStyleAttrs {
-                            if record.attrsOn & bit != 0 {
-                                sticky.insert(style)
-                            } else if record.attrsOff & bit != 0 {
-                                sticky.remove(style)
-                            }
-                        }
-                    }
-                    styleFmt = StyleFormat()
-                    styleFmt.styleID = slot
-                    styleFmt.stickyAttrs = sticky
-                    // Also for an UNRESOLVABLE handle (a 0x03xx editing-temp pool entry,
-                    // or a slot this file's library does not carry): it declares neither
-                    // word, so every attribute inherits, including the running one.
-                    styleFmt.attrs = sticky
-                    if let entry = styleSlots[slot] {
-                        styleFmt.styleName = entry.name
-                        styleFmt.heading = styleHeadingLevel(entry.name)
-                        if let record = entry.record {
-                            // `.left` means EXPLICIT no-justification — it overrides a
-                            // running `.oj`, so it must occupy the align slot rather than
-                            // fall through.
-                            styleFmt.align = record.justification
-                            styleFmt.wrap = record.wordWrap
-                            // HMI 1/1800in -> print columns at 10 CPI, the unit
-                            // `.lm`/`.rm` already use (180 = 1 col).
-                            styleFmt.leftMargin = record.leftMarginHMI.map(hmiToColumns)
-                            styleFmt.rightMargin = record.rightMarginHMI.map(hmiToColumns)
-                            styleFmt.paraMargin = record.paraMarginHMI.map(hmiToColumns)
-                            // The style's own ON bits, plus every sticky attribute
-                            // still running from an earlier style.
-                            styleFmt.attrs = record.attrs.union(sticky)
-                            // line_height_vmi: -2 = auto (the only value the measured
-                            // oracle carries), a positive count = explicit VMI
-                            // (WSFORMAT.WS: same 1/1440in unit as a font's own height
-                            // word). `StyleRecord.lineHeightVMI` already folded -1
-                            // (inherit) to `nil` at parse time, so a bare `if let` is the
-                            // right test here -- 'inherit' never reaches this branch.
-                            if let lh = record.lineHeightVMI {
-                                styleFmt.lineHeightVMI = lh
-                            } else if let prevVMI {
-                                // -1/inherit: carry the ambient value forward
-                                // (see the #236 comment above this block).
-                                styleFmt.lineHeightVMI = prevVMI
-                            }
-                            // Register C5: the style's own declared colour index. A
-                            // present-but-0 value is a real, explicit "Black", distinct
-                            // from "the style never set one" -- `StyleRecord.colour`
-                            // already folded the -1 inherit sentinel to `nil` at parse
-                            // time, so a bare `if let` is the right test, exactly as it
-                            // is for `lineHeightVMI` just above.
-                            if let colour = record.colour {
-                                styleFmt.styleColour = colour
-                            }
-                            // The style's font field is the SAME (width, height,
-                            // typestyle) triple as an inline type-2 Font block, and
-                            // selecting the style CHANGES THE ACTIVE FONT the same way.
-                            // An all-zero triple records NO font (distinct from the
-                            // inherit sentinel, which leaves `record.font` `nil` --
-                            // never having been set at all), so it changes nothing.
-                            if let font = record.font,
-                               font.width != 0 || font.height != 0 || font.typestyle != 0 {
-                                let idx = styleFontIndex(width: font.width, height: font.height,
-                                                         typestyle: font.typestyle)
-                                fontAt.append((offset: rel, index: idx))
-                                // The style's own declared size, in points -- captured on
-                                // the BLOCK (not just the span-level `fontAt` mark) so a
-                                // spanless blank line, which carries no font tag of its
-                                // own, can still resolve its style's auto/explicit
-                                // leading.
-                                styleFmt.styleFontPt = Double(font.height) / 20.0
-                            }
-                        }
-                    }
+                if selectStyle(w0, rel: rel, fontSink: &fontAt) {
+                    styleClosedHere = true
                 }
-                // `styleFmt` is updated BEFORE this close: the previous block keeps its
-                // old style, the fresh block picks the new one up from `newBlock()`. A
-                // 0x03xx temp-pool handle is unresolvable by design, but a selection is
-                // still a block boundary in the file, so this runs either way.
-                closeBlock()
-                styleClosedHere = true
             default:
                 // every other mark kind is SPAN-LEVEL and was collected in the pass
                 // above this one, before the form-feed branch that needs it
@@ -3108,6 +3186,14 @@ private struct StyleFormat {
     /// The style's own declared colour index (0-15, WSFORMAT's fixed CGA/EGA palette --
     /// the same space as an inline type-1 colour change). See `Block.styleColour`.
     var styleColour: Int? = nil
+    /// The last line height a STYLE declared, kept apart from `lineHeightVMI` (the
+    /// ACTIVE one) because a `.lh` supersedes the active value — see the dot-command
+    /// branch — without erasing what the NEXT style's own 'inherit' should inherit.
+    /// Measured on `sawyer/RTF-RJS/NOVEL.WS` page 20 (ws7-prints/v4): inside a
+    /// book-list section running at `.lh 12pt`, the entering advance to each
+    /// sub-heading — H3/H2, both of which inherit their line height — is 24.0pt, the
+    /// VMI 'MS Body Copy' declared, and not the 12pt `.lh` in force.
+    var styleVMIAmbient: Int? = nil
     /// The attributes still RUNNING from an earlier style: turned on by some style and
     /// not yet cleared by a later one's `attrsOff` word (ruling 2026-09-16, see
     /// `stickyStyleAttrs`). Survives the reset to a fresh `StyleFormat` at each style

@@ -1,5 +1,25 @@
 # Known-Issues Register
 
+### 2026-09-16 — iOS 26.3: `pagesAreLaidOutAsTheyAreReached` [-HOLYMAC.WS, Modern] sits on its 100 ms bound (v4.4.0 release run)
+
+- **Test:** `LongDocumentLayoutTests.pagesAreLaidOutAsTheyAreReached(document:view:)` in `SoftReturnIOSTests`, the
+  `-HOLYMAC.WS` Modern case. No `withKnownIssue` wrapper: the assertion stands, and this entry records that it sits on
+  a bound this machine's simulator straddles.
+- **What it asserts:** once the screen has appeared, no main-thread stretch of 100 ms or more while a long document's
+  pages are laid out as they are reached.
+- **Measured:**
+  - `rel440-ios26` (the v4.4.0 release run, tree 6a6ce7a, iOS 26.3): FAILED — the "render finishes" stretch measured
+    100.16 ms, sixteen hundredths of a millisecond over.
+  - `b45-i28-final26` (batch 45, iOS 26.3): PASSED — the same stretch measured 96 ms.
+  - `rel440-ios16` (the same tree, iOS 16.0): PASSED.
+- **Behaviour unchanged:** in the failing run every page was laid out — 491 Modern pages, none breaking differently
+  from a whole layout of the same render. Only the length of one main-thread turn moved.
+- **Same class as** the Mac's `openAndPageChangeTimings` entry below: a machine-marginal timing bound that fails when
+  the box is loaded, here during the whole-target release run.
+- **Status:** OPEN — machine-marginal bound, named so the release gate accounts for it by name rather than as an
+  unexplained failure.
+
+
 ### 2026-09-16 — `RTF-RJS/NOVEL.WS` lays 43 Modern view pages against the engine's 44: same text, broken differently (batch 42)
 
 - **Test:** `ModernFooterTimingFollowsTheEngineTests.bodyLinesPerPageBesideTheEngines()` (macOS) — a printing

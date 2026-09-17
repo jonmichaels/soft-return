@@ -15,6 +15,7 @@ import SoftReturnShared
 enum QuickLookPageSettingsPreference {
     static let groupIdentifier = SpotlightIndexQueue.groupIdentifier
     private static let key = "pageSettingsDefaultPreset"
+    private static let quirksKey = "quirkDefaults"
 
     private static func containerDefaults(groupIdentifier: String) -> UserDefaults? {
         UserDefaults(suiteName: groupIdentifier)
@@ -31,6 +32,24 @@ enum QuickLookPageSettingsPreference {
         } else {
             defaults?.removeObject(forKey: key)
         }
+    }
+
+    /// Batch 46 (Jon's quirks rulings; Athena: Quick Look uses the app default only): the app's default quirks, for
+    /// the two extensions. Written by the app at launch and whenever Settings changes them.
+    static func setQuirkDefaults(_ quirks: QuirkChoices,
+                                 defaults: UserDefaults? = QuickLookPageSettingsPreference
+                                     .containerDefaults(groupIdentifier: QuickLookPageSettingsPreference.groupIdentifier)) {
+        guard let data = try? JSONEncoder().encode(quirks) else { return }
+        defaults?.set(data, forKey: quirksKey)
+    }
+
+    /// The app's default quirks, or what shipped when nothing is stored or it cannot be read.
+    static func resolvedQuirkDefaults(defaults: UserDefaults? = QuickLookPageSettingsPreference
+                                          .containerDefaults(groupIdentifier: QuickLookPageSettingsPreference.groupIdentifier)
+    ) -> QuirkChoices {
+        guard let data = defaults?.data(forKey: quirksKey),
+              let quirks = try? JSONDecoder().decode(QuirkChoices.self, from: data) else { return .shipped }
+        return quirks
     }
 
     /// `nil` means "no override" — an absent key, an unrecognized name, or no app-group

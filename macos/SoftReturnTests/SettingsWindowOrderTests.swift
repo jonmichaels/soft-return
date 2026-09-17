@@ -52,12 +52,14 @@ struct SettingsWindowOrderTests {
         case row(String)
         case separator
         case caption(String)
+        case button(String)
 
         var description: String {
             switch self {
             case .row(let label): return label
             case .separator: return "-- Separator --"
             case .caption(let text): return "caption(\"\(text)\")"
+            case .button(let title): return "button(\"\(title)\")"
             }
         }
     }
@@ -73,6 +75,9 @@ struct SettingsWindowOrderTests {
             }
             if let box = subview as? NSBox, box.boxType == .separator {
                 return [.separator]
+            }
+            if let button = subview as? NSButton {
+                return [.button(button.title)]
             }
             if let field = subview as? NSTextField, field.accessibilityIdentifier() == "settings-font-caption" {
                 return [.caption(field.stringValue)]
@@ -95,6 +100,8 @@ struct SettingsWindowOrderTests {
             .row("Default Display:"),
             .row("Default Page Size:"),
             .row("Quick Look Margins:"),
+            // Batch 46 (canvas v3 MacSettings): Quirks…, centred and unlabelled, under the popups.
+            .button("Quirks…"),
             .separator,
             .caption("Font and size apply to the Modern view — and to its RTF and PDF exports."),
             .row("Font:"),

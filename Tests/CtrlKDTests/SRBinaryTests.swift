@@ -55,7 +55,7 @@ private func withFourKindFile(_ body: (String) throws -> Void) throws {
     let r = try runSR(["--version"])
     #expect(r.status == 0, "sr --version exited \(r.status): \(r.err)")
     #expect(r.out.contains("sr "), "no version string in: \(r.out)")
-    #expect(r.out.contains("sr v4.3.1"), "banner missing sr v4.3.1 in: \(r.out)")
+    #expect(r.out.contains("sr v4.4.0"), "banner missing sr v4.4.0 in: \(r.out)")
     #expect(!r.out.contains("parity"), "parity clause must stay gone: \(r.out)")
 }
 

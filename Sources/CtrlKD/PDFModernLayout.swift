@@ -1500,7 +1500,11 @@ func modernLineOps(
                 tzState = want
             }
         }
-        ops += rules(tok.styles, tok.text, x: x, y: y, w: tok.width)
+        // Modern passes a whole span at a time, so its strike was already one
+        // continuous rule across the gaps — no sink, inline emission unchanged (E3).
+        var noStrikeSink: [(struck: Bool, x0: Double, x1: Double)]? = nil
+        ops += rules(tok.styles, tok.text, x: x, y: y, w: tok.width,
+                     strikeSink: &noStrikeSink)
         x += tok.width
     }
     return ops

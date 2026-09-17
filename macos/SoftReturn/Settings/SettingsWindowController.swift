@@ -177,6 +177,11 @@ final class SettingsWindowController: NSWindowController {
         ])
         style(topGrid)
 
+        // Batch 46 (canvas v3 MacSettings): Quirks…, centred under the popups with no label, as wide as a popup.
+        let quirksButton = NSButton(title: "Quirks…", target: self, action: #selector(showQuirks(_:)))
+        quirksButton.setAccessibilityIdentifier("settings-quirks-button")
+        quirksButton.translatesAutoresizingMaskIntoConstraints = false
+
         let separatorBox = NSBox()
         separatorBox.boxType = .separator
         separatorBox.translatesAutoresizingMaskIntoConstraints = false
@@ -211,6 +216,7 @@ final class SettingsWindowController: NSWindowController {
 
         let content = NSView()
         content.addSubview(topGrid)
+        content.addSubview(quirksButton)
         content.addSubview(separatorBox)
         content.addSubview(caption)
         content.addSubview(bottomGrid)
@@ -220,7 +226,11 @@ final class SettingsWindowController: NSWindowController {
             topGrid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             topGrid.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
 
-            separatorBox.topAnchor.constraint(equalTo: topGrid.bottomAnchor, constant: 16),
+            quirksButton.topAnchor.constraint(equalTo: topGrid.bottomAnchor, constant: 14),
+            quirksButton.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            quirksButton.widthAnchor.constraint(equalToConstant: Self.popupWidth),
+
+            separatorBox.topAnchor.constraint(equalTo: quirksButton.bottomAnchor, constant: 16),
             separatorBox.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             separatorBox.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
 
@@ -249,6 +259,11 @@ final class SettingsWindowController: NSWindowController {
         if !window.setFrameUsingName("SettingsWindow") {
             window.center()
         }
+    }
+
+    /// Batch 46: the app's default quirks, in their own window.
+    @objc func showQuirks(_ sender: Any?) {
+        QuirksWindowController.showAppDefaults(settings: settings, sender: sender)
     }
 
     /// Which grid row holds the given label, so alignment can be set by meaning rather than

@@ -93,7 +93,8 @@ final class ThumbnailProvider: QLThumbnailProvider {
             // its layout and the drawing. `QuickLookEngineWork` is plain `Sendable` data.
             let work = try QuickLookEngineWork.make(
                 bytes: bytes, docPath: fileURL.path,
-                pageSettingsPreset: QuickLookPageSettingsPreference.resolvedDefault())
+                pageSettingsPreset: QuickLookPageSettingsPreference.resolvedDefault(),
+                quirks: QuickLookPageSettingsPreference.resolvedQuirkDefaults())
             let (image, thumbnailSize) = try DispatchQueue.main.sync {
                 try MainActor.assumeIsolated { () throws -> (CGImage, CGSize) in
                     // The drawing itself is `QuickLookNativeRenderer.thumbnail` — page 1, fitted and

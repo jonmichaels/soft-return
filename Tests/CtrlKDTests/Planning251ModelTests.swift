@@ -38,7 +38,7 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON.
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 11"))
+    #expect(json.contains("\"version\": 12"))
     #expect(json.contains("\"justify_word_x\""))
 }
 
@@ -80,7 +80,7 @@ import Testing
     #expect(pages[0].contains { $0.lineNo == nil })
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 11"))
+    #expect(json.contains("\"version\": 12"))
     #expect(json.contains("\"line_no\""))
 }
 
@@ -145,7 +145,7 @@ import Testing
     #expect(middle.map(\.char) == ["\u{2502}", "\u{2502}"])   // only the two bars
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 11"))
+    #expect(json.contains("\"version\": 12"))
     #expect(json.contains("\"graphic_cells\""))
 }
 
@@ -182,7 +182,7 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON's `modern.items`.
     let json = emitLayout(doc, mode: .modern)
-    #expect(json.contains("\"version\": 11"))
+    #expect(json.contains("\"version\": 12"))
     #expect(json.contains("\"graphic_cells\""))
     #expect(json.contains("\"page\": 1"))
 }
@@ -349,7 +349,7 @@ import Testing
     #expect(pages[0].footerLines == nil)
     #expect(pages[0].autoPageno == nil)
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 11"))
+    #expect(json.contains("\"version\": 12"))
     #expect(!json.contains("\"header_lines\""))
     #expect(!json.contains("\"footer_lines\""))
     #expect(!json.contains("\"auto_page_number\""))

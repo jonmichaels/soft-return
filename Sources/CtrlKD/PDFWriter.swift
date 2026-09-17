@@ -1129,6 +1129,30 @@ func sized(_ styles: Style, _ size: Int, rollPt: Double? = nil, family: PDFFamil
     return (size, 0)
 }
 
+/// The stroke ops for one line's strikeout, from `rules`'s own `strikeSink` records
+/// (E3, 2026-09-16). Port of `pdf._strike_runs`.
+///
+/// Consecutive STRUCK pieces merge into one rule spanning the first inked glyph to the
+/// last, so the word gaps between them are overstruck the way real WS7 overstrikes them;
+/// an unstruck inked piece ends the run. Sorted by x because a justified or tab-placed
+/// line does not necessarily emit its pieces left to right. Same `0.6 w` pen and same
+/// `y + 3` offset the per-piece emission used, so a single-piece run is byte-identical to
+/// what this module drew before.
+func strikeRuns(_ sink: [(struck: Bool, x0: Double, x1: Double)], y: Double) -> [[UInt8]] {
+    var ops: [[UInt8]] = []
+    var x0: Double? = nil
+    var x1: Double = 0
+    for r in sink.sorted(by: { ($0.x0, $0.x1) < ($1.x0, $1.x1) }) {
+        if !r.struck {
+            if let a = x0 { ops.append(rule(xFrom: a, xTo: x1, y: y + 3)); x0 = nil }
+            continue
+        }
+        if x0 == nil { x0 = r.x0; x1 = r.x1 } else { x1 = max(x1, r.x1) }
+    }
+    if let a = x0 { ops.append(rule(xFrom: a, xTo: x1, y: y + 3)) }
+    return ops
+}
+
 /// Underline / strikethrough as stroked paths (PDF has no text attribute for either), for a
 /// span occupying `w` points from `x`. Port of `pdf._rules`.
 ///
@@ -1146,13 +1170,34 @@ func sized(_ styles: Style, _ size: Int, rollPt: Double? = nil, family: PDFFamil
 /// parser records `underlineBlanks` only when the command is present, so `nil` (absent) and
 /// `false` (`.ul off`) are distinguishable. Modern's own call site never passes this (stays
 /// `true`, its prior and only behavior).
+///
+/// `strikeSink` (E3, 2026-09-16): a list, or `nil`. When given, this call RECORDS its
+/// piece as `(struck, x0, x1)` instead of emitting the strike rule, and the caller draws
+/// the line's strikes itself once every piece is placed — see `strikeRuns` and
+/// `lineOpsPrinted`'s own use of it. WordStar's strikeout is not a per-word decoration:
+/// WS7 turns it on and overstrikes EVERY horizontal movement until it goes off again,
+/// word gaps included, exactly the way this module already draws a continuous underline
+/// (the `spanUL` lift below). Measured against ws7-prints/v4 `sawyer/RTF-RJS/NOVEL.WS`
+/// page 20, whose headings print as one unbroken rule across "Books by Robert J. Sawyer";
+/// this engine drew five rules with four clear gaps, because it splits a span into
+/// per-word pieces for width-fitting and each piece reached this function alone. `nil`
+/// (Modern's own call site, which passes a whole span at a time and was already
+/// continuous by construction) keeps the inline emission unchanged.
 func rules(_ styles: Style, _ text: String, x: Double, y: Double, w: Double,
-          continuous: Bool = true) -> [[UInt8]] {
+          continuous: Bool = true,
+          strikeSink: inout [(struck: Bool, x0: Double, x1: Double)]?) -> [[UInt8]] {
     // A rule under a run of pure whitespace would be a stray dash, so Python guards both
     // with `text.strip()` — non-empty after stripping, i.e. the run has ink.
     guard text.contains(where: { !$0.isWhitespace }) else { return [] }
     var ops: [[UInt8]] = []
-    if styles.contains(.strike) { ops.append(rule(xFrom: x, xTo: x + w, y: y + 3)) }
+    if strikeSink != nil {
+        // Unstruck inked pieces are recorded too: they are what BREAKS a run (a strike
+        // that stops and restarts later on the same line is two rules, not one spanning
+        // the gap between them).
+        strikeSink!.append((styles.contains(.strike), x, x + w))
+    } else if styles.contains(.strike) {
+        ops.append(rule(xFrom: x, xTo: x + w, y: y + 3))
+    }
     guard styles.contains(.underline) else { return ops }
     if continuous || !text.contains(" ") {
         ops.append(rule(xFrom: x, xTo: x + w, y: y - 1.5))
@@ -1622,7 +1667,8 @@ private func lineOpsPrinted(
     kerning: Bool = true, justifyRightX: Double? = nil,
     justifyWordX: [PageLine.JustifyWordPiece]? = nil,
     recordGraphicCells: inout [PageLine.GraphicCellPlacement]?,
-    pmActive: Bool = false
+    pmActive: Bool = false,
+    driverQuirks: DriverQuirks = .none
 ) -> [[UInt8]] {
     var ops: [[UInt8]] = []
     // Planning #244 (the round-trip gauntlet fix) moved this expansion out of
@@ -1639,7 +1685,13 @@ private func lineOpsPrinted(
     var segs = expandBareTabsForPrintedLayout(segs)
     // `colourMap` is non-empty exactly when the document declares driver LJ6DTP — the
     // same gate covers its character substitutions.
-    segs = colourMap.isEmpty ? segs : ljSubstitute(segs, kerning: kerning)
+    // Quirks mode: the two character families (`lj6dtp-typography`, `lj6dtp-box-corners`)
+    // switch independently of the colour ones, which is why this no longer rides on
+    // `colourMap` being non-empty.
+    segs = driverQuirks.characters
+        ? ljSubstitute(segs, kerning: kerning,
+                       typography: driverQuirks.typography, corners: driverQuirks.corners)
+        : segs
     let splitSegs = splitIndent(splitSymbolFallback(splitGraphics(segs)))
     // Planning #238 (.oj on full justification): justification only ever touches the
     // ONE span that IS the whole line -- a line that split into several segs (a styled
@@ -1679,6 +1731,9 @@ private func lineOpsPrinted(
     // that all still carry the same pctl/pcl values — `drawnPCL` guards against executing
     // the same control's PCL program once per fragment. Register C2.
     var drawnPCL: Set<Int> = []
+    // E3: every `rules` call on this line records into here instead of emitting its own
+    // strike rule; `strikeRuns` draws them at the end.
+    var strikeSink: [(struck: Bool, x0: Double, x1: Double)]? = []
     for seg in splitSegs {
         // A 0x0F user print control's display string is SCREEN-ONLY: on paper WordStar
         // sent the raw printer payload and advanced by the block's own HMI word (0 for
@@ -1737,14 +1792,14 @@ private func lineOpsPrinted(
         // every driver we cannot read — writes not one extra byte. This is what makes
         // LJ6DTP's knockouts work: white (15) text overprinted onto a black bar punches
         // out of it exactly as the LaserJet printed it.
-        if !colourMap.isEmpty {
+        if !colourMap.isEmpty || driverQuirks.patterns {
             // Register C3: colour9-14 (HP1-HP6) fill with a tiling PATTERN instead of a
             // flat gray -- registered per-page in /Resources by `emitPDF`, same mechanism
             // as /Font and /XObject. Anything else (or no colour tag at all) keeps the
             // plain DeviceGray fill.
             let want: PDFFill
             var wantDarken = false
-            if let idx = seg.colour, lj6dtpHPPatterns[idx] != nil {
+            if driverQuirks.patterns, let idx = seg.colour, lj6dtpHPPatterns[idx] != nil {
                 want = .pattern(idx)
             } else {
                 want = .gray(seg.colour.flatMap { colourMap[$0] } ?? 0.0)
@@ -1870,7 +1925,8 @@ private func lineOpsPrinted(
                 }
                 if count != 0 {
                     ops += rules(seg.styles, runText, x: x, y: y,
-                                 w: charW * Double(count), continuous: ulContinuous)
+                                 w: charW * Double(count), continuous: ulContinuous,
+                                 strikeSink: &strikeSink)
                 }
                 x = targetX
             }
@@ -1993,7 +2049,8 @@ private func lineOpsPrinted(
                     if ulX0 == nil { ulX0 = x }
                     ulX1 = x + pw
                 }
-                ops += rules(pieceStyles, piece, x: x, y: y, w: pw, continuous: ulContinuous)
+                ops += rules(pieceStyles, piece, x: x, y: y, w: pw,
+                             continuous: ulContinuous, strikeSink: &strikeSink)
                 x += pw
             }
             if spanUL, let ulX0 {
@@ -2079,7 +2136,7 @@ private func lineOpsPrinted(
                             ulX1 = pieceX + actualW
                         }
                         ops += rules(pieceStyles, text, x: pieceX, y: y, w: actualW,
-                                    continuous: ulContinuous)
+                                    continuous: ulContinuous, strikeSink: &strikeSink)
                     }
                     if spanUL, let ulX0 {
                         ops.append(rule(xFrom: ulX0, xTo: ulX1, y: y - 1.5))
@@ -2151,9 +2208,14 @@ private func lineOpsPrinted(
                 ops.append(op)
             }
         }
-        ops += rules(seg.styles, seg.text, x: x, y: y, w: w, continuous: ulContinuous)
+        ops += rules(seg.styles, seg.text, x: x, y: y, w: w, continuous: ulContinuous,
+                     strikeSink: &strikeSink)
         x += w
     }
+    // E3 (2026-09-16): the line's strikeout, drawn once now that every piece has been
+    // placed — one rule per struck RUN, word gaps included, the way real WS7 overstrikes
+    // them. See `rules`'s own `strikeSink` note.
+    ops += strikeRuns(strikeSink ?? [], y: y)
     return ops
 }
 
@@ -2194,7 +2256,8 @@ func pageStream(
     left: Double = Double(PDFMetrics.margin),
     running: [[UInt8]] = [], fonts: [FontChange] = [], res: FontResources? = nil,
     colourMap: [Int: Double] = [:], rollPt: Double? = nil, ulContinuous: Bool = true,
-    lineNoCheckpoints: [(blockIndex: Int, interval: Int?)]? = nil, pclPrograms: [[UInt8]] = []
+    lineNoCheckpoints: [(blockIndex: Int, interval: Int?)]? = nil, pclPrograms: [[UInt8]] = [],
+    driverQuirks: DriverQuirks = .none
 ) -> [UInt8] {
     let res = res ?? FontResources()
     var ops: [[UInt8]] = running
@@ -2363,7 +2426,7 @@ func pageStream(
                              kerning: line.kerning, justifyRightX: line.justifyRightX,
                              justifyWordX: line.justifyWordX,
                              recordGraphicCells: &discardedGraphicCells,
-                             pmActive: line.pmActive)
+                             pmActive: line.pmActive, driverQuirks: driverQuirks)
     }
     return joined(ops, separator: 0x0A)                                 // Python's b'\n'.join
 }
@@ -2420,7 +2483,7 @@ func attachJustifyWordXPrinted(_ doc: Document, _ pages: inout [Page], size: Int
     let fonts = doc.fonts
     let left = printedLeft(doc, size: size)
     let rollPt = printedRollPt(doc)
-    let colourMap: [Int: Double] = doc.printerDriver == "LJ6DTP" ? colourGrayLJ6DTP : [:]
+    let dq = DriverQuirks(doc)
     for pi in pages.indices {
         for li in pages[pi].indices {
             let line = pages[pi][li]
@@ -2443,8 +2506,9 @@ func attachJustifyWordXPrinted(_ doc: Document, _ pages: inout [Page], size: Int
                                         tabLeader: span.tabLeader))
             }
             segs = expandBareTabsForPrintedLayout(segs)
-            if !colourMap.isEmpty {
-                segs = ljSubstitute(segs, kerning: line.kerning)
+            if dq.characters {
+                segs = ljSubstitute(segs, kerning: line.kerning,
+                                    typography: dq.typography, corners: dq.corners)
             }
             let splitSegs = splitIndent(splitSymbolFallback(splitGraphics(segs)))
             guard splitSegs.count == 1 else { continue }
@@ -2491,7 +2555,8 @@ func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int
     let left = printedLeft(doc, size: size)
     let rollPt = printedRollPt(doc)
     let ulContinuous = doc.formatting.underlineBlanks ?? true
-    let colourMap: [Int: Double] = doc.printerDriver == "LJ6DTP" ? colourGrayLJ6DTP : [:]
+    let dq = DriverQuirks(doc)
+    let colourMap: [Int: Double] = dq.colour ? colourGrayLJ6DTP : [:]
     let pclPrograms = doc.pclPrograms
     let pageHeight = resolvedPageHeight(doc, printed: true)
     for pi in pages.indices {
@@ -2528,7 +2593,8 @@ func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int
                               ulContinuous: ulContinuous, pclPrograms: pclPrograms,
                               pageHeight: Double(pageHeight), kerning: line.kerning,
                               justifyRightX: line.justifyRightX, justifyWordX: line.justifyWordX,
-                              recordGraphicCells: &record, pmActive: line.pmActive)
+                              recordGraphicCells: &record, pmActive: line.pmActive,
+                              driverQuirks: dq)
             if let record, !record.isEmpty {
                 pages[pi][li].graphicCells = record
             }
@@ -2775,6 +2841,10 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     // pattern-object step near the bottom, which runs on both paths and needs to know
     // "no patterns to build" on Modern's. Register C3.
     var colourMap: [Int: Double] = [:]
+    // Same reasoning for the driver quirks: Modern never applies any of them here, so the
+    // pattern/ExtGState resource steps near the bottom (which run on both paths) must see
+    // "nothing to build" -- the real answer is resolved inside the printed branch below.
+    var dq = DriverQuirks.none
     // The SAME figure `printedCap` derives the line count from (PDFLayout.swift) — Python
     // computes it once in `emit_pdf` and uses it for both the MediaBox and the content
     // stream's Y-origin. A page that paginates at a custom `.pl`'s resolved capacity but
@@ -2835,7 +2905,8 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         // rows): 0 Black, 1-7 grays of decreasing ink, 15 White — the knockout that lets
         // white text punch out of a black bar. Any other driver: indices stay opaque,
         // nothing rendered. Printed-only: Modern has no colour ops at all.
-        colourMap = doc.printerDriver == "LJ6DTP" ? colourGrayLJ6DTP : [:]
+        dq = DriverQuirks(doc)
+        colourMap = dq.colour ? colourGrayLJ6DTP : [:]
         // `.pn n` sets the number of the page it appears on, so a chapter file in a larger
         // manuscript numbers from where the previous one stopped. Printed-only: Modern has
         // no running heads at all, so there is nothing to number them for.
@@ -3014,7 +3085,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                     fonts: fonts, res: res, colourMap: colourMap,
                                     rollPt: rollPt, ulContinuous: ulContinuous,
                                     lineNoCheckpoints: lineNoCheckpoints,
-                                    pclPrograms: doc.pclPrograms))
+                                    pclPrograms: doc.pclPrograms, driverQuirks: dq))
         }
         // b24 round 18 (RULINGS-LEDGER row 4): TOC/Index compiled as ADDITIONAL pages at
         // the document's own end (Jon: "It should probably export in all formats even
@@ -3037,7 +3108,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                         size: size, left: left, running: running,
                                         fonts: fonts, res: res, colourMap: colourMap,
                                         rollPt: rollPt, ulContinuous: ulContinuous,
-                                        lineNoCheckpoints: nil))
+                                        lineNoCheckpoints: nil, driverQuirks: dq))
                 chunkStart += cap
             }
         }
@@ -3132,7 +3203,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     // references a /Pattern resource dict it never uses, which costs nothing per the PDF
     // spec. Register C3.
     var patternObjs: [Int: Int] = [:]                     // colour index -> obj num
-    if !colourMap.isEmpty {
+    if dq.patterns {
         for idx in lj6dtpHPPatterns.keys.sorted() {
             let pattern = lj6dtpHPPatterns[idx]!
             let content = Array(pattern.content.utf8)

@@ -674,6 +674,12 @@ public struct Document: Hashable, Sendable {
     public var indexEntries: [IndexEntry]
     /// `.l#` interval; `nil` when off or never set. Register C11.
     public var lineNumbering: Int?
+    /// The quirk decision in force for this render: everything this document trips, and
+    /// the subset actually applied (`Quirks.swift`). `nil` until a host resolves one --
+    /// and a `nil` here is not "no quirks", it is "nobody has asked yet", which
+    /// `quirkEnabled` answers from the defaults (applicable `auto` quirks on). Recorded
+    /// on the document so every later pass reads the SAME answer instead of re-deriving it.
+    public var quirks: QuirkDecision?
     public var formatting: Formatting
     public var headers: [Int: String]
     /// Running foot text by line number (1-5). `.fo` is line 1; `.f1`-`.f5` select
@@ -870,7 +876,8 @@ public struct Document: Hashable, Sendable {
         styles: [StyleEntry] = [],
         tocEntries: [TOCEntry] = [],
         indexEntries: [IndexEntry] = [],
-        lineNumbering: Int? = nil
+        lineNumbering: Int? = nil,
+        quirks: QuirkDecision? = nil
     ) {
         self.blocks = blocks
         self.footnotes = footnotes
@@ -905,6 +912,7 @@ public struct Document: Hashable, Sendable {
         self.tocEntries = tocEntries
         self.indexEntries = indexEntries
         self.lineNumbering = lineNumbering
+        self.quirks = quirks
     }
 
     public func iterLines() -> [Line] {

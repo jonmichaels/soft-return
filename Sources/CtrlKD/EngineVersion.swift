@@ -7,4 +7,4 @@
 
 /// The engine's own version string, numeric (`"4.3.0"`); surfaces that display it add the
 /// leading `v` themselves.
-public let engineVersion = "4.3.1"
+public let engineVersion = "4.4.0"

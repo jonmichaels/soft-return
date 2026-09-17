@@ -225,6 +225,10 @@ enum MainMenu {
         add(to: menu, "Show Invisibles", #selector(DocumentWindowController.toggleInvisibles(_:)), "i")
             .keyEquivalentModifierMask = [.command, .shift]
         add(to: menu, "Show Document Info", #selector(DocumentWindowController.toggleDocumentInfo(_:)), "i")
+        // Batch 46 (Jon's quirks rulings): ⌥⌘K, not the brief's ⌥⌘Q — Option turns Quit (⌘Q) into Quit and Keep
+        // Windows, which is ⌥⌘Q (HIG, The menu bar: App menu).
+        add(to: menu, "Quirks…", #selector(DocumentWindowController.showQuirks(_:)), "k")
+            .keyEquivalentModifierMask = [.command, .option]
         menu.addItem(.separator())
         add(to: menu, "Continuous Scroll", #selector(DocumentWindowController.showContinuousScroll(_:)), "1")
         add(to: menu, "Single Page", #selector(DocumentWindowController.showSinglePage(_:)), "2")

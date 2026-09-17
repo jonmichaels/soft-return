@@ -1,33 +1,33 @@
 import AppKit
 import CtrlKD
+import Darwin
 import Foundation
 import PDFKit
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
 
-/// Batch 40 (M11, Jon: ">5 seconds… blank window… then the first page and all thumbnails appear at once."): the
-/// spacebar preview's pages as `PreviewViewController` shows them — `QuickLookProgressivePreview`, run in-process in a
-/// window, because a test cannot load the extension (see `QuickLookExtensionTests`).
+/// The spacebar preview as `PreviewViewController` shows it — `QuickLookProgressivePreview`, run in-process in a window,
+/// because a test cannot load the extension (see `QuickLookExtensionTests`).
 ///
-/// Batch 44 (M21, Jon on 4.3.0's preview: "Completely unusable"; "The USER gets to choose which page to display. Not
-/// us."): the first paint now comes after the first `batchPages` pages are made (the whole document when it is
-/// shorter), with the thumbnail strip on the trailing edge and showing, and the rest are appended `batchPages` at a
-/// time. So the timing is from `load` to that first paint — batch 40's "page 1 shown" measured page 1 alone, and is
-/// gone — and to every page in; Athena's -HOLYMAC.WS target of under 1.5 s now applies to the first paint. The view
-/// must never move on its own: it stays on page 1 through every append, and on the page the person went to when
-/// they move mid-load, with the thumbnail strip's selection on that page too.
+/// Batch 45 (M24, Jon's final ruling: PDFKit leaves the preview): page 1 as an image, on screen at once with the
+/// thumbnail column at full width and page 1's thumbnail in it; every later page drawn off the main thread and
+/// appended one at a time with its thumbnail; nothing shown drawn again or moved; scrolling to whatever exists;
+/// clicking a thumbnail shows its page. M23 (4.3.1 opened in page 1's lower half): the view's top is page 1's top at
+/// the first paint.
 ///
-/// Documents: LYING.WS (bundled, 4 pages — shown whole at the first paint); a long document made here from plain
-/// WordStar text (`longDocument`, dozens of pages — several appends, always run); -HOLYMAC.WS (302 pages) when the
-/// private corpus is armed.
+/// Timing: from `load` to the first paint (page 1 now; batch 44's first paint waited for 10 pages; batch 40's target of
+/// under 1.5 s for -HOLYMAC.WS stands) and to every page in.
+///
+/// Documents: LYING.WS (bundled, 3 pages); a long document made here from plain WordStar text (`longDocument`, 40
+/// pages — always run); -HOLYMAC.WS (302 pages) when the private corpus is armed.
 @Suite(.serialized)
 @MainActor
 struct QuickLookProgressivePreviewTests {
     static let longDocumentName = "LONG (made here)"
 
     @Test(arguments: ["LYING.WS", "LONG (made here)", "-HOLYMAC.WS"])
-    func firstPagesThenTheRest(document: String) throws {
+    func pageOneAtOnceThenTheRestOneByOne(document: String) throws {
         guard let source = try Self.source(document) else { return }
         let run = Run(bytes: source.bytes, docPath: source.path)
         defer { run.preview.cancel() }
@@ -35,7 +35,7 @@ struct QuickLookProgressivePreviewTests {
 
         let monitor = HolymacTimingTests.BlockMonitor()
         let painted = monitor.wait("first paint", limit: 60) { run.firstPaint.done }
-        try #require(painted, "\(document): the first pages never showed")
+        try #require(painted, "\(document): page 1 never showed")
         #expect(run.firstPaint.error == nil, "\(document): \(String(describing: run.firstPaint.error))")
         let firstPaintMs = Double((preview.firstPaintAt ?? 0) - preview.startedAt) / 1_000_000
         let blocksBeforeFirst = monitor.blocks.count
@@ -48,51 +48,50 @@ struct QuickLookProgressivePreviewTests {
         let whole = try QuickLookNativeRenderer.previewPDF(fromFileBytes: source.bytes, docPath: source.path,
                                                            pageSettingsPreset: nil)
         let wholePDF = try #require(PDFDocument(data: whole.pdf))
-        let expectedAtFirstPaint = min(QuickLookProgressivePreview.batchPages, wholePDF.pageCount)
-        var line = "QL-PROGRESSIVE \(document): first paint after \(String(format: "%.1f", firstPaintMs)) ms"
-        line += " with \(run.firstPaint.pages) page(s) in, thumbnails showing \(run.firstPaint.thumbnailsShowing)"
-        line += " on the trailing edge \(run.firstPaint.thumbnailsTrailing); every page (\(preview.document.pageCount))"
-        line += " after \(String(format: "%.1f", allPagesMs)) ms in \(run.appends.count) append(s); longest main-thread"
-        line += " stretch after the first paint \(String(format: "%.1f", longestAfter?.milliseconds ?? 0)) ms"
-        line += " (\(longestAfter?.what ?? "none")); the whole preview has \(wholePDF.pageCount) pages"
+        let added: [Int] = run.appends.map(\.added)
+        let addedSizes: [Int] = Set(added).sorted()
+        let paint = run.firstPaint
+        var line = "QL-PROGRESSIVE \(document): first paint after \(String(format: "%.1f", firstPaintMs)) ms with"
+        line += " \(paint.pages) page(s) and \(paint.thumbnails) thumbnail(s); visible top"
+        line += " \(paint.visibleTop), page 1's top \(paint.pageOneTop); column \(paint.stripFrame)"
+        line += " trailing \(paint.stripTrailing); every page (\(preview.pageViews.count)) after"
+        line += " \(String(format: "%.1f", allPagesMs)) ms in \(run.appends.count) append(s); longest main-thread stretch"
+        line += " after the first paint \(String(format: "%.1f", longestAfter?.milliseconds ?? 0)) ms"
+        let held = preview.heldBytes
+        line += " (\(longestAfter?.what ?? "none")); footprint \(Self.footprintMB()) MB (page PDFs \(held.pageDocuments / 1024) KB,"
+        line += " \(held.pagesWithImages) page image(s) \(held.pageImages / 1_048_576) MB, thumbnails \(held.thumbnailImages / 1_048_576) MB); the whole preview has"
+        line += " \(wholePDF.pageCount) pages"
         print(line)
 
-        #expect(run.firstPaint.pages == expectedAtFirstPaint,
-                "\(document): \(run.firstPaint.pages) pages in at the first paint, not \(expectedAtFirstPaint)")
-        #expect(run.firstPaint.pageIndex == 0, "\(document): the first paint showed page \((run.firstPaint.pageIndex ?? -2) + 1)")
-        #expect(run.firstPaint.thumbnailsShowing, "\(document): the thumbnails were not showing at the first paint")
-        #expect(run.firstPaint.thumbnailsTrailing, "\(document): the thumbnails were not on the trailing edge at the first paint")
-        #expect(run.firstPaint.thumbnailsWidth == QuickLookProgressivePreview.thumbnailWidth,
-                "\(document): the thumbnail strip was \(run.firstPaint.thumbnailsWidth) pt wide at the first paint")
-        #expect(preview.pdfView.document === preview.document)
-        #expect(run.appends.allSatisfy { $0.added <= QuickLookProgressivePreview.batchPages },
-                "\(document): appends of \(run.appends.map(\.added)) pages")
-        #expect(preview.document.pageCount == wholePDF.pageCount,
-                "\(document): \(preview.document.pageCount) pages in, the whole preview has \(wholePDF.pageCount)")
-        // Batch 44 (M21b): each captured page came from its own one-page PDF, and every thumbnail read "1".
-        let labels = (0..<preview.document.pageCount).map { preview.document.page(at: $0)?.label ?? "nil" }
-        var misnumbered: [String] = []
-        for (index, label) in labels.enumerated() where label != String(index + 1) {
-            misnumbered.append("page \(index + 1) = \(label)")
-        }
-        let firstMisnumbered = Array(misnumbered.prefix(5))
-        #expect(misnumbered.isEmpty, "\(document): \(misnumbered.count) page label(s) are not their page's number, first \(firstMisnumbered)")
-        // The first paint's pages come from the text's first pages alone; they must be the whole render's.
-        let checked = Set(Array(0..<expectedAtFirstPaint) + [wholePDF.pageCount / 2, wholePDF.pageCount - 1])
-        for index in checked.sorted() where index < preview.document.pageCount {
-            let shown = preview.document.page(at: index)
+        #expect(paint.pages == 1, "\(document): \(paint.pages) pages at the first paint, not 1")
+        #expect(paint.thumbnails == 1, "\(document): \(paint.thumbnails) thumbnails at the first paint, not 1")
+        #expect(paint.pageOneHasImage, "\(document): page 1 had no image at the first paint")
+        #expect(paint.visibleTop == paint.pageOneTop,
+                "\(document): M23 — the view's top is at \(paint.visibleTop), page 1's top at \(paint.pageOneTop)")
+        #expect(paint.stripTrailing, "\(document): the thumbnail column is not on the trailing edge")
+        #expect(paint.stripFrame.width == QuickLookProgressivePreview.thumbnailWidth,
+                "\(document): the thumbnail column was \(paint.stripFrame.width) pt wide at the first paint")
+        #expect(addedSizes == [1], "\(document): appends of \(addedSizes) pages — not one at a time")
+        #expect(run.appends.allSatisfy { $0.thumbnails == $0.pages }, "\(document): a page appended without its thumbnail")
+        #expect(preview.pageViews.count == wholePDF.pageCount,
+                "\(document): \(preview.pageViews.count) pages in, the whole preview has \(wholePDF.pageCount)")
+        let checked: Set<Int> = [0, 1, 9, 10, wholePDF.pageCount / 2, wholePDF.pageCount - 1]
+        for index in checked.sorted() where index < preview.pageViews.count && index < wholePDF.pageCount {
             let reference = wholePDF.page(at: index)
-            #expect(shown?.bounds(for: .mediaBox).size == reference?.bounds(for: .mediaBox).size,
+            let shownData = preview.pageDocumentData(index)
+            let shown = shownData.flatMap { PDFDocument(data: $0) }?.page(at: 0)
+            let referenceSize = reference?.bounds(for: .mediaBox).size
+            #expect(preview.pageViews[index].pageSize == referenceSize,
                     "\(document): page \(index + 1)'s size differs from the whole preview's")
             #expect(Self.characters(shown) == Self.characters(reference),
                     "\(document): page \(index + 1)'s text differs from the whole preview's")
         }
         if document == "-HOLYMAC.WS" {
-            #expect(firstPaintMs < 1500, "-HOLYMAC.WS: the first paint came after \(firstPaintMs) ms, not under 1.5 s")
+            #expect(firstPaintMs < 1500, "-HOLYMAC.WS: page 1 showed after \(firstPaintMs) ms, not under 1.5 s")
         }
     }
 
-    /// Opened on page 1, the view stays there through every append and at completion — never ridden to the newest page.
+    /// Opened on page 1's top, the view stays there through every append and at completion.
     @Test(arguments: ["LONG (made here)", "-HOLYMAC.WS"])
     func staysOnPageOneThroughEveryAppend(document: String) throws {
         guard let source = try Self.source(document) else { return }
@@ -101,134 +100,266 @@ struct QuickLookProgressivePreviewTests {
         let preview = run.preview
 
         let monitor = HolymacTimingTests.BlockMonitor()
-        var sampled: [Int] = []
+        var sampledTops: Set<CGFloat> = []
         let finished = monitor.wait("every page", limit: HolymacTimingTests.waitLimit) {
-            if let index = run.currentIndex { sampled.append(index) }
+            if run.firstPaint.done { sampledTops.insert(preview.visibleRect.minY) }
             return preview.isComplete
         }
         try #require(finished, "\(document): pages still loading after \(Int(HolymacTimingTests.waitLimit)) s")
-        let appendsAfterFirstPaint = run.appends.dropFirst()
-        print("QL-STAYS-ON-PAGE-1 \(document): \(preview.document.pageCount) pages, \(run.appends.count) append(s); pages seen at appends \(Set(run.appends.compactMap(\.pageIndex)).sorted().map { $0 + 1 }), sampled \(Set(sampled).sorted().map { $0 + 1 }); selections \(Set(run.appends.compactMap(\.selectedIndex)).sorted().map { $0 + 1 })")
+        let tops: [CGFloat] = Set(run.appends.map(\.visibleTop)).sorted()
+        let selections: [Int] = Set(run.appends.compactMap(\.selected)).sorted()
+        let sampled: [CGFloat] = sampledTops.sorted()
+        print("QL-STAYS-ON-PAGE-1 \(document): \(preview.pageViews.count) pages, \(run.appends.count) append(s); view tops at appends \(tops), sampled \(sampled); selections \(selections)")
 
-        #expect(appendsAfterFirstPaint.count >= 2, "\(document): only \(run.appends.count) append(s) — too short to show anything")
-        #expect(run.appends.allSatisfy { $0.pageIndex == 0 },
-                "\(document): the view left page 1 at an append — pages \(run.appends.map { ($0.pageIndex ?? -2) + 1 })")
-        #expect(sampled.allSatisfy { $0 == 0 }, "\(document): the view left page 1 between appends — pages \(Set(sampled).sorted().map { $0 + 1 })")
-        #expect(run.currentIndex == 0, "\(document): at completion the view is on page \((run.currentIndex ?? -2) + 1)")
-        #expect(run.appends.allSatisfy { $0.selectedIndex == 0 },
-                "\(document): the thumbnail selection left page 1 — \(run.appends.map { ($0.selectedIndex ?? -2) + 1 })")
-        #expect(run.selectedIndex == 0, "\(document): at completion the thumbnail selection is page \((run.selectedIndex ?? -2) + 1)")
+        #expect(run.appends.count >= 2, "\(document): only \(run.appends.count) append(s)")
+        #expect(tops == [0], "\(document): the view's top moved at an append — \(tops)")
+        #expect(sampled == [0], "\(document): the view's top moved between appends — \(sampled)")
+        #expect(selections == [0], "\(document): the selected thumbnail left page 1 — \(selections)")
     }
 
-    /// Moved to a page while pages are still coming, the view stays on that page through every later append.
+    /// Moved to page 15's top while pages are still coming, the view stays exactly there.
     @Test(arguments: ["LONG (made here)", "-HOLYMAC.WS"])
     func staysWhereItWasMovedMidLoad(document: String) throws {
         guard let source = try Self.source(document) else { return }
         let run = Run(bytes: source.bytes, docPath: source.path)
         defer { run.preview.cancel() }
         let preview = run.preview
-        let batch = QuickLookProgressivePreview.batchPages
 
         let monitor = HolymacTimingTests.BlockMonitor()
-        let twoBatches = monitor.wait("two batches", limit: HolymacTimingTests.waitLimit) {
-            preview.document.pageCount >= 2 * batch || preview.isComplete
+        let twenty = monitor.wait("twenty pages", limit: HolymacTimingTests.waitLimit) {
+            preview.pageViews.count >= 20 || preview.isComplete
         }
-        try #require(twoBatches, "\(document): \(preview.document.pageCount) pages after \(Int(HolymacTimingTests.waitLimit)) s")
+        try #require(twenty, "\(document): \(preview.pageViews.count) pages after \(Int(HolymacTimingTests.waitLimit)) s")
         try #require(!preview.isComplete, "\(document): every page was in before the move — too short to show anything")
-        let target = batch + batch / 2 - 1   // page 15: in the second batch, with more batches still to come
-        let targetPage = try #require(preview.document.page(at: target))
-        preview.pdfView.go(to: targetPage)
+        let target = 14
+        preview.showPage(target)
+        let movedTop = preview.visibleRect.minY
+        let targetTop = preview.pageViews[target].frame.minY
+        try #require(movedTop == targetTop, "\(document): showPage put the view's top at \(movedTop), page 15's top is \(targetTop)")
         let appendsBeforeMove = run.appends.count
-        try #require(run.currentIndex == target, "\(document): go(to:) page \(target + 1) left the view on page \((run.currentIndex ?? -2) + 1)")
-        let movedTo = preview.pdfView.currentDestination?.point ?? .zero
 
-        var sampled: [Int] = []
+        var sampledTops: Set<CGFloat> = []
         let finished = monitor.wait("the rest", limit: HolymacTimingTests.waitLimit) {
-            if let index = run.currentIndex { sampled.append(index) }
+            sampledTops.insert(preview.visibleRect.minY)
             return preview.isComplete
         }
         try #require(finished, "\(document): pages still loading after \(Int(HolymacTimingTests.waitLimit)) s")
-        let later = run.appends.dropFirst(appendsBeforeMove)
-        let endedAt = preview.pdfView.currentDestination?.point ?? .zero
-        print("QL-STAYS-WHERE-MOVED \(document): moved to page \(target + 1) with \(appendsBeforeMove) append(s) in; \(later.count) later append(s); pages seen at them \(Set(later.compactMap(\.pageIndex)).sorted().map { $0 + 1 }), sampled \(Set(sampled).sorted().map { $0 + 1 }); destination point \(movedTo) → \(endedAt) at completion")
+        let later = Array(run.appends.dropFirst(appendsBeforeMove))
+        let tops: [CGFloat] = Set(later.map(\.visibleTop)).sorted()
+        let selections: [Int] = Set(later.compactMap(\.selected)).sorted()
+        let sampled: [CGFloat] = sampledTops.sorted()
+        print("QL-STAYS-WHERE-MOVED \(document): moved to page \(target + 1) (top \(movedTop)) with \(appendsBeforeMove) page(s) in; \(later.count) later append(s); view tops at them \(tops), sampled \(sampled); selections \(selections)")
 
         #expect(later.count >= 1, "\(document): no append after the move")
-        #expect(later.allSatisfy { $0.pageIndex == target },
-                "\(document): the view left page \(target + 1) at an append — pages \(later.map { ($0.pageIndex ?? -2) + 1 })")
-        #expect(sampled.allSatisfy { $0 == target },
-                "\(document): the view left page \(target + 1) between appends — pages \(Set(sampled).sorted().map { $0 + 1 })")
-        #expect(run.currentIndex == target, "\(document): at completion the view is on page \((run.currentIndex ?? -2) + 1)")
-        #expect(later.allSatisfy { $0.selectedIndex == target },
-                "\(document): the thumbnail selection left page \(target + 1) — \(later.map { ($0.selectedIndex ?? -2) + 1 })")
-        #expect(run.selectedIndex == target, "\(document): at completion the thumbnail selection is page \((run.selectedIndex ?? -2) + 1)")
+        #expect(tops == [movedTop], "\(document): the view's top moved at an append — \(tops)")
+        #expect(sampled == [movedTop], "\(document): the view's top moved between appends — \(sampled)")
+        #expect(selections == [target], "\(document): the selected thumbnail left page \(target + 1) — \(selections)")
     }
 
-    /// Batch 44 (M21b): what the first paint SHOWS, rendered. The view set with its document drew nothing until it was
-    /// sent to a page (b44-render4: page 1 blank in its own layers, on screen, a second on), and every thumbnail read
-    /// "1". Rendered here once the first paint is in: page 1's text has ink, the strip's first thumbnail holds an
-    /// image with its page's white paper where the placeholder is solid grey, and the labels run 1, 2, 3…
-    ///
-    /// Async on purpose: the strip's thumbnails are made off the main thread and handed back on the main queue, which
-    /// a test waiting by spinning the run loop from inside its own main-queue job never lets run (b44-render6: no
-    /// image after 5 s). Sleeping lets it.
+    /// A click on a thumbnail shows that page from its top, and selects it.
+    @Test func clickingAThumbnailShowsItsPage() throws {
+        guard let source = try Self.source(Self.longDocumentName) else { return }
+        let run = Run(bytes: source.bytes, docPath: source.path)
+        defer { run.preview.cancel() }
+        let preview = run.preview
+        let monitor = HolymacTimingTests.BlockMonitor()
+        try #require(monitor.wait("every page", limit: HolymacTimingTests.waitLimit) { preview.isComplete })
+        let target = 6
+        let item = preview.thumbnailViews[target]
+        let point = item.convert(NSPoint(x: item.bounds.midX, y: item.bounds.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                                                    windowNumber: run.window.windowNumber, context: nil, eventNumber: 0,
+                                                    clickCount: 1, pressure: 1))
+        item.mouseDown(with: event)
+        let top = preview.visibleRect.minY
+        let targetTop = preview.pageViews[target].frame.minY
+        #expect(top == targetTop, "the click left the view's top at \(top), page \(target + 1)'s top is \(targetTop)")
+        #expect(preview.selectedPageIndex == target, "the selected thumbnail is \(String(describing: preview.selectedPageIndex))")
+    }
+
+    /// Nothing shown is drawn again or moved while the rest arrives: every thumbnail keeps the one image it was given
+    /// and its place, every page its place, and page 1 — on screen throughout — its one image.
     @Test(arguments: ["LONG (made here)", "-HOLYMAC.WS"])
-    func firstPaintShowsPageOneAndItsThumbnails(document: String) async throws {
+    func nothingShownIsDrawnAgainOrMoved(document: String) throws {
         guard let source = try Self.source(document) else { return }
         let run = Run(bytes: source.bytes, docPath: source.path)
         defer { run.preview.cancel() }
         let preview = run.preview
-        for _ in 0..<600 where !run.firstPaint.done {
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        try #require(run.firstPaint.done, "\(document): the first pages never showed")
-        let firstPaintPages = preview.document.pageCount
-        var imageViews: [NSImageView] = []
-        for _ in 0..<50 {
-            imageViews = Self.visibleThumbnailImageViews(in: preview)
-            if let top = imageViews.first, top.image != nil { break }
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        let withImages = imageViews.filter { $0.image != nil }.count
-        run.window.contentView?.layoutSubtreeIfNeeded()
+        let monitor = HolymacTimingTests.BlockMonitor()
+        try #require(monitor.wait("every page", limit: HolymacTimingTests.waitLimit) { preview.isComplete })
 
+        var redrawn: [Int] = []
+        var moved: [Int] = []
+        var blank: [Int] = []
+        for (index, first) in run.firstSeen.enumerated() {
+            let item = preview.thumbnailViews[index]
+            let image = item.imageView.image.map { ObjectIdentifier($0) }
+            if item.imageView.imagesSet != 1 || image != first.thumbnailImage { redrawn.append(index + 1) }
+            if item.frame != first.thumbnailFrame || preview.pageViews[index].frame != first.pageFrame { moved.append(index + 1) }
+            if image == nil { blank.append(index + 1) }
+        }
+        let pageOne = preview.pageViews[0]
+        let pageOneImage = pageOne.image.map { ObjectIdentifier($0) }
+        let firstRedrawn = Array(redrawn.prefix(10))
+        let firstMoved = Array(moved.prefix(10))
+        let firstBlank = Array(blank.prefix(10))
+        print("QL-NOTHING-REDRAWN \(document): \(run.firstSeen.count) pages; thumbnails drawn again \(firstRedrawn), moved \(firstMoved), without an image \(firstBlank); page 1 given \(pageOne.imagesSet) image(s)")
+        #expect(run.firstSeen.count == preview.pageViews.count)
+        #expect(redrawn.isEmpty, "\(document): \(redrawn.count) thumbnail(s) drawn again, first \(firstRedrawn)")
+        #expect(moved.isEmpty, "\(document): \(moved.count) page(s) or thumbnail(s) moved, first \(firstMoved)")
+        #expect(blank.isEmpty, "\(document): \(blank.count) thumbnail(s) without an image, first \(firstBlank)")
+        #expect(pageOne.imagesSet == 1, "\(document): page 1 was given \(pageOne.imagesSet) images")
+        #expect(pageOneImage == run.firstSeen.first?.pageImage, "\(document): page 1's image was replaced")
+    }
+
+    /// What the first paint and the middle of a load SHOW, rendered from the view's layers: page 1's text has ink, its
+    /// thumbnail is a picture of the page, and later thumbnails fill in below.
+    @Test(arguments: ["LONG (made here)", "-HOLYMAC.WS"])
+    func firstPaintAndMidLoadRenders(document: String) throws {
+        guard let source = try Self.source(document) else { return }
+        let run = Run(bytes: source.bytes, docPath: source.path)
+        defer { run.preview.cancel() }
+        let preview = run.preview
+        let slug = document == "-HOLYMAC.WS" ? "holymac" : "long"
+        let monitor = HolymacTimingTests.BlockMonitor()
+        try #require(monitor.wait("first paint", limit: 60) { run.firstPaint.done })
+
+        let first = try Self.render(preview, name: "m24-ql-\(slug)-first-paint")
+        let pageOneRect = preview.view.convert(preview.pageViews[0].bounds, from: preview.pageViews[0])
+        let pageInk = Self.count(in: first, of: preview.view, rect: pageOneRect) { $0 < 0.35 }
+        let thumbnail = preview.thumbnailViews[0].imageView
+        let thumbnailRect = preview.view.convert(thumbnail.bounds, from: thumbnail)
+        let thumbnailPaper = Self.count(in: first, of: preview.view, rect: thumbnailRect) { $0 > 0.95 }
+        let thumbnailInk = Self.count(in: first, of: preview.view, rect: thumbnailRect) { $0 < 0.75 }
+
+        let eight = monitor.wait("eight pages", limit: HolymacTimingTests.waitLimit) { preview.pageViews.count >= 8 || preview.isComplete }
+        try #require(eight)
+        let midPages = preview.pageViews.count
+        let mid = try Self.render(preview, name: "m24-ql-\(slug)-mid-load")
+        let lastVisible = min(midPages, 7) - 1
+        let later = preview.thumbnailViews[lastVisible].imageView
+        let laterRect = preview.view.convert(later.bounds, from: later)
+        let laterPaper = Self.count(in: mid, of: preview.view, rect: laterRect) { $0 > 0.95 }
+        print("QL-RENDERS \(document): first paint page-1 ink \(pageInk) pt², first thumbnail \(thumbnailRect.size) paper \(thumbnailPaper) ink \(thumbnailInk) pt²; mid-load \(midPages) pages, thumbnail \(lastVisible + 1) paper \(laterPaper) pt²")
+
+        let thumbnailArea = Int(thumbnailRect.width * thumbnailRect.height)
+        #expect(pageInk > 50, "\(document): page 1 drew \(pageInk) pt² of ink at the first paint")
+        #expect(thumbnailPaper > thumbnailArea / 3, "\(document): the first thumbnail shows no page")
+        #expect(thumbnailInk > 0, "\(document): the first thumbnail shows no text")
+        #expect(laterPaper > 0, "\(document): thumbnail \(lastVisible + 1) shows no page mid-load")
+    }
+
+    // MARK: - Support
+
+    /// The preview in a window the size batch 40 timed it in, loading `bytes`, with what it showed at its first paint
+    /// and at every append.
+    @MainActor
+    final class Run {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 1000), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        let preview = QuickLookProgressivePreview()
+        let firstPaint = FirstPaint()
+        private(set) var appends: [Append] = []
+        /// Each page's thumbnail image and frames when it first appeared.
+        private(set) var firstSeen: [Seen] = []
+
+        struct Append {
+            let pages: Int
+            let thumbnails: Int
+            let added: Int
+            let visibleTop: CGFloat
+            let selected: Int?
+        }
+
+        struct Seen {
+            let thumbnailImage: ObjectIdentifier?
+            let thumbnailFrame: NSRect
+            let pageFrame: NSRect
+            let pageImage: ObjectIdentifier?
+        }
+
+        init(bytes: [UInt8], docPath: String) {
+            let content = window.contentView!
+            content.addSubview(preview.view)
+            NSLayoutConstraint.activate([
+                preview.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                preview.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                preview.view.topAnchor.constraint(equalTo: content.topAnchor),
+                preview.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            ])
+            content.layoutSubtreeIfNeeded()
+            preview.onAppend = { [unowned self] pages in record(pages) }
+            preview.load(bytes: bytes, docPath: docPath, pageSettingsPreset: nil) { [unowned self] error in
+                recordFirstPaint(error)
+            }
+        }
+
+        private func record(_ pages: Int) {
+            let index = pages - 1
+            let item = preview.thumbnailViews[index]
+            let pageView = preview.pageViews[index]
+            firstSeen.append(Seen(thumbnailImage: item.imageView.image.map { ObjectIdentifier($0) }, thumbnailFrame: item.frame,
+                                  pageFrame: pageView.frame, pageImage: pageView.image.map { ObjectIdentifier($0) }))
+            let added = pages - (appends.last?.pages ?? 0)
+            appends.append(Append(pages: pages, thumbnails: preview.thumbnailViews.count, added: added,
+                                  visibleTop: preview.visibleRect.minY, selected: preview.selectedPageIndex))
+        }
+
+        private func recordFirstPaint(_ error: Error?) {
+            window.contentView?.layoutSubtreeIfNeeded()
+            let strip = preview.thumbnailScroll.frame
+            firstPaint.done = true
+            firstPaint.error = error
+            firstPaint.pages = preview.pageViews.count
+            firstPaint.thumbnails = preview.thumbnailViews.count
+            firstPaint.pageOneHasImage = preview.pageViews.first?.image != nil
+            firstPaint.visibleTop = preview.visibleRect.minY
+            firstPaint.pageOneTop = preview.pageViews.first?.frame.minY ?? -1
+            firstPaint.stripFrame = strip
+            let trailing = strip.minX >= preview.pageScroll.frame.maxX - 0.5 && abs(strip.maxX - preview.view.bounds.maxX) < 0.5
+            firstPaint.stripTrailing = !preview.thumbnailScroll.isHiddenOrHasHiddenAncestor && trailing
+        }
+    }
+
+    @MainActor
+    final class FirstPaint {
+        var done = false
+        var error: Error?
+        var pages = 0
+        var thumbnails = 0
+        var pageOneHasImage = false
+        var visibleTop: CGFloat = -1
+        var pageOneTop: CGFloat = -2
+        var stripFrame: NSRect = .zero
+        var stripTrailing = false
+    }
+
+    /// `preview.view` drawn from its layers — the page and thumbnail images are layer contents, which
+    /// `cacheDisplay(in:to:)` does not draw — to a 2x PNG in the proofs directory.
+    static func render(_ preview: QuickLookProgressivePreview, name: String) throws -> NSBitmapImageRep {
+        preview.view.window?.contentView?.layoutSubtreeIfNeeded()
+        preview.view.window?.displayIfNeeded()
+        let bounds = preview.view.bounds
+        let rep = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2),
+                                                pixelsHigh: Int(bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4,
+                                                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                                bytesPerRow: 0, bitsPerPixel: 0))
+        let context = try #require(NSGraphicsContext(bitmapImageRep: rep))
+        let layer = try #require(preview.view.layer)
+        context.cgContext.scaleBy(x: 2, y: 2)
+        layer.render(in: context.cgContext)
         let proofs = RenderProbeKit.resolveOutputDirectory(
             preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
             fallbackName: "soft-return-proofs")
-        let slug = document == "-HOLYMAC.WS" ? "holymac" : "long"
-        let png = proofs.appendingPathComponent("m21-ql-\(slug)-first-paint.png")
-        try RenderProbeKit.renderPNG(view: preview.view, appearance: NSAppearance(named: .aqua)!, to: png)
-        let rep = try #require(NSBitmapImageRep(data: try Data(contentsOf: png)))
-        let pageInk = Self.count(in: rep, of: preview.view, rect: preview.pdfView.frame) { $0 < 0.35 }
-        let firstThumbnail = imageViews.first.map { preview.view.convert($0.bounds, from: $0) } ?? .zero
-        let thumbnailPaper = Self.count(in: rep, of: preview.view, rect: firstThumbnail) { $0 > 0.95 }
-        let thumbnailArea = Int(firstThumbnail.width * firstThumbnail.height)
-        let labels = (0..<preview.document.pageCount).map { preview.document.page(at: $0)?.label ?? "nil" }
-        print("QL-FIRST-PAINT-RENDER \(document): \(png.path); \(firstPaintPages) pages at the first paint; page-area ink \(pageInk) pt²; \(withImages) of \(imageViews.count) visible thumbnails hold an image; first thumbnail \(firstThumbnail) white \(thumbnailPaper) of \(thumbnailArea) pt²; labels \(labels.prefix(12))")
-
-        let shownPage = (run.currentIndex ?? -2) + 1
-        #expect(shownPage == 1, "\(document): the first paint is on page \(shownPage)")
-        #expect(pageInk > 50, "\(document): page 1 drew \(pageInk) pt² of ink at the first paint — blank")
-        #expect(imageViews.first?.image != nil, "\(document): the first thumbnail holds no image 5 s after the first paint")
-        #expect(thumbnailPaper > thumbnailArea / 4,
-                "\(document): the first thumbnail shows \(thumbnailPaper) of \(thumbnailArea) pt² of white paper — a placeholder")
-        let numbers: [String] = (0..<labels.count).map { String($0 + 1) }
-        let firstLabels = Array(labels.prefix(12))
-        #expect(labels == numbers, "\(document): thumbnail labels \(firstLabels)…, not 1, 2, 3…")
+        try FileManager.default.createDirectory(at: proofs, withIntermediateDirectories: true)
+        let png = proofs.appendingPathComponent("\(name).png")
+        let data = try #require(rep.representation(using: .png, properties: [:]))
+        try data.write(to: png)
+        print("PROOF: \(png.path)")
+        return rep
     }
 
-    /// The strip's thumbnail image views on screen, top first. PDFThumbnailView's items are its own; what they hold
-    /// is AppKit's NSImageView.
-    static func visibleThumbnailImageViews(in preview: QuickLookProgressivePreview) -> [NSImageView] {
-        func descendants(_ view: NSView) -> [NSView] { view.subviews + view.subviews.flatMap(descendants) }
-        let strip = preview.view.convert(preview.thumbnails.bounds, from: preview.thumbnails)
-        return descendants(preview.thumbnails).compactMap { $0 as? NSImageView }
-            .map { (view: $0, frame: preview.view.convert($0.bounds, from: $0)) }
-            .filter { $0.frame.height > 0 && strip.contains($0.frame) }
-            .sorted { $0.frame.maxY > $1.frame.maxY }
-            .map(\.view)
-    }
-
-    /// Points of `rect` (in `view`'s coordinates) whose brightness in `rep`, `view`'s render, satisfies `test`.
+    /// Points of `rect` (in `view`'s coordinates) whose brightness in `rep`, `view`'s 2x render, satisfies `test`.
     static func count(in rep: NSBitmapImageRep, of view: NSView, rect: CGRect, where test: (CGFloat) -> Bool) -> Int {
         let scale = CGFloat(rep.pixelsWide) / view.bounds.width
         let top = view.isFlipped ? rect.minY : view.bounds.height - rect.maxY
@@ -243,77 +374,20 @@ struct QuickLookProgressivePreviewTests {
         return hits
     }
 
-    // MARK: - Support
-
-    /// The preview in a window the size batch 40 timed it in, loading `bytes`, with what it showed at its first paint
-    /// and at every append.
-    @MainActor
-    final class Run {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 1000), styleMask: [.borderless],
-                              backing: .buffered, defer: false)
-        let preview = QuickLookProgressivePreview()
-        let firstPaint = FirstPaint()
-        private(set) var appends: [Append] = []
-
-        struct Append {
-            let pages: Int
-            let added: Int
-            let pageIndex: Int?
-            let selectedIndex: Int?
-        }
-
-        init(bytes: [UInt8], docPath: String) {
-            let content = window.contentView!
-            content.addSubview(preview.view)
-            NSLayoutConstraint.activate([
-                preview.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-                preview.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-                preview.view.topAnchor.constraint(equalTo: content.topAnchor),
-                preview.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            ])
-            preview.onAppend = { [unowned self] pages in
-                appends.append(Append(pages: pages, added: pages - (appends.last?.pages ?? 0),
-                                      pageIndex: currentIndex, selectedIndex: selectedIndex))
-            }
-            preview.load(bytes: bytes, docPath: docPath, pageSettingsPreset: nil) { [unowned self] error in
-                window.contentView?.layoutSubtreeIfNeeded()
-                let strip = preview.thumbnails.frame
-                firstPaint.done = true
-                firstPaint.error = error
-                firstPaint.pages = preview.document.pageCount
-                firstPaint.pageIndex = currentIndex
-                firstPaint.thumbnailsShowing = !preview.thumbnails.isHiddenOrHasHiddenAncestor && strip.width > 0
-                    && preview.thumbnails.pdfView === preview.pdfView && preview.pdfView.document === preview.document
-                firstPaint.thumbnailsTrailing = strip.minX >= preview.pdfView.frame.maxX - 0.5
-                    && abs(strip.maxX - preview.view.bounds.maxX) < 0.5
-                firstPaint.thumbnailsWidth = strip.width
+    /// This process's physical footprint, in MB.
+    static func footprintMB() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { raw in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), raw, &count)
             }
         }
-
-        var currentIndex: Int? {
-            preview.pdfView.currentPage.map { preview.document.index(for: $0) }
-        }
-
-        var selectedIndex: Int? {
-            guard let selected = preview.thumbnails.selectedPages, selected.count == 1 else { return nil }
-            return preview.document.index(for: selected[0])
-        }
+        return result == KERN_SUCCESS ? Int(info.phys_footprint / 1_048_576) : -1
     }
 
-    @MainActor
-    final class FirstPaint {
-        var done = false
-        var error: Error?
-        var pages = 0
-        var pageIndex: Int?
-        var thumbnailsShowing = false
-        var thumbnailsTrailing = false
-        var thumbnailsWidth: CGFloat = 0
-    }
-
-    /// A page's text with its whitespace taken out. The two captures space text differently in PDFKit's extraction:
-    /// b44-r1 saw a space in one where the other had a newline, and b44-r3 saw -HOLYMAC.WS's letter-spaced title as
-    /// "Ho ly" in one and "H o l y" in the other. The characters and their order are what must match.
+    /// A page's text with its whitespace taken out: PDFKit's extraction spaces the same text differently from one
+    /// capture to another (b44-r1, b44-r3).
     static func characters(_ page: PDFPage?) -> String {
         String((page?.string ?? "").filter { !$0.isWhitespace })
     }
@@ -338,7 +412,7 @@ struct QuickLookProgressivePreviewTests {
     }
 
     /// A long WordStar 4 document made here: twenty `.pa`-ended stretches of numbered lines, each running past a
-    /// page — dozens of pages, so the preview makes several appends after its first paint.
+    /// page — 40 pages.
     static func longDocument() -> [UInt8] {
         var bytes: [UInt8] = []
         for stretch in 1...20 {

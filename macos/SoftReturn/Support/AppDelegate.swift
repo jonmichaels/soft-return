@@ -163,6 +163,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Batch 46: Quick Look draws with the app's default quirks, from the app group; keep its copy current.
+        QuickLookPageSettingsPreference.setQuirkDefaults(SettingsStore.shared.quirkDefaults)
+        NotificationCenter.default.addObserver(forName: SettingsStore.quirkDefaultsDidChange, object: SettingsStore.shared,
+                                               queue: .main) { _ in
+            MainActor.assumeIsolated {
+                QuickLookPageSettingsPreference.setQuirkDefaults(SettingsStore.shared.quirkDefaults)
+            }
+        }
         // Job 181 Part 1 (-1708): passive record of what `NSScriptSuiteRegistry` actually
         // holds by launch time — see `ScriptingRegistryProbe`'s doc comment for why this runs
         // here (after `applicationWillFinishLaunching`'s forced `loadSuites`, same ordering

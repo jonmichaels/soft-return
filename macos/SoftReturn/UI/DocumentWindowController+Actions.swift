@@ -55,6 +55,15 @@ extension DocumentWindowController: NSMenuItemValidation {
         }
     }
 
+    /// Batch 46 (Jon's quirks rulings): View ▸ Quirks… (⌥⌘K) — this document's quirks window.
+    @IBAction func showQuirks(_ sender: Any?) {
+        let controller = quirksWindowController ?? QuirksWindowController(scope: .document(self))
+        quirksWindowController = controller
+        controller.reload()
+        controller.showWindow(sender)
+        controller.window?.makeKeyAndOrderFront(sender)
+    }
+
     // MARK: - View ▸ Page Size / Margins (submenus, job 314)
 
     /// One selector per named size, the same pattern `showPrintedStyle`/`changeVariantToWS4`

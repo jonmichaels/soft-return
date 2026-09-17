@@ -15,7 +15,7 @@ final class DocumentWindowController: NSWindowController {
     let documentState: DocumentState
     /// Injectable so tests can gate restoration without touching `UserDefaults.standard` —
     /// the same seam `DocumentState.init(data:settings:)` already uses.
-    private let settings: SettingsStore
+    let settings: SettingsStore
     private let scrollView = NSScrollView()
     /// Internal, not private: the Go menu commands live in the Actions extension and drive
     /// page navigation through this view, exactly as the style and zoom commands drive the
@@ -33,6 +33,8 @@ final class DocumentWindowController: NSWindowController {
     /// drive it, same reasoning as `pagedView` above. Lazily created on first toggle — most
     /// windows never open it, so nothing here builds one until asked.
     var documentInfoWindowController: DocumentInfoWindowController?
+    /// Batch 46: View ▸ Quirks…, this document's own, made when first asked for.
+    var quirksWindowController: QuirksWindowController?
 
     /// Set once the window has been sized from its document. The geometry rule applies to
     /// the FIRST presentation only — after that the window is the user's.
@@ -230,6 +232,14 @@ final class DocumentWindowController: NSWindowController {
             selector: #selector(scrollerStyleChanged),
             name: NSScroller.preferredScrollerStyleDidChangeNotification,
             object: nil)
+
+        // Batch 46: Settings ▸ Quirks… changed the app's defaults — the document follows them where it has no choice
+        // of its own.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(quirkDefaultsChanged),
+            name: SettingsStore.quirkDefaultsDidChange,
+            object: settings)
 
         // Printed style's own view, at rest until `reloadContent()` shows it — see the
         // property's own doc comment. `autoScales` stays false: `applyZoom()` drives
@@ -863,6 +873,25 @@ final class DocumentWindowController: NSWindowController {
         }
         invalidateRenderedContent()
         reloadContent()
+    }
+
+    /// Batch 46 (Jon's quirks rulings): one quirk on or off for this document; it re-renders under the new set.
+    func setQuirk(_ name: String, on: Bool) {
+        guard documentState.setQuirk(name, on: on) else { return }
+        QuirkOverrideStore.shared.setOverrides(documentState.quirkOverrides, for: (document as? NSDocument)?.fileURL)
+        rerender()
+    }
+
+    /// View ▸ Quirks…' Use App Defaults: this document's own choices cleared.
+    func useAppDefaultQuirks() {
+        defer { QuirkOverrideStore.shared.setOverrides([:], for: (document as? NSDocument)?.fileURL) }
+        guard documentState.useAppDefaultQuirks() else { return }
+        rerender()
+    }
+
+    @objc private func quirkDefaultsChanged() {
+        guard documentState.setQuirkDefaults(settings.quirkDefaults), !documentState.isAwaitingParse else { return }
+        rerender()
     }
 
     /// "That isn't WS4" is an answer to the user's question, not a failure to show them

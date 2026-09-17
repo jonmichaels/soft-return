@@ -22,9 +22,11 @@ struct QuickLookEngineWork: Sendable {
     static func make(
         bytes: [UInt8],
         docPath: String,
-        pageSettingsPreset: DocumentOperations.PageSettingsPreset?
+        pageSettingsPreset: DocumentOperations.PageSettingsPreset?,
+        quirks: QuirkChoices = .shipped
     ) throws -> QuickLookEngineWork {
-        let parsed = try DocumentState.parsed(from: bytes, docPath: docPath)
+        // Batch 46: `quirks`, the app's default quirks — the Mac's app-group copy; what shipped on the iPhone.
+        let parsed = try DocumentState.parsed(from: bytes, docPath: docPath, quirks: quirks)
         // `DocumentRenderer.nativeEngineOptions` of the state `QuickLookRender.nativeState(for:)` makes: the preset's
         // settings and the pictures resolved with the parse; `pictures: true`, `render`'s export flags.
         let options = EmitOptions(pageSettings: pageSettingsPreset?.settings, pixResults: parsed.pixResults)
@@ -49,6 +51,7 @@ enum QuickLookRender {
             ?? UserDefaults.standard
         let state = DocumentState(awaitingParseOf: work.bytes, settings: SettingsStore(defaults: ephemeralDefaults),
                                   docPath: work.docPath)
+        state.setQuirkDefaults(work.parsed.quirks)
         state.adopt(work.parsed)
         state.style.setManually(.native)
         if let preset = work.pageSettingsPreset {

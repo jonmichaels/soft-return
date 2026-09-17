@@ -110,6 +110,14 @@ private func convertAll(
 ) -> Int32 {
     var status = ExitStatus.ok
 
+    // `--list-quirks` with no file at all: the catalogue this build carries. Same JSON
+    // shape ctrl-kd's own `--list-quirks` prints, byte for byte (both sort their keys and
+    // both emit UTF-8 rather than \uXXXX escapes).
+    if options.listQuirks, options.files.isEmpty {
+        environment.writeOut(quirkListingJSON(QuirkRegistry.standard.list()).render())
+        return ExitStatus.ok
+    }
+
     for path in options.files {
         let data: [UInt8]
         do {
@@ -135,6 +143,33 @@ private func convertAll(
                 "sr: \(path): \(message(for: error)) "
                     + "(use --diagnose to inspect, --variant to force)")
             status = ExitStatus.fileFailure
+            continue
+        }
+
+        // Quirks are resolved ONCE per document, here, before any emitter reads it -- so
+        // every requested format renders the same decision and the layout JSON's own
+        // report can never disagree with what ran. A name this build does not know is a
+        // usage error, not something to swallow: swallowing it would hand back output the
+        // caller did not ask for.
+        do {
+            doc = try QuirkRegistry.standard.applyQuirks(
+                to: doc, enable: options.quirksEnabled, disable: options.quirksDisabled,
+                mode: options.quirksMode)
+        } catch let QuirkError.unknownQuirk(name, known) {
+            environment.writeErr("sr: error: unknown quirk '\(name)' "
+                + "(known: \(known.joined(separator: ", ")))")
+            return ExitStatus.usage
+        } catch {
+            environment.writeErr("sr: \(path): \(message(for: error))")
+            status = ExitStatus.fileFailure
+            continue
+        }
+
+        if options.listQuirks {
+            environment.writeOut(JSONValue.object([
+                "file": .string(basename(path)),
+                "quirks": quirkListingJSON(QuirkRegistry.standard.list(for: doc)),
+            ]).render())
             continue
         }
 
@@ -330,4 +365,24 @@ func message(for error: Error) -> String {
     default:
         return "\(error)"
     }
+}
+
+
+/// One `--list-quirks` row set as JSON. The field names and the two-space, sorted-key
+/// rendering are chosen to match ctrl-kd's own `--list-quirks` output byte for byte, so a
+/// script can read either CLI's answer with one parser.
+private func quirkListingJSON(_ rows: [QuirkListing]) -> JSONValue {
+    .array(rows.map { row in
+        var fields: [String: JSONValue] = [
+            "name": .string(row.name),
+            "description": .string(row.description),
+            "class": .string(row.quirkClass.rawValue),
+        ]
+        if let applicable = row.applicable {
+            fields["applicable"] = .bool(applicable)
+            fields["reason"] = row.reason.map { JSONValue.string($0) } ?? .null
+            fields["enabled"] = .bool(row.enabled ?? false)
+        }
+        return .object(fields)
+    })
 }

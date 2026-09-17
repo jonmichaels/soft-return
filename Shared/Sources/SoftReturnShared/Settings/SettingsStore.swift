@@ -53,6 +53,7 @@ public final class SettingsStore {
         self.defaultPictures = defaults.decode(Key.defaultPictures) ?? .embed
         self.defaultPageNumbers = defaults.decode(Key.defaultPageNumbers) ?? .auto
         self.includeBetaVersions = defaults.object(forKey: Key.includeBetaVersions) as? Bool ?? false
+        self.quirkDefaults = defaults.decode(Key.quirkDefaults) ?? .shipped
     }
 
     // MARK: - The eight
@@ -126,6 +127,21 @@ public final class SettingsStore {
         didSet { defaults.set(includeBetaVersions, forKey: Key.includeBetaVersions) }
     }
 
+    /// 16. Batch 46 (Jon's quirks rulings, 2026-09-16): which of the engine's quirks a document opens with — a ruled
+    /// spec change, as the ones above. Default Auto, the engine's own defaults (`QuirkChoices.shipped`). Every change
+    /// posts `quirkDefaultsDidChange`, so an open document can re-render under the new set.
+    public var quirkDefaults: QuirkChoices {
+        didSet {
+            defaults.encode(quirkDefaults, Key.quirkDefaults)
+            if quirkDefaults != oldValue {
+                NotificationCenter.default.post(name: SettingsStore.quirkDefaultsDidChange, object: self)
+            }
+        }
+    }
+
+    /// Posted by `quirkDefaults` when the set changes; the object is the store.
+    public nonisolated static let quirkDefaultsDidChange = Notification.Name("SettingsStore.quirkDefaultsDidChange")
+
     // MARK: - Fixed vocabularies
 
     /// The size menu, per spec: "9, 10, 11, 12, 13, 14, 16, 18 only, default 14".
@@ -151,6 +167,7 @@ public final class SettingsStore {
         static let defaultPictures = "settings.defaultPictures"
         static let defaultPageNumbers = "settings.defaultPageNumbers"
         static let includeBetaVersions = "settings.includeBetaVersions"
+        static let quirkDefaults = "settings.quirkDefaults"
     }
 }
 

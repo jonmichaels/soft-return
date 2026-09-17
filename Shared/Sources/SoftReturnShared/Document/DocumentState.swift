@@ -229,21 +229,88 @@ public final class DocumentState {
     /// (`parsed(from:docPath:)`) and handed to `adopt(_:)`.
     public struct Parsed: Sendable {
         public let detection: Detection
+        /// The parse with `quirks` applied.
         public let document: CtrlKD.Document
         public let pixResults: [PixResult]
+        /// Batch 46: the parse before any quirk, and the quirks `document` was made with.
+        public let unquirked: CtrlKD.Document
+        public let quirks: QuirkChoices
     }
 
     /// `init(data:settings:docPath:)`'s engine work — detect, parse, resolve the pictures — with
     /// no state of its own, so a large file can be read on another thread while its window shows.
     /// - Throws: whatever `init(data:settings:docPath:)` would.
-    public nonisolated static func parsed(from data: [UInt8], docPath: String) throws -> Parsed {
+    public nonisolated static func parsed(from data: [UInt8], docPath: String,
+                                          quirks: QuirkChoices = .shipped) throws -> Parsed {
         let detection = detect(data)
-        let document = try CtrlKD.parse(data, variant: detection.variant)
+        let unquirked = try CtrlKD.parse(data, variant: detection.variant)
+        let document = quirks.apply(to: unquirked)
         return Parsed(detection: detection, document: document,
-                      pixResults: DocumentPictures.resolve(document, docPath: docPath))
+                      pixResults: DocumentPictures.resolve(document, docPath: docPath),
+                      unquirked: unquirked, quirks: quirks)
     }
 
-    /// The parse currently on screen. Recomputed whenever `variant` changes.
+    /// Batch 46 (Jon's quirks rulings, 2026-09-16): the parse before any quirk — what `document` is remade from when
+    /// the quirks change.
+    private var unquirkedDocument: CtrlKD.Document
+
+    /// The app's default quirks, from Settings when the document opened and whenever they change after.
+    public private(set) var quirkDefaults: QuirkChoices
+
+    /// This document's own choices over `quirkDefaults`, by quirk name. Empty is "Use App Defaults".
+    public private(set) var quirkOverrides: [String: Bool] = [:]
+
+    /// The quirks in force: the defaults with this document's own choices over them.
+    public var quirkChoices: QuirkChoices { quirkDefaults.overridden(by: quirkOverrides) }
+
+    /// The quirks this document trips, the engine's order — the only ones a document's Quirks screen lists.
+    public var applicableQuirks: [QuirkApplicability] { QuirkRegistry.standard.applicable(to: unquirkedDocument) }
+
+    /// Whether this document's own choice for `name` differs from the app's default.
+    public func isQuirkOverridden(_ name: String) -> Bool {
+        guard let on = quirkOverrides[name] else { return false }
+        return on != quirkDefaults.isOn(name)
+    }
+
+    /// Turns one quirk on or off for this document. A choice that matches the app's default is no choice of the
+    /// document's own. Returns whether the quirks in force changed, so the caller knows to re-render.
+    @discardableResult
+    public func setQuirk(_ name: String, on: Bool) -> Bool {
+        var overrides = quirkOverrides
+        overrides[name] = on == quirkDefaults.isOn(name) ? nil : on
+        return setQuirkOverrides(overrides)
+    }
+
+    /// Replaces this document's own choices — a stored set read back when the document opens, or none.
+    @discardableResult
+    public func setQuirkOverrides(_ overrides: [String: Bool]) -> Bool {
+        let before = quirkChoices
+        quirkOverrides = overrides.filter { QuirkChoices.names.contains($0.key) }
+        return reapplyQuirks(ifChangedFrom: before)
+    }
+
+    /// "Use App Defaults": clears this document's own choices.
+    @discardableResult
+    public func useAppDefaultQuirks() -> Bool { setQuirkOverrides([:]) }
+
+    /// New app defaults, from Settings. This document's own choices stay its own.
+    @discardableResult
+    public func setQuirkDefaults(_ defaults: QuirkChoices) -> Bool {
+        let before = quirkChoices
+        quirkDefaults = defaults
+        return reapplyQuirks(ifChangedFrom: before)
+    }
+
+    private func reapplyQuirks(ifChangedFrom before: QuirkChoices) -> Bool {
+        guard quirkChoices != before else { return false }
+        // A document still being read has no parse to remake; `adopt(_:)` applies the set in force then.
+        guard !isAwaitingParse else { return true }
+        document = quirkChoices.apply(to: unquirkedDocument)
+        return true
+    }
+
+    /// The parse currently on screen, with the quirks in force applied. Recomputed whenever `variant` or the quirks
+    /// change.
     public private(set) var document: CtrlKD.Document
 
     /// Job 371 item 1 (PIX IN VIEWS): the source document's own path, empty when there is
@@ -301,7 +368,10 @@ public final class DocumentState {
         let detection = detect(data)
         self.detection = detection
         self.variant = Resolved(detection.variant, .detected)
-        let parsed = try parse(data, variant: detection.variant)
+        let unquirked = try parse(data, variant: detection.variant)
+        let parsed = settings.quirkDefaults.apply(to: unquirked)
+        self.unquirkedDocument = unquirked
+        self.quirkDefaults = settings.quirkDefaults
         self.document = parsed
         self.pixResults = DocumentPictures.resolve(parsed, docPath: docPath)
         self.style = Resolved(settings.defaultStyle, .default)
@@ -331,6 +401,8 @@ public final class DocumentState {
         self.detection = Detection(variant: .ws4)
         self.variant = Resolved(.ws4, .detected)
         self.document = CtrlKD.Document()
+        self.unquirkedDocument = CtrlKD.Document()
+        self.quirkDefaults = settings.quirkDefaults
         self.pixResults = []
         self.style = Resolved(settings.defaultStyle, .default)
         self.zoom = Resolved(settings.defaultZoom, .default)
@@ -350,7 +422,9 @@ public final class DocumentState {
         isAwaitingParse = false
         detection = parsed.detection
         variant = Resolved(parsed.detection.variant, .detected)
-        document = parsed.document
+        unquirkedDocument = parsed.unquirked
+        // The quirks may have changed while the bytes were read — Settings, or a stored choice of the document's own.
+        document = parsed.quirks == quirkChoices ? parsed.document : quirkChoices.apply(to: parsed.unquirked)
         pixResults = parsed.pixResults
         refreshPageSizeAfterReparse()
     }
@@ -372,7 +446,9 @@ public final class DocumentState {
         self.docPath = docPath
         self.detection = Detection(variant: .ws4)
         self.variant = Resolved(.ws4, .detected)
-        self.document = document
+        self.unquirkedDocument = document
+        self.quirkDefaults = settings.quirkDefaults
+        self.document = settings.quirkDefaults.apply(to: document)
         self.pixResults = DocumentPictures.resolve(document, docPath: docPath)
         self.style = Resolved(settings.defaultStyle, .default)
         self.zoom = Resolved(settings.defaultZoom, .default)
@@ -396,7 +472,8 @@ public final class DocumentState {
             // A variant chosen before the background parse returned (restoration) parses the bytes
             // itself; that parse then has nothing to adopt.
             isAwaitingParse = false
-            document = reparsed
+            unquirkedDocument = reparsed
+            document = quirkChoices.apply(to: reparsed)
             pixResults = DocumentPictures.resolve(reparsed, docPath: docPath)
             refreshPageSizeAfterReparse()
             return nil
@@ -412,7 +489,8 @@ public final class DocumentState {
         guard !isAwaitingParse else { return }
         guard let reparsed = try? parse(data, variant: detection.variant) else { return }
         variant = Resolved(detection.variant, .detected)
-        document = reparsed
+        unquirkedDocument = reparsed
+        document = quirkChoices.apply(to: reparsed)
         pixResults = DocumentPictures.resolve(reparsed, docPath: docPath)
         refreshPageSizeAfterReparse()
     }

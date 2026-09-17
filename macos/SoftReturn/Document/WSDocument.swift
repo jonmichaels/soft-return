@@ -36,6 +36,10 @@ final class WSDocument: NSDocument {
     /// nothing for the user to learn. See ExecutableBitRepair.
     override func read(from url: URL, ofType typeName: String) throws {
         ExecutableBitRepair.clearIfNeeded(at: url)
+        // Batch 46: the file being read, for the quirk store's lookup — NSDocument's documentation does not say
+        // whether `fileURL` is set before or after `init(contentsOf:ofType:)` reads.
+        readingURL = url
+        defer { readingURL = nil }
         try read(from: try Data(contentsOf: url), ofType: typeName)
     }
 
@@ -61,11 +65,16 @@ final class WSDocument: NSDocument {
     private var deferredParseSettled = false
     private var deferredParseError: Error?
 
+    /// The URL `read(from:ofType:)` is reading, while it reads.
+    private nonisolated(unsafe) var readingURL: URL?
+
     override nonisolated func read(from data: Data, ofType typeName: String) throws {
         let bytes = [UInt8](data)
         try MainActor.assumeIsolated {
             if bytes.count >= Self.backgroundParseThreshold {
                 state = DocumentState(awaitingParseOf: bytes, settings: .shared, docPath: fileURL?.path ?? "")
+                // Batch 46: the document's own quirk choices, kept by the app, before its parse starts.
+                state.setQuirkOverrides(QuirkOverrideStore.shared.overrides(for: readingURL ?? fileURL))
                 // Batch 27: now, whether or not a window will ever show this document.
                 startDeferredParse { [weak self] error in
                     self?.deferredParseFinished(error)
@@ -77,6 +86,7 @@ final class WSDocument: NSDocument {
                 state = try PerformanceSignposts.measure("open.parse") {
                     try DocumentState(data: bytes, settings: .shared, docPath: fileURL?.path ?? "")
                 }
+                state.setQuirkOverrides(QuirkOverrideStore.shared.overrides(for: readingURL ?? fileURL))
             } catch {
                 throw Self.cannotOpenError(fileName: fileURL?.lastPathComponent, underlying: error)
             }
@@ -150,10 +160,11 @@ final class WSDocument: NSDocument {
         guard deferredParse == nil else { return }
         let bytes = state.data
         let docPath = state.docPath
+        let quirks = state.quirkChoices
         let fileName = fileURL?.lastPathComponent
         let start = DispatchTime.now().uptimeNanoseconds
         deferredParse = Task.detached(priority: .userInitiated) {
-            let result = Result { try DocumentState.parsed(from: bytes, docPath: docPath) }
+            let result = Result { try DocumentState.parsed(from: bytes, docPath: docPath, quirks: quirks) }
             MainRunLoop.perform { [weak self] in
                 self?.completeDeferredParse(result, startedAt: start, fileName: fileName)
             }
@@ -187,7 +198,7 @@ final class WSDocument: NSDocument {
             let bytes = state.data
             let docPath = state.docPath
             let parsed = try PerformanceSignposts.measure("open.parse") {
-                try DocumentState.parsed(from: bytes, docPath: docPath)
+                try DocumentState.parsed(from: bytes, docPath: docPath, quirks: state.quirkChoices)
             }
             state.adopt(parsed)
             settleDeferredParse(nil)

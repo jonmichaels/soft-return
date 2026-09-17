@@ -48,8 +48,14 @@ public struct StyleRecord: Hashable, Sendable {
         where attrsOn & bit != 0 {
             out.insert(style)
         }
-        return out
+        return out.subtracting(suppressedAttrs)
     }
+    /// Attributes a QUIRK has switched off for this render (`Quirks.swift`). Empty for
+    /// every ordinary document, and empty by default, so nothing changes for a caller
+    /// that never asked. It sits beside `attrsOn` rather than editing it because the two
+    /// say different things: `attrsOn` is what the file's own bytes declare, which a quirk
+    /// never rewrites, and `attrs` is what this render actually draws.
+    public var suppressedAttrs: Style = []
     /// Palette index. Sentinel: -1.
     public let colour: Int?
 
@@ -59,7 +65,8 @@ public struct StyleRecord: Hashable, Sendable {
         tabsHMI: [Int]? = nil, decimalTabs: Int? = nil,
         justification: Alignment? = nil, justificationRaw: Int? = nil,
         wordWrap: Bool? = nil, lineHeightVMI: Int? = nil, lineSpacing: Int? = nil,
-        attrsOn: Int = 0, attrsOff: Int = 0, colour: Int? = nil
+        attrsOn: Int = 0, attrsOff: Int = 0, colour: Int? = nil,
+        suppressedAttrs: Style = []
     ) {
         self.font = font
         self.leftMarginHMI = leftMarginHMI
@@ -75,6 +82,7 @@ public struct StyleRecord: Hashable, Sendable {
         self.attrsOn = attrsOn
         self.attrsOff = attrsOff
         self.colour = colour
+        self.suppressedAttrs = suppressedAttrs
     }
 
     // `font` is a tuple, which is not `Equatable`/`Hashable` for free.
@@ -88,6 +96,7 @@ public struct StyleRecord: Hashable, Sendable {
             && a.justificationRaw == b.justificationRaw && a.wordWrap == b.wordWrap
             && a.lineHeightVMI == b.lineHeightVMI && a.lineSpacing == b.lineSpacing
             && a.attrsOn == b.attrsOn && a.attrsOff == b.attrsOff && a.colour == b.colour
+            && a.suppressedAttrs == b.suppressedAttrs
     }
 
     public func hash(into h: inout Hasher) {
@@ -96,6 +105,7 @@ public struct StyleRecord: Hashable, Sendable {
         h.combine(tabsHMI); h.combine(decimalTabs); h.combine(justification)
         h.combine(justificationRaw); h.combine(wordWrap); h.combine(lineHeightVMI)
         h.combine(lineSpacing); h.combine(attrsOn); h.combine(attrsOff); h.combine(colour)
+        h.combine(suppressedAttrs)
     }
 }
 
