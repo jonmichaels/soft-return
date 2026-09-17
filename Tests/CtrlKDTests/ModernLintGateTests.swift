@@ -473,7 +473,19 @@ private func irGluedIndentedParagraphs(_ doc: Document) -> [(String?, [String])]
 }
 
 /// Modern HTML must carry NO page-width opinion of its own. Port of `_html_bad_geometry`.
-private func htmlBadGeometry(_ h: String) -> [String] {
+/// E9 H4 (Jon's ruling 2026-09-17, the human-eye export audit section G) SUPERSEDES the
+/// round-3 addendum's own half of this for Modern: with no measure at all a 1400px window
+/// gave 150 characters to the line and 60 of 509 Modern documents scrolled sideways at
+/// 400px. The TWO ruled declarations (`modernMeasureCSS`, a relative `38em`
+/// plus `overflow-wrap` and a paragraph scroll, and `modernNowrapScrollCSS`, the
+/// `max-width:100%` that keeps an unfoldable row scrolling inside itself) are lifted out
+/// before the check, verbatim and as whole strings — so each is exempt only as itself, and
+/// a max-width, a bare width or an inch-scale margin anywhere else still fails as before. The ORIGINAL defect this
+/// gate was built for — WS-absolute geometry, a quote paragraph's own `margin-right:5.8in`
+/// — is untouched by the exemption.
+private func htmlBadGeometry(_ html: String) -> [String] {
+    let h = html.replacingOccurrences(
+        of: modernMeasureCSS.trimmingCharacters(in: ["\n"]), with: "")
     var bad: [String] = []
     if !regexMatches(#"(?<![-\w])max-width\s*:"#, h).isEmpty { bad.append("max-width declared") }
     if !regexMatches(#"(?<![-\w])width\s*:"#, h).isEmpty { bad.append("width declared") }

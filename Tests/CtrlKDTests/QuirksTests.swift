@@ -141,19 +141,19 @@ import Testing
     /// as per-document settings and must get the same answer from either side.
     @Test func theSixNamesAreTheOnesCtrlKDShips() {
         #expect(QuirkRegistry.standard.names() == [
-            "driver-euro-sign", "lj6dtp-typography", "lj6dtp-box-corners",
-            "lj6dtp-colour-as-gray", "lj6dtp-fill-patterns", "stray-style-strikeout",
+            "euro-swap", "smart-punctuation", "box-corners",
+            "colors-as-gray", "fill-patterns", "sawyer-strikeout",
         ])
     }
 
     @Test func registeringTheSameNameReplacesItInPlace() {
         let replaced = QuirkRegistry.standard.register(
-            Quirk(name: "stray-style-strikeout", description: "Replaced.",
+            Quirk(name: "sawyer-strikeout", description: "Replaced.",
                   quirkClass: .optIn, detect: { _ in nil }))
-        #expect(replaced.quirk("stray-style-strikeout")?.description == "Replaced.")
+        #expect(replaced.quirk("sawyer-strikeout")?.description == "Replaced.")
         #expect(replaced.names() == QuirkRegistry.standard.names())
         // Value semantics: the shared `.standard` is untouched by anybody's registration.
-        #expect(QuirkRegistry.standard.quirk("stray-style-strikeout")?.description != "Replaced.")
+        #expect(QuirkRegistry.standard.quirk("sawyer-strikeout")?.description != "Replaced.")
     }
 
     @Test func aNameThisBuildDoesNotKnowIsAnErrorNotAShrug() {
@@ -171,7 +171,7 @@ import Testing
         let plain = emitRTF(try QuirkRegistry.standard.applyQuirks(to: Self.plainDoc()),
                             mode: .modern)
         let asked = emitRTF(try QuirkRegistry.standard.applyQuirks(
-            to: Self.plainDoc(), enable: ["stray-style-strikeout", "driver-euro-sign"]),
+            to: Self.plainDoc(), enable: ["sawyer-strikeout", "euro-swap"]),
                             mode: .modern)
         #expect(plain == asked)
     }
@@ -180,7 +180,7 @@ import Testing
     /// resolves the same decision `applyQuirks` would.
     @Test func aCallerThatNeverMentionsQuirksGetsTheDefaults() throws {
         let doc = Self.strayStrikeDoc()
-        #expect(quirkEnabled(doc, "stray-style-strikeout") == false)
+        #expect(quirkEnabled(doc, "sawyer-strikeout") == false)
         #expect(emitRTF(doc, mode: .modern)
                 == emitRTF(try QuirkRegistry.standard.applyQuirks(to: doc), mode: .modern))
     }
@@ -190,13 +190,13 @@ import Testing
     @Test func autoQuirksAreOnAndOptInOnesAreOff() throws {
         let doc = try QuirkRegistry.standard.applyQuirks(to: Self.driverDoc("LJ6DTP"))
         let decision = quirkDecision(doc)
-        #expect(decision.applicableNames == ["driver-euro-sign", "lj6dtp-typography",
-                                             "lj6dtp-box-corners", "lj6dtp-colour-as-gray",
-                                             "lj6dtp-fill-patterns"])
+        #expect(decision.applicableNames == ["euro-swap", "smart-punctuation",
+                                             "box-corners", "colors-as-gray",
+                                             "fill-patterns"])
         #expect(decision.applied == decision.applicableNames)
 
         let struck = try QuirkRegistry.standard.applyQuirks(to: Self.strayStrikeDoc())
-        #expect(quirkDecision(struck).applicableNames == ["stray-style-strikeout"])
+        #expect(quirkDecision(struck).applicableNames == ["sawyer-strikeout"])
         #expect(quirkDecision(struck).applied.isEmpty)
     }
 
@@ -220,11 +220,11 @@ import Testing
 
     @Test func quirksAllTurnsOnTheOptInOneToo() throws {
         let doc = try QuirkRegistry.standard.applyQuirks(to: Self.strayStrikeDoc(), mode: .all)
-        #expect(quirkDecision(doc).applied == ["stray-style-strikeout"])
+        #expect(quirkDecision(doc).applied == ["sawyer-strikeout"])
     }
 
-    @Test(arguments: ["driver-euro-sign", "lj6dtp-typography", "lj6dtp-box-corners",
-                      "lj6dtp-colour-as-gray", "lj6dtp-fill-patterns"])
+    @Test(arguments: ["euro-swap", "smart-punctuation", "box-corners",
+                      "colors-as-gray", "fill-patterns"])
     func noQuirkSwitchesOneAutomaticQuirkOffAndLeavesItsSiblings(_ name: String) throws {
         let doc = try QuirkRegistry.standard.applyQuirks(to: Self.driverDoc("LJ6DTP"),
                                                          disable: [name])
@@ -236,7 +236,7 @@ import Testing
     @Test func switchingTheEuroOffShowsThePesetaTheBytesActuallyCarry() throws {
         let src = Self.driverDoc("LASERJET", text: "Costs \(Self.PESETA) 100.")
         let off = emitText(try QuirkRegistry.standard.applyQuirks(
-            to: src, disable: ["driver-euro-sign"]), mode: .modern)
+            to: src, disable: ["euro-swap"]), mode: .modern)
         #expect(off.contains(Self.PESETA) && !off.contains("\u{20AC}"))
     }
 
@@ -267,7 +267,7 @@ import Testing
         let doc = Self.driverDoc("LJ6DTP", text: "a_b")
         #expect(driverSubstituter(try QuirkRegistry.standard.applyQuirks(to: doc)) != nil)
         let allOff = try QuirkRegistry.standard.applyQuirks(
-            to: doc, disable: ["lj6dtp-typography", "lj6dtp-box-corners", "driver-euro-sign"])
+            to: doc, disable: ["smart-punctuation", "box-corners", "euro-swap"])
         #expect(driverSubstituter(allOff) == nil)
     }
 
@@ -275,7 +275,7 @@ import Testing
 
     @Test func itAppliesWhenAStyleStrikesAndTheWriterNeverDid() {
         let rows = QuirkRegistry.standard.applicable(to: Self.strayStrikeDoc())
-        let stray = rows.first { $0.name == "stray-style-strikeout" }
+        let stray = rows.first { $0.name == "sawyer-strikeout" }
         #expect(stray != nil)
         #expect(stray?.reason.contains("'Editing Defaults'") == true)
     }
@@ -285,12 +285,12 @@ import Testing
     /// the quirk is not offered at all.
     @Test func itDoesNotApplyWhenTheWriterTypedARealCrossOut() {
         let names = QuirkRegistry.standard.applicable(to: Self.typedStrikeDoc()).map(\.name)
-        #expect(!names.contains("stray-style-strikeout"))
+        #expect(!names.contains("sawyer-strikeout"))
     }
 
     @Test func applyingItDropsTheStrikeAndKeepsEveryOtherAttribute() throws {
         let doc = try QuirkRegistry.standard.applyQuirks(
-            to: Self.strayStrikeDoc(), enable: ["stray-style-strikeout"])
+            to: Self.strayStrikeDoc(), enable: ["sawyer-strikeout"])
         for text in [Self.STRUCK_TEXT, Self.AFTER_TEXT] {
             #expect(!Self.blockFor(doc, text).styleAttrs.contains(.strike), "\(text)")
         }
@@ -302,7 +302,7 @@ import Testing
     func theStrikeDisappearsFromEveryFormatThatCanShowOne(_ mode: EmitMode) throws {
         let faithful = Self.strayStrikeDoc()
         let quirked = try QuirkRegistry.standard.applyQuirks(
-            to: faithful, enable: ["stray-style-strikeout"])
+            to: faithful, enable: ["sawyer-strikeout"])
 
         #expect(!emitRTF(quirked, mode: mode).contains("\\strike"))
         #expect(!emitHTML(quirked, mode: mode).contains("line-through"))
@@ -328,7 +328,7 @@ import Testing
     /// nothing there -- named rather than left out of the list.
     @Test func plainTextIsUnaffectedAndStillCarriesTheWords() throws {
         let quirked = try QuirkRegistry.standard.applyQuirks(
-            to: Self.strayStrikeDoc(), enable: ["stray-style-strikeout"])
+            to: Self.strayStrikeDoc(), enable: ["sawyer-strikeout"])
         let body = emitText(quirked, mode: .printed)
         for sample in [Self.STRUCK_TEXT, Self.AFTER_TEXT] {
             #expect(body.contains(String(sample.prefix(20))))
@@ -339,7 +339,7 @@ import Testing
     @Test func aDocumentThatTypesItsOwnCrossOutIsUntouchedEvenWhenAsked() throws {
         let doc = Self.typedStrikeDoc()
         let asked = try QuirkRegistry.standard.applyQuirks(
-            to: doc, enable: ["stray-style-strikeout"])
+            to: doc, enable: ["sawyer-strikeout"])
         #expect(emitRTF(asked, mode: .modern) == emitRTF(doc, mode: .modern))
     }
 
@@ -354,7 +354,7 @@ import Testing
     /// a document with no quirk available emits byte-identical JSON to version 11.
     @Test func aDocumentThatTripsNothingSaysNothing() throws {
         let json = Self.layoutJSON(try QuirkRegistry.standard.applyQuirks(to: Self.plainDoc()))
-        #expect(json["version"] as? Int == 12)
+        #expect(json["version"] as? Int == 13)
         #expect(json["quirks_applicable"] == nil)
         #expect(json["quirks_applied"] == nil)
     }
@@ -364,22 +364,22 @@ import Testing
     @Test func applicableIsReportedEvenOnAPlainFaithfulRun() throws {
         let json = Self.layoutJSON(
             try QuirkRegistry.standard.applyQuirks(to: Self.strayStrikeDoc()))
-        #expect(json["quirks_applicable"] as? [String] == ["stray-style-strikeout"])
+        #expect(json["quirks_applicable"] as? [String] == ["sawyer-strikeout"])
         #expect((json["quirks_applied"] as? [String])?.isEmpty == true)
     }
 
     @Test func appliedNamesTheSubsetActuallyInForce() throws {
         let json = Self.layoutJSON(try QuirkRegistry.standard.applyQuirks(
-            to: Self.strayStrikeDoc(), enable: ["stray-style-strikeout"]))
-        #expect(json["quirks_applicable"] as? [String] == ["stray-style-strikeout"])
-        #expect(json["quirks_applied"] as? [String] == ["stray-style-strikeout"])
+            to: Self.strayStrikeDoc(), enable: ["sawyer-strikeout"]))
+        #expect(json["quirks_applicable"] as? [String] == ["sawyer-strikeout"])
+        #expect(json["quirks_applied"] as? [String] == ["sawyer-strikeout"])
     }
 
     @Test func anAutomaticQuirkReportsItselfAsApplied() throws {
         let json = Self.layoutJSON(
             try QuirkRegistry.standard.applyQuirks(to: Self.driverDoc("LJ6DTP")), .printed)
         #expect(json["quirks_applied"] as? [String] == json["quirks_applicable"] as? [String])
-        #expect((json["quirks_applied"] as? [String])?.contains("lj6dtp-typography") == true)
+        #expect((json["quirks_applied"] as? [String])?.contains("smart-punctuation") == true)
     }
 
     // MARK: the listing
@@ -392,11 +392,11 @@ import Testing
 
     @Test func theListingWithADocumentSaysApplicableWhyAndOn() {
         let rows = QuirkRegistry.standard.list(for: Self.strayStrikeDoc())
-        let stray = rows.first { $0.name == "stray-style-strikeout" }
+        let stray = rows.first { $0.name == "sawyer-strikeout" }
         #expect(stray?.applicable == true)
         #expect(stray?.enabled == false)
         #expect(stray?.reason?.isEmpty == false)
-        let euro = rows.first { $0.name == "driver-euro-sign" }
+        let euro = rows.first { $0.name == "euro-swap" }
         #expect(euro?.applicable == false)
         #expect(euro?.reason == nil)
     }
@@ -442,7 +442,7 @@ import Testing
             with: Data(box.outText.utf8))) as? [String: Any])
         #expect(object["file"] as? String == "STRUCK.WS")
         let rows = try #require(object["quirks"] as? [[String: Any]])
-        let stray = try #require(rows.first { $0["name"] as? String == "stray-style-strikeout" })
+        let stray = try #require(rows.first { $0["name"] as? String == "sawyer-strikeout" })
         #expect(stray["applicable"] as? Bool == true)
         #expect(stray["enabled"] as? Bool == false)
         #expect((stray["reason"] as? String)?.isEmpty == false)
@@ -456,7 +456,7 @@ import Testing
         #expect(run(["--quirk", "nope", "-t", "text", "-o", "/out/o.txt", "/in/X.WS"],
                     environment: env) == ExitStatus.usage)
         #expect(box.errText.contains("nope"))
-        #expect(box.errText.contains("stray-style-strikeout"))   // says what IS available
+        #expect(box.errText.contains("sawyer-strikeout"))   // says what IS available
     }
 
     @Test func cliQuirkFlagReachesTheConversion() throws {
@@ -477,11 +477,76 @@ import Testing
             return String(decoding: try #require(box.file("/out/o.rtf")), as: UTF8.self)
         }
         let faithful = try convert(["-t", "rtf", "-o", "/out/o.rtf", "/in/STRUCK.WS"])
-        let quirked = try convert(["--quirk", "stray-style-strikeout", "-t", "rtf",
+        let quirked = try convert(["--quirk", "sawyer-strikeout", "-t", "rtf",
                                    "-o", "/out/o.rtf", "/in/STRUCK.WS"])
         #expect(faithful.contains("\\strike"))
         #expect(!quirked.contains("\\strike"))
     }
+    // -------------------------------------------- the 4.4.0 names (aliases)
+    //
+    // Jon's ruling 2026-09-17: a quirk's identifier is shipped text like any other — a
+    // reader types it, `--list-quirks` prints it, the layout JSON publishes it — so all
+    // six were renamed into plain English. The names that shipped in 4.4.0 are still
+    // ACCEPTED AS INPUT and never PRODUCED, because an app released before the rename has
+    // them written into every user's stored per-document overrides.
+
+    static let retiredNames: [String: String] = [
+        "driver-euro-sign": "euro-swap",
+        "lj6dtp-typography": "smart-punctuation",
+        "lj6dtp-box-corners": "box-corners",
+        "lj6dtp-colour-as-gray": "colors-as-gray",
+        "lj6dtp-fill-patterns": "fill-patterns",
+        "stray-style-strikeout": "sawyer-strikeout",
+    ]
+
+    @Test func everyRetiredNameStillSelectsItsQuirk() {
+        for (old, new) in Self.retiredNames {
+            #expect(QuirkRegistry.canonicalName(old) == new, "\(old)")
+            #expect(QuirkRegistry.standard.quirk(old)?.name == new, "\(old)")
+        }
+    }
+
+    @Test func theAliasTableCoversExactlyTheNamesThatShipped() {
+        // A rename table, not a junk drawer: every entry maps to a name this build really
+        // registers, and every registered name is reachable.
+        #expect(Set(QuirkRegistry.standard.names()) == Set(Self.retiredNames.values))
+        for new in Self.retiredNames.values {
+            #expect(QuirkRegistry.standard.quirk(new)?.name == new, "\(new)")
+        }
+    }
+
+    @Test func aNameThatWasNeverAQuirkIsStillAnError() throws {
+        // An actual typo still throws, which is the whole point of `unknownQuirk`.
+        #expect(QuirkRegistry.canonicalName("lj6dtp-colour-as-grey") == "lj6dtp-colour-as-grey")
+        #expect(QuirkRegistry.standard.quirk("lj6dtp-colour-as-grey") == nil)
+        #expect(throws: QuirkError.self) {
+            _ = try QuirkRegistry.standard.resolve(Self.driverDoc("LJ6DTP"),
+                                                   enable: ["lj6dtp-colour-as-grey"])
+        }
+    }
+
+    @Test func noRetiredNameIsEverProduced() throws {
+        // ONE DIRECTION. Naming old names on the way in must not put them back into
+        // anything this engine writes — the decision and every listing say the new names
+        // only, so the two spellings can never both appear in one output.
+        let decision = try QuirkRegistry.standard.resolve(Self.driverDoc("LJ6DTP"),
+                                                          enable: Array(Self.retiredNames.keys))
+        #expect(decision.applied.contains("colors-as-gray"))
+        #expect(decision.applied.contains("smart-punctuation"))
+        var produced = Set(decision.applied)
+        produced.formUnion(decision.applicable.map(\.name))
+        produced.formUnion(QuirkRegistry.standard.names())
+        #expect(produced.isDisjoint(with: Set(Self.retiredNames.keys)))
+    }
+
+    @Test func aRetiredNameTurnsItsQuirkOffToo() throws {
+        // `--no-quirk` takes an alias by the same route — `resolve` maps both lists, not
+        // just the enable one.
+        let decision = try QuirkRegistry.standard.resolve(
+            Self.driverDoc("LJ6DTP"), disable: ["lj6dtp-colour-as-gray"])
+        #expect(!decision.applied.contains("colors-as-gray"))
+    }
+
 }
 
 private enum QuirkTestFSError: Error { case notFound }
@@ -503,4 +568,6 @@ private final class OutputBox: @unchecked Sendable {
     var outText: String { lock.lock(); defer { lock.unlock() }; return outLines.joined() }
     var errText: String { lock.lock(); defer { lock.unlock() }; return errLines.joined(separator: "\n") }
     func file(_ path: String) -> [UInt8]? { lock.lock(); defer { lock.unlock() }; return files[path] }
+
+
 }

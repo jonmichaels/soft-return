@@ -10,6 +10,9 @@ import CtrlKD
 /// `graphicCells` below can recover which of the six hatches a colour-driven glyph fill wants
 /// without decoding it back out of the `NSColor` itself. Absent for plain black/gray text.
 extension NSAttributedString.Key {
+    /// Batch 47 (M27): on a Modern ■, the width of its cell in points — the layout manager draws Native's square there
+    /// (`ScriptRiseLayoutManager.drawModernSquares`) instead of the reading face's own glyph.
+    static let modernCellSquare = NSAttributedString.Key("SoftReturn.modernCellSquare")
     static let lj6dtpPatternIndex = NSAttributedString.Key("SoftReturn.lj6dtpPatternIndex")
     /// Register b31 (job 506, E2): `true` when a span's `.foregroundColor` resolved from a
     /// driver colour1-7 index (`DocumentRenderer.driverColourAttributes`) — the same
@@ -778,6 +781,49 @@ private func graphicAdvance(
 /// Off, explicitly, everywhere. A hyphen break the library does not make is a line the
 /// library does not have, and it moves every line after it. Stated once here rather than at
 /// each of the eight construction sites, so a ninth cannot quietly reintroduce it.
+/// Batch 47 (M30, I30; Jon: Modern clips the top line on some pages — -HOLYMAC.WS Modern pages 3 and 4): how far a
+/// Modern page's text must sit below its content top so no glyph of its FIRST line rises above it, or 0.
+///
+/// A line set with leading tighter than its face (the engine's condensed `.lh`, a 0.71875 line-height multiple: an
+/// 11.74 pt line for Courier Prime Bold 14 pt) is laid out with its baseline 6.74 pt into the fragment and its ascender
+/// 5.75 pt above the fragment (b47-m30-probe). Mid-page that ink overlaps the line above, as the leading intends; at a
+/// page's top it rose past the text view's edge, which is not drawn — the top of the line was cut. The page's text view
+/// moves down by this much; the layout — every line break and page break — is untouched. (The first cut grew the first
+/// line's fragment instead, which moved Modern's page breaks: AppModernFidelityTests failed on four documents.)
+func modernFirstLineRise(_ layoutManager: NSLayoutManager, container: NSTextContainer) -> CGFloat {
+    let glyphs = layoutManager.glyphRange(for: container)
+    guard glyphs.length > 0, let storage = layoutManager.textStorage else { return 0 }
+    let text = storage.string as NSString
+    // THE FIRST LINE WITH INK, not the container's first line fragment (4.5.0 release run, PixelTruthMarginTests:
+    // dropped-chapter.ws4 opens on six blank lines, collapsed to a sliver at the page's top; its body-font ascender
+    // "rose" 16 pt above that sliver's baseline and the page's text moved down with nothing to protect). A blank line
+    // draws nothing to cut, and the first line that does draw is measured from the container's top.
+    var index = glyphs.location
+    var checked = 0
+    while index < NSMaxRange(glyphs), checked < 64 {
+        var line = NSRange()
+        let fragment = layoutManager.lineFragmentRect(forGlyphAt: index, effectiveRange: &line)
+        let span = NSIntersectionRange(line, glyphs)
+        guard span.length > 0 else { break }
+        let characters = layoutManager.characterRange(forGlyphRange: span, actualGlyphRange: nil)
+        if text.substring(with: characters).rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.inverted) != nil {
+            let baseline = fragment.minY + layoutManager.location(forGlyphAt: span.location).y
+            var ascender: CGFloat = 0
+            storage.enumerateAttribute(.font, in: characters, options: []) { value, _, _ in
+                #if canImport(AppKit)
+                if let font = value as? NSFont { ascender = max(ascender, font.ascender) }
+                #else
+                if let font = value as? UIFont { ascender = max(ascender, font.ascender) }
+                #endif
+            }
+            return max(0, (ascender - baseline).rounded(.up))
+        }
+        index = NSMaxRange(line)
+        checked += 1
+    }
+    return 0
+}
+
 func softReturnLayoutManager() -> NSLayoutManager {
     let manager = ScriptRiseLayoutManager()
     manager.usesDefaultHyphenation = false
@@ -885,6 +931,61 @@ final class ScriptRiseLayoutManager: NSLayoutManager {
             super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
             return
         }
+        // Batch 47 (M27): Modern's ■ bullets, drawn as Native's square; everything else as it was.
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        var squares: [NSRange] = []
+        storage.enumerateAttribute(.modernCellSquare, in: characters, options: []) { value, range, _ in
+            if value != nil { squares.append(range) }
+        }
+        guard !squares.isEmpty else {
+            drawTextGlyphs(forGlyphRange: glyphsToShow, at: origin)
+            return
+        }
+        var cursor = glyphsToShow.location
+        for range in squares {
+            let glyphs = NSIntersectionRange(glyphRange(forCharacterRange: range, actualCharacterRange: nil), glyphsToShow)
+            guard glyphs.length > 0 else { continue }
+            if glyphs.location > cursor {
+                drawTextGlyphs(forGlyphRange: NSRange(location: cursor, length: glyphs.location - cursor), at: origin)
+            }
+            drawModernSquares(forGlyphRange: glyphs, at: origin)
+            cursor = NSMaxRange(glyphs)
+        }
+        if cursor < NSMaxRange(glyphsToShow) {
+            drawTextGlyphs(forGlyphRange: NSRange(location: cursor, length: NSMaxRange(glyphsToShow) - cursor), at: origin)
+        }
+    }
+
+    /// Batch 47 (M27, Jon: Modern's ■ bullets were far larger than Native's and Printed's, and the text after them too
+    /// close): each ■ in `glyphs` as Native draws it (`graphicCells`' square part block) — side 0.65 × min(cell,
+    /// 1.1 × size), centred across its cell and 0.3 × size above the baseline — in the run's colour, not the reading
+    /// face's glyph, which in Courier New 14 pt inked 8.5 pt against Native's 5.0 (b47-m27-probe).
+    private func drawModernSquares(forGlyphRange glyphs: NSRange, at origin: CGPoint) {
+        guard let storage = textStorage else { return }
+        for glyph in glyphs.location..<NSMaxRange(glyphs) {
+            let character = characterIndexForGlyph(at: glyph)
+            guard character < storage.length,
+                  let cell = (storage.attribute(.modernCellSquare, at: character, effectiveRange: nil) as? NSNumber)
+                      .map({ CGFloat($0.doubleValue) }),
+                  let font = storage.attribute(.font, at: character, effectiveRange: nil) as? NSFont
+            else { continue }
+            let pt = font.pointSize
+            let fragment = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let location = location(forGlyphAt: glyph)
+            let x0 = origin.x + fragment.minX + location.x
+            let baseline = origin.y + fragment.minY + location.y
+            let square = min(cell, 1.1 * pt)
+            let side = 0.65 * square
+            let colour = storage.attribute(.foregroundColor, at: character, effectiveRange: nil) as? NSColor ?? NSColor.black
+            colour.setFill()
+            NSBezierPath(rect: CGRect(x: x0 + cell / 2 - side / 2, y: baseline - 0.3 * pt - side / 2,
+                                      width: side, height: side)).fill()
+        }
+    }
+
+    /// The glyphs as laid out, a script rise moving a run's drawing.
+    private func drawTextGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+        guard glyphsToShow.length > 0, let storage = textStorage else { return }
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         var risen = false
         storage.enumerateAttribute(.nativeScriptRise, in: characters, options: []) { value, _, stop in

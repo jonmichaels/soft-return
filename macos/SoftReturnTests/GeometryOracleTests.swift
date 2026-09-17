@@ -20,6 +20,18 @@ import Testing
 ///
 /// Jon does not verify arithmetic. This file does.
 enum Oracle {
+    /// E11 (engine b86d214): how many running rows each page (1-based) carries flagged off the sheet.
+    static func offSheetRows(_ document: Document, options: EmitOptions) -> [Int: Int] {
+        let pages = docToPagelines(printedDocument(document, options: options), printed: true)
+        var out: [Int: Int] = [:]
+        for (index, page) in pages.enumerated() {
+            let count = ((page.headerLines ?? []) + (page.footerLines ?? [])).filter(\.offSheet).count
+                + (page.autoPageno?.offSheet == true ? 1 : 0)
+            if count > 0 { out[index + 1] = count }
+        }
+        return out
+    }
+
     /// Fixtures are read from the SOURCE tree, not the test bundle.
     ///
     /// The project uses a synchronized file group, which does not copy `.ws4`/`.ps` files into
@@ -1826,7 +1838,9 @@ let noTextInkDocuments: [String: String] = [
         let rolls48 = [state.document.formatting.subSuperRoll48 ?? 3.0]
             + state.document.blocks.flatMap { $0.lines.compactMap(\.roll48) }
         let rises = Set(rolls48.map { ($0 * 1.5).rounded(.toNearestOrEven) }).sorted()
-        let engineLines = try AppModernFidelityTests.lines(of: enginePDF)
+        // E11: the rows the engine flags off the sheet are drawn below the page's foot and by no view — counted out.
+        let engineLines = try AppModernFidelityTests.lines(
+            of: enginePDF, offSheet: Oracle.offSheetRows(state.document, options: state.printedOptions))
         let appLines = try AppModernFidelityTests.lines(of: appPDF, rises: rises)
 
         // COMPARED WITHOUT THE READER'S OWN INVENTIONS, and in the ENGINE'S OWN ALPHABET —

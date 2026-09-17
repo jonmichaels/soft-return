@@ -229,11 +229,14 @@ private func nonPagedExports(_ doc: Document, _ mode: EmitMode) -> [(String, Str
     let doc = mergeDocument("Dear &NAME& of &COMPANY&, see &REF#& and &#COUNT&.\r\n")
     for mode in [EmitMode.printed, .modern] {
         for (name, out) in nonPagedExports(doc, mode) {
-            // HTML escapes the ampersand and Markdown backslash-escapes the hash —
-            // neither is this rule's business, so compare against each format's own
-            // rendering of the same characters.
+            // HTML escapes the ampersand and Markdown backslash-escapes both the hash
+            // and (since the Markdown escaping round) the ampersand — neither is this
+            // rule's business, so compare against what a READER of each format actually
+            // shows. A Markdown reader renders `\\&` as `&` and `\\#` as `#`; the rule
+            // here is "the variable survives", not "the bytes are unescaped".
             let plain = out.replacingOccurrences(of: "&amp;", with: "&")
                            .replacingOccurrences(of: "\\#", with: "#")
+                           .replacingOccurrences(of: "\\&", with: "&")
             for variable in ["&NAME&", "&COMPANY&", "&REF#&", "&#COUNT&"] {
                 #expect(plain.contains(variable), "\(name)/\(mode)/\(variable)")
             }

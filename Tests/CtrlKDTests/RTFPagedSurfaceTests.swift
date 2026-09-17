@@ -31,7 +31,16 @@ import Testing
 /// Port of ctrl-kd's `tests/test_rtf_trailing_pa_page.py`,
 /// `tests/test_rtf_page_numbers.py` and `tests/test_rtf_facing_pages.py`.
 @Suite struct RTFPagedSurfaceTests {
-    static let footerNum = #"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#
+    /// WordStar's automatic number as each mode writes it.
+    ///
+    /// E10/E10b (Jon 2026-09-17): page furniture takes the body's own face and size --
+    /// Printed `\f1` Courier New, Modern `\f0` (the MODERN_BODY face), both at `\fs24`
+    /// (Printed's body size; Modern's body less 2pt). It was a hardcoded `\f0\fs22` in
+    /// both modes, i.e. Times New Roman 11 on a Courier page.
+    static func footerNum(_ mode: EmitMode = .printed) -> String {
+        let face = mode == .printed ? #"\f1"# : #"\f0"#
+        return #"{\footer \pard\plain \qc\#(face)\fs24 {\chpgn }\par}"#
+    }
 
     /// A one-paragraph document, with `dots` recorded the way the parser records them for
     /// `pgnumCheckpoints`/`poeOrPooCheckpoints` to read.
@@ -84,22 +93,25 @@ import Testing
     @Test(arguments: [EmitMode.printed, .modern])
     func aSilentDocumentGetsACentredPageNumber(mode: EmitMode) {
         // Stock WordStar 7 numbers a document that says nothing at all.
-        #expect(emitRTF(Self.doc(), mode: mode).contains(Self.footerNum))
+        #expect(emitRTF(Self.doc(), mode: mode).contains(Self.footerNum(mode)))
     }
 
     @Test func opTurnsTheNumberOffAndPgTurnsItBackOn() {
-        #expect(!emitRTF(Self.doc(dots: [".op"])).contains(Self.footerNum))
-        #expect(emitRTF(Self.doc(dots: [".op", ".pg"])).contains(Self.footerNum))
+        // `emitRTF`'s own default mode is Modern, so the Modern furniture face is what
+        // these two look for (E10/E10b).
+        #expect(!emitRTF(Self.doc(dots: [".op"])).contains(Self.footerNum(.modern)))
+        #expect(emitRTF(Self.doc(dots: [".op", ".pg"])).contains(Self.footerNum(.modern)))
     }
 
     @Test func theFlagReachesTheEmitterAtAll() {
         // The named defect: `--page-numbers` used to be swallowed by the emitter.
         var off = EmitOptions()
         off.pageNumbers = .off
-        #expect(!emitRTF(Self.doc(), options: off).contains(Self.footerNum))
+        #expect(!emitRTF(Self.doc(), options: off).contains(Self.footerNum(.modern)))
         var on = EmitOptions()
         on.pageNumbers = .on
-        #expect(emitRTF(Self.doc(dots: [".op"]), options: on).contains(Self.footerNum))
+        #expect(emitRTF(Self.doc(dots: [".op"]), options: on)
+            .contains(Self.footerNum(.modern)))
     }
 
     // MARK: the two flags (planning #264 R7, ruled 2026-09-14)
@@ -126,7 +138,7 @@ import Testing
         options.headers = combo.headers
         options.pageNumbers = combo.pageNumbers
         let out = emitRTF(Self.doc(dots: [".op"]), mode: mode, options: options)
-        #expect(out.contains(Self.footerNum) == combo.expected)
+        #expect(out.contains(Self.footerNum(mode)) == combo.expected)
     }
 
     @Test(arguments: [EmitMode.printed, .modern])
@@ -137,9 +149,9 @@ import Testing
             var options = EmitOptions()
             options.headers = headers
             #expect(emitRTF(Self.doc(), mode: mode, options: options)
-                .contains(Self.footerNum))
+                .contains(Self.footerNum(mode)))
             #expect(!emitRTF(Self.doc(dots: [".op"]), mode: mode, options: options)
-                .contains(Self.footerNum))
+                .contains(Self.footerNum(mode)))
         }
     }
 
@@ -165,7 +177,7 @@ import Testing
 
     @Test func aDeclaredFooterPreEmptsTheAutomaticNumber() {
         let out = emitRTF(Self.doc(footers: [1: "Chapter One"]))
-        #expect(!out.contains(Self.footerNum))
+        #expect(!out.contains(Self.footerNum()))
         #expect(out.contains(#"{\footer "#))              // the real footer is there
     }
 
@@ -173,7 +185,7 @@ import Testing
         // The corpus's LJ6DTP document declares an `.f1` of two 0x0F bytes: declared,
         // invisible, and enough to keep WordStar's automatic number off.
         let out = emitRTF(Self.doc(footers: [1: "\u{0F}\u{0F}"]))
-        #expect(!out.contains(Self.footerNum))
+        #expect(!out.contains(Self.footerNum()))
         #expect(!out.contains(#"{\footer "#))             // nothing visible to draw
     }
 
@@ -315,7 +327,12 @@ import Testing
         }
         let out = emitRTF(try parse([UInt8](data)), mode: .printed)
         #expect(out.contains(#"\headery1272"#) && out.contains(#"\footery1646"#))
-        #expect(out.contains(#"\margl8370\margr1944"#))
+        // E9 R1 (2026-09-17): `\margr` is the document's own ruler now, not a mirror of
+        // `\margl`. `.rm 3.3125i` = 33.125 columns, plus one cell of reader slack = 4914
+        // twips of text column on the 11in landscape sheet, so the right margin is
+        // 15840 - 8370 - 4914. That 3.3125in measure IS the paperback trim this template
+        // exists to make — before the fix the column came out 3.84in.
+        #expect(out.contains(#"\margl8370\margr2556"#))
         #expect(out.contains(#"\margmirror"#))
     }
 
@@ -330,7 +347,7 @@ import Testing
         #expect(!doc.paEofBlankAfter)
         let out = emitRTF(doc, mode: mode)
         #expect(!out.trimmed().hasSuffix(#"\page \n}"#))
-        #expect(out.contains(Self.footerNum))             // and it gains its number
+        #expect(out.contains(Self.footerNum(mode)))       // and it gains its number
     }
 
     @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),

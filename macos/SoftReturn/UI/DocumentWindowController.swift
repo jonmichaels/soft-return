@@ -113,6 +113,14 @@ final class DocumentWindowController: NSWindowController {
     static let firstLaidOutPages = 1
     /// The longest a progressive load's work holds one turn of the main run loop before it yields.
     static let turnBudgetNanoseconds: UInt64 = 20_000_000
+    /// Batch 47 (M25, Jon: -HOLYMAC.WS switched to Continuous Scroll scrolled jerkily until its load finished): a turn's
+    /// budget while the reader is scrolling — the clip view moved within `scrollingWindowSeconds`. A 20 ms turn beside a
+    /// frame's own drawing took every frame over 16.7 ms for the first 3.1 s after the switch (b47-m25-before: 20 frames
+    /// a second, `render.chunk` and `pages.layOut` turns of ~23 ms each); the load finishes later instead.
+    static let scrollingTurnBudgetNanoseconds: UInt64 = 4_000_000
+    static let scrollingWindowSeconds: TimeInterval = 0.25
+    /// When the reader last moved the pages, as `DispatchTime` uptime nanoseconds.
+    nonisolated(unsafe) static var lastScrollActivity: UInt64 = 0
     /// Shown while a progressive load has nothing new on screen yet.
     let loadingIndicator = NSProgressIndicator()
     /// The page size the first-open geometry was sized for. A progressive load sizes the window before its
@@ -183,6 +191,10 @@ final class DocumentWindowController: NSWindowController {
         // (page centred on any axis smaller than the viewport, normal scrolling on any axis
         // larger) lives entirely in that class; see its doc comment.
         scrollView.contentView = CenteringClipView()
+        // Batch 47 (M25): the reader moving the pages makes a progressive load's turns short (`turnDeadline`).
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(pagesMoved),
+                                               name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
         scrollView.drawsBackground = true
         scrollView.backgroundColor = .softReturnCanvas
         // Zoom is the scroll view's own magnification, which is what makes pinch-to-zoom
@@ -478,16 +490,35 @@ final class DocumentWindowController: NSWindowController {
     /// (a `@MainActor` test waiting on the pages) starved every chunk (b25-holymac-fix1). The default mode
     /// also pauses the work while a scroll or resize is being tracked, so it never stutters one.
     private func onNextTurn(token: Int, _ body: @escaping @MainActor @Sendable (DocumentWindowController) -> Void) {
-        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+        let run: @Sendable () -> Void = { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.loadToken == token else { return }
                 body(self)
             }
         }
+        // Batch 47 (M25): while the reader scrolls, one turn a frame — turns queued back to back ran three and four inside
+        // one frame (b47-m25-after: 25 layout turns in 7 frames over budget).
+        guard Self.isScrolling else {
+            RunLoop.main.perform(inModes: [.default], block: run)
+            return
+        }
+        let timer = Timer(timeInterval: Self.scrollingTurnSpacingSeconds, repeats: false) { _ in run() }
+        RunLoop.main.add(timer, forMode: .default)
+    }
+
+    /// While the reader scrolls, the least time between two turns: about a frame.
+    static let scrollingTurnSpacingSeconds: TimeInterval = 0.008
+
+    static var isScrolling: Bool {
+        DispatchTime.now().uptimeNanoseconds < lastScrollActivity + UInt64(scrollingWindowSeconds * 1_000_000_000)
+    }
+
+    @objc private func pagesMoved() {
+        Self.lastScrollActivity = DispatchTime.now().uptimeNanoseconds
     }
 
     private static func turnDeadline() -> UInt64 {
-        DispatchTime.now().uptimeNanoseconds + turnBudgetNanoseconds
+        DispatchTime.now().uptimeNanoseconds + (isScrolling ? scrollingTurnBudgetNanoseconds : turnBudgetNanoseconds)
     }
 
     /// The pages `present` left, a turn's budget of them at a time.

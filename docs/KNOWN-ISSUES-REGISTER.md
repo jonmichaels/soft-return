@@ -1,5 +1,27 @@
 # Known-Issues Register
 
+### 2026-09-17 — `theAppPaginatesExactlyLikeTheLibrary`: RETIRED — every failing row was an off-sheet page number (E11, batch 48b)
+
+- **Test:** `GeometryOracleTests.theAppPaginatesExactlyLikeTheLibrary()`, one of the six Mac register-named rows of the
+  v4.3.1 and v4.4.0 release runs (`outbox/release-v4.4.0-runs/INDEX.txt`).
+- **What the rows were:** a page on which the app draws one line fewer than the library: FORMFEED.WS page 5, PAGE.RND,
+  narrow.ws4, -LASERJE.FNT, PS-FONTS.REF, ROUNDED.BRD and FONTS.REF pages 1–10. The extra line on the library's side
+  was, on every one, WordStar's automatic page number resolved below the foot of the sheet. For example, FORMFEED.WS
+  page 5's is `342.0 -144.0 Td (5) Tj` on its 792×612 sheet, and PAGE.RND page 1's number is at y −21.6. The engine's
+  PDF writes it there because WS7 commands it and the paper clips it. The PDF reader counted it; no view draws it.
+- **What changed:** engine E11 (`b86d214`) publishes such a row as `HeadFootLine.offSheet` / `AutoPageNumber.offSheet`
+  (layout JSON v12 `off_sheet: true`).
+  - Native on the Mac and the iPhone skips a flagged row (`0244aca`).
+  - The oracle reads the engine's PDF without the rows it flags, dropping text below the foot of a page that has
+    flagged rows (`Oracle.offSheetRows`, `AppModernFidelityTests.lines(of:offSheet:)`).
+- **Proof:** `b48-e11-mac` (armed, on `0244aca` + E11) — `theAppPaginatesExactlyLikeTheLibrary` PASSED.
+  - `NativeOffSheetRowsTests` 3/3: FORMFEED.WS p5 (engine PDF 30 lines, 29 on the sheet, Native 29), PAGE.RND p1
+    (58 / 57 / 57), MICKEE.WS p23 (a flagged foot with no ink, 28 / 28 / 28).
+  - iOS `b48-e11-ios26` and `b48-e11-ios16`, 6/6 each.
+  - The run's other three failures are the remaining register rows, unchanged: `everyLineStartsAtTheLibrarysLeftMargin`,
+    `structuralParity["LJ6DTP.WS"]` and `knockoutRunsClassifyTheSameWayTheEngineDoes`.
+- **Status:** RETIRED. The v4.5.0 release gate no longer names this row; a failure of it is a new failure.
+
 ### 2026-09-16 — iOS 26.3: `pagesAreLaidOutAsTheyAreReached` [-HOLYMAC.WS, Modern] sits on its 100 ms bound (v4.4.0 release run)
 
 - **Test:** `LongDocumentLayoutTests.pagesAreLaidOutAsTheyAreReached(document:view:)` in `SoftReturnIOSTests`, the

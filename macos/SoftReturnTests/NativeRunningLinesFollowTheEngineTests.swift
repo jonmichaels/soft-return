@@ -52,11 +52,11 @@ struct NativeRunningLinesFollowTheEngineTests {
     static func enginePlacements(_ state: DocumentState) -> [[Placement]] {
         let options = DocumentRenderer.nativeEngineOptions(state)
         let doc = printedDocument(state.document, options: options)
-        let metrics = printedMetrics(state.document, options: options)
-        let pageHeight = Double(metrics.pageHeight)
         let pages = docToPagelines(doc, printed: true, pixResults: options.pixResults, pictures: .embed)
         var result: [[Placement]] = []
         for page in pages {
+            // Each page flips against its own sheet (engine 07b040c, M31).
+            let pageHeight = Double(printedMetrics(state.document, page: page, options: options).pageHeight)
             var lines: [Placement] = []
             let resolved: [HeadFootLine] = (page.headerLines ?? []) + (page.footerLines ?? [])
             for line in resolved {

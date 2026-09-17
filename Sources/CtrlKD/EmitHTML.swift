@@ -6,11 +6,21 @@
 /// page byte for byte, embedded newlines included, so reflowing or "tidying" this string
 /// breaks equivalence with Python. Change it there first if it ever needs changing.
 ///
-/// NO WIDTH/MEASURE DECLARATION ANYWHERE (round 3 addendum): an earlier version capped the
+/// NO WIDTH/MEASURE DECLARATION HERE (round 3 addendum): an earlier version capped the
 /// body at `max-width:42rem` as a reading-measure nicety — reasonable on its own, but still
 /// OUR OWN page-width opinion, the same category of thing the rest of this round strips.
-/// HTML has no page; width belongs entirely to the renderer/reader, in both Modern AND
-/// Native output. `padding` is a fixed breathing-room gutter, not a measure.
+/// HTML has no page; width belongs entirely to the renderer/reader. `padding` is a fixed
+/// breathing-room gutter, not a measure.
+///
+/// SUPERSEDED FOR MODERN by E9 H4 (Jon's ruling 2026-09-17, audit section G): with no
+/// measure at all a 1400px window gave about 150 characters to the line, roughly twice a
+/// comfortable one, and with no `overflow-wrap` a single long DOS path or a wide row of
+/// block graphics dragged the whole page sideways — 60 of 509 Modern documents scrolled
+/// horizontally at 400px, four of them more than four times the viewport.
+/// `modernMeasureCSS` below carries the measure, and it is appended for MODERN ONLY: the
+/// Printed facsimile is already clean at 400px (its `p.ws-native` blocks scroll inside
+/// themselves, which is the right behaviour for a facsimile) and a measure imposed on a
+/// line-for-line page would be exactly the page-width opinion the rule above rejects.
 let htmlCSS = """
 body{margin:0;padding:2rem 1rem;
 font:14pt/1.6 Georgia,'Times New Roman',P052,serif;color:#222}p{margin:0 0 1em}
@@ -24,6 +34,83 @@ section[role=doc-endnotes] h2{font-size:1.1rem}
 @media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}
 hr.pb{border-top-color:#444}blockquote{border-left-color:#555}}
 """
+
+/// E9 H4: the Modern measure — see the supersession note above `htmlCSS`.
+///
+///   max-width  38em at the 14pt Georgia body is about 70 characters to the line on a
+///              desktop, inside the 65-75 a reader wants; `margin: 0 auto` centres it in
+///              a wide window instead of leaving it pinned to the left edge.
+///   overflow-wrap  `anywhere` rather than `break-word` on purpose: only `anywhere` also
+///              shrinks the element's MIN-CONTENT width, and min-content is exactly what
+///              a 400px viewport hands a long unbroken path.
+///   overflow-x  on the PARAGRAPH, this emitter's own answer to the audit's
+///              "`overflow-x: auto` on pre/tables": there are no `<pre>` or `<table>`
+///              elements here, but there IS content a paragraph is forbidden to fold — a
+///              picture row (`span.ws-nowrap`, planning #264 item 3) and a run of
+///              box-drawing characters. `LSRBOX/LSRBOX.WS` was 5,095 px wide at a 400 px
+///              viewport through one such span. The paragraph scrolls inside itself
+///              instead, exactly as `p.ws-native` already does.
+///
+/// `p.ws-native` needs nothing here: it already carries `overflow-x:auto`, and
+/// `overflow-wrap` has no effect under `white-space:pre` anyway.
+///   ws-nowrap  the same guard one level in, because the paragraph's own scroll is not
+///              always the container that ends up holding the overflow (`LJ6DTP.WS`'s
+///              banner row escaped it, 602 px). Making the non-folding span itself a
+///              `max-width:100%` inline-block pins it either way.
+let modernMeasureCSS = "\nbody{max-width:38em;margin:0 auto;overflow-wrap:anywhere}"
+    + "\np{overflow-x:auto}"
+
+/// Appended only when a `ws-nowrap` span is actually on the page — same "no CSS-byte delta
+/// for a feature this document never used" discipline the conditional rules in `emitHTML`
+/// already follow.
+let modernNowrapScrollCSS =
+    "\nspan.ws-nowrap{display:inline-block;max-width:100%;overflow-x:auto;vertical-align:top}"
+
+/// E9 H2 (Jon's ruling 2026-09-17, audit section E): NEWSPAPER COLUMNS ARE A SECTION, NOT
+/// A PARAGRAPH. Modern HTML used to wrap EVERY paragraph of a `.co n` region in its own
+/// `column-count` box, so each paragraph balanced itself across the columns and a fresh
+/// pair started underneath; Printed HTML dropped the columns entirely. Both now open ONE
+/// container per columnar section — the wrapper is written per block (the only place
+/// `block.columns` is in scope) and `mergeHTMLColumnSections` welds each run of adjacent,
+/// identical wrappers into one.
+let htmlColsClass = "ws-cols"
+
+/// A two-column measure on a 400px phone is about twenty characters a line, which is not
+/// a column, it is a stack of fragments. `!important` is not decoration: it is beating
+/// this element's OWN inline `column-count`, which no ordinary selector can outrank.
+let htmlColsCSS = "\n@media(max-width:600px){div.\(htmlColsClass){column-count:1!important}}"
+
+/// The opening `<div>` for a block inside a `.co n` region, or nil. A gutter is print
+/// columns at 10 CPI -> tenths of an inch. Port of `_html_column_wrapper`.
+func htmlColumnWrapper(_ block: Block) -> String? {
+    guard let n = block.columns, n > 1 else { return nil }
+    let gap = block.columnGutter.map { "; column-gap:\(fixedTwoDecimals($0 / 10.0))in" } ?? ""
+    return "<div class=\"\(htmlColsClass)\" style=\"column-count:\(n)\(gap)\">"
+}
+
+/// Weld each run of adjacent, identically-opened column wrappers into one container.
+/// Port of `_html_merge_column_sections`.
+func mergeHTMLColumnSections(_ parts: inout [String]) {
+    let prefix = "<div class=\"\(htmlColsClass)\" style=\""
+    let close = "</div>"
+    var i = 0
+    while i < parts.count {
+        guard parts[i].hasPrefix(prefix), parts[i].hasSuffix(close),
+              let gt = parts[i].firstIndex(of: ">") else { i += 1; continue }
+        let openTag = String(parts[i][parts[i].startIndex...gt])
+        var j = i + 1
+        while j < parts.count, parts[j].hasPrefix(openTag), parts[j].hasSuffix(close) {
+            j += 1
+        }
+        if j > i + 1 {
+            let inner = (i..<j).map { k -> String in
+                String(parts[k].dropFirst(openTag.count).dropLast(close.count))
+            }.joined(separator: "\n")
+            parts.replaceSubrange(i..<j, with: [openTag + inner + close])
+        }
+        i += 1
+    }
+}
 
 /// `_TAG` (emit.py:141), listed in the order Python's `sorted(s.styles)` yields the style
 /// *codes*: `b, i, strike, sub, sup, u`. Because each style wraps the accumulated text,
@@ -929,10 +1016,15 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             // wrapper): a <pre> box implies a width-constraining monospace grid, which is
             // exactly the page-geometry opinion this round strips everywhere else.
             // Native's own identity is the FONT (kept via the `ws-native` class:
-            // monospace, `white-space:pre-wrap` so literal column spacing still lines up)
-            // -- not a boxed, non-wrapping element. Every physical line break is now an
-            // explicit <br> rather than a literal newline relying on <pre>'s own
-            // whitespace handling.
+            // monospace) -- not a boxed, non-wrapping element.
+            //
+            // E9 H1 (Jon's ruling 2026-09-17, audit section D): ONE NEWLINE PER LINE, NO
+            // `<br>`. `p.ws-native` settled on `white-space:pre` (its `overflow-x:auto`
+            // is what lets a wide facsimile line scroll inside itself instead of dragging
+            // the page) and under `pre` the newline IS the break -- the `<br>` this branch
+            // also wrote was a SECOND one, so every line of the facsimile was followed by
+            // a blank line and a 57-page novel arrived twice as tall as the document. 481
+            // of 511 Printed HTML documents.
             // planning #264 item 1 (packet row B3): a bare 0x09 lands on WordStar's
             // own modulus-8 stop here, where the face is fixed-pitch (`p.ws-native`)
             // and a column IS a character -- see `expandBareTabsForPrintedLayout`
@@ -944,10 +1036,20 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                         refNotes: refNotes, labels: labels,
                         options: options, shownMap: shownMap, sentenceSpacing: ssOn)
             }
-            let body = lines.joined(separator: "<br>\n")
+            let body = lines.joined(separator: "\n")
             if !body.trimmed().isEmpty {
                 let nativeCls = addHTMLClass(cls, "ws-native")
-                parts.append("<p\(nativeCls)>\(body)</p>")
+                let pHTML = "<p\(nativeCls)>\(body)</p>"
+                // E9 H2: Printed HTML used to be the ONE surface that threw `.co n`
+                // away -- 0 of 511 Printed HTML documents carried columns, where the
+                // Printed RTF of the same file composes them properly. The facsimile
+                // lines go down one column and on into the next, which is what
+                // WordStar printed.
+                if let colOpen = htmlColumnWrapper(block) {
+                    parts.append("\(colOpen)\(pHTML)</div>")
+                } else {
+                    parts.append(pHTML)
+                }
             }
         } else {
             // A plain (non-list, non-centred) run of lines now reflows the SAME way an
@@ -1066,11 +1168,8 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                     // is print columns at 10 CPI -> tenths of an inch. Wraps the ALREADY
                     // fully-assembled/indented paragraph — see this branch's own header
                     // comment for why this is not a separate rendering path.
-                    if let n = block.columns, n > 1 {
-                        let gap = block.columnGutter.map {
-                            "; column-gap:\(fixedTwoDecimals($0 / 10.0))in"
-                        } ?? ""
-                        pHTML = "<div style=\"column-count:\(n)\(gap)\">\(pHTML)</div>"
+                    if let colOpen = htmlColumnWrapper(block) {
+                        pHTML = "\(colOpen)\(pHTML)</div>"
                     }
                     if quote {
                         // round 3/4: quote-classified styles become a real <blockquote>;
@@ -1163,6 +1262,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     }
     builder.flush(&parts)
     flushQuote()
+    mergeHTMLColumnSections(&parts)
 
     // One `doc-endnotes` section per included, non-empty kind, `noteKindOrder`'s order —
     // a plain `<hr>` first, only if at least one such section exists.
@@ -1186,6 +1286,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     var page = "<!doctype html><html><head><meta charset=\"utf-8\">"
     page += "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     var css = htmlCSS
+    if !printed { css += modernMeasureCSS }          // E9 H4, Modern only
     if options.styles {
         let extra = styleCSS(doc, printed: printed, inlineStyling: options.inlineStyling)
         if !extra.isEmpty { css += "\n" + extra }
@@ -1218,6 +1319,15 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     if parts.contains(where: { asciiContains($0, "ws-nowrap") }) {
         css += "\nspan.ws-nowrap{white-space:nowrap}"
         css += "\np.ws-native span.ws-nowrap{white-space:pre}"
+        // E9 H4: and, in Modern, the scroll that keeps an unfoldable row from dragging
+        // the whole page sideways.
+        if !printed { css += modernNowrapScrollCSS }
+    }
+    // E9 H2: the phone rule, appended only when the document actually opened a columnar
+    // section -- the same "no CSS-byte delta for a feature this document never used"
+    // discipline as the three rules above.
+    if parts.contains(where: { asciiContains($0, htmlColsClass) }) {
+        css += htmlColsCSS
     }
     // planning #264 R5 (packet row C6, ruled 2026-09-14 "Fine. Add it."): the print
     // stylesheet. Printed only, appended last so everything above it is the SCREEN
@@ -1401,7 +1511,12 @@ func styleCSS(_ doc: Document, printed: Bool = true, inlineStyling: Bool = true)
     if inlineStyling {
         for n in coloursUsed(doc) {
             let (r, g, b) = cgaPalette[n % 16]
-            rules.append(".ws-colour-\(n) { color:#" + hex2(r) + hex2(g) + hex2(b) + " }")
+            // E9 R2: colour 15 is WordStar's knockout, not a colour -- the same
+            // reverse-video fact RTF answers with `\chcbpat` (see `rtfSpan`). Without a
+            // ground it is white text on a white page and the words disappear.
+            let ground = n == rtfReverseVideoColour ? "; background:#000000" : ""
+            rules.append(".ws-colour-\(n) { color:#" + hex2(r) + hex2(g) + hex2(b)
+                         + ground + " }")
         }
     }
     // One rule per attribute some block actually inherited -- never a fixed six, so a

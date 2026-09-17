@@ -20,18 +20,44 @@ ruled the same day) read what is described here; they are not built yet.
 
 | name | class | what it does (the engines' own description string, verbatim — Jon's wording, 2026-09-16) | applies when |
 |---|---|---|---|
-| `driver-euro-sign` | auto | Euro instead of peseta | the header names `LASERJET`, `LJ6DTP` or `HP4` |
-| `lj6dtp-typography` | auto | Real dashes, curly quotes, ellipsis, © | the header names `LJ6DTP` |
-| `lj6dtp-box-corners` | auto | Card suits as box corners (Univers) | the header names `LJ6DTP` |
-| `lj6dtp-colour-as-gray` | auto | Screen colours as grey | the header names `LJ6DTP` |
-| `lj6dtp-fill-patterns` | auto | Colours 9–14 as hatch patterns | the header names `LJ6DTP` |
-| `stray-style-strikeout` | opt-in | Ignore a strikeout set only by a style | a paragraph style declares strikeout AND no span anywhere carries a strikeout the writer typed inline (`^PX`) |
+| `euro-swap` | auto | Euro instead of peseta | the header names `LASERJET`, `LJ6DTP` or `HP4` |
+| `smart-punctuation` | auto | Real dashes, curly quotes, ellipsis, © | the header names `LJ6DTP` |
+| `box-corners` | auto | Card suits as box corners (Univers) | the header names `LJ6DTP` |
+| `colors-as-gray` | auto | Screen colors as gray | the header names `LJ6DTP` |
+| `fill-patterns` | auto | Colors 9–14 as hatch patterns | the header names `LJ6DTP` |
+| `sawyer-strikeout` | opt-in | Ignore a strikeout set only by a style | a paragraph style declares strikeout AND no span anywhere carries a strikeout the writer typed inline (`^PX`) |
 
 The five auto quirks are the substitutions both engines already made, unchanged.
 Naming them changes no output; what is new is that they can be seen, explained,
 and switched off.
 
-`stray-style-strikeout` is the one the faithful default deliberately leaves in
+### The names that shipped in 4.4.0 still work
+
+Jon's ruling, 2026-09-17: all six were renamed. A quirk's name is text a reader
+reads and types — `--list-quirks` prints it, `--quirk`/`--no-quirk` take it, the
+layout JSON publishes it, and the app stores it as a per-document override — so
+the names now say what they do in plain words rather than naming one printer
+driver or the code behind them.
+
+| shipped in 4.4.0 | now |
+|---|---|
+| `driver-euro-sign` | `euro-swap` |
+| `lj6dtp-typography` | `smart-punctuation` |
+| `lj6dtp-box-corners` | `box-corners` |
+| `lj6dtp-colour-as-gray` | `colors-as-gray` |
+| `lj6dtp-fill-patterns` | `fill-patterns` |
+| `stray-style-strikeout` | `sawyer-strikeout` |
+
+An old name is still ACCEPTED anywhere one can be typed or stored — the CLI
+flags, and any name read back from settings saved by an earlier build — so
+nobody's stored per-document overrides stop working. An old name is never
+PRODUCED: the registry, `--list-quirks`, `quirks_applicable`/`quirks_applied`
+and every report say the new name only, so one output can never carry both
+spellings for one quirk. `QuirkRegistry.canonicalName(_:)` (Swift) and
+`ctrlkd.quirks.canonical_name()` (Python) are the one mapping, and it runs on
+the way in.
+
+`sawyer-strikeout` is the one the faithful default deliberately leaves in
 place: a style-declared strikeout runs until a later style clears it, as real
 WordStar 7's printer does (Feature Decision Register, 2026-09-16). Seven
 documents in the reference archive carry that stray bit; this quirk is how a
@@ -59,7 +85,7 @@ registered is an error, because that is a typo or a missing plugin.
 Format version 12 adds two top-level lists:
 
 ```json
-"quirks_applicable": ["stray-style-strikeout"],
+"quirks_applicable": ["sawyer-strikeout"],
 "quirks_applied": []
 ```
 
@@ -78,7 +104,7 @@ Swift (`Sources/CtrlKD/Quirks.swift`):
 
 ```swift
 let doc = try QuirkRegistry.standard.applyQuirks(
-    to: parsed, enable: ["stray-style-strikeout"], disable: [], mode: .auto)
+    to: parsed, enable: ["sawyer-strikeout"], disable: [], mode: .auto)
 
 for row in QuirkRegistry.standard.list(for: doc) {
     // row.name, row.description, row.quirkClass, row.applicable, row.reason, row.enabled

@@ -38,7 +38,7 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON.
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 12"))
+    #expect(json.contains("\"version\": 13"))
     #expect(json.contains("\"justify_word_x\""))
 }
 
@@ -80,7 +80,7 @@ import Testing
     #expect(pages[0].contains { $0.lineNo == nil })
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 12"))
+    #expect(json.contains("\"version\": 13"))
     #expect(json.contains("\"line_no\""))
 }
 
@@ -145,7 +145,7 @@ import Testing
     #expect(middle.map(\.char) == ["\u{2502}", "\u{2502}"])   // only the two bars
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 12"))
+    #expect(json.contains("\"version\": 13"))
     #expect(json.contains("\"graphic_cells\""))
 }
 
@@ -182,7 +182,7 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON's `modern.items`.
     let json = emitLayout(doc, mode: .modern)
-    #expect(json.contains("\"version\": 12"))
+    #expect(json.contains("\"version\": 13"))
     #expect(json.contains("\"graphic_cells\""))
     #expect(json.contains("\"page\": 1"))
 }
@@ -280,6 +280,34 @@ import Testing
     #expect(asString.contains("57.6 60.0 Td (Footer Text) Tj"))
 }
 
+/// E11 (Jon's ruling 2026-09-17, option C) -- Swift port of ctrl-kd's own
+/// `test_off_sheet_rows_are_flagged_and_still_drawn`.
+///
+/// A head/foot/page-number row whose own resolved y is off the paper is STILL
+/// COMMANDED -- real WS7 does that and lets the printer clip it (`hfOffSheet`'s own
+/// captures) -- and the layout model says so, for the consumers that have no paper to
+/// clip with. `.mb 1.8` with the default `.fm 2` is the captured shape
+/// (`REF/PS-FONTS.REF`, `FONTS.REF`, `-LASERJE.FNT`): the row lands 14.4pt below the
+/// bottom edge.
+@Test func offSheetRowsAreFlaggedAndStillDrawn() throws {
+    var src = bytes(".mb 1.8\r\n")
+    for i in 1...39 { src += bytes("FLINE-\(String(format: "%03d", i))\r\n") }
+    let doc = parseWS(src)
+    let page = try #require(docToPagelines(doc, printed: true).first)
+    let auto = try #require(page.autoPageno)
+    #expect((auto.y * 10).rounded() / 10 == -14.4)
+    #expect(auto.offSheet)
+    // still drawn: the paper is the clip, exactly as the printer is
+    let asString = String(decoding: pdfContentStreams(emitPDF(doc, mode: .printed))[0],
+                          as: UTF8.self)
+    #expect(asString.contains("-14.4 Td"))
+    // published, and OMITTED (not false) for a row that is on the sheet
+    #expect(emitLayout(doc).contains("\"off_sheet\": true"))
+    var onSheet = bytes(".h1 Head\r\n")
+    for i in 1...39 { onSheet += bytes("FLINE-\(String(format: "%03d", i))\r\n") }
+    #expect(!emitLayout(parseWS(onSheet)).contains("off_sheet"))
+}
+
 @Test func headFootLinesResolveTheSamePageNumberSubstitutionAndTabBake() {
     // -README's own right-tab shape (see `runningHeadRightTabRepositionsWhenThePage
     // NumberWidens`, the same synthetic fixture) -- the model's own `headerLines[0]
@@ -349,7 +377,7 @@ import Testing
     #expect(pages[0].footerLines == nil)
     #expect(pages[0].autoPageno == nil)
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 12"))
+    #expect(json.contains("\"version\": 13"))
     #expect(!json.contains("\"header_lines\""))
     #expect(!json.contains("\"footer_lines\""))
     #expect(!json.contains("\"auto_page_number\""))

@@ -36,6 +36,10 @@ let rtfColourTable: String = {
 /// WordStar index N -> `\cf(N+1)` — `\colortbl`'s FIRST real entry (index 0, "Black") is
 /// `\cf1` (RTF colour numbers are 1-based; index 0 before the first `;` is the reader's
 /// own "automatic" colour). Port of `_rtf_colour_num`.
+/// WordStar's own knockout index in the CGA palette — see `rtfSpan`'s own E9 R2 note
+/// and `emitHTML`'s `.ws-colour-15` rule. Port of emit.py's `_RTF_REVERSE_VIDEO_TAG`.
+let rtfReverseVideoColour = 15
+
 func rtfColourNum(_ index: Int) -> Int { index + 1 }
 
 /// Every WordStar colour INDEX (0-15, the raw palette value — unlike `fontN`, `colourN`'s

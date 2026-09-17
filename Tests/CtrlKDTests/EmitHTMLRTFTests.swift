@@ -39,16 +39,19 @@ import Testing
     //
     // b23 exports overhaul (round 3 addendum): Native no longer wraps in a bare `<pre>` —
     // a width-constraining monospace grid, the page-geometry opinion this round strips
-    // everywhere else. Native's own identity is the FONT (`ws-native` class: monospace,
-    // `white-space:pre-wrap` so literal column spacing still lines up), carried by a
-    // normal-flow `<p>` with an explicit `<br>` per physical line break instead of a
-    // literal newline.
+    // everywhere else. Native's own identity is the FONT (`ws-native` class: monospace),
+    // carried by a normal-flow `<p>`.
+    //
+    // E9 H1 (2026-09-17) retired the `<br>` half of that: `ws-native` is
+    // `white-space:pre`, where the newline IS the break, so the `<br>` the emitter also
+    // wrote made a SECOND one and every line came out followed by a blank line. See
+    // PrintedHTMLSingleBreakTests.swift.
     let data = bytes("A    B    C\r\nD    E    F\r\n")
     let html = emitHTML(parsePrintstream(data), mode: .printed)
     #expect(html.contains("<p class=\"ws-native\">"))
     #expect(html.contains("A    B    C"))
     #expect(html.contains(
-        "<body>\n<p class=\"ws-native\">A    B    C<br>\nD    E    F<br>\n</p>\n</body></html>\n"
+        "<body>\n<p class=\"ws-native\">A    B    C\nD    E    F\n</p>\n</body></html>\n"
     ))
 }
 
@@ -154,7 +157,7 @@ import Testing
     expected += #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
     // planning #264 item 3: every document gets stock WordStar 7's own automatic page
     // number when it declares no footer of its own.
-    expected += #"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#
+    expected += #"{\footer \pard\plain \qc\f0\fs24 {\chpgn }\par}"#
     expected += "\n"
     expected += #"\f0\fs28 "#
     expected += "\n"
@@ -178,7 +181,7 @@ import Testing
     var expected = #"{\rtf1\ansi\deff0{\fonttbl{\f0 Georgia{\*\falt Times New Roman};}{\f1 Courier New;}}"#
     expected += #"\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440"#
     // planning #264 item 3: see the escaped-braces test above.
-    expected += #"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#
+    expected += #"{\footer \pard\plain \qc\f0\fs24 {\chpgn }\par}"#
     expected += "\n"
     expected += #"\f0\fs28 "#
     expected += "\n"
@@ -207,11 +210,15 @@ import Testing
     // Built with `+=` rather than one chained `+`: this repo's own pre-push fixture
     // rule (planning #253) -- macOS CI's type-checker abandons a long chain.
     var expected = #"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}}"#
-    expected += #"\paperw12240\paperh15840\margl1152\margr1152\margt720\margb1920"#
+    // E9 R1 (2026-09-17): `\margr` is no longer a mirror of `\margl` — the Printed text
+    // column is the document's own ruler (a silent document's `.rm` default of 65
+    // columns, plus one cell of reader slack) and the right margin is whatever the
+    // Letter sheet has left over. See PrintedRTFRulerColumnTests.swift.
+    expected += #"\paperw12240\paperh15840\margl1152\margr1584\margt720\margb1920"#
     // planning #264 item 4: `\headery`/`\footery` are the document's own
     // `.mt`/`.hm`/`.mb`/`.fm` gaps, Printed only; item 3 adds the footer.
     expected += #"\headery0\footery1200"#
-    expected += #"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#
+    expected += #"{\footer \pard\plain \qc\f1\fs24 {\chpgn }\par}"#
     expected += "\n"
     expected += #"\f1\fs24 "#
     expected += "\n"
@@ -228,12 +235,12 @@ import Testing
     // Native paragraph. b23 exports overhaul (round 3 addendum): Native no longer wraps in
     // a bare `<pre>` (a width-constraining monospace grid, the page-geometry opinion this
     // round strips everywhere else) — it's a normal-flow `<p class="ws-native">` instead,
-    // with an explicit `<br>` per physical line break. The block itself carries a SECOND,
-    // span-less physical line before the page eject (same one the RTF assertion above
-    // renders as a trailing empty `\line`), so the `<br>`-joined body ends in a trailing
-    // `<br>` too — `<br>\n`.join(["...today.", ""]) is "...today.<br>\n".
+    // and since E9 H1 one NEWLINE per physical line break, no `<br>`. The block itself
+    // carries a SECOND, span-less physical line before the page eject (same one the RTF
+    // assertion above renders as a trailing empty `\line`), so the joined body ends in a
+    // trailing newline too — "\n".join(["...today.", ""]) is "...today.\n".
     #expect(emitHTML(doc).contains(
-        "<body>\n<p class=\"ws-native\">Some plain text here today.<br>\n</p>\n<hr class=\"pb\">\n</body></html>\n"
+        "<body>\n<p class=\"ws-native\">Some plain text here today.\n</p>\n<hr class=\"pb\">\n</body></html>\n"
     ))
 }
 

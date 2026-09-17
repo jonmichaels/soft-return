@@ -197,6 +197,29 @@ private func rule(xFrom: Double, xTo: Double, y: Double) -> [UInt8] {
 /// PROPORTIONAL line re-stamps as 10-CPI machine spaces, not the font's own narrow
 /// space glyph) so alignment and drawing never disagree about how wide the same text
 /// is. Direct port of Python's `_hf_natural_width_pt` (ctrl-kd pdf.py).
+/// Is this resolved head/foot/page-number row OFF THE PAPER?
+///
+/// E11 (Jon's ruling 2026-09-17, option C). WordStar commands a row wherever
+/// `pl - mb + fm` puts it and lets the printer clip it: real WS7 captures put the
+/// automatic number 14.4pt past the bottom edge of a 792pt sheet (`REF/PS-FONTS.REF`,
+/// `FONTS.REF`, `-LASERJE.FNT`, `.mb 1.8 .fm 2`) and 21.6pt past it on
+/// `LSRBOX/PAGE.RND` — so the PDF keeps drawing at the resolved y and the page clips it
+/// exactly as the printer does. That ruling stands and no PDF byte moves.
+///
+/// What could not stand is a CONSUMER of the layout model drawing such a row as if it
+/// were on the page: the apps draw the Printed head, foot and page number themselves
+/// from that model, so on `sawyer/ARTICLES/FORMFEED.WS` page 5 — landscape, a 612pt
+/// sheet whose `.pl` still counts a portrait 66 lines, row y = -144 — the app drew a
+/// number the PDF shows nowhere and its own pagination oracle counted one line more than
+/// the library.
+///
+/// THE CONTRACT: a row this returns true for carries `HeadFootLine.offSheet` /
+/// `AutoPageNumber.offSheet` (published as `off_sheet: true`, `layout` JSON version 12)
+/// and A CONSUMER DOES NOT DRAW IT. The PDF ignores the flag by design — the paper is
+/// its clip. Below the bottom edge only; a row above the top of the sheet has never been
+/// observed and is not claimed about here.
+public func hfOffSheet(_ y: Double) -> Bool { y < 0 }
+
 func hfNaturalWidthPt(_ txt: String, fontIdx: Int?, doc: Document, size: Int,
                       styleAttrs: Style = []) -> Double {
     var entry: FontChange? = nil
@@ -692,7 +715,15 @@ func resolveHeadFootLines(
             y += hfLineStepPt(doc, kind: .header, line: k)
             k += 1
         }
-        guard y >= 0 else { continue }
+        // E11 (Jon's ruling 2026-09-17, option C): this loop used to DROP a head whose
+        // row landed off the paper -- `guard y >= 0 else { continue }`, a guard Python
+        // never had. Dropping is the wrong half of the ruling: WordStar commands the row
+        // and lets the printer clip it (see `hfOffSheet`), so the row is resolved and
+        // drawn here exactly as Python resolves and draws it, and the LAYOUT MODEL
+        // carries `offSheet` for the consumers that have no paper to clip with. It never
+        // fired on any corpus document -- the two engines' Printed PDFs were byte-
+        // identical with the guard in place -- so no cell moves either way; what changes
+        // is that one rule is now stated once, in both engines.
         let fontIdx: Int?
         let tabRec: HFTabMark?
         let align: Alignment?
@@ -1685,7 +1716,7 @@ private func lineOpsPrinted(
     var segs = expandBareTabsForPrintedLayout(segs)
     // `colourMap` is non-empty exactly when the document declares driver LJ6DTP — the
     // same gate covers its character substitutions.
-    // Quirks mode: the two character families (`lj6dtp-typography`, `lj6dtp-box-corners`)
+    // Quirks mode: the two character families (`smart-punctuation`, `box-corners`)
     // switch independently of the colour ones, which is why this no longer rides on
     // `colourMap` being non-empty.
     segs = driverQuirks.characters
@@ -2718,9 +2749,17 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
             || page.hmLines != nil || page.fmLines != nil
         let pageLeft = ((pageGeomChanged || page.poParity) ? page.poCols : nil)
             .map { resolveLeftPt($0, size: size) } ?? left
+        // M31: this page's own SHEET. The running head's row is measured DOWN from the
+        // top of the paper, so a page the writer draws on a landscape sheet and this model
+        // measures on the document's portrait one put the head 180pt apart -- off the top
+        // of the page entirely, in the one direction nothing else here can catch (the
+        // automatic number is measured UP from the foot and is right either way). Caught
+        // by `HeadFootModelPDFParityTests`, which is exactly what it exists for.
+        let pageOr = page.orientation
         var pageDoc = doc
         if page.mtLines != nil || page.mbLines != nil || page.plLines != nil
-            || page.hmLines != nil || page.fmLines != nil, var eff = doc.page {
+            || page.hmLines != nil || page.fmLines != nil || pageOr != nil,
+           var eff = doc.page {
             if let mt = page.mtLines { eff.mtLines = mt; eff.mtSource = .file }
             if let mb = page.mbLines { eff.mbLines = mb; eff.mbSource = .file }
             if let pl = page.plLines { eff.plLines = pl }
@@ -2729,6 +2768,7 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
                 eff.hmSource = hm != defaultHmLines ? .file : .default
             }
             if let fm = page.fmLines { eff.fmLines = fm; eff.fmSource = .file }
+            if let pageOr { eff = pageGeometryFor(eff, orientation: pageOr) }
             pageDoc.page = eff
         }
         let autoPageNumber: Bool
@@ -2739,8 +2779,9 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
                 pgnumCheckpointsList, fallbackBi: page.explicitBreakBI,
                 bodilessDoc: bodilessDoc)
         }
+        let pageHeightThis = pageOr == nil ? pageHeight : resolvedPageHeight(pageDoc, printed: true)
         guard let resolved = resolveHeadFootLines(
-            pageDoc, pageNo: pageNumbers[pi], pageHeight: pageHeight, lead: lead, size: size,
+            pageDoc, pageNo: pageNumbers[pi], pageHeight: pageHeightThis, lead: lead, size: size,
             left: pageLeft, printed: true, headers: headersIn, footers: footersIn,
             autoPageNumber: autoPageNumber,
             headHfOverride: headHfOverrideIn, footHfOverride: footHfOverrideIn,
@@ -2762,17 +2803,18 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
         if !resolved.headers.isEmpty {
             pages[pi].headerLines = resolved.headers.map {
                 HeadFootLine(text: $0.text, x: $0.x, y: $0.y, font: $0.fontIdx,
-                             styleAttrs: $0.styleAttrs)
+                             styleAttrs: $0.styleAttrs, offSheet: hfOffSheet($0.y))
             }
         }
         if !resolved.footers.isEmpty {
             pages[pi].footerLines = resolved.footers.map {
                 HeadFootLine(text: $0.text, x: $0.x, y: $0.y, font: $0.fontIdx,
-                             styleAttrs: $0.styleAttrs)
+                             styleAttrs: $0.styleAttrs, offSheet: hfOffSheet($0.y))
             }
         }
         if let auto = resolved.auto {
-            pages[pi].autoPageno = AutoPageNumber(text: auto.text, x: auto.x, y: auto.y)
+            pages[pi].autoPageno = AutoPageNumber(text: auto.text, x: auto.x, y: auto.y,
+                                                  offSheet: hfOffSheet(auto.y))
         }
     }
 }
@@ -2864,6 +2906,12 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     // the height -- A4-tall pages are 210mm wide, everything else is the 8.5in sheet --
     // so a default document stays exactly 612.
     let pageWidth = roundHalfToEven((doc.page?.pwIn ?? 8.5) * 72.0)
+    // M31: (width, height) in points per page, in stream order -- the MediaBox stopped
+    // being one number for the whole document when `.pr or=` became per-page. Every page
+    // of every document that never changes orientation mid-file appends the SAME pair
+    // `pageWidth`/`pageHeight` used to supply on its own, so this is byte-identical
+    // everywhere else.
+    var pageBoxes: [(width: Int, height: Int)] = []
     if printed {
         let pages = docToPagelines(doc, printed: true, pixResults: options.pixResults,
                                    pictures: options.pictures, sentenceSpacing: ssOn)
@@ -2961,10 +3009,21 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
             // `runningOps` (the header/footer ROW itself) -- need the SAME per-page swap,
             // or a page whose `.hm`/`.fm` changed renders its running head/foot at the
             // document's stale global row.
+            // M31: this page's own sheet. `Page.orientation` is set only when the
+            // `.pr or=` in force where this page OPENED differs from
+            // `doc.formatting.orientation` -- the document-wide value
+            // `resolvedGeometryDocument` has already applied (or not applied) to
+            // `doc.page`. So a stamped page is always one that must be corrected the
+            // OTHER way from the whole document: landscape here means the global swap did
+            // not happen and this page needs one; portrait means it did and this page
+            // must be put back. `pageGeometryFor` recomputes the pair fresh from `.pl`
+            // rather than swapping what it is handed, so both directions are exact.
+            let pageOr = page.orientation
             let pageTop: Int
             var pageDoc = doc
             if page.mtLines != nil || page.mbLines != nil || page.plLines != nil
-                || page.hmLines != nil || page.fmLines != nil, var eff = doc.page {
+                || page.hmLines != nil || page.fmLines != nil || pageOr != nil,
+               var eff = doc.page {
                 if let mt = page.mtLines { eff.mtLines = mt; eff.mtSource = .file }
                 if let mb = page.mbLines { eff.mbLines = mb; eff.mbSource = .file }
                 if let pl = page.plLines { eff.plLines = pl }
@@ -2981,11 +3040,21 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                     eff.hmSource = hm != 2.0 ? .file : .default
                 }
                 if let fm = page.fmLines { eff.fmLines = fm; eff.fmSource = .file }
+                if let pageOr { eff = pageGeometryFor(eff, orientation: pageOr) }
                 pageDoc.page = eff
                 pageTop = printedTop(pageDoc)
             } else {
                 pageTop = top
             }
+            // M31: THE SHEET ITSELF, per page. `pageHeightThis` feeds the y-flip every
+            // content-stream op is drawn through and the running head/foot's own row;
+            // `pageWidthThis` is the MediaBox width. Both are the document's single
+            // answer for every page that stamped nothing.
+            let pageHeightThis = pageOr == nil ? pageHeight
+                : resolvedPageHeight(pageDoc, printed: true)
+            let pageWidthThis = pageOr == nil ? pageWidth
+                : roundHalfToEven((pageDoc.page?.pwIn ?? 8.5) * 72.0)
+            pageBoxes.append((pageWidthThis, pageHeightThis))
             // mechanism O (ctrl-kd 55d2b52): a page whose own `.po` (`Page.poCols`, set by
             // `layoutPrintedPagesPlain` from `poCheckpoints`) differs from the document's
             // global default gets its OWN header/footer LEFT edge -- SCRIPT.WS's own
@@ -3057,7 +3126,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
             } else {
                 autoPageNumber = false
             }
-            let running = runningOps(pageDoc, pageNo: pageNumbers[i], pageHeight: pageHeight,
+            let running = runningOps(pageDoc, pageNo: pageNumbers[i], pageHeight: pageHeightThis,
                                      lead: lead, size: size, left: pageLeft, printed: true,
                                      headers: options.headers ? page.headers : [:],
                                      footers: options.headers ? page.footers : [:],
@@ -3080,7 +3149,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                      // the one in `attachHeadFootLinesPrinted`; see
                                      // `autoPageNumberXPt`.
                                      poCols: page.autoPagenoPo)
-            built.append(pageStream(page, top: pageTop, pageHeight: pageHeight, lead: lead,
+            built.append(pageStream(page, top: pageTop, pageHeight: pageHeightThis, lead: lead,
                                     size: size, left: left, running: running,
                                     fonts: fonts, res: res, colourMap: colourMap,
                                     rollPt: rollPt, ulContinuous: ulContinuous,
@@ -3109,6 +3178,10 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                         fonts: fonts, res: res, colourMap: colourMap,
                                         rollPt: rollPt, ulContinuous: ulContinuous,
                                         lineNoCheckpoints: nil, driverQuirks: dq))
+                // M31: a compiled TOC/Index sheet is the DOCUMENT's own sheet, not any
+                // body page's -- it is not part of the document's own flow and carries no
+                // running head or foot either, the same documented simplification.
+                pageBoxes.append((pageWidth, pageHeight))
                 chunkStart += cap
             }
         }
@@ -3121,6 +3194,22 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         var discardedModernGraphicCells: [Int: [PageLine.GraphicCellPlacement]]? = nil
         streams = modernStreams(doc, options: options, res: res,
                                 attachGraphicCells: &discardedModernGraphicCells)
+        // M31: Modern composes on ONE sheet, the document's own declared size with the
+        // document-wide `.pr or=` swap applied (`resolvedGeometryDocument`). Per-page
+        // orientation is deliberately NOT carried here: Modern reflows, so "the
+        // orientation in force when this page starts" is not a property of the document
+        // at all but of a flow this engine invented, and no real WS7 capture can
+        // adjudicate what Modern OUGHT to show. Printed is the facsimile; it is the
+        // surface the measurement exists for.
+        pageBoxes = Array(repeating: (pageWidth, pageHeight), count: streams.count)
+    }
+    // M31: every stream must have a box. The printed path appends one per page by
+    // construction; this guard catches any future page-producing branch that forgets,
+    // rather than writing a silently wrong MediaBox.
+    if pageBoxes.count != streams.count {
+        pageBoxes += Array(repeating: (pageWidth, pageHeight),
+                           count: max(0, streams.count - pageBoxes.count))
+        pageBoxes = Array(pageBoxes.prefix(streams.count))
     }
 
     // (number, body) — the body WITHOUT the `N 0 obj` wrapper, which the writer adds while
@@ -3259,8 +3348,8 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
 
     for (i, stream) in streams.enumerated() {
         objs.append((pageNums[i], Array("""
-        << /Type /Page /Parent 2 0 R /MediaBox [0 0 \(pageWidth) \
-        \(pageHeight)] /Resources << /Font << \(fontDict) >>\(xobjectDict)\(patternDict)\(extGStateDict) >> \
+        << /Type /Page /Parent 2 0 R /MediaBox [0 0 \(pageBoxes[i].width) \
+        \(pageBoxes[i].height)] /Resources << /Font << \(fontDict) >>\(xobjectDict)\(patternDict)\(extGStateDict) >> \
         /Contents \(contentNums[i]) 0 R >>
         """.utf8)))
         var body = Array("<< /Length \(stream.count) >>\nstream\n".utf8)

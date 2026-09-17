@@ -440,13 +440,13 @@ private func noFSEnvironment() -> CLIEnvironment {
     // This repo never carries a dev stamp (DevStamp.swift is nil here; the app's build
     // script injects real values into its own checkout) — so the committed shape is the
     // clean release string, and the dev shape is exercised through the split-out helper.
-    #expect(versionLine(devDate: srDevDate) == "sr v4.4.0")
-    #expect(versionLine(devDate: "2026-08-14") == "sr v4.4.0 (dev 2026-08-14)")
+    #expect(versionLine(devDate: srDevDate) == "sr v4.5.0")
+    #expect(versionLine(devDate: "2026-08-14") == "sr v4.5.0 (dev 2026-08-14)")
 
     let recorder = Recorder()
     #expect(run(["--version"], environment: recorder.environment) == ExitStatus.ok)
     #expect(recorder.out == [versionOutput])
-    #expect(versionOutput.hasSuffix("sr v4.4.0"))
+    #expect(versionOutput.hasSuffix("sr v4.5.0"))
     #expect(versionOutput.contains("_____       ______     ____"))  // the SOFT RETURN Slant banner leads
     #expect(recorder.written.isEmpty)
 
@@ -1012,6 +1012,12 @@ private func noFSEnvironment() -> CLIEnvironment {
     // shifts by one as well, and the longer stream moves every xref offset after it.
     // Re-captured from `convertData` the same way the original was, and cross-checked
     // against ctrl-kd's own Python output on the identical fixture.
+    // RE-RECORDED 2026-09-17 (E10/E10b, Jon's ruling that page furniture takes the body's
+    // own font chain and that Modern furniture sets at the body size less 2pt): the
+    // automatic number's op is the only furniture here, so it moves from 11pt to 12pt and
+    // re-centres -- two bytes in the whole file (`11 Tf` -> `12 Tf`, x 303.2 -> 303.0),
+    // same stream length, same xref offsets. Re-captured from Python's `convert(...,
+    // to='pdf', title='PAPER')` the same way the original was.
     let expectedPDFBase64 = [
         "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIg",
         "MCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFs4IDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBv",
@@ -1026,8 +1032,8 @@ private func noFSEnvironment() -> CLIEnvironment {
         "RW5jb2RpbmcgPj4KZW5kb2JqCjggMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVk",
         "aWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSAzIDAgUiAvRjIgNCAw",
         "IFIgL0YzIDUgMCBSIC9GNCA2IDAgUiAvRjUgNyAwIFIgPj4gPj4gL0NvbnRlbnRzIDkgMCBSID4+CmVu",
-        "ZG9iago5IDAgb2JqCjw8IC9MZW5ndGggNTE4ID4+CnN0cmVhbQpCVCAvRjUgMTEgVGYgMCBUcyAzMDMu",
-        "MiA0NC4wIFRkICgxKSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA3Mi4wIDcwNi4yIFRkICh4eHh4eHh4",
+        "ZG9iago5IDAgb2JqCjw8IC9MZW5ndGggNTE4ID4+CnN0cmVhbQpCVCAvRjUgMTIgVGYgMCBUcyAzMDMu",
+        "MCA0NC4wIFRkICgxKSBUaiBFVApCVCAvRjUgMTQgVGYgMCBUcyA3Mi4wIDcwNi4yIFRkICh4eHh4eHh4",
         "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4KSBUaiBFVApCVCAv",
         "RjUgMTQgVGYgMCBUcyA0NjAuNSA3MDYuMiBUZCAod29yZHMpIFRqIEVUCkJUIC9GNSAxNCBUZiAwIFRz",
         "IDcyLjAgNjg5LjQgVGQgKHl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5",

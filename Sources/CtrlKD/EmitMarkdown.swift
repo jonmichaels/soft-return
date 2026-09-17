@@ -21,8 +21,99 @@ private let markdownHTMLTags: [(style: Style, tag: String)] = [
     (.underline, "u"),
 ]
 
-/// Characters Markdown would otherwise interpret (emit.py:90).
-private let markdownEscapes: [Character] = ["*", "_", "#", "`", "[", "]"]
+/// Characters Markdown would otherwise interpret (emit.py's `_MD_ESCAPE`).
+///
+/// `<` and `&` joined the set in E7 (Jon 2026-09-17). UNESCAPED, a `<` in the SOURCE is
+/// read by every renderer as the start of an HTML tag and the word DISAPPEARS — `<SP>`,
+/// `<Enter>`, `<B>` in Sawyer's macro and patch documentation, thousands of times. `<B>`
+/// is worse than invisible: a real tag, switching bold on with nothing to switch it off.
+private let markdownEscapes: [Character] = ["*", "_", "#", "`", "[", "]", "<", "&"]
+
+/// `text` with every Markdown-significant character backslash-escaped. Port of
+/// `emit._md_escape`.
+///
+/// ONE definition for the two places that render document text: `markdownSpan` (every
+/// span) and the note-definition block in `emitMarkdown` (a note's raw text, which
+/// bypasses the span path). They escaped different sets until E7 — the note path handled
+/// only the backslash — so `<-Repeated` in a real TAGS annotation still vanished after
+/// every span had been fixed.
+///
+/// Backslash FIRST, or the escapes added below get double-escaped. The emitter's own
+/// `<u>`/`<sub>`/`<sup>` tags never pass through here: they are wrapped around text this
+/// function has already returned.
+func markdownEscape(_ text: String) -> String {
+    var out = text.replacingAll("\\", with: "\\\\")
+    for character in markdownEscapes {
+        out = out.replacingAll(character, with: "\\" + String(character))
+    }
+    return out
+}
+
+/// Concatenate `(text, outerDelimiter)` pairs, MERGING a run that the span split in two.
+/// Port of `emit._md_join` (E7 item A, Jon 2026-09-17).
+///
+/// THE BUG. A bold or italic word inside a strikeout run is a separate span, so the
+/// emitter closed the strikeout at the end of one span and reopened it at the start of the
+/// next with NOTHING in between: `~~alpha~~~~**beta**~~~~gamma~~`. Four tildes are not
+/// strikethrough in any flavour — the strikeout was lost AND the tildes became visible
+/// text.
+///
+/// THE GUARD. When the previous piece CLOSES with the same delimiter the next piece OPENS
+/// with, drop both: the run simply continues. Compared on the OUTERMOST delimiter each
+/// span actually emitted, never on a string suffix, because a suffix test cannot tell
+/// `**bold**` followed by `*italic*` (which ends in `*` and starts with `*`, and must NOT
+/// merge) from two halves of one italic run. `strike` is applied last of the three
+/// delimiter styles, so it is always the outermost, which is where the collisions are. An
+/// HTML-tag style reports no delimiter: `</u><u>` is harmless and merging it would change
+/// no rendering.
+///
+/// Deliberately the SMALLEST fix that stops literal `~~` reaching a reader (audit §6.A
+/// option 3). A span pair separated by a SPACE is not a collision and is left alone — the
+/// cosmetic splits are a separate decision.
+func markdownJoin(_ pieces: [(text: String, outer: String)]) -> String {
+    var out = ""
+    var prev = ""
+    for piece in pieces {
+        if !piece.outer.isEmpty, piece.outer == prev,
+           out.hasSuffix(piece.outer), piece.text.hasPrefix(piece.outer) {
+            out.removeLast(piece.outer.count)
+            out += piece.text.dropFirst(piece.outer.count)
+        } else {
+            out += piece.text
+        }
+        // A piece that emitted no delimiter of its own breaks the chain: whatever ran
+        // before it has real content after its close and is genuinely finished.
+        if !piece.text.isEmpty { prev = piece.outer }
+    }
+    return out
+}
+
+/// A verse/stanza unit's lines as one or more real Markdown paragraphs. Port of
+/// `emit._md_hard_break_paragraphs` (E7 item C, Jon 2026-09-17).
+///
+/// THE BUG. A hard break in Markdown is two TRAILING SPACES before the newline, so joining
+/// a unit that contains a BLANK line produced a line holding nothing but those two spaces.
+/// CommonMark reads a whitespace-only line as a blank line, so the paragraph the join was
+/// trying to hold together split anyway — into pieces whose raw text claimed otherwise.
+///
+/// THE FIX. Say what it already renders as: a blank line ENDS the unit, and what follows
+/// is a new paragraph. The rendered result is unchanged; the file now agrees with it, and
+/// carries no line whose entire content is invisible whitespace. Also drops the dangling
+/// trailing `  ` a unit ending in a blank used to leave on its last real line.
+func markdownHardBreakParagraphs(_ lines: [String]) -> [String] {
+    var out: [String] = []
+    var group: [String] = []
+    for line in lines {
+        if !line.trimmed().isEmpty {
+            group.append(line)
+        } else if !group.isEmpty {
+            out.append(group.joined(separator: "  \n"))
+            group = []
+        }
+    }
+    if !group.isEmpty { out.append(group.joined(separator: "  \n")) }
+    return out
+}
 
 /// One span -> Markdown. emit.py:83-101.
 ///
@@ -38,6 +129,12 @@ private let markdownEscapes: [Character] = ["*", "_", "#", "`", "[", "]"]
 /// deliberately the stable one. See the job-008 response: the Python side is the thing
 /// that needs fixing here, not this port.
 func markdownSpan(_ span: Span, plain: Bool = false) -> String {
+    markdownSpanParts(span, plain: plain).text
+}
+
+/// `markdownSpan` plus the outermost delimiter it wrapped with — the one thing
+/// `markdownJoin` needs to tell a real collision from two different runs.
+func markdownSpanParts(_ span: Span, plain: Bool = false) -> (text: String, outer: String) {
     // NOTE: this function deliberately does NOT special-case `.fnref` (ctrl-kd 1.2.0 moved
     // that decision up into `emitMarkdown`'s block loop, alongside note-kind selection and
     // the out-of-range guard — see `markdownReferenceSpan` below). An `fnref` span that
@@ -47,14 +144,10 @@ func markdownSpan(_ span: Span, plain: Bool = false) -> String {
     //
     // emit.py:87-88 — whitespace-only spans pass through untouched and unescaped.
     if span.text.trimmed().isEmpty {
-        return span.text
+        return (span.text, "")
     }
 
-    // emit.py:89-91 — backslash first, or the escapes added below get double-escaped.
-    var escaped = span.text.replacingAll("\\", with: "\\\\")
-    for character in markdownEscapes {
-        escaped = escaped.replacingAll(character, with: "\\" + String(character))
-    }
+    let escaped = markdownEscape(span.text)
 
     // emit.py:92-94 — peel the outer whitespace off, style only the core, reattach. Markup
     // wrapped around leading/trailing spaces doesn't render.
@@ -67,16 +160,19 @@ func markdownSpan(_ span: Span, plain: Bool = false) -> String {
     // one — style alone can't tell "this is a marker" from "this is prose." The
     // character escaping above still applies; only the wrapping is skipped.
     if plain {
-        return lead + core + trail
+        return (lead + core + trail, "")
     }
 
+    var outer = ""
     for entry in markdownDelimiters where span.styles.contains(entry.style) {
         core = entry.delimiter + core + entry.delimiter
+        outer = entry.delimiter
     }
     for entry in markdownHTMLTags where span.styles.contains(entry.style) {
         core = "<\(entry.tag)>" + core + "</\(entry.tag)>"
+        outer = ""                     // an HTML tag cannot collide; see `markdownJoin`
     }
-    return lead + core + trail
+    return (lead + core + trail, outer)
 }
 
 /// A real scene-break marker ('#', '* * *', '...') is a handful of characters at most —
@@ -107,8 +203,9 @@ private func mdUnitLines(_ unit: [Line], refNotes: [Note], labels: [String], opt
         // N9 (b33 field notes): applied to the EFFECTIVE-style spans, before rendering --
         // the same choke point every other emitter's own span-to-output step uses.
         if sentenceSpacing { spans = sentenceSpacingSpans(spans) }
-        let text = spans.map { markdownReferenceSpan($0, refNotes: refNotes, labels: labels,
-                                                      options: options, plain: plain) }.joined()
+        let text = markdownJoin(spans.map {
+            markdownReferenceSpan($0, refNotes: refNotes, labels: labels,
+                                  options: options, plain: plain) })
         // N9 MD guard (independent of the flag): never leave a line ending in 2+ spaces
         // baked into its OWN text -- CommonMark reads that as a hard break, and the only
         // place this emitter ever WANTS one is the explicit "  \n" join the caller adds
@@ -144,9 +241,9 @@ private func markdownReferenceKey(_ kind: NoteKind, label: String) -> String {
 /// which is what turns a stray sentinel into `<sup>1</sup>`.
 private func markdownReferenceSpan(
     _ span: Span, refNotes: [Note], labels: [String], options: EmitOptions, plain: Bool = false
-) -> String {
+) -> (text: String, outer: String) {
     if span.pctlHMI != nil {
-        return ""                  // screen-only print-control display string (M10)
+        return ("", "")            // screen-only print-control display string (M10)
     }
     // b24 round 19 (RULINGS-LEDGER PIX row, "PIX images RULED IN"): MD has NO true
     // embed (ruled) -- both `.embed` and `.export` render the same relative link here;
@@ -161,13 +258,14 @@ private func markdownReferenceSpan(
        let link = options.imageLinks[result.index] {
         let alt = pixBasename(result.rawPath).replacingAll("[", with: "\\[")
             .replacingAll("]", with: "\\]")
-        return "![\(alt)](\(link))"
+        return ("![\(alt)](\(link))", "")
     }
-    guard span.styles.contains(.fnref) else { return markdownSpan(span, plain: plain) }
+    guard span.styles.contains(.fnref) else { return markdownSpanParts(span, plain: plain) }
     switch resolveReference(span, refNotes: refNotes, labels: labels, options: options) {
-    case .note(let note, let label, _): return "[^\(markdownReferenceKey(note.kind, label: label))]"
-    case .excluded: return ""
-    case .invalid: return markdownSpan(span, plain: plain)
+    case .note(let note, let label, _):
+        return ("[^\(markdownReferenceKey(note.kind, label: label))]", "")
+    case .excluded: return ("", "")
+    case .invalid: return markdownSpanParts(span, plain: plain)
     }
 }
 
@@ -257,11 +355,14 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
                 // gained that guard (it only touched `_md_unit_lines`/note defs), and
                 // byte-parity beats elegance.
                 if ssOn { spans = sentenceSpacingSpans(spans) }
-                let text = spans.map { markdownReferenceSpan($0, refNotes: refNotes, labels: labels,
-                                                              options: options) }.joined()
+                let text = markdownJoin(spans.map {
+                    markdownReferenceSpan($0, refNotes: refNotes, labels: labels,
+                                          options: options) })
                 return String(text.drop(while: { $0 == " " }))
             }
-            let para = lines.joined(separator: "  \n")
+            // E7 item C: a heading is ONE paragraph, so an empty line inside it would
+            // leave a line of nothing but the two hard-break spaces.
+            let para = lines.filter { !$0.trimmed().isEmpty }.joined(separator: "  \n")
             if !para.trimmed().isEmpty {
                 out.append(String(repeating: "#", count: max(0, block.heading)) + " " + para.trimmed())
             }
@@ -290,7 +391,7 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
             } else {
                 // round 4: a hard break is two TRAILING SPACES before the newline, not a
                 // trailing backslash — invisible in the raw text, which a backslash is not.
-                out.append(lines.joined(separator: "  \n"))
+                out.append(contentsOf: markdownHardBreakParagraphs(lines))
             }
         }
     }
@@ -322,7 +423,7 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
             // read as an unintended hard break.
             let noteText = ssOn ? sentenceSpacingTexts([entry.note.text])[0] : entry.note.text
             let body = noteText.split(separator: "\n", omittingEmptySubsequences: false)
-                .map { String($0).strippedOfSpaces().replacingAll("\\", with: "\\\\") }
+                .map { markdownEscape(String($0).strippedOfSpaces()) }
                 .joined(separator: "\n")
             defs.append("[^\(markdownReferenceKey(kind, label: entry.label))]: " + body)
         }

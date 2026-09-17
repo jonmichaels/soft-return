@@ -169,8 +169,11 @@ public struct Options: Equatable, Sendable {
     /// `--comments` + printed contradiction notice, which keys on the FLAG, not on the
     /// resolved note set (`--no-notes` wins the set but the notice still explains).
     public var commentsRequested = false
-    /// `--headers {on,off}` (ctrl-kd's `--headers`, b24 round 17): headers, footers,
-    /// and page numbers in the paged surfaces (Printed/Native PDF and RTF). Default on.
+    /// `--headers {on,off}` (ctrl-kd's `--headers`, b24 round 17): headers and footers.
+    /// PDF AND RTF ONLY — those are the page formats. Text, Markdown and HTML are
+    /// unpaged BY DESIGN (Jon's ruling 2026-09-17, alongside E9) and carry no running
+    /// heads, feet or page numbers at all; the flag is accepted and ignored for them,
+    /// never an error. Default on.
     public var headers = true
     /// `--line-numbers {on,off}` (ctrl-kd's `--line-numbers`, b24 round 17b): the
     /// document's own `.l#` line-number gutter in the paged surfaces. Default on.
@@ -189,7 +192,9 @@ public struct Options: Equatable, Sendable {
     /// comment for what each mode does.
     public var pictures: EmitOptions.PixMode = .embed
     /// `--page-numbers {auto,on,off}` (ctrl-kd's `--page-numbers`, register b31, E3 item
-    /// 2, ruled 2026-08-25): WordStar's own AUTOMATIC page number, Printed PDF only.
+    /// 2, ruled 2026-08-25): WordStar's own AUTOMATIC page number. PDF AND RTF ONLY,
+    /// for the same reason `--headers` is (ruling 2026-09-17): text, Markdown and HTML
+    /// are unpaged by design, so the flag is accepted and ignored for them.
     /// Default `.auto` (the ruled default — the document's own dot commands decide).
     /// See `EmitOptions.PageNumberMode`'s own doc comment for what each mode does.
     public var pageNumbers: EmitOptions.PageNumberMode = .auto
@@ -768,11 +773,13 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             --force) in a script or pipeline -- ctrl-kd itself
                             always overwrites silently; this is the one place
                             sr's own defaults diverge from it ("it's a Mac")
-      --headers {on,off}    the document's own running heads and feet (.he/.fo)
-                            in the paged surfaces -- Printed PDF, Modern PDF
-                            and both RTF modes. WordStar's own automatic page
-                            number is --page-numbers' business alone.
-                            Default: on
+      --headers {on,off}    the document's own running heads and feet (.he/.fo).
+                            PDF AND RTF ONLY -- those are the page formats;
+                            text, Markdown and HTML are unpaged by design and
+                            carry no running heads, feet or page numbers at
+                            all, so this flag is accepted and ignored for them
+                            (no error). WordStar's own automatic page number
+                            is --page-numbers' business alone. Default: on
       --line-numbers {on,off}
                             the document's own .l# line-number gutter in the
                             paged surfaces; no effect on a document that never
@@ -783,9 +790,9 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             each entry to a real page number, every other
                             format lists entries without one. Default: off
       --inline-styling {on,off}
-                            inline colour (^A) and font-size (^B... a symmetric
+                            inline color (^A) and font-size (^B... a symmetric
                             type-2 font block) changes the author placed mid-
-                            text -- RTF gets \\cf from a 16-colour screen
+                            text -- RTF gets \\cf from a 16-color screen
                             palette and \\fsN; HTML gets a span with color/
                             font-size. Default: on
       --pictures {off,embed,export}
@@ -804,8 +811,11 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             WordStar's own AUTOMATIC page number -- the one
                             .pc positions, a separate mechanism from a # the
                             author placed inside a real .he/.fo (that goes with
-                            its head, under --headers, never this flag). Every
-                            paged surface. auto (DEFAULT): the document's own dot
+                            its head, under --headers, never this flag). PDF
+                            AND RTF ONLY, for the same reason --headers is:
+                            text, Markdown and HTML are unpaged by design, so
+                            the flag is accepted and ignored for them (no
+                            error). auto (DEFAULT): the document's own dot
                             commands decide -- .pn/.pg turn it on, .op turns
                             it off, exactly like real WordStar; a document
                             that never touches any of them gets stock

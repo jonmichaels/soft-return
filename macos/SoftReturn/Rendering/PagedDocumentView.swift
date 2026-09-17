@@ -62,7 +62,7 @@ final class PagedDocumentView: NSView {
     /// how the figure is measured, and `rebuildPageTops`/`layout()`/`draw(_:)` below for
     /// how it is spent — always as bonus canvas space ABOVE a page's existing geometry,
     /// never as a change to where a glyph's own baseline sits.
-    private func headroom(atPage index: Int) -> CGFloat {
+    func headroom(atPage index: Int) -> CGFloat {
         guard let rendered, rendered.leadingHeadroom.indices.contains(index) else { return 0 }
         return rendered.leadingHeadroom[index]
     }
@@ -146,7 +146,8 @@ final class PagedDocumentView: NSView {
             if index > 0 { y += Self.pageGap }
             y += headroom(atPage: index)
             tops.append(y)
-            y += rendered.pageSize.height
+            // Batch 47 (M31-app): each page's own sheet.
+            y += rendered.pageSize(atPage: index).height
         }
         pageTops = tops
     }
@@ -336,6 +337,7 @@ final class PagedDocumentView: NSView {
         self.rendered = rendered
         self.display = display
         pendingPages = nil
+        modernTopRises = [:]
 
         // Tear down the old chain. Removing the layout manager from the storage first
         // detaches every container and view in one move.
@@ -1022,7 +1024,7 @@ final class PagedDocumentView: NSView {
             var lines = DocumentRenderer.modernRunningLines(
                 events: rendered.hfEvents, upToOffset: lastOffset,
                 pageNo: rendered.pageNumberStart + index,
-                pageHeight: Double(rendered.pageSize.height))
+                pageHeight: Double(rendered.pageSize.height), font: rendered.modernFurnitureFont)
             // Batch 41 (F): where the engine laid furniture for THIS page, its own heads and feet REPLACE the
             // replay — placed where it placed them, and an ink-less line simply absent, because the engine never
             // reported one. Furniture record `index`, as Athena ruled the mapping (app page i takes record i).
@@ -1040,7 +1042,7 @@ final class PagedDocumentView: NSView {
             if rendered.exportFlags.headers, rendered.modernFurniture.indices.contains(index) {
                 lines = DocumentRenderer.modernFurnitureRunningLines(
                     furniture: rendered.modernFurniture[index],
-                    textLeft: Double(rendered.textFrame.origin.x))
+                    textLeft: Double(rendered.textFrame.origin.x), rendered: rendered)
             }
             // Batch 41 (C): and the engine's own automatic page number for this page. The engine decides whether
             // the page is numbered at all — `nil` for `.op`, a footer in use, or page numbers off.
@@ -1049,7 +1051,7 @@ final class PagedDocumentView: NSView {
             // legitimately number its pages with running heads switched off.
             if rendered.modernFurniture.indices.contains(index),
                let auto = DocumentRenderer.modernAutoPageNumberLine(
-                furniture: rendered.modernFurniture[index], textLeft: Double(rendered.textFrame.origin.x)) {
+                furniture: rendered.modernFurniture[index], textLeft: Double(rendered.textFrame.origin.x), rendered: rendered) {
                 lines.append(auto)
             }
             result.append(lines)
@@ -1260,7 +1262,9 @@ final class PagedDocumentView: NSView {
                 height = CGFloat(pinnedBottom) - flowTop + epsilon
             }
 
-            let container = NSTextContainer(size: CGSize(width: max(1, width), height: max(1, height)))
+            // Batch 47 (M31-app): a page on a wider sheet clips its lines at that sheet's edge, not the document's.
+            let widening = max(0, rendered.pageSize(atPage: pageIndex).width - rendered.pageSize.width)
+            let container = NSTextContainer(size: CGSize(width: max(1, width + widening), height: max(1, height)))
             container.lineFragmentPadding = 0
             container.widthTracksTextView = false
             container.heightTracksTextView = false
@@ -1331,18 +1335,32 @@ final class PagedDocumentView: NSView {
     private func frameForPage(_ index: Int) -> CGRect {
         guard let rendered else { return .zero }
         let text = rendered.textFrame
+        // Batch 47 (M31-app): a page on a wider sheet than the document's shows its lines out to that sheet's edge.
+        let widening = max(0, rendered.pageSize(atPage: index).width - rendered.pageSize.width)
         switch display {
         case .singlePage:
             return CGRect(
-                x: text.origin.x, y: textTop(atPage: index) + headroom(atPage: index),
-                width: text.width, height: textHeight(atPage: index))
+                x: text.origin.x, y: textTop(atPage: index) + headroom(atPage: index) + modernTopRise(atPage: index),
+                width: text.width + widening, height: textHeight(atPage: index))
         case .continuousScroll:
             guard pageTops.indices.contains(index) else { return .zero }
             return CGRect(
-                x: text.origin.x, y: pageTops[index] + textTop(atPage: index),
-                width: text.width, height: textHeight(atPage: index))
+                x: text.origin.x, y: pageTops[index] + textTop(atPage: index) + modernTopRise(atPage: index),
+                width: text.width + widening, height: textHeight(atPage: index))
         }
     }
+
+    /// Batch 47 (M30): how far a Modern page's text sits below its content top so its first line's ink is not cut
+    /// (`modernFirstLineRise`); 0 for a pinned layout (Native), and for a page not laid out yet.
+    func modernTopRise(atPage index: Int) -> CGFloat {
+        guard let rendered, rendered.pinnedBaselines.isEmpty, !isMeasuringProbeContainer,
+              let first = containerPage.firstIndex(of: index), containers.indices.contains(first) else { return 0 }
+        if let cached = modernTopRises[index] { return cached }
+        let rise = modernFirstLineRise(layoutManager, container: containers[first])
+        modernTopRises[index] = rise
+        return rise
+    }
+    private var modernTopRises: [Int: CGFloat] = [:]
 
     /// `fragments` is this view's own slice of its PAGE's fragment ordinals.
     ///
@@ -1529,7 +1547,7 @@ final class PagedDocumentView: NSView {
     /// export, QuickLook — now gets the full glyph too, not merely the screen view.
     func rect(ofPage index: Int) -> CGRect {
         guard let rendered, index >= 0, index < pageViews.count else { return .zero }
-        let size = rendered.pageSize
+        let size = rendered.pageSize(atPage: index)
         switch display {
         case .singlePage:
             return CGRect(origin: .zero, size: NSSize(width: size.width, height: size.height + headroom(atPage: index)))
@@ -1774,7 +1792,7 @@ final class PagedDocumentView: NSView {
 
     override var intrinsicContentSize: NSSize {
         guard let rendered else { return NSSize(width: 100, height: 100) }
-        let page = rendered.pageSize
+        let page = rendered.pageSize(atPage: currentPageIndex)
         switch display {
         case .singlePage:
             // Job 396: grown by CURRENT page's own `headroom` — screen-only canvas so an
@@ -1783,9 +1801,9 @@ final class PagedDocumentView: NSView {
             // for the overwhelming majority of pages, so this is a no-op almost always.
             return NSSize(width: page.width, height: page.height + headroom(atPage: currentPageIndex))
         case .continuousScroll:
-            guard !pageTops.isEmpty else { return NSSize(width: page.width, height: page.height) }
-            let bottom = (pageTops.last ?? 0) + page.height
-            return NSSize(width: page.width, height: bottom)
+            guard !pageTops.isEmpty else { return NSSize(width: rendered.widestPageWidth, height: page.height) }
+            let bottom = (pageTops.last ?? 0) + rendered.pageSize(atPage: pageTops.count - 1).height
+            return NSSize(width: rendered.widestPageWidth, height: bottom)
         }
     }
 
@@ -1908,7 +1926,6 @@ final class PagedDocumentView: NSView {
             onFirstDraw = nil
             firstDraw()
         }
-        let page = rendered.pageSize
 
         // The grey desk the pages sit on is a SCREEN affordance. Paper has no desk, and
         // printing it would put a grey wash across every sheet — so on paper we draw only
@@ -1941,7 +1958,8 @@ final class PagedDocumentView: NSView {
             // still one seamless white sheet, just possibly a little taller at the top,
             // never a grey strip showing through above an oversized title's own ascender.
             let nominalTop = headroom(atPage: currentPageIndex)
-            CGRect(x: 0, y: 0, width: page.width, height: page.height + nominalTop).fill()
+            let sheet = rendered.pageSize(atPage: currentPageIndex)
+            CGRect(x: 0, y: 0, width: sheet.width, height: sheet.height + nominalTop).fill()
             drawRunningLines(rendered: rendered, pageIndex: currentPageIndex,
                              pageOrigin: CGPoint(x: 0, y: nominalTop))
             drawPCLGraphics(rendered: rendered, pageIndex: currentPageIndex,

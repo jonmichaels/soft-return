@@ -35,7 +35,27 @@ final class QuickLookProgressivePreview {
     private(set) var pageSize: CGSize = .zero
     /// What Quick Look sizes its window to: page 1 beside the thumbnail column.
     var preferredContentSize: CGSize {
-        pageSize == .zero ? .zero : CGSize(width: pageSize.width + Self.thumbnailWidth, height: pageSize.height)
+        guard pageSize != .zero else { return .zero }
+        // The page column's own scroller, where it takes width (legacy scrollers: b47-m29-mac, a 597 pt column in a 744 pt
+        // window, page 1 773 pt tall and 11 pt of page 2 in view).
+        let scroller = max(0, pageScroll.frame.width - pageScroll.contentView.frame.width)
+        let size = Self.contentSize(forPage: pageSize)
+        return CGSize(width: size.width + scroller, height: size.height)
+    }
+
+    /// Batch 47 (M29): a window showing exactly `page` beside the thumbnail column — and, before page 1 is made, a US
+    /// Letter page's (`defaultContentSize`), so the window Quick Look opens from the view's first frame already has the
+    /// thumbnail column's room (a bare 612 × 792 view left the page column 480 pt wide, page 1 621 pt tall, and 171 pt of
+    /// page 2 in view).
+    static func contentSize(forPage page: CGSize) -> CGSize {
+        CGSize(width: page.width + thumbnailWidth, height: page.height)
+    }
+    /// A Letter page's window, with room for a scroller where the system's scrollers take width.
+    static var defaultContentSize: CGSize {
+        let size = contentSize(forPage: CGSize(width: 612, height: 792))
+        let scroller = NSScroller.preferredScrollerStyle == .legacy
+            ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+        return CGSize(width: size.width + scroller, height: size.height)
     }
     private(set) var isComplete = false
     /// `DispatchTime` uptimes, for the timing tests: when `load` began, page 1 showed, and every page showed.
@@ -311,20 +331,31 @@ final class QuickLookProgressivePreview {
     private var backingScale: CGFloat { view.window?.backingScaleFactor ?? 2 }
 
     private func pixelScale(forPageWidth width: CGFloat) -> CGFloat {
-        backingScale * pageColumnWidth / max(width, 1)
+        backingScale * pageFrame(below: nil, size: CGSize(width: width, height: pageSize.height > 0 && pageSize.width > 0
+            ? width * pageSize.height / pageSize.width : width * 792 / 612)).width / max(width, 1)
     }
 
-    /// A page fitted to the column's width, `pageGap` below `previous` (page 1 at the very top).
-    private func pageFrame(below previous: NSView?, size: CGSize) -> NSRect {
-        let width = pageColumnWidth
+    /// The column's visible height.
+    private var pageColumnHeight: CGFloat {
+        let height = pageScroll.contentView.bounds.height
+        return height > 0 ? height : max(pageSize.height, 1)
+    }
+
+    /// A page fitted to the column — its width, or its visible height where that is the tighter (batch 47, M29: a window
+    /// shorter for its width than the page never shows a part of the next page below the first), centred across the
+    /// column, `pageGap` below `previous` (page 1 at the very top).
+    func pageFrame(below previous: NSView?, size: CGSize) -> NSRect {
+        let scale = min(pageColumnWidth / max(size.width, 1), pageColumnHeight / max(size.height, 1))
+        let width = (size.width * scale).rounded()
         let top = previous.map { $0.frame.maxY + Self.pageGap } ?? 0
-        return NSRect(x: 0, y: top, width: width, height: (width * size.height / max(size.width, 1)).rounded())
+        return NSRect(x: ((pageColumnWidth - width) / 2).rounded(), y: top, width: width,
+                      height: (size.height * scale).rounded())
     }
 
     /// The column changed width (the view was first laid out, or the window was resized): every page is fitted again
     /// and the pages within reach drawn again at the new size, the reader kept on their page.
     private func relayOutPages() {
-        guard !pageViews.isEmpty, pageViews[0].frame.width != pageColumnWidth else { return }
+        guard !pageViews.isEmpty, pageViews[0].frame != pageFrame(below: nil, size: pageViews[0].pageSize) else { return }
         let reading = selectedPageIndex
         var previous: NSView?
         for pageView in pageViews {
@@ -484,10 +515,14 @@ final class FlippedColumnView: NSView {
 
     override var isFlipped: Bool { true }
 
-    /// The clip view's width drives the page column's; a change re-fits the pages.
-    func clipWidthChanged(to width: CGFloat) {
-        guard width != lastWidth else { return }
+    private var lastHeight: CGFloat = 0
+
+    /// The clip view's width drives the page column's; a change re-fits the pages. Batch 47 (M29): so does its height,
+    /// which a page may be fitted to.
+    func clipWidthChanged(to width: CGFloat, height: CGFloat? = nil) {
+        guard width != lastWidth || (height.map { $0 != lastHeight } ?? false) else { return }
         lastWidth = width
+        if let height { lastHeight = height }
         onWidthChange?()
     }
 
@@ -502,7 +537,7 @@ final class FlippedColumnView: NSView {
 
     @objc private func clipFrameChanged(_ note: Notification) {
         guard let clip = note.object as? NSClipView else { return }
-        clipWidthChanged(to: clip.bounds.width)
+        clipWidthChanged(to: clip.bounds.width, height: clip.bounds.height)
     }
 }
 

@@ -839,14 +839,24 @@ public struct HeadFootLine: Hashable, Sendable {
     /// that, and every consumer drawing the printed page from this model drew them
     /// light. `layout` JSON version 11 publishes it as `style`, a sorted tag list.
     public var styleAttrs: Style
+    /// THIS ROW IS NOT ON THE PAPER -- DO NOT DRAW IT.
+    ///
+    /// E11 (Jon's ruling 2026-09-17, `layout` JSON version 12's `off_sheet`): WordStar
+    /// commands a head/foot/page-number row wherever `pl - mb + fm` puts it and lets the
+    /// printer clip it, so the PDF still draws at `y` and the page edge does the
+    /// clipping -- see `hfOffSheet` for the WS7 captures. A consumer drawing from this
+    /// MODEL has no paper to clip with, and drew a `FORMFEED.WS` page-5 number the PDF
+    /// shows nowhere. False for every ordinary row.
+    public var offSheet: Bool
 
     public init(text: String, x: Double, y: Double, font: Int?,
-                styleAttrs: Style = []) {
+                styleAttrs: Style = [], offSheet: Bool = false) {
         self.text = text
         self.x = x
         self.y = y
         self.font = font
         self.styleAttrs = styleAttrs
+        self.offSheet = offSheet
     }
 }
 
@@ -857,11 +867,16 @@ public struct AutoPageNumber: Hashable, Sendable {
     public var text: String
     public var x: Double
     public var y: Double
+    /// THIS NUMBER IS NOT ON THE PAPER -- DO NOT DRAW IT. See
+    /// `HeadFootLine.offSheet`, `hfOffSheet`, and `layout` JSON version 12's
+    /// `off_sheet`. `sawyer/ARTICLES/FORMFEED.WS` page 5 is the case.
+    public var offSheet: Bool
 
-    public init(text: String, x: Double, y: Double) {
+    public init(text: String, x: Double, y: Double, offSheet: Bool = false) {
         self.text = text
         self.x = x
         self.y = y
+        self.offSheet = offSheet
     }
 }
 
@@ -944,6 +959,13 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     /// override (`Line.poCols`, applied in `resolvePlainBody`/`resolvePrintedBody`), this is
     /// the page-granularity twin that mechanism was missing. Port of Python's `Page.po_cols`.
     public var poCols: Double?
+    /// M31: the `.pr or=` in force when this page's own pagination started -- `nil` for
+    /// "the document's own orientation", the same contract as everything above it. Unlike
+    /// every other value here it reaches the SHEET: the page's MediaBox, the height its
+    /// content stream is drawn through, and its running head/foot row. See
+    /// `orCheckpoints` for the measured WS7 timing rule that decides which page a
+    /// `.pr or=` belongs to.
+    public var orientation: Orientation?
     /// planning #231/#241 follow-up (2026-09-08): whether `poCols` above came from an
     /// ACTIVE `.poe`/`.poo` parity override, as opposed to a plain mid-document `.po`
     /// reset. #241's `pageGeomChanged` gate (`PDFWriter.swift`) exists to keep a
@@ -1060,12 +1082,13 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         headHfOverride = nil
         footHfOverride = nil
         footerInUse = false
+        orientation = nil
     }
 
     public init(_ lines: [PageLine], headers: [Int: String] = [:], footers: [Int: String] = [:],
                mtLines: Double? = nil, mbLines: Double? = nil, plLines: Double? = nil,
                hmLines: Double? = nil, fmLines: Double? = nil, poCols: Double? = nil,
-               poParity: Bool = false,
+               poParity: Bool = false, orientation: Orientation? = nil,
                explicitBreak: Bool = false, explicitBreakBI: Int? = nil,
                columns: Int? = nil, columnGutterPt: Double? = nil,
                columnWidthPt: Double? = nil) {
@@ -1081,6 +1104,7 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
         self.fmLines = fmLines
         self.poCols = poCols
         self.poParity = poParity
+        self.orientation = orientation
         self.autoPagenoPo = nil
         self.explicitBreak = explicitBreak
         self.explicitBreakBI = explicitBreakBI
@@ -1455,6 +1479,7 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
         merged.mtLines = pg.mtLines
         merged.mbLines = pg.mbLines
         merged.plLines = pg.plLines
+        merged.orientation = pg.orientation
         merged.hmLines = pg.hmLines
         merged.fmLines = pg.fmLines
         merged.poCols = pg.poCols
@@ -2645,6 +2670,104 @@ func landscapePage(_ page: PageGeometry) -> PageGeometry {
     return eff
 }
 
+/// `[(blockIndex, lineIndex, orientation), ...]` in ascending order -- the `.pr or=`
+/// orientation IN FORCE from that position onward. Port of Python's `_or_checkpoints`
+/// (M31). Same `dotPositions` anchor and the same "block 0 is WordStar's own hardcoded
+/// default" contract as `plCheckpoints`, but with the LINE index kept, which
+/// `.pl`/`.po`/`.mt` discard.
+///
+/// WHAT WAS WRONG. `.pr or=` was captured once, at parse time, into
+/// `doc.formatting.orientation` -- whatever value the file happened to set LAST. That is
+/// the same defect class `poCols`/`lead48` are already excluded from the document-level
+/// formatting record for; it simply never reached `.pr`. A file that asks for landscape on
+/// one page and portrait on the rest printed every page portrait, and the landscape page's
+/// content ran off the right edge of a sheet too narrow to hold it -- silently, because a
+/// viewer clips at the MediaBox without complaining.
+///
+/// THE TIMING RULE IS MEASURED, not assumed (real WS7 under DOSBox-X, LASERJET driver ->
+/// PCL5, 2026-09-17):
+///
+///   * A `.pr or=` at the TOP of a page -- immediately after `.pa`, before any of that
+///     page's text -- applies to THAT page. WS7 wrote `ESC&l1O` immediately after the form
+///     feed that ended page 1 and before page 2's text, then `ESC&l0O` immediately after
+///     page 2's form feed.
+///   * A `.pr or=` in the MIDDLE of a page does NOT touch that page; it takes effect at the
+///     NEXT one. With `.pr or=l` typed between page 1's second and third lines, all three
+///     of page 1's lines printed under the portrait escape at its top, and the landscape
+///     escape appeared one byte AFTER page 1's form feed. WS7 never emits an orientation
+///     escape mid-page at all -- it queues the change to the next page boundary.
+///
+/// WHY THE LINE INDEX IS KEPT, when every sibling here throws it away: a `.pr` typed
+/// between two lines of a paragraph sits in the SAME block the page opened at, so a
+/// block-only comparison reads it a page early and gives page 1 the sheet real WS7 gave
+/// page 2. The paginator already keeps the number that settles it (`readTally[bi]`, how
+/// many lines of that block earlier pages consumed, still the pre-line value where the
+/// geometry recompute runs). `.pl`/`.po`/`.mt` keep their block granularity: their own
+/// oracles were measured against it, and none of them reaches the MediaBox.
+func orCheckpoints(_ doc: Document) -> [(blockIndex: Int, lineIndex: Int,
+                                         orientation: Orientation)] {
+    var checkpoints: [(blockIndex: Int, lineIndex: Int, orientation: Orientation)] =
+        [(0, 0, .portrait)]
+    for dp in doc.dotPositions {
+        guard let (name, arg) = dotCommandNameAndArg(Array(dp.text.utf8)) else { continue }
+        let upperName = String(decoding: name.map(asciiUppercased), as: UTF8.self)
+        guard upperName == "PR" else { continue }
+        // The SAME acceptance the parser itself applies (`applyFormatDot`'s `"PR"` case,
+        // Formatting2.swift): the argument must literally begin `or=` and its fourth
+        // character decides. Anything looser here would invent a checkpoint for a command
+        // the parser ignored.
+        let a = arg.map(asciiUppercased)
+        guard a.count > 3, a[0] == 0x4F, a[1] == 0x52, a[2] == 0x3D else { continue }  // "OR="
+        let resolved: Orientation
+        if a[3] == 0x4C { resolved = .landscape }        // 'l'
+        else if a[3] == 0x50 { resolved = .portrait }    // 'p'
+        else { continue }
+        if resolved != checkpoints[checkpoints.count - 1].orientation {
+            checkpoints.append((dp.blockIndex, dp.lineIndex, resolved))
+        }
+    }
+    return checkpoints
+}
+
+/// The orientation in force for a page opening at block `bi`, per `checkpoints`
+/// (ascending, from `orCheckpoints`). Port of Python's `_or_at`.
+///
+/// `consumed` is how many lines of block `bi` EARLIER pages already took -- the
+/// paginator's own `readTally[bi]`. With it, a checkpoint counts when it sits at or before
+/// this page's opening position, so a `.pr` further into the block than this page reached
+/// belongs to a later page. Without it (`nil`) the comparison is block-granular: every
+/// checkpoint in block `bi` counts. RTF's section spine uses that form, having already
+/// resolved each change to the paragraph boundary it can actually break at.
+func orAt(_ checkpoints: [(blockIndex: Int, lineIndex: Int, orientation: Orientation)],
+          _ bi: Int, _ consumed: Int? = nil) -> Orientation {
+    var orientation = checkpoints[0].orientation
+    for cp in checkpoints {
+        if cp.blockIndex > bi { break }
+        if cp.blockIndex == bi, let consumed, cp.lineIndex > consumed { break }
+        orientation = cp.orientation
+    }
+    return orientation
+}
+
+/// `page` as THIS SHEET's orientation wants it (M31). Port of Python's
+/// `_page_dict_for_orientation`.
+///
+/// `landscapePage` is idempotent by construction -- it recomputes the height/width pair
+/// fresh from the page's own `.pl` rather than swapping whatever pair it is handed -- so
+/// `.landscape` can be applied to a geometry that has already been swapped, or to one that
+/// has not, with the same answer. `.portrait` is the other direction and needs the same
+/// treatment: `resolvePageSize`'s own PORTRAIT-convention resolution of this page's `.pl`,
+/// recomputed fresh, so a page that must be put BACK from a document-wide landscape swap
+/// lands exactly where a portrait document's own geometry would have.
+public func pageGeometryFor(_ page: PageGeometry, orientation: Orientation) -> PageGeometry {
+    if orientation == .landscape { return landscapePage(page) }
+    let (heightIn, _, pwIn) = resolvePageSize(page.plLines)
+    var eff = page
+    eff.heightIn = heightIn
+    eff.pwIn = pwIn
+    return eff
+}
+
 /// The document an emitter actually lays out: `options.pageSettings` folded in, then
 /// Printed's `.pr or=l` rotation on top of it, in that order. THE one place that order is
 /// written down.
@@ -2794,7 +2917,17 @@ func resolvedPageHeight(_ doc: Document, printed: Bool) -> Int {
 /// all. Clamped to at least `LEAD * (footnoteFloor + 1)` points so a degenerate tiny/absent
 /// page can never send the capacity below the floor `_printed_cap` itself also enforces.
 private func resolvedPrintedPageHeight(_ doc: Document) -> Int {
-    let heightIn = doc.page?.heightIn ?? 11.0
+    guard let page = doc.page else { return printedPageHeightPt(nil) }
+    return printedPageHeightPt(page)
+}
+
+/// One PAGE GEOMETRY's own printed height in points -- the arithmetic
+/// `resolvedPrintedPageHeight` has always done, split out (M31) so a caller holding a
+/// single page's resolved sheet (per-page orientation, the layout JSON's `size`) gets the
+/// same answer without a whole `Document`. `nil` is the bare print-stream capture's own
+/// 11in default. Port of Python's `_page_height_pt_for`.
+public func printedPageHeightPt(_ page: PageGeometry?) -> Int {
+    let heightIn = page?.heightIn ?? 11.0
     if heightIn == 0 {
         // `.pl 0` = page breaks off (bug 12284; see `textLinesPerPage`). The text model
         // already never breaks; the PDF page box itself falls back to Letter — a truly
@@ -5561,7 +5694,19 @@ func layoutPrintedPagesPlain(
     let docHm = doc.page?.hmLines ?? 2.0    // WSFORMAT's own hardcoded ".HM" default
     let docFm = doc.page?.fmLines ?? 2.0    // WSFORMAT's own hardcoded ".FM" default
     let docPo = doc.page?.poCols ?? 8.0     // WS7 manual's own default page offset
-    /// (mt, mb, pl, hm, fm, po) in force at block `bi`, for the page about to start there --
+    // triage Q12: how far into the document this page has READ, kept as a running
+    // per-block line tally. `checkpointsByPage` needs it because `finalizePages` strips
+    // a page's trailing blanks -- a page of nothing but blank lines ends up EMPTY, with
+    // no `bi` left on it at all, and the leading blank run a `.pn` sits inside is
+    // exactly that shape. Counted here, before anything is stripped.
+    var readTally: [Int: Int] = [:]
+    // M31: the `.pr or=` checkpoints, and the document-level value a page is compared
+    // AGAINST before it stamps one of its own -- `doc.formatting.orientation`, the
+    // document-wide last-write-wins reading every non-printed surface still uses.
+    let orCheckpointsList = orCheckpoints(doc)
+    let docOr = doc.formatting.orientation ?? .portrait
+    var curOr = orAt(orCheckpointsList, 0, 0)
+    /// (mt, mb, pl, hm, fm, po, poe, poo, orientation) in force at block `bi`, for the page about to start there --
     /// shared by BOTH places a fresh page begins: the explicit-break path below (`page`
     /// already empty by the time the next `.line` case's top-of-switch check runs), and
     /// the ORGANIC-overflow close (where `page` is NOT yet empty at the top of THIS
@@ -5573,24 +5718,24 @@ func layoutPrintedPagesPlain(
     /// also strengthens `.mt`/`.mb` for organic breaks (previously recomputed only at the
     /// explicit-break site).
     func recomputeGeom(_ bi: Int) -> (mt: Double, mb: Double, pl: Double, hm: Double, fm: Double,
-                                      po: Double, poe: Double?, poo: Double?) {
+                                      po: Double, poe: Double?, poo: Double?,
+                                      orientation: Orientation) {
         let (mt, mb) = mtMbAt(mtMbCheckpointsList, bi)
         let pl = plAt(plCheckpointsList, bi)
         let (hm, fm) = hmFmAt(hmFmCheckpointsList, bi)
         let po = poAt(poCheckpointsList, bi)
         let poe: Double? = poeCheckpointsList.isEmpty ? nil : poAt(poeCheckpointsList, bi)
         let poo: Double? = pooCheckpointsList.isEmpty ? nil : poAt(pooCheckpointsList, bi)
-        return (mt, mb, pl, hm, fm, po, poe, poo)
+        // M31: the line-exact form -- `readTally[bi]` is how many lines of this block
+        // earlier pages consumed, i.e. where this page opens INSIDE the block, and it is
+        // still the pre-line value here (the tally advances at the bottom of the loop
+        // body). See `orAt`.
+        let orientation = orAt(orCheckpointsList, bi, readTally[bi] ?? 0)
+        return (mt, mb, pl, hm, fm, po, poe, poo, orientation)
     }
 
     var pages: [Page] = []
     var page: [PageLine] = []
-    // triage Q12: how far into the document this page has READ, kept as a running
-    // per-block line tally. `checkpointsByPage` needs it because `finalizePages` strips
-    // a page's trailing blanks -- a page of nothing but blank lines ends up EMPTY, with
-    // no `bi` left on it at all, and the leading blank run a `.pn` sits inside is
-    // exactly that shape. Counted here, before anything is stripped.
-    var readTally: [Int: Int] = [:]
     var readPos: PageReadPos?
     var spent = 0.0
     var curHeaders: [Int: String] = [:]
@@ -5709,6 +5854,12 @@ func layoutPrintedPagesPlain(
         if curMt != globalMt || curMb != globalMb {
             pg.mtLines = curMt
             pg.mbLines = curMb
+        }
+        // M31: this page's own sheet, stamped only when it differs from the document's
+        // -- same `nil`/"document global" contract as everything else here, so every page
+        // of every document with at most one column-1 `.pr or=` is byte-identical.
+        if curOr != docOr {
+            pg.orientation = curOr
         }
         if curPl != docPl {
             pg.plLines = curPl
@@ -5987,7 +6138,7 @@ func layoutPrintedPagesPlain(
             // page only, so a page whose geometry never changes never recomputes to a
             // different number (see `printedCapFor`'s docstring).
             if page.isEmpty, let bi = line.bi {
-                let (mt, mb, pl, hm, fm, po, poe, poo) = recomputeGeom(bi)
+                let (mt, mb, pl, hm, fm, po, poe, poo, orient) = recomputeGeom(bi)
                 curMt = mt
                 curMb = mb
                 curPl = pl
@@ -5996,6 +6147,7 @@ func layoutPrintedPagesPlain(
                 curPo = po
                 curPoe = poe
                 curPoo = poo
+                curOr = orient
                 capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
                 budget = printedBudgetPt(doc, capacity: capacity, defaultLead: defaultLead,
                                          mtLines: mt, mbLines: mb, plLines: pl)
@@ -6036,7 +6188,7 @@ func layoutPrintedPagesPlain(
                 // `page.isEmpty` gate above, since `page` is not empty until closePage/
                 // openNewPage runs right here, mid-iteration.
                 if let bi = line.bi {
-                    let (mt, mb, pl, hm, fm, po, poe, poo) = recomputeGeom(bi)
+                    let (mt, mb, pl, hm, fm, po, poe, poo, orient) = recomputeGeom(bi)
                     curMt = mt
                     curMb = mb
                     curPl = pl
@@ -6045,6 +6197,7 @@ func layoutPrintedPagesPlain(
                     curPo = po
                     curPoe = poe
                     curPoo = poo
+                    curOr = orient
                     capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
                     budget = printedBudgetPt(doc, capacity: capacity, defaultLead: defaultLead,
                                              mtLines: mt, mbLines: mb, plLines: pl)

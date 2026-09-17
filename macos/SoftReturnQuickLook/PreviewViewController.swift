@@ -18,7 +18,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     override var nibName: NSNib.Name? { nil }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+        // Batch 47 (M29): a Letter page beside the thumbnail column, so a window opened from this frame shows one page.
+        view = NSView(frame: NSRect(origin: .zero, size: QuickLookProgressivePreview.defaultContentSize))
+        preferredContentSize = QuickLookProgressivePreview.defaultContentSize
     }
 
     nonisolated func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping @Sendable ((any Error)?) -> Void) {
@@ -41,11 +43,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         }
         // Detection is content-based — names and extensions lie about WordStar-era files. A real `.PIX` parses as a
         // picture; anything else goes to the WordStar reading, which fails with its own error.
-        if let pix = try? QuickLookPixRenderer.renderedPix(fromFileBytes: bytes), let image = NSImage(data: pix.png) {
-            let imageView = NSImageView(image: image)
-            imageView.imageScaling = .scaleProportionallyUpOrDown
-            pin(imageView)
-            preferredContentSize = pix.sizeInPoints
+        // Batch 47 (M28a): the whole picture, fitted (`QuickLookPictureView`).
+        if let picture = QuickLookPictureView.preview(fromFileBytes: bytes) {
+            pin(picture.view)
+            preferredContentSize = picture.size
             handler(nil)
             return
         }

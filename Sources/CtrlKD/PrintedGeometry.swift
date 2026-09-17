@@ -141,6 +141,42 @@ public func printedMetrics(_ doc: Document,
     )
 }
 
+/// The same metrics for ONE PAGE of a document whose sheet changes mid-file (M31).
+///
+/// `printedMetrics` above answers for the DOCUMENT: its `pageWidth`/`pageHeight` are the
+/// one sheet `doc.formatting.orientation` describes. Since M31 that is no longer the whole
+/// answer — `.pr or=l`/`.pr or=p` is resolved PER PAGE (see `orCheckpoints`), and a page
+/// whose own orientation differs from the document's prints on a different sheet, which is
+/// exactly what `emitPDF` writes into that page's MediaBox.
+///
+/// So a caller drawing a specific page — the app's Printed and Native views, which place
+/// text at the coordinates `emitPDF` would — must ask for THAT page's metrics, not the
+/// document's, or a landscape page inside a portrait document is drawn on a portrait sheet
+/// and clipped exactly as the exported PDF used to be. Pass the `Page` that
+/// `docToPagelines(printedDocument(doc, options: options), printed: true)` handed back.
+///
+/// A page that never changes orientation (`Page.orientation == nil`, which is every page
+/// of nearly every document) answers exactly what `printedMetrics(doc)` answers — the same
+/// values, from the same helpers — so a caller may use this unconditionally. Nothing here
+/// computes anything of its own: same façade rule as the rest of this file.
+///
+/// Only the SHEET moves. `top`/`lead`/`size`/`left`/`capacity` are `.mt`/`.lh`/`.cw`/`.po`
+/// and are the document's, exactly as before — `landscapePage`'s own rule is that a
+/// rotation changes the canvas and never re-interprets the margins, which is what real
+/// WordStar's driver-level rotation did too.
+public func printedMetrics(_ doc: Document, page: Page,
+                           options: EmitOptions = EmitOptions()) -> PrintedPageMetrics {
+    let base = printedMetrics(doc, options: options)
+    guard let pageOr = page.orientation,
+          let sheet = printedDocument(doc, options: options).page else { return base }
+    let eff = pageGeometryFor(sheet, orientation: pageOr)
+    return PrintedPageMetrics(
+        pageWidth: Double(roundHalfToEven(eff.pwIn * 72.0)),
+        pageHeight: Double(printedPageHeightPt(eff)),
+        top: base.top, lead: base.lead, size: base.size,
+        left: base.left, capacity: base.capacity)
+}
+
 /// The Modern-mode equivalent: the fixed page the reflowing layout targets.
 ///
 /// Modern mode deliberately does NOT match the original page — 1in margins on US Letter,

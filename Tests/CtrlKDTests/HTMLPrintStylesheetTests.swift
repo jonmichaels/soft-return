@@ -179,8 +179,12 @@ private let printBody =
 func theScreenStylesheetIsByteIdenticalToTheBase(mode: EmitMode) {
     // The proof the ruling asked for: strip `@media print` and what is left is exactly
     // the stylesheet that was there before — so nothing a browser renders can have moved.
+    //
+    // E9 H4 (2026-09-17) added ONE thing to the screen side, and only in Modern: the
+    // reading measure (`modernMeasureCSS`). Printed's screen stylesheet is still the
+    // base, byte for byte, which is the half of this claim the print round made.
     let html = emitHTML(printCSSDocument(printBody), mode: mode)
-    #expect(screenCSS(html) == htmlCSS)
+    #expect(screenCSS(html) == htmlCSS + (mode == .printed ? "" : modernMeasureCSS))
 }
 
 @Test func noScreenRuleEverNamesTheNewClasses() {

@@ -876,12 +876,12 @@ let euroPatchedDrivers: Set<String> = ["LASERJET", "LJ6DTP", "HP4"]
 /// to even though it never applies the rule itself: the semantic flow above has already
 /// mapped the character by the time the app's Native and Modern renderers see a run. Nothing
 /// else about this function changed — visibility only (planning #266, Native half).
-/// Quirks mode (2026-09-16) names this rule `driver-euro-sign` and lets a reader switch it
+/// Quirks mode (2026-09-16) names this rule `euro-swap` and lets a reader switch it
 /// off to see the literal peseta even on a patched-driver document. It is an AUTO quirk --
 /// on unless a caller says otherwise -- so a document naming one of the three drivers gets
 /// exactly the same answer it always did.
 public func pesetaMeansEuro(_ doc: Document) -> Bool {
-    guard quirkEnabled(doc, QuirkName.euro) else { return false }
+    guard quirkEnabled(doc, QuirkName.euroSwap) else { return false }
     let name = (doc.printerDriver ?? "").trimmed().uppercased()
     return euroPatchedDrivers.contains(name)
 }
@@ -923,8 +923,8 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
     // planning #266 / quirks mode: the LJ6DTP driver's own two character families are
     // separately named quirks, each switchable on its own; both are AUTO, so a document
     // declaring that driver behaves exactly as it always did.
-    let ljTypography = quirkEnabled(doc, QuirkName.ljTypography)
-    let ljCorners = quirkEnabled(doc, QuirkName.ljBoxCorners)
+    let ljTypography = quirkEnabled(doc, QuirkName.smartPunctuation)
+    let ljCorners = quirkEnabled(doc, QuirkName.boxCorners)
     let lj = ljTypography || ljCorners
     // b24 completion (C1): the same whole-document context `EmitRTF`/`EmitHTML`/`EmitText`
     // compute for their own `assembleParagraphs`/`isVerse` calls — Modern is never
@@ -1558,7 +1558,7 @@ private func jsonHFDict(_ dict: [Int: String], order: [Int]) -> LayoutJSONValue 
 /// One resolved `HeadFootLine` (version 6, planning #251(d)) — `x`/`y` rounded to 1
 /// decimal, same convention as `justify_word_x`/`line_no`/`graphic_cells`.
 private func jsonHeadFootLine(_ line: HeadFootLine) -> LayoutJSONValue {
-    .object([
+    var fields: [(String, LayoutJSONValue)] = [
         ("text", .string(line.text)),
         ("x", .double(roundToOneDecimal(line.x))),
         ("y", .double(roundToOneDecimal(line.y))),
@@ -1568,7 +1568,15 @@ private func jsonHeadFootLine(_ line: HeadFootLine) -> LayoutJSONValue {
         // (`[]` for the overwhelming majority) rather than omitted, so a consumer reads
         // one shape. See `HeadFootLine.styleAttrs` for why `font` could not say it.
         ("style", .array(pythonStyleTags(line.styleAttrs).map { LayoutJSONValue.string($0) })),
-    ])
+    ]
+    // `off_sheet` (version 12, E11, Jon's ruling 2026-09-17): present, and true, ONLY on
+    // a row whose own resolved y is off the paper (`hfOffSheet`) -- OMITTED, not false,
+    // everywhere else, so a document with no off-sheet furniture emits byte-identical
+    // JSON to version 11. A CONSUMER MUST NOT DRAW A FLAGGED ROW: the PDF draws it at
+    // the resolved y and the paper clips it, which is what real WS7 does, and an app
+    // drawing from this model has no paper to do the clipping.
+    if line.offSheet { fields.append(("off_sheet", .bool(true))) }
+    return .object(fields)
 }
 
 /// One `PageLine.GraphicCellPlacement`, shared by Printed's own `printed.pages[].lines[]
@@ -1645,6 +1653,18 @@ private func jsonGraphicCellPlacement(_ cell: PageLine.GraphicCellPlacement) -> 
 /// PUBLIC function, not exported through this JSON (it depends on nothing per-
 /// document; a consumer calls it directly, in either engine, keyed only by the
 /// character).
+///
+/// version 12 (E11, Jon's ruling 2026-09-17): a `header_lines`/`footer_lines` entry, and
+/// `auto_page_number`, MAY carry `off_sheet: true` — this row's own resolved y is off the
+/// bottom of the sheet, and **a consumer must not draw it**. WordStar commands such a row
+/// anyway and lets the printer clip it (real WS7 captures put the automatic number 14.4pt
+/// past the bottom edge on `REF/PS-FONTS.REF`, `FONTS.REF` and `-LASERJE.FNT`, 21.6pt on
+/// `LSRBOX/PAGE.RND`), so the PDF is unchanged and still draws at that y — the paper is
+/// its clip. An app drawing from THIS model has no paper, which is how
+/// `sawyer/ARTICLES/FORMFEED.WS` page 5 (landscape 612pt sheet, portrait `.pl`, row
+/// y = -144) came to show a page number the PDF does not and to count one line more than
+/// the library. OMITTED, not false, on every row that is on the sheet: a document with no
+/// off-sheet furniture emits byte-identical JSON to version 11. See `hfOffSheet`.
 ///
 /// version 6 (planning #251(d), 2026-09-10): each printed PAGE MAY now carry
 /// `header_lines`/`footer_lines` — `[{"text", "x", "y", "font"}, ...]`, one entry per
@@ -1921,11 +1941,14 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
             pageFields.append(("footer_lines", .array(footerLines.map(jsonHeadFootLine))))
         }
         if let auto = page.autoPageno {
-            pageFields.append(("auto_page_number", .object([
+            var autoFields: [(String, LayoutJSONValue)] = [
                 ("text", .string(auto.text)),
                 ("x", .double(roundToOneDecimal(auto.x))),
                 ("y", .double(roundToOneDecimal(auto.y))),
-            ])))
+            ]
+            // version 12: same omit-unless-true rule as the head/foot lines.
+            if auto.offSheet { autoFields.append(("off_sheet", .bool(true))) }
+            pageFields.append(("auto_page_number", .object(autoFields)))
         }
         // `columns`/`column_gutter_pt`/`column_width_pt` (version 2): same
         // omit-unless-set convention as `left`/`col` above -- present only on a page
@@ -1941,6 +1964,18 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
             // note on `emitLayout`.
             pageFields.append(("column_top_offset_pt",
                                .double(roundToOneDecimal(page.columnTopOffsetPt ?? 0.0))))
+        }
+        // `size` (version 13, M31): THIS PAGE'S OWN SHEET, in points, and its
+        // orientation -- present ONLY on a page whose `.pr or=` differs from the
+        // document's own, the same omit-unless-set convention every field above uses. A
+        // page without it is the document's sheet (the top-level `page` object).
+        if let pageOr = page.orientation, let docPage = doc.page {
+            let sheet = pageGeometryFor(docPage, orientation: pageOr)
+            pageFields.append(("size", .object([
+                ("width_pt", .int(roundHalfToEven(sheet.pwIn * 72.0))),
+                ("height_pt", .int(printedPageHeightPt(sheet))),
+                ("orientation", .string(pageOr.rawValue)),
+            ])))
         }
         printedPages.append(.object(pageFields))
     }
@@ -1972,9 +2007,19 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
             ("quirks_applied", .array(decision.applied.map { .string($0) })),
         ]
     }
+    // version 13 (2026-09-17, M31): a PRINTED PAGE may now carry its own `size` --
+    // `{width_pt, height_pt, orientation}` -- because the sheet stopped being one answer
+    // for the whole document. `.pr or=l`/`.pr or=p` used to be read as a single
+    // document-wide last-write-wins flag; it is resolved per page now, at the position
+    // each page OPENS at (`orCheckpoints`, whose doc comment carries the measured WS7
+    // timing rule). `size` follows the same omit-unless-it-differs convention as every
+    // other per-page field here, so a document that never changes orientation mid-file
+    // emits byte-identical JSON to version 12 apart from the version number. A page
+    // WITHOUT `size` is the document's sheet: the top-level `page` object's own
+    // `pw_in`/`height_in`, exactly as before.
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
-        ("version", .int(12)),
+        ("version", .int(13)),
         ("meta", jsonMeta(doc)),
         ("page", jsonPage(doc.page)),
         ("fonts", .array(doc.fonts.map(jsonFont))),
@@ -2064,8 +2109,8 @@ func substExempt(_ span: Span) -> Bool {
 /// case — callers skip the whole pass and nothing is copied). Port of
 /// `layout.driver_substituter`.
 func driverSubstituter(_ doc: Document) -> ((String, Int?) -> String)? {
-    let ljTypography = quirkEnabled(doc, QuirkName.ljTypography)
-    let ljCorners = quirkEnabled(doc, QuirkName.ljBoxCorners)
+    let ljTypography = quirkEnabled(doc, QuirkName.smartPunctuation)
+    let ljCorners = quirkEnabled(doc, QuirkName.boxCorners)
     let lj = ljTypography || ljCorners
     let euro = pesetaMeansEuro(doc)
     guard lj || euro else { return nil }

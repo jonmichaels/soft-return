@@ -87,8 +87,17 @@ import Testing
     // drawn op per page -- a centred number on Modern's own footer row. Nothing else
     // about it moves. The PRINTED hashes cannot move, because Printed already drew this
     // number. Again the identical digest ctrl-kd's own re-pinned fixture carries.
+    //
+    // Re-pinned an EIGHTH time 2026-09-17 (this MODERN hash ONLY -- the three PRINTED
+    // hashes are untouched again): E10/E10b, Jon's ruling that page furniture takes the
+    // body's own font chain and that Modern furniture sets at the body size less 2pt.
+    // This fixture's one piece of furniture is the automatic page number M15 added
+    // above, so its single drawn op goes from 11pt to 12pt and re-centres at the new
+    // width. Printed's furniture was already the body's own Courier at the body size,
+    // which is why those hashes cannot move. Again the identical digest ctrl-kd's own
+    // re-pinned fixture carries.
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .modern))
-        == "fbb4a53b849f6fd06036c7b7ff9f5aa551b981f62444374d7f6ce66219959e08")
+        == "e766708c4040a5e50e8663fc5730fc6c8bbf9fb5be226a1abdeab16b150ca90d")
     // Re-pinned a SIXTH time 2026-09-14 (this `styled` PRINTED hash ONLY -- the other
     // three are untouched): a run that is all whitespace no longer gets a text-showing
     // op of its own (`lineOpsPrinted`, planning #270 item 39). Blanks put no ink on

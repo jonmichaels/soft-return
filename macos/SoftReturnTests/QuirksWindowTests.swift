@@ -87,28 +87,28 @@ struct QuirksWindowTests {
         let buttons = RenderProbeKit.descendants(content).compactMap { $0 as? NSButton }.filter { !$0.title.isEmpty }
         #expect(Set(buttons.map(\.title)) == ["Use App Defaults", "App Default Settings…", "Done"])
         let titles = RenderProbeKit.descendants(content).compactMap { $0 as? NSTextField }.map(\.stringValue)
-        #expect(titles.contains("Euro sign") && titles.contains("Ignore a strikeout set only by a style"))
+        #expect(titles.contains("Euro swap") && titles.contains("Ignore a strikeout set only by a style"))
 
-        let stray = try #require(quirks.checkboxes[QuirkName.strayStyleStrikeout])
-        #expect(stray.state == .off && quirks.checkboxes[QuirkName.euro]?.state == .on)
+        let stray = try #require(quirks.checkboxes[QuirkName.sawyerStrikeout])
+        #expect(stray.state == .off && quirks.checkboxes[QuirkName.euroSwap]?.state == .on)
         // Each checkbox at the box's leading edge, the canvas's 16 pt in, not centred.
         for (name, checkbox) in quirks.checkboxes {
             let box = try #require(checkbox.superview?.superview?.superview)
             let x = checkbox.convert(checkbox.bounds, to: box).minX
             #expect(x < 24, "\(name)'s checkbox is \(x) pt in")
         }
-        #expect(quirks.overriddenLabels[QuirkName.strayStyleStrikeout]?.isHidden == true)
+        #expect(quirks.overriddenLabels[QuirkName.sawyerStrikeout]?.isHidden == true)
         stray.performClick(nil)
-        #expect(state.quirkOverrides == [QuirkName.strayStyleStrikeout: true])
+        #expect(state.quirkOverrides == [QuirkName.sawyerStrikeout: true])
         #expect(state.document.blocks.first?.styleAttrs.contains(.strike) == false)
         #expect(settings.quirkDefaults == .shipped)
-        #expect(quirks.overriddenLabels[QuirkName.strayStyleStrikeout]?.isHidden == false)
+        #expect(quirks.overriddenLabels[QuirkName.sawyerStrikeout]?.isHidden == false)
         try Self.render(quirks, "quirks-document", dark: dark)
 
         // The app's defaults move under it; the document's own choice stays.
         settings.quirkDefaults = .off
-        #expect(state.document.quirks?.applied == [QuirkName.strayStyleStrikeout])
-        #expect(quirks.checkboxes[QuirkName.euro]?.state == .off)
+        #expect(state.document.quirks?.applied == [QuirkName.sawyerStrikeout])
+        #expect(quirks.checkboxes[QuirkName.euroSwap]?.state == .off)
 
         let useDefaults = try #require(buttons.first { $0.title == "Use App Defaults" })
         useDefaults.performClick(nil)
@@ -138,7 +138,7 @@ struct QuirksWindowTests {
         defaults.presetControl.selectedSegment = 0
         defaults.presetChosen(defaults.presetControl)
         #expect(settings.quirkDefaults == .shipped)
-        try #require(defaults.checkboxes[QuirkName.ljBoxCorners]).performClick(nil)
+        try #require(defaults.checkboxes[QuirkName.boxCorners]).performClick(nil)
         #expect(settings.quirkDefaults.preset == .custom)
         #expect(defaults.presetControl.selectedSegment == 3)
         let custom = settings.quirkDefaults
@@ -183,13 +183,13 @@ struct QuirksWindowTests {
         let first = try WSDocument(contentsOf: url, ofType: "public.data")
         let controller = DocumentWindowController(state: try #require(first.state), settings: Self.throwawaySettings())
         first.addWindowController(controller)
-        controller.setQuirk(QuirkName.euro, on: false)
-        #expect(QuirkOverrideStore.shared.overrides(for: url) == [QuirkName.euro: false])
+        controller.setQuirk(QuirkName.euroSwap, on: false)
+        #expect(QuirkOverrideStore.shared.overrides(for: url) == [QuirkName.euroSwap: false])
         first.close()
 
         let again = try WSDocument(contentsOf: url, ofType: "public.data")
-        #expect(again.state?.quirkOverrides == [QuirkName.euro: false])
-        #expect(again.state?.quirkChoices.isOn(QuirkName.euro) == false)
+        #expect(again.state?.quirkOverrides == [QuirkName.euroSwap: false])
+        #expect(again.state?.quirkChoices.isOn(QuirkName.euroSwap) == false)
         #expect(try Data(contentsOf: url) == bytes, "the document was written")
         again.close()
 
@@ -197,7 +197,7 @@ struct QuirksWindowTests {
         try FileManager.default.moveItem(at: url, to: renamed)
         defer { QuirkOverrideStore.shared.setOverrides([:], for: renamed) }
         let moved = try WSDocument(contentsOf: renamed, ofType: "public.data")
-        #expect(moved.state?.quirkOverrides == [QuirkName.euro: false])
+        #expect(moved.state?.quirkOverrides == [QuirkName.euroSwap: false])
         let movedController = DocumentWindowController(state: try #require(moved.state), settings: Self.throwawaySettings())
         moved.addWindowController(movedController)
         movedController.useAppDefaultQuirks()

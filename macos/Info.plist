@@ -87,6 +87,22 @@
 			<key>NSDocumentClass</key>
 			<string>SoftReturn.WSDocument</string>
 		</dict>
+		<!-- Batch 47 (M28b, Jon's ruling): the WordStar picture is Soft Return's own type on the Mac, as on the iPhone —
+		     Owner of the `.PIX` type this app exports (below), opened by `PixDocument`. -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>WordStar PIX Image</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>me.beforeti.wordstar-pix</string>
+			</array>
+			<key>NSDocumentClass</key>
+			<string>SoftReturn.PixDocument</string>
+		</dict>
 		<!-- Extensionless files are the common shape of a 1987 floppy's contents, and
 		     public.data is the only UTI that reaches them. Alternate rank + Viewer role
 		     so this never becomes the default handler for arbitrary data. -->
@@ -229,7 +245,9 @@
 					<string>wsd</string>
 					<string>wsm</string>
 					<string>ws-bak</string>
-					<string>ws-$$$</string>
+					<!-- Batch 47: `$$` is the build's escape for one `$` (the Info.plist's build settings are expanded), so
+					     six here are the three WordStar writes; three came out as `ws-$$`. -->
+					<string>ws-$$$$$$</string>
 				</array>
 			</dict>
 		</dict>

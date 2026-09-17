@@ -106,21 +106,28 @@ private func rtfReferenceMarker(_ note: Note, label: String, markOverride: Strin
 /// to RTF's generic "unrecognised control word" rule and dumps the destination's TEXT
 /// inline instead of losing it; a `\footnote`-aware reader (Word, Pages, LibreOffice) is
 /// unaffected either way — it keys off the `\footnote` control word itself, not the flag.
+/// `face` (E10, Jon's ruling 2026-09-17, research/2026-09-17_furniture-font-rules.md) is
+/// the note's own FACE control, resolved by the caller through the same chain a body run
+/// takes: `\f1` (Courier New) in Printed, where the body is Courier and `\plain`'s own
+/// `\f0` was setting note text in Times New Roman; `\f1` in Modern too when the document
+/// declares fonts and declares itself non-proportional (`nonpropFallback`); empty
+/// otherwise, because `\plain` already selects `\f0`, which IS Modern's body face. The
+/// size stays `\fs24` = 12pt: the Printed body size, and Modern's body-less-2 (E10b).
 private func rtfDestination(_ note: Note, label: String, markOverride: String? = nil,
-                            sentenceSpacing: Bool = false) -> String {
+                            sentenceSpacing: Bool = false, face: String = "") -> String {
     let noteText = sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text
     let text = rtfEscape(noteText)
     let flag = note.kind == .footnote ? "" : #"\ftnalt"#
     if note.kind == .annotation || note.tag != nil || markOverride != nil {
         let markText = rtfEscape(markOverride ?? label)
-        return #"{\footnote"# + flag + #" \pard\plain\fs24 {\super "# + markText + #" }"#
+        return #"{\footnote"# + flag + #" \pard\plain"# + face + #"\fs24 {\super "# + markText + #" }"#
             + text + "}"
     }
     switch note.kind {
     case .footnote:
-        return #"{\footnote \pard\plain\fs24 {\super\chftn }"# + text + "}"
+        return #"{\footnote \pard\plain"# + face + #"\fs24 {\super\chftn }"# + text + "}"
     case .endnote:
-        return #"{\footnote\ftnalt \pard\plain\fs24 {\super\chftn }"# + text + "}"
+        return #"{\footnote\ftnalt \pard\plain"# + face + #"\fs24 {\super\chftn }"# + text + "}"
     case .annotation, .comment:
         return ""   // annotation handled above; comments render elsewhere
     }
@@ -214,6 +221,16 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], labels: [String], optio
             // `fontControlRTF`'s own gate) but never the font FAMILY switch, which is
             // document rendering, not an author styling CHOICE.
             c += #"\cf\#(rtfColourNum(colour)) "#
+            // E9 R2 (Jon's ruling 2026-09-17, audit section C): WHITE IS REVERSE
+            // VIDEO, NOT A COLOUR. WordStar's colour 15 is the knockout -- the banner
+            // WS7 printed as white type in a dark bar (`colourGrayLJ6DTP` calls index
+            // 15 "the knockout" for the same reason) -- and a `\cf16` with no ground is
+            // white ink on white paper: the words are simply gone. 19 runs in 3
+            // documents (`LJ6DTP.WS` twice and `PSPRINT.TST`, whose own text reads
+            // "White Text on a Black Background"). `\chcbpat` is RTF's own character
+            // shading and `\highlight` is the same fact in the vocabulary Word reads;
+            // `\cf1` is the table's Black. Port of emit.py's identical addition.
+            if colour == rtfReverseVideoColour { c += #"\chcbpat1 \highlight1 "# }
         }
         // `\f1` (Courier New) is ALWAYS in the font table regardless of the document's
         // own fonts (see the `\fonttbl` literal in `emitRTF`), appended last so it wins
@@ -256,6 +273,9 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], labels: [String], optio
     }
     switch resolveReference(span, refNotes: refNotes, labels: labels, options: options) {
     case .note(let note, let label, let index):
+        // E10 (Jon 2026-09-17): note text and its echoed label are page furniture and
+        // take the body's own face -- see `rtfDestination`'s `face` parameter.
+        let noteFace = (printed || nonpropFallback) ? #"\f1"# : ""
         if note.kind == .comment {
             // Printed is a facsimile: WordStar printed nothing for a comment, so
             // neither do we (the CLI explains on stderr). Modern anchors a real Word
@@ -264,7 +284,7 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], labels: [String], optio
             // markless — Word's own convention is a bubble, not a superscript. (M9)
             if printed { return "" }
             let mark = shownMap.flatMap { $0[index] }.map { "{\\super " + rtfEscape($0) + "}" } ?? ""
-            return mark + rtfComment(note, sentenceSpacing: sentenceSpacing)
+            return mark + rtfComment(note, sentenceSpacing: sentenceSpacing, face: noteFace)
         }
         // `prefixed` (M8): endnotes/annotations anchor with literal e1/a1 custom marks
         // in place of \chftn/tags — the Markdown emitter's own labels, matched across
@@ -276,7 +296,8 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], labels: [String], optio
             override = nil
         }
         return rtfReferenceMarker(note, label: label, markOverride: override)
-            + rtfDestination(note, label: label, markOverride: override, sentenceSpacing: sentenceSpacing)
+            + rtfDestination(note, label: label, markOverride: override,
+                             sentenceSpacing: sentenceSpacing, face: noteFace)
     case .excluded:
         return ""
     case .invalid:
@@ -349,9 +370,11 @@ func fontControlRTF(_ doc: Document, target: FontsTarget = .office,
 /// block after every paragraph, not inline (comments have no inline reference to attach
 /// to). `ctrl-kd` is the literal author id Python's emitter writes; there's no per-note
 /// identity to carry since a comment has neither a number nor a tag.
-private func rtfComment(_ note: Note, sentenceSpacing: Bool = false) -> String {
+private func rtfComment(_ note: Note, sentenceSpacing: Bool = false,
+                        face: String = "") -> String {
     let noteText = sentenceSpacing ? sentenceSpacingTexts([note.text])[0] : note.text
-    return #"{\chatn}{\*\atnid ctrl-kd}{\*\annotation \pard\plain\fs24 "# + rtfEscape(noteText) + "}"
+    return #"{\chatn}{\*\atnid ctrl-kd}{\*\annotation \pard\plain"# + face + #"\fs24 "#
+        + rtfEscape(noteText) + "}"
 }
 
 /// - Parameter options: `options.notes` decides which note kinds get an inline reference
@@ -546,6 +569,178 @@ func rtfColumnsState(_ doc: Document) -> [(cols: Int, gutter: Double?)] {
 /// 10-CPI print column -> twips, for a `.co` gutter.
 let rtfTwipsPerColGutter = 144.0
 
+// MARK: - Printed RTF: the text column is the document's own ruler
+
+/// E9 R1 (Jon's ruling 2026-09-17, the human-eye export audit section A). Printed RTF
+/// used to mirror `.po` into `\margr`, which made the text column *paper width - 2 x
+/// `.po`* — an arithmetic that has nothing to do with the ruler the author typed on. At
+/// the ordinary default (`.po 0.8in` on Letter) it yields exactly 69 columns, one short
+/// of the 69-character lines real documents carry, so 6,488 facsimile lines in 216
+/// documents were re-wrapped by the reader — the one thing Printed mode exists to
+/// prevent — and `MAILLIST/ENVELOPE.LST` (`.poo/.poe 4.20"` on an 8.5in sheet) got a
+/// text column ONE TENTH OF AN INCH wide.
+///
+/// The column now comes from WordStar's own measure: the widest `.rm` in force anywhere
+/// (`rtfPrintedRulerTwips`), widened to the document's own longest printed line when
+/// that line runs past its ruler (`rtfPrintedWidestLineTwips`), plus one cell of slack
+/// because a reader breaks a line whose width EQUALS the measure exactly (measured,
+/// LibreOffice 24.2.7.2 — 68 characters fit a 69-column column, 69 do not).
+///
+/// `\paperw` follows the column when the sheet cannot hold it, and stops at 22in: Word's
+/// own maximum page dimension, comfortably inside LibreOffice's (measured: a 41.6in page
+/// still lays one line, a 51.6in page collapses its text frame). Port of emit.py's
+/// `_RTF_MAX_PAPERW_TWIPS`.
+let rtfMaxPaperWidthTwips = 22 * 1440
+
+/// The widest physical line in an already-emitted Printed RTF `body`, in twips.
+///
+/// THE BODY IS MEASURED, NOT THE DOCUMENT. Every fact that decides how wide a printed
+/// line draws — `.pf` re-wrap, expanded tabs, `.l#` line-number labels, heading `\fs28`,
+/// a font block's own `\fsN`, an embedded picture's `\picwgoal` — is already resolved in
+/// the bytes this emitter just built, and re-deriving any of it from `doc` would be a
+/// second opinion that could disagree. It also makes the two engines agree structurally:
+/// the identical scan over an identical string cannot produce a different number.
+///
+/// THE WIDTH MODEL IS WORDSTAR'S OWN GRID: one character is one cell of the document's
+/// pitch, scaled by its own run's declared size (`\fs24` = 12pt = 144 twips, WordStar's
+/// 10 CPI). That is exactly what the Printed PDF draws — `faceTz` scales a proportional
+/// face so its AVERAGE character lands on the grid pitch — and for the Courier the
+/// overwhelming majority of Printed RTF is set in it is not a model at all but the true
+/// advance. Port of `_rtf_printed_widest_line_twips`; scanned over unicode SCALARS so
+/// the count is Python's own code-point count.
+func rtfPrintedWidestLineTwips(_ body: String) -> Int {
+    let u = Array(body.unicodeScalars)
+    let n = u.count
+    var fs = 24, stack: [Int] = []
+    var width = 0, trail = 0, widest = 0
+    func isLetter(_ c: Unicode.Scalar) -> Bool {
+        (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")
+    }
+    func isDigit(_ c: Unicode.Scalar) -> Bool { c >= "0" && c <= "9" }
+    func isHex(_ c: Unicode.Scalar) -> Bool {
+        isDigit(c) || (c >= "a" && c <= "f") || (c >= "A" && c <= "F")
+    }
+    /// The index just past the `}` closing the group already open at `i`.
+    func groupEnd(_ start: Int) -> Int {
+        var depth = 1, i = start
+        while i < n {
+            if u[i] == "\\" { i += 2; continue }
+            if u[i] == "{" { depth += 1 } else if u[i] == "}" {
+                depth -= 1
+                if depth == 0 { return i + 1 }
+            }
+            i += 1
+        }
+        return n
+    }
+    var i = 0
+    while i < n {
+        let c = u[i]
+        if c == "{" { stack.append(fs); i += 1; continue }
+        if c == "}" { if let f = stack.popLast() { fs = f }; i += 1; continue }
+        if c == "\\" {
+            // a control word: `\word`, an optional signed argument, one optional space
+            var j = i + 1
+            while j < n, isLetter(u[j]) { j += 1 }
+            if j > i + 1 {
+                let word = String(String.UnicodeScalarView(u[(i + 1)..<j]))
+                var k = j
+                if k < n, u[k] == "-" { k += 1 }
+                let digitsFrom = k
+                while k < n, isDigit(u[k]) { k += 1 }
+                let arg: Int? = k > digitsFrom ? Int(String(String.UnicodeScalarView(u[j..<k]))) : nil
+                var next = k
+                if next < n, u[next] == " " { next += 1 }
+                i = next
+                switch word {
+                case "fs":
+                    if let a = arg { fs = a }
+                case "par", "line":
+                    widest = max(widest, width - trail)
+                    width = 0; trail = 0
+                case "tab":
+                    width = (width / 720 + 1) * 720      // a reader's own 0.5in stop
+                    trail = 0
+                case "u":
+                    if arg != nil {
+                        width += fs * 6
+                        trail = 0
+                        if i < n, u[i] == "?" { i += 1 }
+                    }
+                case "pict":
+                    let end = groupEnd(i)
+                    if let goal = rtfPicWGoal(u, from: i, to: end) {
+                        width += goal
+                        trail = 0
+                    }
+                    i = end
+                default:
+                    if rtfOneCharControls.contains(word) { width += fs * 6; trail = 0 }
+                }
+                continue
+            }
+            if i + 3 < n, u[i + 1] == "'", isHex(u[i + 2]), isHex(u[i + 3]) {
+                width += fs * 6; trail = 0; i += 4; continue
+            }
+            if i + 1 < n, u[i + 1] == "\\" || u[i + 1] == "{" || u[i + 1] == "}" {
+                width += fs * 6; trail = 0; i += 2; continue
+            }
+            i += 1
+            continue
+        }
+        if c == "\n" || c == "\r" { i += 1; continue }
+        var j = i
+        while j < n, u[j] != "\\", u[j] != "{", u[j] != "}", u[j] != "\n", u[j] != "\r" {
+            j += 1
+        }
+        let count = j - i
+        var spaces = 0
+        var k = j - 1
+        while k >= i, u[k] == " " { spaces += 1; k -= 1 }
+        width += count * fs * 6
+        trail = spaces == count ? trail + count * fs * 6 : spaces * fs * 6
+        i = j
+    }
+    widest = max(widest, width - trail)
+    return widest
+}
+
+/// `\picwgoal`'s own twip figure inside the `{\pict ...}` group starting at `from`.
+private func rtfPicWGoal(_ u: [Unicode.Scalar], from: Int, to: Int) -> Int? {
+    let needle = Array("\\picwgoal".unicodeScalars)
+    var i = from
+    while i + needle.count < to {
+        if Array(u[i..<(i + needle.count)]) == needle {
+            var k = i + needle.count, digits = ""
+            while k < to, u[k] >= "0", u[k] <= "9" { digits.unicodeScalars.append(u[k]); k += 1 }
+            return Int(digits)
+        }
+        i += 1
+    }
+    return nil
+}
+
+/// Every control word this emitter writes that PUTS ONE CHARACTER on the line.
+let rtfOneCharControls: Set<String> = [
+    "bullet", "emdash", "endash", "lquote", "rquote", "ldblquote",
+    "rdblquote", "chftn", "chpgn", "tilde", "zwnj", "zwj",
+]
+
+/// The widest `.rm` in force anywhere in `doc`, in twips.
+///
+/// Document-opening `.rm` (`doc.page.rmCols`, 65 when the file is silent — WSFORMAT.TXT's
+/// own documented default) plus every block's own resolved `.rm`, because a document that
+/// widens its ruler part way down is still one text column to an RTF reader. `.rm` is
+/// measured from the SAME `.po` origin the Printed PDF measures its right edge from
+/// (confirmed there against two real WS7 captures). Port of `_rtf_printed_ruler_twips`.
+func rtfPrintedRulerTwips(_ doc: Document) -> Int {
+    var cols = doc.page?.rmCols ?? 65.0
+    for block in doc.blocks {
+        if let rm = block.rightMargin { cols = max(cols, rm) }
+    }
+    return roundHalfToEven(cols * 144.0)
+}
+
 /// `\cols`/`\colsx` for one section, or "" for a single column.
 ///
 /// `.co n, gutter` (packet row A7): the gutter is print columns at 10 CPI, the same unit
@@ -644,9 +839,44 @@ struct RTFSection {
     let gutter: Double?
     let headerSlots: [Int: [HFParity?: String]]
     let footerSlots: [Int: [HFParity?: String]]
+    /// M31: the `.pr or=` in force in this section, or `nil` on the Modern path, which
+    /// never opens a section for orientation at all. See `rtfSectionBreaks`.
+    let orientation: Orientation?
 }
 
-func rtfSectionBreaks(_ doc: Document) -> [Int: RTFSection] {
+/// M31: `\pgwsxn\pghsxn[\lndscpsxn]` for a section whose `.pr or=` differs from the
+/// document's own, or "" when it agrees. Port of Python's `_rtf_section_page_size`.
+///
+/// Read straight off the document rather than from `emitRTF`'s own resolved page: `.pl` is
+/// the only field needed and neither the landscape swap nor `pageSettings` touches it. The
+/// pair is recomputed fresh from it, orientation-aware, exactly as `pageGeometryFor` does
+/// for the MediaBox, so the two surfaces answer the same sheet for the same section.
+///
+/// `\lndscpsxn` is written on a landscape section and deliberately NOT "unwritten" on a
+/// portrait one -- `\sectd` has already reset it, since it is a section property, so a
+/// portrait section needs only its own width and height.
+func rtfSectionPageSize(_ doc: Document, _ sectionOr: Orientation) -> String {
+    let docLandscape = doc.formatting.orientation == .landscape
+    let sectionLandscape = sectionOr == .landscape
+    if sectionLandscape == docLandscape { return "" }
+    let plLines = doc.page?.plLines ?? defaultPlLines
+    var heightIn: Double
+    var pwIn: Double
+    if sectionLandscape {
+        let (h, _, w) = resolvePageSize(plLines, orientation: "landscape")
+        heightIn = w
+        pwIn = h
+    } else {
+        let (h, _, w) = resolvePageSize(plLines)
+        heightIn = h
+        pwIn = w
+    }
+    var out = #"\pgwsxn\#(roundHalfToEven(pwIn * 1440))\pghsxn\#(roundHalfToEven(heightIn * 1440))"#
+    if sectionLandscape { out += #"\lndscpsxn"# }
+    return out
+}
+
+func rtfSectionBreaks(_ doc: Document, printed: Bool = true) -> [Int: RTFSection] {
     var anchors = rtfHFRedefinitions(doc)
     let state = rtfColumnsState(doc)
     for (bi, block) in doc.blocks.enumerated() {
@@ -655,12 +885,38 @@ func rtfSectionBreaks(_ doc: Document) -> [Int: RTFSection] {
         guard block.columns != nil, bi > 0 else { continue }
         if state[bi] != state[bi - 1] { anchors.insert(bi) }
     }
+    // M31: a change of SHEET ORIENTATION opens a section too -- PRINTED ONLY. RTF's page
+    // size really is a section property as well as a document one
+    // (`\pgwsxn`/`\pghsxn`/`\lndscpsxn`), so this is the one place RTF can say what the
+    // Printed PDF's per-page MediaBox now says. It is the only opener that also FORCES a
+    // page break in the reader -- `\sect` always does -- but that costs nothing: real WS7
+    // defers a mid-page `.pr or=` to the next page anyway (measured, see `orCheckpoints`),
+    // and every column-1 `.pr or=` in the corpus sits immediately after a `.pa`.
+    //
+    // PRINTED ONLY, unlike the other two openers, because Modern PDF is the printed form
+    // of the Modern RTF (ruled 2026-08-05) and Modern PDF composes every page on ONE
+    // sheet. A Modern RTF carrying a landscape section would be a Modern RTF its own PDF
+    // does not print. Whether Modern should follow orientation per section as well is a
+    // real open question and a separate ruling: Modern reflows, so its pages are this
+    // engine's own and no capture can adjudicate them.
+    let orCheckpointsList = orCheckpoints(doc)
+    if printed {
+        for cp in orCheckpointsList.dropFirst() {
+            // A command that OPENS its block (`lineIndex == 0`) starts the section at that
+            // block. One typed further in has text before it in the same paragraph -- real
+            // WS7 defers such a command to the next page, and RTF can only break at a
+            // paragraph boundary anyway -- so its section starts at the block AFTER.
+            let anchor = cp.lineIndex == 0 ? cp.blockIndex : cp.blockIndex + 1
+            if anchor > 0 { anchors.insert(anchor) }
+        }
+    }
     var out: [Int: RTFSection] = [:]
     for bi in anchors where bi > 0 && bi < doc.blocks.count {
         let pair: (cols: Int, gutter: Double?) = state[bi]
         out[bi] = RTFSection(cols: pair.cols, gutter: pair.gutter,
                              headerSlots: rtfHFSlotsAt(doc, .header, anchor: bi),
-                             footerSlots: rtfHFSlotsAt(doc, .footer, anchor: bi))
+                             footerSlots: rtfHFSlotsAt(doc, .footer, anchor: bi),
+                             orientation: printed ? orAt(orCheckpointsList, bi) : nil)
     }
     return out
 }
@@ -820,11 +1076,29 @@ func rtfAutoPageNumber(_ doc: Document, _ mode: EmitOptions.PageNumberMode) -> B
 /// header: the manuscript convention (no running head on page 1), and exactly what
 /// WordStar itself printed when `.h1` follows page 1's title. Port of
 /// `_rtf_running_heads`.
+///
+/// E10 (Jon's ruling 2026-09-17, research/2026-09-17_furniture-font-rules.md): page
+/// furniture resolves its FACE through the SAME chain as body text, and no longer through
+/// a hardcoded `\f0` -- Times New Roman in Printed while the body was Courier, on every
+/// page of 450 documents. `fontControl` is `emitRTF`'s own font-table control map, so a
+/// `.h#`/`.f#` that opens a font block (`headerFonts`/`footerFonts`, register C6 -- 22
+/// documents in the public corpus) draws in THAT record's resolved face and size, exactly
+/// as Printed PDF has always drawn it. A line that declares nothing takes the mode's own
+/// body face: Printed `\f1` Courier New, Modern `\f0` (the MODERN_BODY face) -- or `\f1`
+/// under `nonpropFallback`, the same document-level `.ps off` predicate `rtfBodySpan`
+/// applies to an uncovered body run.
+///
+/// SIZE (E10b): Printed furniture is the body's own size (`\fs24`; WordStar has no
+/// separate header size), Modern furniture the body size less 2pt -- 12pt against Modern's
+/// 14pt body, `\fs24` again, which is why both modes write the same token. It was
+/// `\fs22` (11pt) in both, matching neither body nor Printed PDF's own furniture.
 private func rtfRunningHeads(_ doc: Document, headers: Bool = true,
                              autoPageNumber: Bool = false,
                              printed: Bool = true,
                              slots: (header: [Int: [HFParity?: String]],
-                                     footer: [Int: [HFParity?: String]])? = nil)
+                                     footer: [Int: [HFParity?: String]])? = nil,
+                             fontControl: [Int: String] = [:],
+                             nonpropFallback: Bool = false)
     -> (groups: String, facingPages: Bool, headery: Int?, footery: Int?) {
     // planning #264 R1 (packet row A13): `slots`, when given, is a LATER section's own
     // head/foot state, resolved by `rtfHFSlotsAt`. The `\titlepg` rule below is the
@@ -870,6 +1144,12 @@ private func rtfRunningHeads(_ doc: Document, headers: Bool = true,
     // substituter exactly as a body span's `font` is, so the same
     // proportional-only/Univers-only face rules apply.
     let subst = driverSubstituter(doc)
+    // E10: the mode's own body face, the fallback every line that declares no face of its
+    // own takes -- `\f1` is always Courier New in this emitter's `\fonttbl`, `\f0` the
+    // MODERN_BODY face (Printed's own `\f0` is Times New Roman, which is exactly what
+    // furniture must stop reaching for). `\fs24` = 12pt: the Printed body size, and
+    // Modern's own body-less-2 (E10b).
+    let baseCtl = ((printed || nonpropFallback) ? #"\f1"# : #"\f0"#) + #"\fs24"#
 
     func group(_ name: String, _ lines: [Int: String], _ faces: [Int: Int],
                _ aligns: [Int: Alignment], _ attrs: [Int: Style]) -> String {
@@ -891,8 +1171,13 @@ private func rtfRunningHeads(_ doc: Document, headers: Bool = true,
             // style printed light. The corpus's galley template is the case: its
             // `.h1o`/`.h1e` both declare a bold style and carry no toggle byte at all.
             let lineAttrs = attrs[n] ?? []
+            // E10: this LINE's own declared face/size (register C6), applied per line
+            // rather than per group -- a group can join lines that declare different
+            // faces (`\line` inside one paragraph), and the paragraph prefix can only
+            // carry one.
+            let lineCtl = faces[n].flatMap { fontControl[$0] } ?? ""
             rendered.append(runs.map { run in
-                "{" + rtfStyleControls(run.styles.union(lineAttrs))
+                "{" + lineCtl + rtfStyleControls(run.styles.union(lineAttrs))
                     + rtfEscape(run.text).replacingAll("#", with: #"{\chpgn }"#) + "}"
             }.joined())
         }
@@ -910,10 +1195,10 @@ private func rtfRunningHeads(_ doc: Document, headers: Bool = true,
         // printed form of the Modern RTF).
         if Set(lineAligns).count <= 1 {
             let body = rendered.joined(separator: #"\line "#)
-            return #"{\\#(name) \pard\plain \#(lineAligns[0])\f0\fs22 \#(body)\par}"#
+            return #"{\\#(name) \pard\plain \#(lineAligns[0])\#(baseCtl) \#(body)\par}"#
         }
         let paras = zip(lineAligns, rendered)
-            .map { #"\pard\plain \#($0)\f0\fs22 \#($1)\par"# }
+            .map { #"\pard\plain \#($0)\#(baseCtl) \#($1)\par"# }
             .joined()
         return #"{\\#(name) \#(paras)}"#
     }
@@ -956,7 +1241,10 @@ private func rtfRunningHeads(_ doc: Document, headers: Bool = true,
         // WordStar's own default and what the PDF draws for a document that never sets
         // `.pc`. Centred is the same on both sides of a sheet, so this stays the plain
         // `\footer` group even under `\facingp`.
-        footGroup = #"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#
+        // E10: the automatic number is furniture like any other -- the same face and
+        // size as this document's running feet (it only ever shows when no `.fo` is in
+        // use, so there is never a declared foot face for it to inherit).
+        footGroup = #"{\footer \pard\plain \qc\#(baseCtl) {\chpgn }\par}"#
         footFacing = false
     }
     var out = headGroup + footGroup
@@ -1272,9 +1560,33 @@ func rtfStructureIndentHang(_ structure: RowStructure, _ doc: Document,
     // point — 12 twips per unit, 144 for the default 12.
     let colTwips = (doc.page?.cw120 ?? 12.0) * 12.0
     let indent = Double(max(structure.level - 1, 0) * modernLevelStepCols) * colTwips
-    let hang: Double = structure.kind == .def
-        ? modernDefHangPt * 20.0
-        : stringWidthPt(markerText, "Times-Roman", modernBodyPt) * 20.0
+    // M27/E8 (Jon's ruling 2026-09-17, "Modern's bullets and the gap after them must
+    // match Native/Printed"): a BULLET whose marker is a graphic-cell glyph (`■`, the
+    // shape every real corpus list uses) hangs by TWO FIXED-PITCH CELLS -- the marker's
+    // own cell and the cell of the single space after it. An ORDINARY marker (`*`, `-`,
+    // `o`) is a real glyph in the reading face and keeps the measured advance it always
+    // had: pairing a natural glyph width with a cell-wide gap would be a third
+    // measurement matching nothing.
+    //
+    // This used to measure the two characters in Times at the Modern body size (9.72pt for
+    // `■ `), which disagreed with the PDF's own answer in two ways at once. The PDF does
+    // not draw the marker as a Times glyph at all: `■` is vector art PINNED to one
+    // monospace cell, and since E8 the space after it is one cell too. So the PDF's hang is
+    // exactly two cells, 14.4pt at the default `.cw 12`, and RTF says that same number
+    // rather than a third one.
+    //
+    // A def row's hang stays a measured points figure: it has a real proportional LABEL in
+    // front of it, not a pinned cell.
+    let markerIsCell = (structure.marker?.first ?? markerText.first)
+        .map { graphicChars.contains($0) } ?? false
+    let hang: Double
+    if structure.kind == .def {
+        hang = modernDefHangPt * 20.0
+    } else if markerIsCell {
+        hang = 2 * colTwips
+    } else {
+        hang = stringWidthPt(markerText, "Times-Roman", modernBodyPt) * 20.0
+    }
     return (roundHalfToEven(indent + hang), -roundHalfToEven(hang))
 }
 
@@ -1492,7 +1804,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // what opens a section and what deliberately does not. A document whose geometry
     // never changes gets an empty dictionary here and emits exactly the bytes it always
     // did.
-    let sectionBreaks = rtfSectionBreaks(doc)
+    let sectionBreaks = rtfSectionBreaks(doc, printed: printed)
     let columnsState: [(cols: Int, gutter: Double?)]? = rtfColumnsState(doc)
     // planning #264 R2 (packet row A8): `.cp n`/`.cc n` -> `\keep`/`\keepn` on the
     // paragraphs they asked to hold together. See `rtfKeepPlan`.
@@ -1503,15 +1815,25 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
                 doc, headers: options.headers,
                 autoPageNumber: rtfAutoPageNumber(doc, options.pageNumbers),
                 printed: printed,
-                slots: (header: section.headerSlots, footer: section.footerSlots))
+                slots: (header: section.headerSlots, footer: section.footerSlots),
+                fontControl: fontTable.control, nonpropFallback: nonpropFallback)
             // `\sectd` resets EVERY section property to the document's own defaults, so
             // this section restates the ones it needs: `\headery`/`\footery` (section
             // properties in the RTF spec, written into the page setup for section 1) and
             // its own column regime. `\facingp`, `\margmirror` and the paper size are
             // DOCUMENT properties and survive untouched.
+            //
+            // M31: the paper size is NOT purely a document property -- RTF has
+            // `\pgwsxn`/`\pghsxn`/`\lndscpsxn` for exactly this -- and is written whenever
+            // this section's own `.pr or=` differs from the document's. A section whose
+            // orientation matches writes nothing, so every existing file's bytes stay
+            // where they were.
             var opener = #"\sect\sectd"#
             if let headery = sectionHeads.headery, let footery = sectionHeads.footery {
                 opener += #"\headery\#(headery)\footery\#(footery)"#
+            }
+            if let sectionOr = section.orientation {
+                opener += rtfSectionPageSize(doc, sectionOr)
             }
             opener += rtfColsControl(section.cols, section.gutter)
             parts.append(opener + " " + sectionHeads.groups + "\n")
@@ -1864,7 +2186,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     }
     // width joined the page model 2026-08-06: A4-tall documents get the 210mm sheet;
     // everything else (and every default) stays 12240 twips
-    let paperw = roundHalfToEven((page?.pwIn ?? 8.5) * 1440.0)
+    var paperw = roundHalfToEven((page?.pwIn ?? 8.5) * 1440.0)
     // planning #264 item 4 (packet row A6): `.poe`/`.poo` — a wider margin on the binding
     // side — become `\margmirror` under `\facingp`, which is RTF's own inside/outside
     // reading of `\margl`/`\margr`: on an odd (right-hand) page the left margin is
@@ -1889,7 +2211,30 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     let runningHeads = rtfRunningHeads(
         doc, headers: options.headers,
         autoPageNumber: rtfAutoPageNumber(doc, options.pageNumbers),
-        printed: printed)
+        printed: printed, fontControl: fontTable.control,
+        nonpropFallback: nonpropFallback)
+    if printed {
+        // E9 R1: the text column is the document's own ruler, widened to the document's
+        // own longest printed line — see `rtfPrintedWidestLineTwips`. `\margl` stays
+        // `.po` (and stays the `.poo`/`.poe` pair when the document declares one); only
+        // the RIGHT edge moves, because only the right edge was ever guesswork.
+        // `runningHeads.groups` is measured beside `body`: a running head or foot draws
+        // in the same text column the body does, so a long `.h1` name block would be
+        // re-wrapped by exactly the same arithmetic.
+        let column = max(rtfPrintedRulerTwips(doc),
+                         rtfPrintedWidestLineTwips(body),
+                         rtfPrintedWidestLineTwips(runningHeads.groups)) + 144
+        // the least right margin the sheet may keep: one cell normally, and the declared
+        // outside offset under `\margmirror`, where the right margin is a real
+        // page-parity fact and not just leftover paper.
+        let minRight = mirrorMargins ? rightMargin : 144
+        if leftMargin + column + minRight <= paperw {
+            rightMargin = paperw - leftMargin - column
+        } else {
+            paperw = min(rtfMaxPaperWidthTwips, leftMargin + column + minRight)
+            rightMargin = max(144, paperw - leftMargin - column)
+        }
+    }
     var pageSetup = #"\paperw\#(paperw)\paperh\#(paperh)\margl\#(leftMargin)\margr\#(rightMargin)"#
         + #"\margt\#(margt)\margb\#(margb)"#
     if runningHeads.facingPages || mirrorMargins { pageSetup += #"\facingp"# }

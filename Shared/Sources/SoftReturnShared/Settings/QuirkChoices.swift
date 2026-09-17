@@ -15,9 +15,12 @@ public struct QuirkChoices: Hashable, Sendable {
     /// The switched-on names.
     public private(set) var enabled: Set<String>
 
+    /// Batch 47 (E5c, Jon's ruling: the six quirks renamed for what they do): a name 4.4.0 stored — in the app's defaults
+    /// or a document's own choices — is read as its new name (`QuirkRegistry.canonicalName`), so nothing a person chose
+    /// is lost; the next save writes the new names.
     public init<Names: Sequence>(enabled: Names) where Names.Element == String {
         let known = Set(Self.names)
-        self.enabled = Set(enabled).intersection(known)
+        self.enabled = Set(enabled.map(QuirkRegistry.canonicalName)).intersection(known)
     }
 
     /// The engine's own defaults: every `auto`-class quirk, no `opt-in` one.
@@ -59,9 +62,10 @@ public struct QuirkChoices: Hashable, Sendable {
         }
     }
 
-    public func isOn(_ name: String) -> Bool { enabled.contains(name) }
+    public func isOn(_ name: String) -> Bool { enabled.contains(QuirkRegistry.canonicalName(name)) }
 
     public mutating func set(_ name: String, on: Bool) {
+        let name = QuirkRegistry.canonicalName(name)
         guard Self.names.contains(name) else { return }
         if on { enabled.insert(name) } else { enabled.remove(name) }
     }
@@ -89,13 +93,13 @@ public struct QuirkChoices: Hashable, Sendable {
 
     /// A quirk's row title, from the canvas (batch 46): the engine's name made readable.
     public static func title(of name: String) -> String {
-        switch name {
-        case QuirkName.euro: return "Euro sign"
-        case QuirkName.ljTypography: return "LJ6DTP typography"
-        case QuirkName.ljBoxCorners: return "LJ6DTP box corners"
-        case QuirkName.ljColourAsGray: return "LJ6DTP colour as gray"
-        case QuirkName.ljFillPatterns: return "LJ6DTP fill patterns"
-        case QuirkName.strayStyleStrikeout: return "Stray style strikeout"
+        switch QuirkRegistry.canonicalName(name) {
+        case QuirkName.euroSwap: return "Euro swap"
+        case QuirkName.smartPunctuation: return "Smart punctuation"
+        case QuirkName.boxCorners: return "Box corners"
+        case QuirkName.colorsAsGray: return "Colors as gray"
+        case QuirkName.fillPatterns: return "Fill patterns"
+        case QuirkName.sawyerStrikeout: return "Sawyer strikeout"
         default: return name
         }
     }

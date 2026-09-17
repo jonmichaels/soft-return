@@ -102,7 +102,7 @@ private let ljSubstUniversSemantic: [Character: Character] = [
 /// print-time). Proportional faces only, Univers corners only, per the driver's own chart.
 ///
 /// `typography` and `corners` are the two quirks these two tables belong to
-/// (`lj6dtp-typography`, `lj6dtp-box-corners`, `Quirks.swift`), switchable one without the
+/// (`smart-punctuation`, `box-corners`, `Quirks.swift`), switchable one without the
 /// other. Both default to on, which is what every caller before quirks existed asked for.
 func ljSubstituteText(_ text: String, entry: FontChange,
                       typography: Bool = true, corners: Bool = true) -> String {

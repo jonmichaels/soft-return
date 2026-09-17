@@ -203,7 +203,7 @@ private func convertAll(
         // are content and ARE applied.
         if options.mode == .modern, doc.printerDriver == "LJ6DTP" {
             environment.writeErr("sr: \(path): LJ6DTP driver document -- its print-time "
-                + "page art (boxes, rules, colour) does not reflow; character "
+                + "page art (boxes, rules, color) does not reflow; character "
                 + "substitutions applied. --mode printed reproduces the page")
         }
 

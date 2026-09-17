@@ -478,11 +478,13 @@ enum EngineTruth {
         // (its own doc comment: "a FAÇADE ... it only calls the existing helpers"), so this is
         // the identical value with no re-derivation.
         let metrics = printedMetrics(doc)
-        let pageHeight = metrics.pageHeight
         let startNo = doc.page?.pnStart ?? 1
 
         var result: [Page] = []
         for (i, pageLines) in pagelines.enumerated() {
+            // Batch 47 (M31-app): each page's own sheet — a landscape page in a portrait document flips its ops, and
+            // decides whether a running line fits, against ITS height (engine 07b040c), as `emitPDF` does.
+            let pageHeight = printedMetrics(doc, page: pageLines).pageHeight
             guard i < streams.count else { result.append(Page()); continue }
             let (scanned, rawRects) = scanOps(streams[i])
             var ops = scanned

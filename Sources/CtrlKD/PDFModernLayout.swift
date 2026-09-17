@@ -17,7 +17,14 @@
 /// same value, different files, different design principle behind each (base-14 has no
 /// Georgia seat, so the PDF body is Times, not Georgia, at this same size).
 let modernBodyPt = 14
-let modernNotePt = 11
+/// Modern PAGE FURNITURE -- running heads, running feet, the automatic page number,
+/// footnote/endnote text and the note separator rule. E10b (Jon's ruling 2026-09-17,
+/// research/2026-09-17_furniture-font-rules.md): "Modern furniture = the body's face by
+/// the same chain, size = body size - 2pt." Written as that subtraction, not as a bare 11
+/// (its value before the ruling), so the relationship survives any future change to the
+/// body size. The 1.2x note leading is derived from it, so the furniture rows and the note
+/// block step by their own size, as they always have.
+let modernNotePt = modernBodyPt - 2
 /// Single-spacing: baseline advance = 1.2 x the line's own type size.
 let modernLine = 1.2
 
@@ -719,6 +726,55 @@ func modernDefRuns(_ runs: [SemanticRun], _ structure: RowStructure)
 ///           glyph: a marker and its gap never land on a whole number of monospace cells in a
 ///           proportional face, and a column-count hang put every wrapped line slightly past
 ///           its own first line's text start (Jon's b21 field note).
+/// `toks` with the SPACE AFTER A LIST BULLET widened to one fixed-pitch cell. Port of
+/// `pdf._modern_bullet_gap_toks` (M27/E8, Jon's ruling 2026-09-17).
+///
+/// THE DEFECT. In Printed, and in the app's Native view, a bullet row's marker and the
+/// single space after it each occupy one monospace CELL, so the item's first word starts
+/// two cells past the marker's own left edge. Modern draws the marker itself pinned to
+/// that same cell (it is vector art, not a glyph — see the graphic-cell rects), but then
+/// measured the following space in the READING FACE, where a Times-14 space is 3.5pt
+/// rather than the cell's 7.2. Measured on `sawyer/-README.WS`: the next word landed
+/// 4.70pt past the square's ink where Native puts it 8.40pt past. The bullet and its text
+/// read as one crowded word.
+///
+/// THE FIX. Give that one space the cell's own width. Nothing else changes: the marker
+/// keeps its pinned cell, the reading face keeps every other space, and the row's HANG —
+/// the advance of its first two characters, which is what a wrapped continuation lines up
+/// against — picks the new width up by construction, because it is measured from these
+/// same tokens after this runs.
+///
+/// SCOPED TWICE OVER, and both halves matter.
+///
+/// FIRST, to a real list bullet: the gate is the structure classifier's own
+/// `kind == .bullet` plus its recorded `marker`, the same detection the hanging indent
+/// already uses — so a `■` in running prose, or in a cp437 box-drawing figure, is
+/// untouched. `classifyRows` only ever calls a glyph a marker when the row is exactly
+/// "glyph, one space, text", which is why a single-space token is the only shape accepted.
+///
+/// SECOND, to a marker that is itself drawn ON THE CELL — a `graphicChars` glyph. That is
+/// the whole premise: `■` already advances one fixed-pitch cell, so giving its gap a cell
+/// makes the pair exactly the two cells Printed and Native lay down. An ORDINARY marker
+/// (`*`, `-`, `o`) is a real glyph in the reading face, advancing its own natural width,
+/// and pairing that with a cell-wide gap would produce a third measurement matching
+/// nothing — so those keep the reading face's own space, exactly as before.
+func modernBulletGapToks(_ toks: [ModernToken], structure: RowStructure,
+                         colPt: Double) -> [ModernToken] {
+    guard structure.kind == .bullet, let marker = structure.marker,
+          let first = marker.first, graphicChars.contains(first) else {
+        return toks
+    }
+    for (i, tok) in toks.enumerated() {
+        if tok.text.trimmed().isEmpty { continue }   // leading padding, already dropped
+        guard tok.text == marker, i + 1 < toks.count else { return toks }
+        guard toks[i + 1].text == " " else { return toks }
+        var out = toks
+        out[i + 1].width = colPt
+        return out
+    }
+    return toks
+}
+
 func modernStructureIndentHang(_ structure: RowStructure, colPt: Double, toks: [ModernToken],
                                printedPt: Int) -> (indent: Double, hang: Double) {
     let indent = Double(max(structure.level - 1, 0) * modernLevelStepCols) * colPt
@@ -924,12 +980,17 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
             continue          // editor-time state: no rendered consequence (task #19)
         case .noteSeparator:
             let separator = String(repeating: "-", count: 20)
-            let sepW = stringWidthPt(separator, "Times-Roman", modernNotePt)
+            // E10: the separator rule sits at the head of the note block and takes the
+            // note block's own face (the same chain), so a `.ps off` document's Courier
+            // notes are not introduced by a Times rule.
+            let sepFamily: PDFFamily = nonpropFallback ? .courier : .times
+            let sepW = stringWidthPt(separator, base14(sepFamily, bold: false,
+                                                       italic: false), modernNotePt)
             // endNotesStart: true -- layout.swift's modernSemanticFlow emits exactly one
             // .noteSeparator, always immediately before the first .note item, when the
             // document has any end-matter notes at all. Jon's ruling 2026-09-07 fires on
             // this flag in modernStreams.
-            flow.append(.para(toks: [ModernToken(text: separator, styles: [], family: .times,
+            flow.append(.para(toks: [ModernToken(text: separator, styles: [], family: sepFamily,
                                                  pt: modernNotePt, entry: nil, width: sepW)],
                               align: .left, notes: [], indent: 0.0, cut: 0.0,
                               noWrap: false, pageMarker: false, endNotesStart: true,
@@ -939,7 +1000,8 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
         case .note(let ni, _, let label, let text):
             let noteText = sentenceSpacing ? sentenceSpacingTexts([text])[0] : text
             flow.append(.para(toks: modernNoteToks(label: label, text: noteText,
-                                                    kind: sem.notes[ni].kind),
+                                                    kind: sem.notes[ni].kind,
+                                                    nonpropFallback: nonpropFallback),
                               align: .left, notes: [], indent: 0.0, cut: 0.0,
                               noWrap: false, pageMarker: false, endNotesStart: false,
                               tight: false, hang: 0.0))
@@ -1123,6 +1185,11 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
                     toks.removeFirst()
                     if !tokOff.isEmpty { tokOff.removeFirst() }
                 }
+                // M27/E8: widen the bullet's own gap BEFORE the hang is measured -- the
+                // hang is the advance of the row's first two characters, so it has to see
+                // the corrected width or a wrapped continuation would line up against the
+                // old one.
+                toks = modernBulletGapToks(toks, structure: structure, colPt: colPt)
                 (indent, hang) = modernStructureIndentHang(structure, colPt: colPt, toks: toks,
                                                           printedPt: printedPt)
             } else {
@@ -1239,13 +1306,21 @@ func modernWrap(_ toks: [ModernToken], width: Double, hang: Double = 0.0,
 /// `[label]` bracket form — their label is a WordStar tag or a running count, not a
 /// number, and nothing in the register asked for their look to change. Port of
 /// `_modern_note_toks`.
-func modernNoteToks(label: String, text noteText: String, kind: NoteKind = .footnote) -> [ModernToken] {
+/// `nonpropFallback` (E10, Jon's ruling 2026-09-17): note text is page furniture and
+/// resolves its face through the SAME chain as a body run (`modernTokFont`). A note
+/// carries no font block of its own, so the chain lands on Modern's fontless answer --
+/// Times, or Courier in a document that declares fonts elsewhere AND declares itself
+/// non-proportional (`.ps off`), the identical predicate the body's uncovered runs take.
+func modernNoteToks(label: String, text noteText: String, kind: NoteKind = .footnote,
+                    nonpropFallback: Bool = false) -> [ModernToken] {
     let text = (kind == .footnote || kind == .endnote)
         ? "\(label). \(noteText)" : "[\(label)] \(noteText)"
+    let family: PDFFamily = nonpropFallback ? .courier : .times
+    let basefont = base14(family, bold: false, italic: false)
     var toks: [ModernToken] = []
     for piece in splitKeepingSpaceRuns(text) {
-        let width = stringWidthPt(piece, "Times-Roman", modernNotePt)
-        toks.append(ModernToken(text: piece, styles: [], family: .times, pt: modernNotePt,
+        let width = stringWidthPt(piece, basefont, modernNotePt)
+        toks.append(ModernToken(text: piece, styles: [], family: family, pt: modernNotePt,
                                 entry: nil, width: width))
     }
     return toks
@@ -1256,8 +1331,10 @@ func modernNoteToks(label: String, text noteText: String, kind: NoteKind = .foot
 /// see this file's module docstring), so `kind` defaults to `.footnote` here; threaded
 /// through anyway for the same reason `modernNoteToks` takes it. Port of
 /// `_modern_note_lines`.
-func modernNoteLines(label: String, text: String, width: Double, kind: NoteKind = .footnote) -> [[ModernToken]] {
-    modernWrap(modernNoteToks(label: label, text: text, kind: kind), width: width)
+func modernNoteLines(label: String, text: String, width: Double, kind: NoteKind = .footnote,
+                     nonpropFallback: Bool = false) -> [[ModernToken]] {
+    modernWrap(modernNoteToks(label: label, text: text, kind: kind,
+                              nonpropFallback: nonpropFallback), width: width)
 }
 
 /// One modern running-head/foot line: Times `modernNotePt` in the margin zone, WordStar's
@@ -1317,25 +1394,59 @@ func modernHFAlign(_ doc: Document, _ which: ModernHFKind, _ lno: Int) -> Alignm
 /// toggle-byte runs kept, in the Times face and `modernNotePt` size Modern's furniture
 /// uses. Split out so `modernPageFurniture` reports the SAME text and the same measured
 /// width the drawn line has (`modernPlaceLine`), never a re-derivation of either.
-func modernHFToks(_ txt: String, pageNo: Int) -> [ModernToken] {
+/// `entry`/`nonpropFallback` (E10, Jon's ruling 2026-09-17): the FACE and SIZE, resolved
+/// through the same chain a body run takes instead of the hardcoded Times this used to
+/// draw everything in. `entry` is this line's own `headerFonts`/`footerFonts` record
+/// (register C6 -- the same index Printed PDF's `hfLineOps` has always honoured, and which
+/// Modern alone threw away), or nil when the line declares no font: then Modern's own
+/// fontless answer, Times, or Courier under `nonpropFallback`. A declared record brings
+/// its own point size; an undeclared line takes `modernNotePt`, which E10b defines as the
+/// body size less 2pt.
+func modernHFToks(_ txt: String, pageNo: Int, entry: FontChange? = nil,
+                  nonpropFallback: Bool = false) -> [ModernToken] {
+    let family = entry != nil ? pdfFamily(entry) : (nonpropFallback ? .courier : .times)
+    // The same reading `hfNaturalWidthPt`/`hfLineOps` take on the Printed side: a record
+    // whose own height word is 0 has no size to honour, so the mode's furniture size
+    // stands.
+    let pt: Int
+    if let entry, entry.points != 0 { pt = max(1, roundHalfToEven(entry.points)) }
+    else { pt = modernNotePt }
     var toks: [ModernToken] = []
     for run in hfRuns(txt) {
         let runText = run.text.replacingAll("#", with: String(pageNo))
         for piece in splitKeepingSpaceRuns(runText) {
-            let basefont = base14(.times, bold: run.styles.contains(.bold),
+            let basefont = base14(family, bold: run.styles.contains(.bold),
                                   italic: run.styles.contains(.italic))
-            let w = stringWidthPt(piece, basefont, modernNotePt)
-            toks.append(ModernToken(text: piece, styles: run.styles, family: .times,
-                                    pt: modernNotePt, entry: nil, width: w))
+            let w = stringWidthPt(piece, basefont, pt)
+            toks.append(ModernToken(text: piece, styles: run.styles, family: family,
+                                    pt: pt, entry: nil, width: w))
         }
     }
     return toks
 }
 
+/// One running head/foot line's own declared font RECORD, or nil.
+///
+/// E10 (Jon 2026-09-17): "if fonts are declared for headers and footers, use them."
+/// `headerFonts`/`footerFonts` (register C6) is where a `.h#`/`.f#` that opens a font
+/// block records its `doc.fonts` index -- 22 documents in the public corpus. Printed PDF
+/// has read it since planning #202 (`hfLineOps`); this is the same read for Modern, which
+/// drew everything in Times. The FLAT dictionary, deliberately, not the parity table:
+/// Modern already draws the flat head text on both sides of a sheet (`modernHFAlign`'s own
+/// note), and reading a parity face beside flat text would dress one side's words in the
+/// other side's face.
+func hfFontEntry(_ doc: Document, _ which: ModernHFKind, _ lno: Int) -> FontChange? {
+    let fonts = which == .header ? doc.headerFonts : doc.footerFonts
+    guard let idx = fonts[lno], idx >= 0, idx < doc.fonts.count else { return nil }
+    return doc.fonts[idx]
+}
+
 func modernHFOps(_ txt: String, pageNo: Int, left: Double, y: Double, width: Double,
                  res: FontResources, tzState: inout Int, printedPt: Int,
-                 align: Alignment = .left) -> [[UInt8]] {
-    let toks = modernHFToks(txt, pageNo: pageNo)
+                 align: Alignment = .left, entry: FontChange? = nil,
+                 nonpropFallback: Bool = false) -> [[UInt8]] {
+    let toks = modernHFToks(txt, pageNo: pageNo, entry: entry,
+                            nonpropFallback: nonpropFallback)
     if toks.isEmpty { return [] }
     var discardedGraphicCells: [PageLine.GraphicCellPlacement]? = nil
     return modernLineOps(toks, left: left, y: y, width: width, align: align,
@@ -1611,8 +1722,15 @@ public struct ModernHeadFootLine: Hashable, Sendable {
     public let x: Double
     /// Baseline y in points, from the bottom of the sheet.
     public let y: Double
-    /// Modern draws its furniture in Times at `modernNotePt`; both are stated rather
-    /// than assumed so a caller never has to know that.
+    /// The RESOLVED face and size this line is drawn in -- READ THEM, never assume.
+    ///
+    /// E10/E10b (Jon's ruling 2026-09-17, research/2026-09-17_furniture-font-rules.md):
+    /// Modern furniture used to be Times at `modernNotePt` for every document, and these
+    /// two fields always reported exactly that. They now carry what the PDF actually
+    /// draws: a `.h#`/`.f#` that declares a font block gives that record's face and its
+    /// own point size; a line that declares none gives Modern's body face (Times, or
+    /// Courier in a font-bearing `.ps off` document) at the body size less 2pt. An app
+    /// view that hardcodes Times 11 will no longer match the PDF.
     public let family: PDFFamily
     public let pt: Int
     /// `.left`, `.center` or `.right` -- the alignment ALREADY applied to `x`, reported
@@ -1859,6 +1977,10 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     let semOfItem = semIndexOfItem ?? []
     let noteLead = modernLine * Double(modernNotePt)
     let sepH = noteLead
+    // E10 (Jon 2026-09-17): page furniture takes the body's own font chain, so this
+    // function needs the same document-level `.ps off` predicate `modernFlow`/
+    // `modernTokFont` resolve for body runs. Same expression, resolved once per render.
+    let nonpropFallback = !doc.fonts.isEmpty && doc.formatting.proportional == false
 
     /// `image` non-nil marks an embedded pix line (b24 round 22) — `toks` is empty then,
     /// mirroring Python's `('image', ...)` tuple riding in the `toks` slot.
@@ -2246,7 +2368,9 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
                 // reports -- collected here, committed to a page below at the same
                 // moment `notesLines` is.
                 newNoteRows.append(entry.index)
-                newNoteLines += modernNoteLines(label: entry.label, text: entry.text, width: width)
+                newNoteLines += modernNoteLines(label: entry.label, text: entry.text,
+                                                width: width,
+                                                nonpropFallback: nonpropFallback)
             }
             for (vi, vline) in vis.enumerated() {
                 let face = modernLineFace(vline)
@@ -2408,40 +2532,47 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
         /// content is 0x0F user print controls is the real one: `REF/BOOKLET.WS`
         /// declares one, and reporting it as furniture would have the apps drawing a
         /// line the PDF does not.
-        func furnitureLine(_ txt: String, lno: Int, y: Double,
-                           align: Alignment) -> ModernHeadFootLine? {
-            let toks = modernHFToks(txt, pageNo: pageNo)
+        func furnitureLine(_ txt: String, lno: Int, y: Double, align: Alignment,
+                           entry: FontChange?) -> ModernHeadFootLine? {
+            let toks = modernHFToks(txt, pageNo: pageNo, entry: entry,
+                                    nonpropFallback: nonpropFallback)
             if toks.isEmpty { return nil }
             let placed = modernPlaceLine(toks, left: margl, width: width, align: align)
+            // E10/E10b: `family`/`pt` are the RESOLVED face and size, not the Times
+            // `modernNotePt` pair this always reported -- the apps' Modern views draw
+            // from these two fields, so a declared head face and the body-less-2 size
+            // reach them here and nowhere else.
             return ModernHeadFootLine(
                 line: lno, text: placed.toks.map(\.text).joined(),
-                x: placed.x, y: y, family: .times, pt: modernNotePt, align: align)
+                x: placed.x, y: y, family: toks[0].family, pt: toks[0].pt, align: align)
         }
         for lno in (showHeaders ? page.headers.keys.sorted() : []) {
             guard let txt = page.headers[lno], !txt.isEmpty else { continue }
             let hy = sheetH - 44.0 - Double(lno - 1) * noteLead
             let align = modernHFAlign(doc, .header, lno)
+            let entry = hfFontEntry(doc, .header, lno)
             if recordFurniture != nil,
                let f = furnitureLine(euroText(txt, euro), lno: lno,
-                                     y: hy, align: align) {
+                                     y: hy, align: align, entry: entry) {
                 furnHeaders.append(f)
             }
             ops += modernHFOps(euroText(txt, euro), pageNo: pageNo, left: margl, y: hy,
                                width: width, res: res, tzState: &tzState, printedPt: printedPt,
-                               align: align)
+                               align: align, entry: entry, nonpropFallback: nonpropFallback)
         }
         for lno in (showHeaders ? page.footers.keys.sorted() : []) {
             guard let txt = page.footers[lno], !txt.isEmpty else { continue }
             let fy = max(8.0, 44.0 - Double(lno - 1) * noteLead)
             let align = modernHFAlign(doc, .footer, lno)
+            let entry = hfFontEntry(doc, .footer, lno)
             if recordFurniture != nil,
                let f = furnitureLine(euroText(txt, euro), lno: lno,
-                                     y: fy, align: align) {
+                                     y: fy, align: align, entry: entry) {
                 furnFooters.append(f)
             }
             ops += modernHFOps(euroText(txt, euro), pageNo: pageNo, left: margl, y: fy,
                                width: width, res: res, tzState: &tzState, printedPt: printedPt,
-                               align: align)
+                               align: align, entry: entry, nonpropFallback: nonpropFallback)
         }
         // M15 (Jon's ruling 2026-09-15): WordStar's own AUTOMATIC page number — the one
         // `.pc` positions, never a `#` an author typed into a real `.he`/`.fo`, which
@@ -2462,13 +2593,15 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
            modernAutoPagenoShows(doc, bi: page.endBlock, pageNumbers: pageNumbersMode,
                                  pgnumCheckpoints: pgnumCps, footerInUse: footerInUse) {
             if recordFurniture != nil {
-                let placed = modernPlaceLine(modernHFToks(String(pageNo), pageNo: pageNo),
+                let placed = modernPlaceLine(modernHFToks(String(pageNo), pageNo: pageNo,
+                                                          nonpropFallback: nonpropFallback),
                                              left: margl, width: width, align: .center)
                 furnAuto = ModernAutoPageNumber(text: String(pageNo), x: placed.x, y: 44.0)
             }
             ops += modernHFOps(String(pageNo), pageNo: pageNo, left: margl, y: 44.0,
                                width: width, res: res, tzState: &tzState,
-                               printedPt: printedPt, align: .center)
+                               printedPt: printedPt, align: .center,
+                               nonpropFallback: nonpropFallback)
         }
         if let recordFurniture {
             let sheet = modernPageDict(doc)

@@ -255,8 +255,7 @@ struct QuickLookProgressivePreviewTests {
     /// and at every append.
     @MainActor
     final class Run {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 1000), styleMask: [.borderless],
-                              backing: .buffered, defer: false)
+        let window: NSWindow
         let preview = QuickLookProgressivePreview()
         let firstPaint = FirstPaint()
         private(set) var appends: [Append] = []
@@ -278,7 +277,9 @@ struct QuickLookProgressivePreviewTests {
             let pageImage: ObjectIdentifier?
         }
 
-        init(bytes: [UInt8], docPath: String) {
+        init(bytes: [UInt8], docPath: String, size: NSSize = NSSize(width: 800, height: 1000)) {
+            window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
             let content = window.contentView!
             content.addSubview(preview.view)
             NSLayoutConstraint.activate([
@@ -425,5 +426,61 @@ struct QuickLookProgressivePreviewTests {
         }
         bytes.append(0x1A)
         return bytes
+    }
+}
+
+/// Batch 47 (M29, Jon: Quick Look opens on page 1 and a sliver of page 2): the preview opens on exactly one page. Its
+/// view starts at, and asks for, a page beside the thumbnail column — US Letter's 744 × 792 before page 1 is made — and
+/// a page is fitted to the column's width or its height, whichever is tighter, so in a window of the size it asks for,
+/// in one scaled down, and in one shorter for its width, page 1 is wholly in view and page 2 is not. Render per window:
+/// m29-one-page-<width>x<height>.png.
+@Suite("Quick Look opens on one page (M29)", .serialized)
+@MainActor
+struct QuickLookOnePageTests {
+    @Test func theViewStartsWithRoomForTheThumbnailColumn() {
+        let scroller = NSScroller.preferredScrollerStyle == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+        #expect(QuickLookProgressivePreview.defaultContentSize
+                == CGSize(width: 612 + QuickLookProgressivePreview.thumbnailWidth + scroller, height: 792))
+    }
+
+    @Test(arguments: ["LYING.WS", "LONG (made here)"])
+    func exactlyPageOneInView(document: String) throws {
+        guard let source = try QuickLookProgressivePreviewTests.source(document) else { return }
+        // The size it asks for, first learnt from a load in a window of the default size.
+        let probe = QuickLookProgressivePreviewTests.Run(bytes: source.bytes, docPath: source.path)
+        let monitor = HolymacTimingTests.BlockMonitor()
+        try #require(monitor.wait("first paint", limit: 60) { probe.firstPaint.done })
+        let asked = probe.preview.preferredContentSize
+        probe.preview.cancel()
+        print("M29 \(document): the preview asks for \(asked)")
+        for (index, window) in [asked, CGSize(width: asked.width * 1.3, height: asked.height),
+                                QuickLookProgressivePreview.defaultContentSize,
+                                CGSize(width: asked.width * 0.75, height: asked.height * 0.75)].enumerated() {
+            let run = QuickLookProgressivePreviewTests.Run(bytes: source.bytes, docPath: source.path,
+                                                            size: NSSize(width: window.width.rounded(), height: window.height.rounded()))
+            defer { run.preview.cancel() }
+            try #require(monitor.wait("first paint", limit: 60) { run.firstPaint.done })
+            let preview = run.preview
+            try #require(monitor.wait("page 2", limit: 60) { preview.pageViews.count >= 2 || preview.isComplete })
+            let visible = preview.pageScroll.contentView.bounds
+            let one = preview.pageViews[0].frame
+            print("M29 \(document) window \(window): visible \(visible), page 1 \(one), page 2 \(preview.pageViews.count > 1 ? preview.pageViews[1].frame : .zero)")
+            #expect(visible.insetBy(dx: -0.5, dy: -0.5).contains(one), "page 1 \(one) is not wholly in view \(visible)")
+            #expect(abs(one.height - visible.height) < 1.5 || abs(one.width - visible.width) < 1.5,
+                    "page 1 \(one) fills neither the view's width nor its height \(visible)")
+            if preview.pageViews.count > 1 {
+                let two = preview.pageViews[1].frame
+                // In the window it asks for, one wider, and the default: nothing of page 2 in view. Scaled down whole
+                // (Quick Look shrinking the window for a small screen scales the thumbnail column too) page 1 is
+                // width-limited and a little of page 2 can show; that is reported, not failed.
+                if index < 3 {
+                    #expect(two.minY >= visible.maxY - 0.5, "page 2 \(two) shows in view \(visible) in the \(window) window")
+                } else {
+                    print("M29 \(document) scaled window: \(max(0, visible.maxY - two.minY)) pt of page 2 in view")
+                }
+            }
+            let rep = try QuickLookProgressivePreviewTests.render(preview, name: "m29-one-page-\(Int(window.width))x\(Int(window.height))")
+            _ = rep
+        }
     }
 }

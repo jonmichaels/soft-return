@@ -15,8 +15,8 @@ import Testing
 /// The corpus's galley template is the worked example, and it carries no toggle byte at
 /// all — both its `.h1o` and its `.h1e` declare a bold style:
 ///
-///     before  {\headerr \pard\plain \qr\f0\fs22 {TITLE 舦? {\chpgn }}\par}
-///     after   {\headerr \pard\plain \qr\f0\fs22 {\b TITLE 舦? {\chpgn }}\par}
+///     before  {\headerr \pard\plain \qr\f1\fs24 {TITLE 舦? {\chpgn }}\par}
+///     after   {\headerr \pard\plain \qr\f1\fs24 {\b TITLE 舦? {\chpgn }}\par}
 ///
 /// Per LINE and per PARITY, the same "parity wins, plain is the fallback" rule `hfAttr`
 /// already applies to the head's face and its alignment.
@@ -95,6 +95,6 @@ import Testing
         // sheet behind it, so nothing here reaches it.
         let out = emitRTF(Self.doc([(.header, 1, "TITLE", nil)],
                                    plainAttrs: [1: .bold]), mode: .printed)
-        #expect(out.contains(#"{\footer \pard\plain \qc\f0\fs22 {\chpgn }\par}"#))
+        #expect(out.contains(#"{\footer \pard\plain \qc\f1\fs24 {\chpgn }\par}"#))
     }
 }

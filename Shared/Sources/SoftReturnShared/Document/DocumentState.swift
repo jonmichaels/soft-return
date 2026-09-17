@@ -268,7 +268,7 @@ public final class DocumentState {
 
     /// Whether this document's own choice for `name` differs from the app's default.
     public func isQuirkOverridden(_ name: String) -> Bool {
-        guard let on = quirkOverrides[name] else { return false }
+        guard let on = quirkOverrides[QuirkRegistry.canonicalName(name)] else { return false }
         return on != quirkDefaults.isOn(name)
     }
 
@@ -285,7 +285,10 @@ public final class DocumentState {
     @discardableResult
     public func setQuirkOverrides(_ overrides: [String: Bool]) -> Bool {
         let before = quirkChoices
-        quirkOverrides = overrides.filter { QuirkChoices.names.contains($0.key) }
+        // A document's choices 4.4.0 stored under the old quirk names are read under the new (batch 47, E5c).
+        var canonical: [String: Bool] = [:]
+        for (name, on) in overrides { canonical[QuirkRegistry.canonicalName(name)] = on }
+        quirkOverrides = canonical.filter { QuirkChoices.names.contains($0.key) }
         return reapplyQuirks(ifChangedFrom: before)
     }
 

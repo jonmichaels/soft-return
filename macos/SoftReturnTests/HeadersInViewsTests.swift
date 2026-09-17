@@ -132,6 +132,62 @@ struct HeadersInViewsTests {
         }
     }
 
+    // MARK: - Batch 48 (E10): furniture follows the body's font rules
+
+    /// Engine 8b4862f (Jon: page furniture "needs to follow the general font rules. If fonts are declared for headers
+    /// and footers, use them."): Modern draws a head, foot or automatic page number that declares no font in the body's
+    /// own fontless face — the reader's Modern face — at the body size less 2 pt; a line whose `.h#` opens a font block
+    /// in that block's face. POWERUSE.WS (fontless): every page's head, and its number, in the Modern face at 12 against
+    /// the 14 pt body. OLDTIMES.WS page 2: its `.h1` opens Courier 12, so Courier at 12. The engine's furniture reports
+    /// the same pairs. Renders e10-<doc>-modern-page<n>-head.png.
+    @Test @MainActor func modernFurnitureTakesTheBodysFontRules() throws {
+        let power = try Self.state(fixture: "POWERUSE.WS")
+        let powerView = Self.pagedModernView(for: power)
+        try #require(powerView.pageCount >= 1)
+        let bodyFamily = try #require(NSFont(name: power.modernFontName, size: 12)?.familyName)
+        let furnitureSize = CGFloat(power.modernFontSize - 2)
+        var checked = 0
+        for page in 0..<powerView.pageCount {
+            for line in powerView.runningLines(atPageIndex: page) where line.text.length > 0 {
+                let font = try #require(line.text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+                #expect(font.familyName == bodyFamily && font.pointSize == furnitureSize,
+                        "POWERUSE page \(page + 1) \(line.kind): \(font.fontName) \(font.pointSize), wanted \(bodyFamily) \(furnitureSize)")
+                checked += 1
+            }
+        }
+        let furniture = modernPageFurniture(power.document, options: DocumentRenderer.modernEngineOptions(power))
+        let engineHeads = furniture.flatMap(\.headers)
+        print("E10 POWERUSE: \(checked) furniture lines on \(powerView.pageCount) pages; engine heads \(Set(engineHeads.map { "\($0.family) \($0.pt)" }))")
+        #expect(checked >= powerView.pageCount)
+        #expect(!engineHeads.isEmpty && engineHeads.allSatisfy { $0.family == .times && $0.pt == 12 })
+        try Self.renderHead(powerView, page: 0, name: "e10-poweruse-modern-page1-head.png")
+
+        let old = try Self.state(fixture: "OLDTIMES.WS")
+        let oldView = Self.pagedModernView(for: old)
+        try #require(oldView.pageCount >= 2)
+        let head = try #require(oldView.runningLines(atPageIndex: 1).first { $0.kind == .header && $0.text.length > 0 })
+        let headFont = try #require(head.text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        let oldFurniture = modernPageFurniture(old.document, options: DocumentRenderer.modernEngineOptions(old))
+        let engineHead = try #require(oldFurniture.dropFirst().first?.headers.first)
+        print("E10 OLDTIMES page 2 head: app \(headFont.fontName) \(headFont.pointSize); engine \(engineHead.family) \(engineHead.pt)")
+        #expect(engineHead.family == .courier && engineHead.pt == 12)
+        #expect(headFont.familyName?.contains("Courier") == true && headFont.pointSize == 12,
+                "OLDTIMES page 2's head is \(headFont.fontName) \(headFont.pointSize)")
+        try Self.renderHead(oldView, page: 1, name: "e10-oldtimes-modern-page2-head.png")
+    }
+
+    /// The top 90 pt of page `page` as drawn, written to the proofs folder.
+    @MainActor
+    private static func renderHead(_ view: PagedDocumentView, page: Int, name: String) throws {
+        let sheet = view.rect(ofPage: page)
+        let png = RenderProbeKit.resolveOutputDirectory(
+            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
+            fallbackName: "soft-return-proofs").appendingPathComponent(name)
+        let rect = NSRect(x: sheet.minX, y: sheet.minY, width: sheet.width, height: 90)
+        #expect(try RenderProbeKit.renderPNG(view: view, rect: rect, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
+        print("PROOF: \(png.path)")
+    }
+
     // MARK: - Engine-oracle cross-check: the view must agree with `emitPDF(mode: .modern)`
 
     /// The engine's own Modern PDF already replays `.hf` per real page (`PDFModernLayout

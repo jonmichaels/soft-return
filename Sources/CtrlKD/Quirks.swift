@@ -151,7 +151,39 @@ public struct QuirkRegistry: Sendable {
         return copy
     }
 
-    public func quirk(_ name: String) -> Quirk? { quirks[name] }
+    /// THE NAMES THAT SHIPPED IN 4.4.0, still ACCEPTED AS INPUT. Jon's ruling 2026-09-17:
+    /// a quirk's identifier is shipped text like any other — it is what a reader types on
+    /// the command line, what `--list-quirks` prints, and what the layout JSON publishes —
+    /// so it gets the same plain-English, US-spelling treatment the descriptions got. Five
+    /// of the six old names also said something untrue or unhelpful: three began
+    /// `lj6dtp-`, naming ONE printer driver for a behaviour a reader sees as a property of
+    /// their document, and two (`driver-`, `stray-style-`) described the engine's own
+    /// plumbing rather than the effect.
+    ///
+    /// The old names cannot simply vanish: an app released before the rename has them
+    /// written into every user's stored per-document overrides. So they are mapped on the
+    /// way IN and never produced on the way OUT — `--quirk`/`--no-quirk`, a name read back
+    /// from stored settings, and `quirk(_:)` all resolve them, while the registry,
+    /// `--list-quirks`, the layout JSON's `quirks_applicable`/`quirks_applied` and every
+    /// report say only the new name. ONE DIRECTION, so the two spellings can never both
+    /// appear in one output.
+    static let aliases: [String: String] = [
+        "driver-euro-sign": QuirkName.euroSwap,
+        "lj6dtp-typography": QuirkName.smartPunctuation,
+        "lj6dtp-box-corners": QuirkName.boxCorners,
+        "lj6dtp-colour-as-gray": QuirkName.colorsAsGray,
+        "lj6dtp-fill-patterns": QuirkName.fillPatterns,
+        "stray-style-strikeout": QuirkName.sawyerStrikeout,
+    ]
+
+    /// The name this build knows a quirk by, mapping a retired name to its
+    /// replacement. Anything else is handed back untouched — an unknown name is
+    /// `resolve`'s error to raise, not this function's.
+    public static func canonicalName(_ name: String) -> String {
+        aliases[name] ?? name
+    }
+
+    public func quirk(_ name: String) -> Quirk? { quirks[Self.canonicalName(name)] }
 
     /// Every registered name, registration order — for CLI help and for a settings list.
     public func names() -> [String] { order }
@@ -175,6 +207,11 @@ public struct QuirkRegistry: Sendable {
     /// not ask for.
     public func resolve(_ doc: Document, enable: [String] = [], disable: [String] = [],
                         mode: QuirkMode = .auto) throws -> QuirkDecision {
+        // Canonicalised FIRST, so a caller naming a retired spelling (an app's stored
+        // overrides from before a rename) selects the same quirk the registry, the report
+        // and the layout JSON all name the new way. See `aliases`.
+        let enable = enable.map(Self.canonicalName)
+        let disable = disable.map(Self.canonicalName)
         for name in enable + disable where quirks[name] == nil {
             throw QuirkError.unknownQuirk(name: name, known: order)
         }
@@ -278,12 +315,12 @@ private func driverName(_ doc: Document) -> String {
 
 /// Name constants, so a render site and the registry can never disagree by a typo.
 public enum QuirkName {
-    public static let euro = "driver-euro-sign"
-    public static let ljTypography = "lj6dtp-typography"
-    public static let ljBoxCorners = "lj6dtp-box-corners"
-    public static let ljColourAsGray = "lj6dtp-colour-as-gray"
-    public static let ljFillPatterns = "lj6dtp-fill-patterns"
-    public static let strayStyleStrikeout = "stray-style-strikeout"
+    public static let euroSwap = "euro-swap"
+    public static let smartPunctuation = "smart-punctuation"
+    public static let boxCorners = "box-corners"
+    public static let colorsAsGray = "colors-as-gray"
+    public static let fillPatterns = "fill-patterns"
+    public static let sawyerStrikeout = "sawyer-strikeout"
 }
 
 private let detectEuro: @Sendable (Document) -> String? = { doc in
@@ -360,22 +397,22 @@ private let applyStrayStyleStrikeout: @Sendable (Document) -> Document = { doc i
 }
 
 let builtInQuirks: [Quirk] = [
-    Quirk(name: QuirkName.euro,
+    Quirk(name: QuirkName.euroSwap,
           description: "Euro instead of peseta",
           quirkClass: .auto, detect: detectEuro),
-    Quirk(name: QuirkName.ljTypography,
+    Quirk(name: QuirkName.smartPunctuation,
           description: "Real dashes, curly quotes, ellipsis, \u{00A9}",
           quirkClass: .auto, detect: detectLJ6DTP),
-    Quirk(name: QuirkName.ljBoxCorners,
+    Quirk(name: QuirkName.boxCorners,
           description: "Card suits as box corners (Univers)",
           quirkClass: .auto, detect: detectLJ6DTP),
-    Quirk(name: QuirkName.ljColourAsGray,
-          description: "Screen colours as grey",
+    Quirk(name: QuirkName.colorsAsGray,
+          description: "Screen colors as gray",
           quirkClass: .auto, detect: detectLJ6DTP),
-    Quirk(name: QuirkName.ljFillPatterns,
-          description: "Colours 9\u{2013}14 as hatch patterns",
+    Quirk(name: QuirkName.fillPatterns,
+          description: "Colors 9\u{2013}14 as hatch patterns",
           quirkClass: .auto, detect: detectLJ6DTP),
-    Quirk(name: QuirkName.strayStyleStrikeout,
+    Quirk(name: QuirkName.sawyerStrikeout,
           description: "Ignore a strikeout set only by a style",
           quirkClass: .optIn, detect: detectStrayStyleStrikeout,
           apply: applyStrayStyleStrikeout),
@@ -402,10 +439,10 @@ public struct DriverQuirks: Hashable, Sendable {
     }
 
     public init(_ doc: Document) {
-        self.init(typography: quirkEnabled(doc, QuirkName.ljTypography),
-                  corners: quirkEnabled(doc, QuirkName.ljBoxCorners),
-                  colour: quirkEnabled(doc, QuirkName.ljColourAsGray),
-                  patterns: quirkEnabled(doc, QuirkName.ljFillPatterns))
+        self.init(typography: quirkEnabled(doc, QuirkName.smartPunctuation),
+                  corners: quirkEnabled(doc, QuirkName.boxCorners),
+                  colour: quirkEnabled(doc, QuirkName.colorsAsGray),
+                  patterns: quirkEnabled(doc, QuirkName.fillPatterns))
     }
 
     /// Whether either CHARACTER family is in force — the gate `ljSubstitute` sits behind.

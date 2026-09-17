@@ -202,7 +202,9 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     data += bytes(".oc off") + HARD
     data += bytes("Plain closing prose, quite ordinary and long.") + HARD
     let rtf = emitRTF(parseWS(data), mode: .modern)
-    #expect(rtf.contains(#"{\header \pard\plain \f0\fs22 {Chapter / {\chpgn }}\par}"#))
+    // E10/E10b (2026-09-17): Modern furniture is the MODERN_BODY face at the body size
+    // less 2pt -- `\f0\fs24`, where it used to be `\f0\fs22`.
+    #expect(rtf.contains(#"{\header \pard\plain \f0\fs24 {Chapter / {\chpgn }}\par}"#))
     #expect(rtf.contains("A Centered Title"))
     #expect(!rtf.contains("  A Centered Title"))          // the tag does the work
 }
@@ -444,7 +446,7 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     let emitter = try #require(EmitterRegistry.standard.getEmitter("layout"))
     let out = try #require(emitter.emit(doc, .modern, EmitOptions()).asText)
     #expect(out.contains("\"format\": \"ctrl-kd-layout\""))
-    #expect(out.contains("\"version\": 12"))
+    #expect(out.contains("\"version\": 13"))
     #expect(out.contains("\"encoding\": \"cp437\""))
     #expect(out.contains("\"size_name\": \"Letter\""))
     #expect(out.contains("\"kind\": \"para\""))                 // semantic flow present

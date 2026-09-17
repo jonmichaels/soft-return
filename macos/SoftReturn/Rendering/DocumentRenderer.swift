@@ -433,6 +433,28 @@ struct RenderedDocument {
     /// length — the engine's flow carries `hf` and `break` text the view's does not — so this is what the mapping
     /// resolves against, and what a test needs to say WHERE the two disagree rather than only that they do.
     var modernItemStarts: [Int] = []
+    /// Batch 47 (M31-app): each page's own sheet, in points — a page whose `.pr or=` differs from the document's prints
+    /// landscape inside a portrait document (engine 07b040c), and Native draws it on that sheet. Empty (every page on
+    /// `pageSize`) for Modern, which stays on one sheet by design.
+    var perPageSize: [CGSize] = []
+    /// Batch 48 (E10, engine 8b4862f; Jon: page furniture "needs to follow the general font rules. If fonts are declared
+    /// for headers and footers, use them."): the face Modern draws a head, foot or automatic page number in when its
+    /// line declares no font — the body's own fontless face (the reader's Modern face, or Courier Prime under `.ps off`)
+    /// at the body size less 2 pt. Nil outside Modern.
+    var modernFurnitureFont: NSFont?
+    /// The font records the document's `.h#`/`.f#` lines open (`Document.headerFonts`/`footerFonts`), by line number.
+    var modernHeaderFonts: [Int: FontChange] = [:]
+    var modernFooterFonts: [Int: FontChange] = [:]
+
+    /// Page `index`'s sheet: its own, or the document's.
+    func pageSize(atPage index: Int) -> CGSize {
+        perPageSize.indices.contains(index) ? perPageSize[index] : pageSize
+    }
+
+    /// The widest sheet — the width a view of every page needs.
+    var widestPageWidth: CGFloat {
+        perPageSize.map(\.width).max().map { max($0, pageSize.width) } ?? pageSize.width
+    }
 }
 
 /// Batch 41 (columns): one Modern column's own end in the view's text.
@@ -1464,6 +1486,30 @@ private func modernPinGraphicCells(
 }
 
 
+/// Batch 47 (M27, Jon: Modern's ■ bullets were far larger than Native's and Printed's, and the text after them too
+/// close): every ■ in a Modern text is marked with its cell's width (`.modernCellSquare`: its own advance and the kern
+/// its cell pin gave it), so the layout manager draws Native's square there in place of the reading face's glyph. Measured
+/// on -README.WS (b47-m27-probe):
+/// Native's square inks 5.0 pt with 9.0 pt to the next word's ink; Modern's Courier New ■ inked 8.5 pt with 2.5 pt.
+/// Idempotent: a ■ already marked is left as it is.
+@MainActor
+func markModernSquareBullets(_ text: NSMutableAttributedString) {
+    let string = text.string as NSString
+    var search = NSRange(location: 0, length: string.length)
+    while search.length > 0 {
+        let found = string.range(of: "\u{25A0}", options: [.literal], range: search)
+        guard found.location != NSNotFound else { break }
+        search = NSRange(location: NSMaxRange(found), length: string.length - NSMaxRange(found))
+        guard text.attribute(.modernCellSquare, at: found.location, effectiveRange: nil) == nil,
+              let font = text.attribute(.font, at: found.location, effectiveRange: nil) as? NSFont else { continue }
+        let kern = (text.attribute(.kern, at: found.location, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
+        let cell = nativeResolvedAdvance(of: "\u{25A0}", in: font) + kern
+        guard cell > 0 else { continue }
+        text.addAttribute(.modernCellSquare, value: NSNumber(value: cell), range: found)
+        // The gap after a LIST's ■ is `modernBulletGapCell`'s, scoped to the rows the engine calls bullets.
+    }
+}
+
 /// One character's real advance, in points, in the face AppKit will actually draw it with —
 /// `font` when it has a glyph, and CoreText's own substitute when it does not, which is the
 /// same decision AppKit's own layout makes.
@@ -1732,6 +1778,8 @@ struct NativeEngineWork: Sendable {
     let doc: Document
     let metrics: PrintedPageMetrics
     let pages: [Page]
+    /// Batch 47 (M31-app): each page's own sheet (`printedMetrics(_:page:options:)`).
+    var sheets: [CGSize] = []
 
     /// `options`: `DocumentRenderer.nativeEngineOptions`; `pictures`: the export flag of that name.
     nonisolated static func make(document: Document, options: EmitOptions, pictures: Bool) -> NativeEngineWork {
@@ -1739,10 +1787,18 @@ struct NativeEngineWork: Sendable {
         // `options`; with `.embed` `docToPagelines` substitutes a resolved `.PIX` tag's own `PageLine`,
         // sized exactly as `emitPDF`'s Printed PDF sizes it.
         let doc = printedDocument(document, options: options)
-        return NativeEngineWork(doc: doc, metrics: printedMetrics(document, options: options),
-                                pages: docToPagelines(doc, printed: true,
-                                                      pixResults: pictures ? options.pixResults : [],
-                                                      pictures: .embed))
+        let pages = docToPagelines(doc, printed: true, pixResults: pictures ? options.pixResults : [], pictures: .embed)
+        return NativeEngineWork(doc: doc, metrics: printedMetrics(document, options: options), pages: pages,
+                                sheets: nativeSheets(document, pages: pages, options: options))
+    }
+}
+
+/// Batch 47 (M31-app): every page's own sheet, as `emitPDF` writes each page's MediaBox — `printedMetrics(_:page:options:)`
+/// for the original document and the page `docToPagelines(printedDocument(...), printed: true)` gave.
+nonisolated func nativeSheets(_ document: Document, pages: [Page], options: EmitOptions) -> [CGSize] {
+    pages.map { page in
+        let metrics = printedMetrics(document, page: page, options: options)
+        return CGSize(width: metrics.pageWidth, height: metrics.pageHeight)
     }
 }
 
@@ -1754,11 +1810,14 @@ struct NativeAnnotatedEngineWork: Sendable {
     let metrics: PrintedPageMetrics
     let annotated: AnnotatedDocument
     let pages: [Page]
+    var sheets: [CGSize] = []
 
     nonisolated static func make(document: Document, options: EmitOptions) -> NativeAnnotatedEngineWork {
         let doc = printedDocument(document, options: options)
+        let pages = docToPagelines(doc, printed: true)
         return NativeAnnotatedEngineWork(doc: doc, metrics: printedMetrics(document, options: options),
-                                         annotated: annotatedLayout(doc), pages: docToPagelines(doc, printed: true))
+                                         annotated: annotatedLayout(doc), pages: pages,
+                                         sheets: nativeSheets(document, pages: pages, options: options))
     }
 }
 
@@ -2415,7 +2474,8 @@ enum DocumentRenderer {
             let pageTop = hasPageOverride ? printedMetrics(pageDoc).top : metrics.top
             runningLines.append(exportFlags.headers
                 ? Self.runningLines(for: page, pageNo: startNo + index, doc: pageDoc,
-                                    metrics: metrics, leftAnchor: printedLeftAnchor)
+                                    metrics: metrics, leftAnchor: printedLeftAnchor,
+                                    sheetHeight: work.sheets.indices.contains(index) ? Double(work.sheets[index].height) : nil)
                 : [])
             // Job 425: this page's own real anchor — see the citation on `perPageFirstBaselines`
             // above. `page.first?.lead` (not `pages[index].first?.lead` re-derived) since
@@ -2773,7 +2833,7 @@ enum DocumentRenderer {
         )
         let leadingHeadroom = Self.leadingHeadroom(oversizedSelfPasses, firstBaselines: perPageFirstBaselines)
 
-        return RenderedDocument(
+        var rendered = RenderedDocument(
             text: flow,
             pageSize: pageSize,
             textFrame: textFrame,
@@ -2810,6 +2870,15 @@ enum DocumentRenderer {
             modernEndnoteAppendixStart: nil,
             pclPrograms: doc.pclPrograms
         )
+        // A hand-picked Page Size is the paper for every page; a page the engine turned keeps its turn on that paper.
+        let documentLandscape = metrics.pageWidth > metrics.pageHeight
+        let manualPaper = state.pageSize.provenance == .manual && state.pageSize.value != nil
+        rendered.perPageSize = work.sheets.prefix(max(1, renderedPageCount)).map { sheet in
+            guard manualPaper else { return sheet }
+            guard (sheet.width > sheet.height) != documentLandscape else { return pageSize }
+            return CGSize(width: pageSize.height, height: pageSize.width)
+        }
+        return rendered
         }
         return NativeRenderSession(pageCount: pages.count,
                                    renderPage: { index in renderPage(index, pages[index]) },
@@ -5091,8 +5160,10 @@ enum DocumentRenderer {
         // per this file's own header on `ExportEngine`'s "documented AppKit divergence") —
         // notes keep that SAME app font, just at the engine's own relative size ratio,
         // rather than forcing Times where the body never is.
-        let noteSize = size * (11.0 / 14.0)
-        let noteFont = NSFont(name: state.modernFontName, size: noteSize)
+        // E10 (engine 8b4862f): note text is furniture — the body's fontless face at the body size less 2 pt
+        // (`modernNotePt = modernBodyPt - 2`), Courier Prime under `.ps off` as the body is.
+        let noteSize = max(1, size - 2)
+        let noteFont = NSFont(descriptor: modernFallbackFont.fontDescriptor, size: noteSize)
             ?? NSFont.systemFont(ofSize: noteSize)
         let noteParagraph = Self.modernParagraphStyle(
             colPt: colPt, size: noteSize, align: .left, indentCols: 0, cutCols: 0)
@@ -5389,7 +5460,7 @@ enum DocumentRenderer {
                             needPt: Double(spacerHeight + paragraph.maximumLineHeight)))
                     output.append(spacer)
                 }
-                output.append(line)
+                output.append(Self.modernBulletGapCell(line, structure: structure))
                 output.append(lineTerminator(font: bodyFont, paragraph: paragraph))
                 // The leading a following `.blank` inherits (see `lastParagraphPt`'s own
                 // comment). Recorded here, where a real text line has actually been placed —
@@ -5536,6 +5607,7 @@ enum DocumentRenderer {
         // batch 27, on a copy of the text so far for `snapshot()`.
         func document(final: Bool) -> RenderedDocument {
         let flowText = final ? output : NSMutableAttributedString(attributedString: output)
+        markModernSquareBullets(flowText)
         if flowText.length > 0 { flowText.deleteCharacters(in: NSRange(location: flowText.length - 1, length: 1)) }
 
         // Job 477: the decisive measurement for the persistent "no footnotes/endnotes in
@@ -5638,6 +5710,10 @@ enum DocumentRenderer {
         document.modernBlankLineRanges = modernBlankLineRanges
         document.modernConditionalBreaks = modernConditionalBreaks
         document.modernFurniture = work.furniture
+        let furnitureFonts = Self.modernFurnitureFonts(doc, bodyFallback: modernFallbackFont, bodySize: size)
+        document.modernFurnitureFont = furnitureFonts.font
+        document.modernHeaderFonts = furnitureFonts.headers
+        document.modernFooterFonts = furnitureFonts.footers
         // The flags this render was asked for, carried so the view can honour them where the furniture's
         // running lines are drawn — see `RenderedDocument.exportFlags`.
         document.exportFlags = exportFlags
@@ -5810,8 +5886,10 @@ enum DocumentRenderer {
         let modernTextWidthPt: Double = max(1, Double(modernPage.measure))
         let blankParagraph = Self.modernParagraphStyle(colPt: colPt, size: size, align: .left,
                                                         indentCols: 0, cutCols: 0)
-        let noteSize = size * (11.0 / 14.0)
-        let noteFont = NSFont(name: state.modernFontName, size: noteSize)
+        // E10 (engine 8b4862f): note text is furniture — the body's fontless face at the body size less 2 pt
+        // (`modernNotePt = modernBodyPt - 2`), Courier Prime under `.ps off` as the body is.
+        let noteSize = max(1, size - 2)
+        let noteFont = NSFont(descriptor: modernFallbackFont.fontDescriptor, size: noteSize)
             ?? NSFont.systemFont(ofSize: noteSize)
         let noteParagraph = Self.modernParagraphStyle(
             colPt: colPt, size: noteSize, align: .left, indentCols: 0, cutCols: 0)
@@ -5928,6 +6006,7 @@ enum DocumentRenderer {
                         modernFontlessFamily: modernFontlessFamily
                     ))
                 }
+                line = NSMutableAttributedString(attributedString: Self.modernBulletGapCell(line, structure: structure))
                 // b28 note 9 (part 2): same suppression `renderModern` applies — see that call
                 // site's own citation. Must mirror it exactly (job 300's ruling, this
                 // function's own header) rather than re-deriving it.
@@ -6108,7 +6187,8 @@ enum DocumentRenderer {
         let paper = modernPage.paper
         let textFrame = modernPage.textFrame
 
-        return RenderedDocument(
+        markModernSquareBullets(output)
+        var annotated = RenderedDocument(
             text: output,
             pageSize: paper,
             textFrame: textFrame,
@@ -6155,6 +6235,11 @@ enum DocumentRenderer {
             // that asked for none — the same fault, one render path over. See `RenderedDocument.exportFlags`.
             exportFlags: exportFlags
         )
+        let furnitureFonts = Self.modernFurnitureFonts(doc, bodyFallback: modernFallbackFont, bodySize: size)
+        annotated.modernFurnitureFont = furnitureFonts.font
+        annotated.modernHeaderFonts = furnitureFonts.headers
+        annotated.modernFooterFonts = furnitureFonts.footers
+        return annotated
         }
         return SlicedRender(phases: [SlicedRender.Phase(count: { items.count }, step: itemStep)], finish: finish)
     }
@@ -6222,6 +6307,32 @@ enum DocumentRenderer {
     /// glyph geometry — rather than a `NSAttributedString.size()` probe (this file's own
     /// job-240-era doc comment on `.size()` flags it as unreliable against real TextKit
     /// layout).
+    /// E8 (engine ac9ddd6, Jon 2026-09-17: "Modern's bullets and the gap after them must match Native/Printed"): on a row
+    /// the engine classifies as a bullet whose marker is a graphic character drawn on its cell (`■`), the one space after
+    /// the marker is one cell wide too — the width the marker's own pin gave it — so the first word starts two cells past
+    /// the marker, as in Printed and Native. Any other row, and an ordinary glyph marker (`*`, `-`), is returned as it is.
+    @MainActor
+    static func modernBulletGapCell(_ line: NSAttributedString, structure: RowStructure?) -> NSAttributedString {
+        guard structure?.kind == .bullet, let marker = structure?.marker, let first = marker.first,
+              graphicChars.contains(first) else { return line }
+        let text = line.string as NSString
+        var at = 0
+        while at < text.length, text.character(at: at) == 0x20 { at += 1 }
+        let markerLength = (marker as NSString).length
+        let spaceAt = at + markerLength
+        guard spaceAt + 1 < text.length, text.substring(with: NSRange(location: at, length: markerLength)) == marker,
+              text.character(at: spaceAt) == 0x20, text.character(at: spaceAt + 1) != 0x20,
+              let markerFont = line.attribute(.font, at: at, effectiveRange: nil) as? NSFont,
+              let spaceFont = line.attribute(.font, at: spaceAt, effectiveRange: nil) as? NSFont else { return line }
+        let pin = (line.attribute(.kern, at: at, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
+        let cell = nativeResolvedAdvance(of: marker, in: markerFont) + pin
+        let space = nativeResolvedAdvance(of: " ", in: spaceFont)
+        guard cell > space else { return line }
+        let out = NSMutableAttributedString(attributedString: line)
+        out.addAttribute(.kern, value: Float(cell - space), range: NSRange(location: spaceAt, length: 1))
+        return out
+    }
+
     private static func bulletMarkerWidthPt(
         _ marker: String, font: NSFont, entry: FontChange?, printedPt: Int
     ) -> Double {
@@ -6242,8 +6353,13 @@ enum DocumentRenderer {
             total += CTLineGetTypographicBounds(line, nil, nil, nil)
             plain = ""
         }
-        for character in marker {
+        let characters = Array(marker)
+        for (index, character) in characters.enumerated() {
             if graphicChars.contains(character) {
+                flushPlain()
+                total += cell
+            } else if character == " ", index == characters.count - 1, index > 0, graphicChars.contains(characters[index - 1]) {
+                // E8 (engine ac9ddd6): a graphic marker's gap is one cell as well — `modernBulletGapCell`.
                 flushPlain()
                 total += cell
             } else {
@@ -6464,8 +6580,10 @@ enum DocumentRenderer {
     /// left of its own default does not drag its running heads left with it.
     private static func runningLines(
         for page: Page, pageNo: Int, doc: Document, metrics: PrintedPageMetrics,
-        leftAnchor: Double
+        leftAnchor: Double, sheetHeight: Double? = nil
     ) -> [RunningLine] {
+        // Batch 47 (M31-app): the engine flips a page's running lines against THAT page's sheet (07b040c).
+        let pageHeight = sheetHeight ?? metrics.pageHeight
         // THE MODEL SAYS WHAT GOES ON THIS PAGE AND WHERE — planning #251(d).
         //
         // `Page.headerLines`/`footerLines`/`autoPageno` arrive from
@@ -6607,9 +6725,11 @@ enum DocumentRenderer {
         // changed. The guard below is reintroduced NOW, against that corrected baseline, and
         // the full suite (see this job's report) shows it introduces no new divergence.
         func line(_ resolved: HeadFootLine, kind: RunningLine.Kind) -> RunningLine? {
+            // E11 (engine b86d214): a row the engine flags off the sheet is never drawn — the PDF still writes it and
+            // the paper clips it; a view has no paper. The flag is `hfOffSheet(y)`, this guard's own test.
+            guard !resolved.offSheet else { return nil }
             let text = resolved.text
-            let baseline = metrics.pageHeight - resolved.y
-            guard baseline <= metrics.pageHeight else { return nil }
+            let baseline = pageHeight - resolved.y
             let pageLeftOffset = resolved.x - leftAnchor
             let entry = resolved.font.flatMap { doc.fonts.indices.contains($0) ? doc.fonts[$0] : nil }
             // Batch 41: the weight and slant the engine resolved for this line (its style sheet's
@@ -6703,8 +6823,9 @@ enum DocumentRenderer {
             // x is anchored ABSOLUTELY from the paper's left edge (`.po` plus `.pc`), not at
             // the text column every other running line starts from, which is exactly why the
             // model carries it per line rather than per page.
-            let baseline = metrics.pageHeight - auto.y
-            if baseline <= metrics.pageHeight {
+            let baseline = pageHeight - auto.y
+            // E11: never a flagged row.
+            if !auto.offSheet {
                 let attributed = NSAttributedString(string: auto.text, attributes: [
                     .font: font,
                     .foregroundColor: NSColor.black,
@@ -6767,16 +6888,40 @@ enum DocumentRenderer {
     /// (`toks.isEmpty` → `nil`), so a `.f1` that is nothing but print-control bytes stops drawing the blank
     /// `"  "` the replay used to put on every page of REF/BOOKLET.WS. That judgement is the engine's now, not a
     /// rule this file keeps its own copy of.
+    /// Batch 48 (E10): the furniture face for a Modern render — `bodyFallback` (the face a fontless body run reads in)
+    /// at `bodySize` less 2 pt, the engine's `modernNotePt = modernBodyPt - 2` — and the font records the document's head
+    /// and foot lines open.
+    static func modernFurnitureFonts(_ doc: Document, bodyFallback: NSFont, bodySize: CGFloat)
+        -> (font: NSFont, headers: [Int: FontChange], footers: [Int: FontChange]) {
+        let size = max(1, bodySize - 2)
+        let font = NSFont(descriptor: bodyFallback.fontDescriptor, size: size) ?? bodyFallback
+        func records(_ table: [Int: Int]) -> [Int: FontChange] {
+            table.compactMapValues { doc.fonts.indices.contains($0) ? doc.fonts[$0] : nil }
+        }
+        return (font, records(doc.headerFonts), records(doc.footerFonts))
+    }
+
     internal static func modernFurnitureRunningLines(
-        furniture: ModernPageFurniture, textLeft: Double
+        furniture: ModernPageFurniture, textLeft: Double, rendered: RenderedDocument? = nil
     ) -> [RunningLine] {
         func built(_ line: ModernHeadFootLine, kind: RunningLine.Kind) -> RunningLine? {
             let size = CGFloat(line.pt)
-            let base: NSFont
+            var base: NSFont
             switch line.family {
             case .courier: base = NSFont(name: "Courier New", size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
             case .helvetica: base = NSFont(name: "Helvetica", size: size) ?? NSFont.systemFont(ofSize: size)
             default: base = NSFont(name: "Times New Roman", size: size) ?? NSFont.systemFont(ofSize: size)
+            }
+            // E10: the line's own declared font when its `.h#`/`.f#` opens one, else the body's fontless face at the
+            // body size less 2 pt — the chain a body run takes, as the engine now resolves it (`family`/`pt`).
+            if let rendered, let furnitureFont = rendered.modernFurnitureFont {
+                let records = kind == .header ? rendered.modernHeaderFonts : rendered.modernFooterFonts
+                if let entry = records[line.line] {
+                    base = Self.resolvedFont(for: entry, styles: [], fallback: furnitureFont,
+                                             defaultSize: Int(furnitureFont.pointSize.rounded()), useCourierPrime: true)
+                } else {
+                    base = furnitureFont
+                }
             }
             let result = NSMutableAttributedString()
             for run in nativeHeadFootRuns(line.text) {
@@ -6807,11 +6952,12 @@ enum DocumentRenderer {
     }
 
     internal static func modernAutoPageNumberLine(
-        furniture: ModernPageFurniture, textLeft: Double
+        furniture: ModernPageFurniture, textLeft: Double, rendered: RenderedDocument? = nil
     ) -> RunningLine? {
         guard let auto = furniture.autoPageNumber else { return nil }
-        let size: CGFloat = 11
-        let font = NSFont(name: "Times New Roman", size: size) ?? NSFont.systemFont(ofSize: size)
+        // E10: the body's fontless face at the body size less 2 pt, as the engine's Modern number now is.
+        let font = rendered?.modernFurnitureFont
+            ?? NSFont(name: "Times New Roman", size: 12) ?? NSFont.systemFont(ofSize: 12)
         let text = nativeStripControlChars(auto.text)
         guard !text.isEmpty else { return nil }
         let attributed = NSAttributedString(string: text, attributes: [
@@ -6829,7 +6975,7 @@ enum DocumentRenderer {
     }
 
     internal static func modernRunningLines(
-        events: [HFEvent], upToOffset offset: Int, pageNo: Int, pageHeight: Double
+        events: [HFEvent], upToOffset offset: Int, pageNo: Int, pageHeight: Double, font furnitureFont: NSFont? = nil
     ) -> [RunningLine] {
         var headers: [Int: String] = [:]
         var footers: [Int: String] = [:]
@@ -6838,8 +6984,9 @@ enum DocumentRenderer {
         }
         guard !(headers.isEmpty && footers.isEmpty) else { return [] }
 
-        let size: CGFloat = 11
-        let font = NSFont(name: "Times New Roman", size: size) ?? NSFont.systemFont(ofSize: size)
+        // E10: the body's fontless face at the body size less 2 pt when the render says so.
+        let font = furnitureFont ?? NSFont(name: "Times New Roman", size: 12) ?? NSFont.systemFont(ofSize: 12)
+        let size = font.pointSize
         let noteLead = 1.2 * Double(size)
         let drawOriginOffset = Double(firstBaselineOffset(
             font: font, paragraph: NSParagraphStyle(), width: 500))

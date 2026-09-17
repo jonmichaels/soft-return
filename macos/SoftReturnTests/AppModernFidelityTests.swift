@@ -69,10 +69,22 @@ struct AppModernFidelityTests {
     /// disappears with it, which is correct here: this gate is about WHERE THE BREAKS FALL,
     /// and indentation is placement, which Modern legitimately renders in the reader's own
     /// type.
-    static func lines(of pdf: [UInt8], rises: [Double] = []) throws -> [[String]] {
+    ///
+    /// `offSheet`: the engine's rows flagged off the sheet (E11, `HeadFootLine.offSheet`/`AutoPageNumber.offSheet`,
+    /// by 1-based page): the PDF still draws each below its page's foot, where the paper clips it, and no view draws
+    /// it, so on a page that has flagged rows a word whose baseline is below the page's foot is not read. A page without
+    /// one is read whole.
+    static func lines(of pdf: [UInt8], rises: [Double] = [], offSheet: [Int: Int] = [:]) throws -> [[String]] {
         let payload = try AppPDFWords.payload(from: pdf, rises: rises)
+        var pageHeights: [Int: Double] = [:]
+        if !offSheet.isEmpty, let provider = CGDataProvider(data: Data(pdf) as CFData), let document = CGPDFDocument(provider) {
+            for page in offSheet.keys where page >= 1 && page <= document.numberOfPages {
+                pageHeights[page] = document.page(at: page).map { Double($0.getBoxRect(.mediaBox).height) }
+            }
+        }
         var byPage: [Int: [Double: [(x: Double, text: String)]]] = [:]
         for word in payload.words {
+            if let height = pageHeights[word.page], word.y_top_pt > height + 0.5 { continue }
             // Baselines group to a tenth of a point: a line's own words share a baseline
             // exactly within each emitter, and a tenth is far below any real line gap.
             let baseline = (word.y_top_pt * 10).rounded() / 10
