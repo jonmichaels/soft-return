@@ -184,11 +184,11 @@ let appTarget: Target = .target(
             // colour set actool warns on every build.
             "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "",
             "COMBINE_HIDPI_IMAGES": "YES",
-            "CURRENT_PROJECT_VERSION": "27",
+            "CURRENT_PROJECT_VERSION": "28",
             "ENABLE_HARDENED_RUNTIME": "YES",
             "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/../Frameworks"],
             "LSApplicationCategoryType": "public.app-category.productivity",
-            "MARKETING_VERSION": "4.6.0",
+            "MARKETING_VERSION": "4.6.1",
             "PRODUCT_MODULE_NAME": "SoftReturn",
             "SWIFT_EMIT_LOC_STRINGS": "YES",
         ],
@@ -286,8 +286,8 @@ let quickLookTarget: Target = .target(
         renderingPackage,
     ],
     settings: targetSettings(base: [
-        "CURRENT_PROJECT_VERSION": "27",
-        "MARKETING_VERSION": "4.6.0",
+        "CURRENT_PROJECT_VERSION": "28",
+        "MARKETING_VERSION": "4.6.1",
         "SKIP_INSTALL": "YES",
         // Job 369: explicitly pinned, not a fix by itself — `xcodebuild -showBuildSettings`
         // confirmed this key is absent/unset project-wide (Tuist never sets it, and this
@@ -319,9 +319,9 @@ let importerTarget: Target = .target(
         ctrlKDPackage,
     ],
     settings: targetSettings(base: [
-        "CURRENT_PROJECT_VERSION": "27",
+        "CURRENT_PROJECT_VERSION": "28",
         "GENERATE_INFOPLIST_FILE": "NO",
-        "MARKETING_VERSION": "4.6.0",
+        "MARKETING_VERSION": "4.6.1",
         "SKIP_INSTALL": "YES",
         "WRAPPER_EXTENSION": "mdimporter",
         // Xcode auto-injects -lz (CtrlKD's linkedLibrary) for .app/.appExtension
@@ -353,8 +353,8 @@ let thumbnailTarget: Target = .target(
         renderingPackage,
     ],
     settings: targetSettings(base: [
-        "CURRENT_PROJECT_VERSION": "27",
-        "MARKETING_VERSION": "4.6.0",
+        "CURRENT_PROJECT_VERSION": "28",
+        "MARKETING_VERSION": "4.6.1",
         "SKIP_INSTALL": "YES",
         // Job 369: same pin, same reasoning — see `quickLookTarget`'s settings above.
         "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",

@@ -1,4 +1,4 @@
-// swift-tools-version:6.0
+// swift-tools-version:5.9
 import PackageDescription
 
 // What every test target in the repo shares and none owns: where the corpus variables are
@@ -9,6 +9,10 @@ import PackageDescription
 // the Mac app's tests and the iPhone app's tests all consume it, and each of those picks its
 // own test framework. The one thing that needs `Testing` (a trait that cites the skip
 // message) is a few lines in each test target; `docs/TESTING.md` shows it.
+//
+// Tools version 5.9, the engine package's own: SwiftPM reads every dependency's manifest before it builds anything,
+// so a 6.0 manifest here stopped `brew install sr` on Swift 5.10 (macOS 14's Xcode 15.4) even though `sr` never builds
+// this package (v4.6.0, planning #585).
 //
 // Floors: macOS 10.15 because the engine package (`../Package.swift`) tests at that floor and
 // SwiftPM refuses a target that depends on a product with a higher one; iOS 16 is the

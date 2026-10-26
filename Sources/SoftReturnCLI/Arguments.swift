@@ -10,7 +10,8 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 4.6.0 is the v4.6.0 minor release: sr carries ctrl-kd 4.10.1's
+/// CLI's user-visible contract. 4.6.1 is the v4.6.1 patch: sr runs on macOS 10.15 again (built with Xcode 26.6) and
+/// Homebrew builds it on Swift 5.10. 4.6.0 is the v4.6.0 minor release: sr carries ctrl-kd 4.10.1's
 /// one Printed paginator for documents with and without notes, and `-t markdown --pictures
 /// embed` exports the pictures as `-t md` does. 4.3.0 is the v4.3.0 minor release: sr carries ctrl-kd
 /// 4.8.0's Modern round — the document's own sheet and newspaper columns in Modern PDF and

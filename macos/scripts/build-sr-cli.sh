@@ -23,10 +23,20 @@ if [ ! -f "${CHECKOUT}/Package.swift" ]; then
     exit 1
 fi
 
+# `sr` is built with Xcode 26.6's toolchain, whatever Xcode builds the app (R-134, planning #584): Xcode 27's macOS SDK
+# cannot target anything below macOS 12, and `sr` runs back to 10.15 (arm64's own floor is 11.0). `SR_CLI_DEVELOPER_DIR`
+# names another; the release content gate checks the floor that comes out.
+SR_CLI_DEVELOPER_DIR="${SR_CLI_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+if [ ! -x "${SR_CLI_DEVELOPER_DIR}/usr/bin/xcodebuild" ]; then
+    echo "error: sr is built with ${SR_CLI_DEVELOPER_DIR} (Xcode 26.6), which is not installed" >&2
+    exit 1
+fi
+
 # --scratch-path keeps this OUT of the repo's own .build, which Xcode's
-# native SPM integration may also use for the CtrlKD package dependency.
+# native SPM integration may also use for the CtrlKD package dependency. Its own folder for this toolchain: two Swift
+# compilers' products must not share one.
 DERIVED_DATA_ROOT="${BUILD_DIR}/../.."
-SCRATCH="${DERIVED_DATA_ROOT}/sr-cli-scratch"
+SCRATCH="${DERIVED_DATA_ROOT}/sr-cli-scratch-xcode26"
 
 # Dev stamp (Jon's ruling 2026-08-14, b19): between releases the sr banner
 # carries the engine commit's date — `sr 3.1.0 (dev YYYY-MM-DD)` — with the
@@ -80,17 +90,16 @@ fi
 # the scratch dir and collides with itself ("Multiple commands produce ...
 # Soft Return.app/Contents/MacOS/__preview.dylib" — seen first-hand, job 248).
 # A minimal, explicit environment sidesteps the whole class of leakage.
-swift_build_env=(PATH="${PATH}" HOME="${HOME}")
-if [ -n "${DEVELOPER_DIR:-}" ]; then
-    swift_build_env+=(DEVELOPER_DIR="${DEVELOPER_DIR}")
-fi
+# The plain system PATH: Xcode's own PATH starts with the building Xcode's tool folders, which a 26.6 build must not
+# reach. DEVELOPER_DIR picks the toolchain and its SDK.
+swift_build_env=(PATH="/usr/bin:/bin:/usr/sbin:/sbin" HOME="${HOME}" DEVELOPER_DIR="${SR_CLI_DEVELOPER_DIR}")
 swift_build_args=(--package-path "${CHECKOUT}" --scratch-path "${SCRATCH}" \
     -c release --arch arm64 --arch x86_64 --product sr)
-env -i "${swift_build_env[@]}" swift build "${swift_build_args[@]}"
+env -i "${swift_build_env[@]}" /usr/bin/xcrun swift build "${swift_build_args[@]}"
 
-# SwiftPM names the universal build's folder, and the name changed with Xcode
-# 27 (`apple/Products/Release` became `out/Products/Release`), so ask it.
-BIN_PATH="$(env -i "${swift_build_env[@]}" swift build "${swift_build_args[@]}" --show-bin-path)"
+# SwiftPM names the universal build's folder, and the name differs by toolchain
+# (`apple/Products/Release` on Xcode 26, `out/Products/Release` on 27), so ask it.
+BIN_PATH="$(env -i "${swift_build_env[@]}" /usr/bin/xcrun swift build "${swift_build_args[@]}" --show-bin-path)"
 BUILT_BINARY="${BIN_PATH}/sr"
 if [ ! -f "${BUILT_BINARY}" ]; then
     echo "error: swift build did not produce ${BUILT_BINARY}" >&2
