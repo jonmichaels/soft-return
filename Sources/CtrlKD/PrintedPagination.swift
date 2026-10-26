@@ -448,7 +448,11 @@ func layoutPrintedPages(
     // waits until the new page's own geometry is known (`recomputeGeom`), or the page
     // closes. A document with no notes queues nothing, so both are no-ops.
     func roomLines() -> Int {
-        Int(((budget - colCut() - spent) / defaultLead + 1e-9).rounded(.down))
+        // Floored by hand: `rounded(.down)` calls the C library's `floor`, which this Foundation-free engine does not
+        // link on Linux (the public engine workflow's link failure, v4.6.0).
+        let lines = (budget - colCut() - spent) / defaultLead + 1e-9
+        let whole = Int(lines)
+        return Double(whole) > lines ? whole - 1 : whole
     }
     func admitNotes() {
         notes.admit(roomLines: roomLines(), capacity: capacity)
