@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnRendering
 import SoftReturnShared
 
 /// Page-one thumbnails and the Get-Info rows for the batch window's preview column.
@@ -38,16 +39,7 @@ enum PagePreviewRenderer {
         guard let state = state(for: url, style: style, variant: variant) else { return nil }
         let rendered = DocumentRenderer.render(state, style: style)
 
-        let view = PagedDocumentView()
-        view.setContent(rendered, display: .singlePage)
-        view.frame = CGRect(origin: .zero, size: rendered.pageSize)
-        view.layoutSubtreeIfNeeded()
-
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        let image = NSImage(size: rendered.pageSize)
-        image.addRepresentation(rep)
-        return image
+        return PagedDocumentView.laidOut(rendered).pageImage(at: 0)
     }
 
     /// The Get-Info-style rows, in the spec's fixed order: File Name / Kind / Size / Where /
@@ -59,59 +51,14 @@ enum PagePreviewRenderer {
     /// The same rows for a document already open, read from its window's own state — so its
     /// Margins choice is in the Page Size and Pages the rows report (#271 M9).
     static func info(for url: URL, state: DocumentState?, style: RenderStyle) -> [(String, String)] {
-        // Best-effort metadata read with a sound default: `byteText`/`dateText` below both
-        // render a nil value as "—" rather than failing the whole info panel over one
-        // missing attribute.
-        let values = try? url.resourceValues(forKeys: [
-            .fileSizeKey, .creationDateKey, .contentModificationDateKey,
-        ])
-
-        let kind: String
-        if let detected = state?.variant.value {
-            kind = Self.variantKind(detected)
-        } else {
-            kind = "Unreadable"
-        }
-
+        // The unreadable case keeps every row, each honestly "—" (Kind says "Unreadable").
+        let kind = state?.variant.value.kindName ?? "Unreadable"
         // The sheet Printed lays out, so a landscape document reads landscape (#271 M9).
-        let pageSizeText = state?.pageSizeDescription ?? "—"
-
-        let pageCount: String
-        if let state {
-            pageCount = "\(DocumentRenderer.render(state, style: style).pageCount)"
-        } else {
-            pageCount = "—"
-        }
-
-        return [
-            ("File Name", url.lastPathComponent),
-            ("Kind", kind),
-            ("Size", byteText(values?.fileSize)),
-            ("Where", url.deletingLastPathComponent().path),
-            ("Created", dateText(values?.creationDate)),
-            ("Modified", dateText(values?.contentModificationDate)),
-            ("Page Size", pageSizeText),
-            ("Pages", pageCount),
-        ]
-    }
-
-    private static func variantKind(_ variant: Variant) -> String {
-        switch variant {
-        case .ws4:         return "WordStar 4 document"
-        case .ws5plus:     return "WordStar 5+ document"
-        case .printstream: return "WordStar print stream"
-        case .text:        return "Plain text"
-        case .binary:      return "Not a document"
-        }
-    }
-
-    private static func byteText(_ bytes: Int?) -> String {
-        guard let bytes else { return "—" }
-        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-    }
-
-    private static func dateText(_ date: Date?) -> String {
-        guard let date else { return "—" }
-        return date.formatted(date: .abbreviated, time: .shortened)
+        let pageSize = state?.pageSizeDescription ?? DocumentInfo.none
+        let pages = state.map { "\(DocumentRenderer.render($0, style: style).pageCount)" } ?? DocumentInfo.none
+        return DocumentInfo.fileRows(
+            url: url, kind: kind, location: url.deletingLastPathComponent().path,
+            pageSize: pageSize, pages: pages
+        ).map { ($0.label, $0.value) }
     }
 }

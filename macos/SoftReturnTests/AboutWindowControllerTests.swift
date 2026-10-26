@@ -192,8 +192,7 @@ struct AboutWindowControllerTests {
 
     /// #271 M5: every piece of text in the About window is set in the system font — the system's
     /// own faces all carry a private name starting with "." (`.AppleSystemUIFont…`), a named
-    /// family never does — and the window is photographed for the record (in-process, no Screen
-    /// Recording). `ChromeFontScannerTests` holds the same line for the source as a whole.
+    /// family never does — `ChromeFontScannerTests` holds the same line for the source as a whole.
     @Test func everyLabelIsSetInTheSystemFont() throws {
         let controller = AboutWindowController(
             engineProbe: FakeEngineVersionProbe(result: nil), urlOpener: FakeAboutURLOpener())
@@ -208,12 +207,6 @@ struct AboutWindowControllerTests {
             #expect(font.fontName.hasPrefix("."),
                     "\(type(of: control)) “\(control.stringValue)” is set in \(font.fontName), not the system font")
         }
-        let proofs = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
-        let png = proofs.appendingPathComponent("m5-about-window.png")
-        #expect(try RenderProbeKit.renderPNG(view: content, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
-        print("PROOF: \(png.path)")
     }
 
     /// Jon's ruling (job 335): match Ghostty's About window — an untitled title bar. Traffic
@@ -347,7 +340,7 @@ struct AboutWindowControllerTests {
     /// window. It's to the left now."): the middle of the gap between the labels' right edge
     /// and the values' left edge is on the window's centre line, for every row set — no engine
     /// row, the release banner the engine prints, and the dev banner with its commit link — and
-    /// no value is cut short. Each shape is photographed, with a copy marking the centre line.
+    /// no value is cut short.
     @Test(arguments: ["no-engine", "release", "dev-commit"])
     func gapBetweenLabelsAndValuesIsOnTheWindowsCentreLine(shape: String) throws {
         let banner: String? = switch shape {
@@ -394,22 +387,6 @@ struct AboutWindowControllerTests {
                 "\(shape): the gap's middle is at \(gapMiddle), the window's centre at \(centre)")
         #expect(grid.column(at: 0).xPlacement == .trailing)
         #expect(grid.column(at: 1).xPlacement == .leading)
-
-        let proofs = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
-        let png = proofs.appendingPathComponent("m22-about-\(shape).png")
-        #expect(try RenderProbeKit.renderPNG(view: content, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
-        let marked = proofs.appendingPathComponent("m22-about-\(shape)-centre-line.png")
-        let line = NSBox(frame: NSRect(x: centre - 0.5, y: 0, width: 1, height: content.bounds.height))
-        line.boxType = .custom
-        line.borderWidth = 0
-        line.fillColor = .systemRed
-        content.addSubview(line)
-        defer { line.removeFromSuperview() }
-        #expect(try RenderProbeKit.renderPNG(view: content, appearance: NSAppearance(named: .aqua)!, to: marked) > 0)
-        print("PROOF: \(png.path)")
-        print("PROOF: \(marked.path)")
     }
 
     /// Jon's ruling: the Engine row's dev shape wraps — "sr v4.0.0" on line 1, "(dev ...)" on
@@ -566,16 +543,7 @@ struct AboutWindowControllerTests {
         let controller = AboutWindowController(engineProbe: FakeEngineVersionProbe(result: nil), urlOpener: opener)
         let gitHubButton = try button("about-github-button", in: controller)
         _ = gitHubButton.target?.perform(gitHubButton.action, with: gitHubButton)
-        #expect(opener.openedURLs == [GitHubUpdateFeed.repoPageURL])
-    }
-
-    /// `URL.deletingLastPathComponent()` leaves a trailing slash (Foundation's own documented
-    /// behaviour) — the repo page opens fine either way, so the test pins that real shape
-    /// rather than a stripped one the implementation never produces.
-    @Test func repoPageURLIsTheReleasesPageWithoutTheTrailingReleasesComponent() {
-        #expect(GitHubUpdateFeed.repoPageURL.absoluteString == "https://github.com/jonmichaels/soft-return/")
-        #expect(GitHubUpdateFeed.releasesPageURL.absoluteString
-            == "https://github.com/jonmichaels/soft-return/releases")
+        #expect(opener.openedURLs == [AboutWindowController.repoPageURL])
     }
 
     @Test func commitLinkOpensTheEngineCommitPageWhenADevBannerIsPresent() throws {

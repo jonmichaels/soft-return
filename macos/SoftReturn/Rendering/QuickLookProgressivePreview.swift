@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+import SoftReturnRendering
 import SoftReturnShared
 
 /// The spacebar preview of a WordStar document: page images in a column, with their thumbnails beside it.
@@ -176,7 +177,7 @@ final class QuickLookProgressivePreview {
               firstPaint: @escaping @MainActor @Sendable (Error?) -> Void) {
         startedAt = DispatchTime.now().uptimeNanoseconds
         self.firstPaint = firstPaint
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let work = Result {
                 try QuickLookEngineWork.make(bytes: bytes, docPath: docPath, pageSettingsPreset: pageSettingsPreset,
                                              quirks: quirks)
@@ -198,7 +199,7 @@ final class QuickLookProgressivePreview {
         case .success(let work):
             let session = DocumentRenderer.nativeRenderSession(QuickLookRender.nativeState(for: work), engine: work.engine)
             guard session.pageCount > 0,
-                  let one = Self.capture(Self.laidOut(QuickLookRender.pageOne(for: work)), page: 0) else {
+                  let one = PagedDocumentView.laidOut(QuickLookRender.pageOne(for: work)).pagePDF(at: 0) else {
                 tellFirstPaint(QuickLookNativeRenderer.RenderError.emptyDocument)
                 return
             }
@@ -250,7 +251,7 @@ final class QuickLookProgressivePreview {
                 pages.layOutMorePages(until: deadline)
             }
             guard nextPage < pages.pageCount else { break }
-            if let page = Self.capture(pages, page: nextPage) {
+            if let page = pages.pagePDF(at: nextPage) {
                 draw(page)
             }
             nextPage += 1
@@ -275,7 +276,7 @@ final class QuickLookProgressivePreview {
         let inReach = reach(nearby: true).intersects(CGRect(x: 0, y: top, width: 1, height: pageColumnWidth * page.size.height / page.size.width))
         let pixelScale = inReach ? self.pixelScale(forPageWidth: page.size.width) : 0
         let backingScale = self.backingScale
-        rasterQueue.async {
+        rasterQueue.async { [weak self] in
             let image = pixelScale > 0 ? Self.drawPage(page.data, pixelScale: pixelScale) : nil
             let thumbnail = Self.drawPage(page.data, fitting: Self.thumbnailImageBox, backingScale: backingScale)
             let drawn = DrawnPage(image: image, thumbnail: thumbnail)
@@ -387,7 +388,7 @@ final class QuickLookProgressivePreview {
                     pageImageRequested[index] = true
                     let data = pageData[index]
                     let pixelScale = pixelScale(forPageWidth: pageView.pageSize.width)
-                    rasterQueue.async {
+                    rasterQueue.async { [weak self] in
                         let image = Self.drawPage(data, pixelScale: pixelScale)
                         let drawn = DrawnPage(image: image, thumbnail: nil)
                         Self.performOnMain { [weak self] in
@@ -416,26 +417,6 @@ final class QuickLookProgressivePreview {
 
     // MARK: - Capture and drawing
 
-    /// `rendered`'s pages laid out, as `QuickLookNativeRenderer` lays them out to capture them.
-    private static func laidOut(_ rendered: RenderedDocument) -> PagedDocumentView {
-        let pages = PagedDocumentView(frame: .zero)
-        pages.setContent(rendered, display: .continuousScroll)
-        pages.setFrameSize(pages.intrinsicContentSize)
-        pages.layoutSubtreeIfNeeded()
-        return pages
-    }
-
-    /// One page of `pages` as a one-page PDF, captured alone — `QuickLookNativeRenderer.multiPagePDF`'s capture.
-    private static func capture(_ pages: PagedDocumentView, page index: Int) -> (data: Data, size: CGSize)? {
-        let rect = pages.rect(ofPage: index)
-        guard rect.width > 0, rect.height > 0 else { return nil }
-        return autoreleasepool {
-            pages.capturingPageIndex = index
-            let data = pages.dataWithPDF(inside: rect)
-            pages.capturingPageIndex = nil
-            return (data, rect.size)
-        }
-    }
 
     /// A one-page PDF drawn to an image, `pixelScale` pixels a point, on white.
     nonisolated static func drawPage(_ data: Data, pixelScale: CGFloat) -> CGImage? {

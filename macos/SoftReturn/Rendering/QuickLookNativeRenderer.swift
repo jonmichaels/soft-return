@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnRendering
 import SoftReturnShared
 import PDFKit
 
@@ -16,12 +17,9 @@ import PDFKit
 /// a parity/oracle gate must never import the REFERENCE's rendering limitations into the
 /// product; the old QL-via-`emitPDF` design did exactly that, silently, for five betas).
 ///
-/// One file, mirrored VERBATIM into three targets (`Project.swift`'s `sources`, the same "an
-/// appex can't import the app module, so Tuist compiles the same source path into every
-/// target that needs it" pattern `SpotlightFileIndexer.swift`/`DocumentOperations.swift`
-/// already use here): `SoftReturn` (covered by its own `SoftReturn/**` glob — the app itself
-/// has no caller, but nothing stops it compiling there too), `SoftReturnQuickLook`,
-/// `SoftReturnThumbnail`. This is deliberately the ONLY place either appex builds a
+/// Compiled into the app and both appexes with the rest of `SoftReturn/Rendering` (an appex
+/// can't import the app module; `Project.swift` globs the folder into each). This is
+/// deliberately the ONLY place either appex builds a
 /// `DocumentState`/`PagedDocumentView` — see `PreviewProvider`/`ThumbnailProvider`'s own doc
 /// comments for why two independent derivations of "what does this document look like" is
 /// exactly the defect this job exists to remove (the OLD `PreviewProvider`'s own doc comment
@@ -97,11 +95,7 @@ enum QuickLookNativeRenderer {
     /// (Single Page only positions the CURRENT page). Never added to a window — see this
     /// type's own doc comment.
     private static func layoutPagedView(_ rendered: RenderedDocument) -> PagedDocumentView {
-        let pagedView = PagedDocumentView(frame: .zero)
-        pagedView.setContent(rendered, display: .continuousScroll)
-        pagedView.setFrameSize(pagedView.intrinsicContentSize)
-        pagedView.layoutSubtreeIfNeeded()
-        return pagedView
+        PagedDocumentView.laidOut(rendered)
     }
 
     /// The multi-page Preview PDF — pages of the NATIVE renderer's own drawing, not
@@ -128,13 +122,9 @@ enum QuickLookNativeRenderer {
         }
         var pagesWritten = 0
         for index in 0..<pagedView.pageCount {
-            let rect = pagedView.rect(ofPage: index)
-            guard rect.width > 0, rect.height > 0 else { continue }
+            guard let capture = pagedView.pagePDF(at: index) else { continue }
             autoreleasepool {
-                pagedView.capturingPageIndex = index
-                let onePageData = pagedView.dataWithPDF(inside: rect)
-                pagedView.capturingPageIndex = nil
-                guard let provider = CGDataProvider(data: onePageData as CFData),
+                guard let provider = CGDataProvider(data: capture.data as CFData),
                       let onePage = CGPDFDocument(provider)?.page(at: 1) else { return }
                 var mediaBox = onePage.getBoxRect(.mediaBox)
                 context.beginPage(mediaBox: &mediaBox)
@@ -154,12 +144,7 @@ enum QuickLookNativeRenderer {
     static func firstPage(for rendered: RenderedDocument) throws -> PDFPage {
         let pagedView = layoutPagedView(rendered)
         guard pagedView.pageCount > 0 else { throw RenderError.emptyDocument }
-        let rect = pagedView.rect(ofPage: 0)
-        guard rect.width > 0, rect.height > 0 else { throw RenderError.emptyDocument }
-        let data = pagedView.dataWithPDF(inside: rect)
-        guard let doc = PDFDocument(data: data), let page = doc.page(at: 0) else {
-            throw RenderError.emptyDocument
-        }
+        guard let page = pagedView.pdfPage(at: 0) else { throw RenderError.emptyDocument }
         return page
     }
 
@@ -222,7 +207,7 @@ enum QuickLookNativeRenderer {
         // point, `.preview`/`SoftReturnQuickLook`, is what serves full-size views). Capping our
         // OWN output is the documented, accepted pattern regardless of what a caller asks for:
         // QuickLookUI scales a smaller-than-requested thumbnail up rather than showing nothing.
-        let maxDimension: CGFloat = 1024
+        let maxDimension = QuickLookThumbnail.maxDimension
         let requestedSize = CGSize(
             width: min(maximumSize.width, maxDimension),
             height: min(maximumSize.height, maxDimension))

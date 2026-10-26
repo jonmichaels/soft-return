@@ -1,28 +1,32 @@
 import AppKit
 import Testing
+import TestSupport
 @testable import SoftReturn
 
 /// The Gatekeeper problem: an extensionless file with the execute bit is refused by macOS as
 /// an unverifiable program, before the app is ever asked. These tests work on copies in a
-/// temporary directory — never on anyone's real documents.
-@MainActor
-private func scratchFile(name: String, mode: Int) throws -> URL {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("ExecBitTests-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let url = dir.appendingPathComponent(name)
-    try Data("PLAIN TEXT DOCUMENT\r\nSecond line.\r\n".utf8).write(to: url)
-    try FileManager.default.setAttributes(
-        [.posixPermissions: NSNumber(value: mode)], ofItemAtPath: url.path)
-    return url
-}
-
+/// scratch directory — never on anyone's real documents.
 private func mode(of url: URL) throws -> UInt16 {
     let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
     return (attributes[.posixPermissions] as! NSNumber).uint16Value
 }
 
 @Suite struct ExecutableBitTests {
+    /// Each test's files live here, and go with the test's own instance.
+    private let scratch: TestScratch
+
+    init() throws {
+        scratch = try TestScratch(prefix: "ExecBitTests")
+    }
+
+    private func scratchFile(name: String, mode: Int) throws -> URL {
+        let url = scratch.url(for: name)
+        try Data("PLAIN TEXT DOCUMENT\r\nSecond line.\r\n".utf8).write(to: url)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: mode)], ofItemAtPath: url.path)
+        return url
+    }
+
     /// The exact shape macOS refuses: no extension, execute bit set.
     @Test @MainActor func anExtensionlessExecutableIsRepaired() throws {
         let url = try scratchFile(name: "AWAKEN", mode: 0o744)
@@ -50,8 +54,8 @@ private func mode(of url: URL) throws -> UInt16 {
 
     /// Repair Permissions… reports how many it actually fixed — the number the sheet shows.
     @Test @MainActor func preparingAFolderCountsOnlyWhatItChanged() throws {
-        let seed = try scratchFile(name: "seed", mode: 0o644)
-        let folder = seed.deletingLastPathComponent()
+        _ = try scratchFile(name: "seed", mode: 0o644)
+        let folder = scratch.url
         for name in ["LETTER1", "LETTER2", "LETTER3"] {
             _ = try? Data("x".utf8).write(to: folder.appendingPathComponent(name))
             try FileManager.default.setAttributes(

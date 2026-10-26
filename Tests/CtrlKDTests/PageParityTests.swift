@@ -14,12 +14,12 @@ import Testing
 ///
 ///   1. `Formatting2.swift`/`Line.swift`: `.poe`/`.poo` are independently STATEFUL
 ///      (same family as `.po`), carried per line as `Line.poeCols`/`pooCols`.
-///   2. `PDFLayout.swift`: `resolvePlainBody`/`resolvePrintedBody` record a candidate
+///   2. `PrintedBody.swift`: `resolvePrintedBody` records a candidate
 ///      `ParityLeft(even:odd:)` pair on `PageLine.parityLeft` for any line `.poe`/
-///      `.poo` governs; `layoutPrintedPagesPlain`'s own `closePage` — the one place
+///      `.poo` governs; `layoutPrintedPages`'s own `closePage` — the one place
 ///      that knows a page's own number once it closes — resolves the pair. The same
 ///      parity feeds `Page.poCols` (header/footer LEFT edge) via new
-///      `poeOrPooCheckpoints`/`leftForParity`.
+///      `parityPoTimeline`/`leftForParity`.
 ///
 /// A document that never uses `.poe`/`.poo` costs nothing — every new field stays
 /// `nil` throughout, `parityLeft` is never set, `leftForParity` always falls back to

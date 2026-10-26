@@ -30,8 +30,8 @@ import Testing
         var d = Document()
         d.blocks = [Block(kind: .para, lines: [Line(spans: [Span(text: "body")])])]
         for (kind, line, text, parity) in events {
-            d.hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: 0))
-            d.hfEventsParity.append(parity)
+            d.hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: 0,
+                                      parity: parity))
             if kind == .header { d.headers[line] = text } else { d.footers[line] = text }
         }
         d.headerStyleAttrs = plainAttrs

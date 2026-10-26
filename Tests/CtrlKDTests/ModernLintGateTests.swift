@@ -523,7 +523,7 @@ private func mdDeepIndentLines(_ md: String) -> [String] {
 /// however many escaped `\\` pairs precede it) -- still forbidden here. An EVEN number
 /// is fully paired escape sequences (`\\` -> one literal backslash character, per
 /// CommonMark's own escape rule) -- legitimate CONTENT the emitter escapes at every
-/// position (`markdownSpan` and the round-12 fix to the note-definition path), not
+/// position (`markdownSpanParts` and the round-12 fix to the note-definition path), not
 /// emitter syntax. A character-reference document whose own lines legitimately end in
 /// a literal backslash is exactly this shape: every trailing run is an even,
 /// fully-escaped count. Port of `_md_trailing_backslash_lines`.
@@ -723,7 +723,7 @@ private func missingAttrMarkers(_ rendered: String, fmt: String, attrsPresent: S
 /// WordTsar's `.PSA`/`.PSB`. Port of `_rtf_printed_vertical_space_expected`.
 ///
 /// LIMIT (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): this calls
-/// `rtfSlTwips`/`rtfPMFiTwips`/`rtfDocSpacingTwips` -- the exact functions `emitRTF` itself
+/// `rtfSlTwips`/`printedPMFiPt`/`rtfDocSpacingTwips` -- the exact functions `emitRTF` itself
 /// calls to produce the tokens this gate checks for -- so a bug IN those functions passes
 /// here regardless. `round6DoubleSpacedSourceOpensDoubleSpacedInPrintedRTF` and
 /// `round6PsaPsbLandAsDirectSbSaInPrintedRTF` below already close that gap independently:
@@ -1027,7 +1027,7 @@ private func assertLintGates(_ name: String, _ doc: Document) {
     // ctrl-kd round 12 (a character-code reference document -- the same self-
     // documenting class as LJ6DTP/SCRIPT.WS/LAYOUT.WS -- whose own lines legitimately
     // end in a literal backslash, e.g. explaining what a byte displays as):
-    // `markdownSpan` already doubles every content backslash (`\` -> `\\`), which
+    // `markdownSpanParts` already doubles every content backslash (`\` -> `\\`), which
     // CommonMark's own escape rule reads back as ONE literal backslash character, not
     // a break. The gate itself (`mdTrailingBackslashLines`) is fixed the same round: it
     // now counts trailing backslashes and flags only an ODD count (a real unescaped
@@ -1042,7 +1042,7 @@ private func assertLintGates(_ name: String, _ doc: Document) {
 @Test func round12NoteTextBackslashEscapedInDefinition() {
     // ctrl-kd round 12: a note's own text is embedded verbatim in its Markdown
     // footnote-style definition -- the ONE path in this emitter that bypassed
-    // `markdownSpan` entirely, so a content backslash anywhere in a note (mid-word or
+    // `markdownSpanParts` entirely, so a content backslash anywhere in a note (mid-word or
     // trailing) reached CommonMark unescaped. Reproduced directly: a footnote whose
     // text contains a backslash mid-sentence.
     var data = ws7Block(0x00) + bytes("A claim needing a citation")

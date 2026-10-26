@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -139,7 +140,5 @@ struct NativeColumnsDrawTests {
         }
 
         #expect(failures.isEmpty, "a column drew no ink: \(failures)")
-        try NativeSupSubRiseTests.writeComparison(state: state, rendered: rendered,
-                                                  name: "b41-columns-booklet-native-vs-printed.png")
     }
 }

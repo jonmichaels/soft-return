@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+import SoftReturnRendering
 import SoftReturnShared
 import PDFKit
 
@@ -27,6 +28,11 @@ final class DocumentWindowController: NSWindowController {
     /// `scrollView` at the same position in `content`; `reloadContent()` shows exactly one
     /// of the two, by hiding the other, depending on `documentState.style.value`.
     let pdfView = PDFView()
+    /// Native's and Modern's pages, and Printed's (`PageContent`).
+    private(set) lazy var pagedContent = PagedContent(scrollView: scrollView, pages: pagedView)
+    private(set) lazy var printedContent = PrintedContent(pdfView: pdfView)
+    /// What the window shows its pages in now: the document's own style decides, and nothing else.
+    var content: PageContent { documentState.style.value == .printed ? printedContent : pagedContent }
     let bottomBar = BottomBar()
     /// The per-window Inspector (job 314, View ▸ Show Document Info / ⌘I). Internal, not
     /// private: the Actions extension's `toggleDocumentInfo`/`validateMenuItem` read and
@@ -36,16 +42,21 @@ final class DocumentWindowController: NSWindowController {
     /// Batch 46: View ▸ Quirks…, this document's own, made when first asked for.
     var quirksWindowController: QuirksWindowController?
 
-    /// Set once the window has been sized from its document. The geometry rule applies to
-    /// the FIRST presentation only — after that the window is the user's.
-    private var hasAppliedFirstOpenGeometry = false
     /// Batch 40 (M10): the local event monitor that turns pages for a scroll in Single Page (`PagedDocumentView.flipPages`),
     /// removed when the window closes.
     private var scrollMonitor: Any?
-    /// The scale the first-open rule chose, kept so `snapToViewport()` knows what size the
-    /// page is meant to be on screen once the real viewport is known.
-    private var firstOpenScale: CGFloat = 1
-    private var hasSnappedToViewport = false
+    /// The first-open rule's own record (`applyFirstOpenGeometry`): the geometry rule applies to the FIRST
+    /// presentation only — after that the window is the user's.
+    private struct FirstOpenGeometry {
+        /// The page size the window was sized for, once it has been. A progressive load sizes the window before its
+        /// pages exist, against a stand-in, and sizes it again once if the real page differs (`contentDidAppear`).
+        var pageSize: CGSize?
+        /// The scale the rule chose, so `snapToViewport()` knows what size the page is meant to be on screen once
+        /// the real viewport is known.
+        var scale: CGFloat = 1
+        var snappedToViewport = false
+    }
+    private var firstOpen = FirstOpenGeometry()
     /// How this window turns its current screen into the "Actual Size" magnification factor.
     /// A stored closure rather than a hardwired `DisplayPhysicalMetrics.live(for:)` call —
     /// injectable so a test can pin known, synthetic display metrics instead of depending on
@@ -92,11 +103,6 @@ final class DocumentWindowController: NSWindowController {
     /// Batch 27: each unpinned render's probe (Show Invisibles, Native), so going back to it never measures the
     /// whole flow again.
     private var probeCache: [RenderKey: PagedDocumentView.ExplicitProbe] = [:]
-    /// Batch 27: the style whose content is on screen now — which, while a progressive load runs, can still be the
-    /// style before a switch.
-    private(set) var shownContentStyle: ViewStyle? {
-        didSet { shownContentVersion += 1 }
-    }
     /// Batch 27: bumped every time new content goes on screen — a first page, a preview, a whole render, a PDF —
     /// the same style again included (Show Invisibles turned on or off).
     private(set) var shownContentVersion = 0
@@ -123,9 +129,6 @@ final class DocumentWindowController: NSWindowController {
     nonisolated(unsafe) static var lastScrollActivity: UInt64 = 0
     /// Shown while a progressive load has nothing new on screen yet.
     let loadingIndicator = NSProgressIndicator()
-    /// The page size the first-open geometry was sized for. A progressive load sizes the window before its
-    /// pages exist, against a stand-in, and sizes it again once if the real page differs (`contentDidAppear`).
-    private var firstOpenPageSize: CGSize?
     private var hasShownContent = false
 
     init(state: DocumentState, settings: SettingsStore = .shared,
@@ -143,7 +146,9 @@ final class DocumentWindowController: NSWindowController {
             // `titleBarHeight` measures 0 for a bar that really costs 28pt, and AppKit hands
             // the scroll view an automatic 28pt top content inset nobody asked for.
             // Measured before removal: titleBarHeight=0, contentLayoutRect 28pt shorter than
-            // the frame, scrollView.contentInsets.top = 28.
+            // the frame, scrollView.contentInsets.top = 28. Workaround, kept (reviewed 2026-10-26, macOS 26.7):
+            // still an opaque title bar, so nothing for the flag to show through; re-test only if the title bar ever
+            // becomes transparent.
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -283,6 +288,9 @@ final class DocumentWindowController: NSWindowController {
         // scroller — Jon's field screenshots' "grey band and scrollbars appear". Zero margins
         // makes the document view's true size equal the page's, the same "true content size
         // equals the page's mediaBox" contract the shadow fix above already established.
+        // Workaround, kept (reviewed 2026-10-26, macOS 26.7): FirstOpenFitTests finds no desk along any edge of a
+        // Printed window with both settings; re-test if a PDFKit release stops padding by `pageBreakMargins` in
+        // Single Page mode.
         pdfView.pageBreakMargins = NSEdgeInsetsZero
         pdfView.setAccessibilityIdentifier("document-pdf-view")
         pdfView.setAccessibilityLabel("Document")
@@ -344,14 +352,14 @@ final class DocumentWindowController: NSWindowController {
     /// `PagePreviewRenderer`) keeps calling the plain `render(_:style:)`, which never
     /// consults `showInvisibles` at all. See `DocumentRenderer.render`'s own top doc comment.
     private func reloadContent() {
-        let isPrinted = documentState.style.value == .printed
-        if isPrinted {
+        if documentState.style.value == .printed {
             loadPrintedPDFContent()
         } else {
             loadPagedContent()
         }
-        scrollView.isHidden = isPrinted
-        pdfView.isHidden = !isPrinted
+        for candidate in [pagedContent, printedContent] as [PageContent] {
+            candidate.view.isHidden = candidate !== content
+        }
         bottomBar.update(from: documentState)
         refreshPageIndicator()
         applyZoom()
@@ -469,7 +477,7 @@ final class DocumentWindowController: NSWindowController {
             pagedView.setContent(rendered, display: display, firstPages: loadsProgressively ? Self.firstLaidOutPages : nil,
                                  probe: probe)
         }
-        shownContentStyle = documentState.style.value
+        shownContentVersion += 1
         contentDidAppear()
         guard !pagedView.isLaidOut else {
             finishLoad()
@@ -485,7 +493,7 @@ final class DocumentWindowController: NSWindowController {
 
     /// `body` on a later turn of the main run loop, unless another load has replaced this one by then.
     ///
-    /// A run-loop perform in the default mode, not `DispatchQueue.main.async`: a main-queue block cannot
+    /// A run-loop timer in the default mode, not `DispatchQueue.main.async`: a main-queue block cannot
     /// run while another main-queue block is running, and a caller that turns the run loop from inside one
     /// (a `@MainActor` test waiting on the pages) starved every chunk (b25-holymac-fix1). The default mode
     /// also pauses the work while a scroll or resize is being tracked, so it never stutters one.
@@ -496,16 +504,18 @@ final class DocumentWindowController: NSWindowController {
                 body(self)
             }
         }
-        // Batch 47 (M25): while the reader scrolls, one turn a frame — turns queued back to back ran three and four inside
-        // one frame (b47-m25-after: 25 layout turns in 7 frames over budget).
-        guard Self.isScrolling else {
-            RunLoop.main.perform(inModes: [.default], block: run)
-            return
-        }
-        let timer = Timer(timeInterval: Self.scrollingTurnSpacingSeconds, repeats: false) { _ in run() }
+        // A timer a little in the future, never a block due at once (planning #572): one pass of the run loop runs every
+        // block due in it, and a turn that queued the next as a block got it in the same pass — four and five 20 ms turns
+        // held the loop 100–125 ms on end before it drew or took an event (-HOLYMAC.WS's Modern, HolymacTimingTests). The
+        // iPhone learned this in batch 27. While the reader scrolls, one turn a frame (batch 47, M25: turns queued back
+        // to back ran three and four inside one frame).
+        let spacing = Self.isScrolling ? Self.scrollingTurnSpacingSeconds : Self.turnSpacingSeconds
+        let timer = Timer(timeInterval: spacing, repeats: false) { _ in run() }
         RunLoop.main.add(timer, forMode: .default)
     }
 
+    /// The least time between two turns of a progressive load, so the next is not due as the last one ends.
+    static let turnSpacingSeconds: TimeInterval = 0.002
     /// While the reader scrolls, the least time between two turns: about a frame.
     static let scrollingTurnSpacingSeconds: TimeInterval = 0.008
 
@@ -550,10 +560,11 @@ final class DocumentWindowController: NSWindowController {
     private func contentDidAppear() {
         guard loadsProgressively, !hasShownContent else { return }
         hasShownContent = true
-        if firstOpenPageSize != currentPageSize() {
-            hasAppliedFirstOpenGeometry = false
-            hasSnappedToViewport = false
+        if firstOpen.pageSize != currentPageSize() {
+            firstOpen = FirstOpenGeometry()
             applyFirstOpenGeometry()
+            window?.contentView?.layoutSubtreeIfNeeded()
+            snapToViewport()
         }
         applyZoom()
     }
@@ -578,7 +589,7 @@ final class DocumentWindowController: NSWindowController {
         let document = documentState.document
         let options = DocumentRenderer.nativeEngineOptions(documentState)
         let start = DispatchTime.now().uptimeNanoseconds
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .userInitiated) { [weak self] in
             let work = NativeAnnotatedEngineWork.make(document: document, options: options)
             MainRunLoop.perform { [weak self] in
                 guard let self, self.loadToken == token else { return }
@@ -596,7 +607,7 @@ final class DocumentWindowController: NSWindowController {
         let document = documentState.document
         let options = DocumentRenderer.modernEngineOptions(documentState)
         let start = DispatchTime.now().uptimeNanoseconds
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .userInitiated) { [weak self] in
             let flow = modernSemanticFlow(document)
             // Batch 41 (A): the engine's Modern page furniture runs the whole Modern emitter — made here, off the main
             // thread, beside the flow, with the Modern export's own options.
@@ -642,7 +653,7 @@ final class DocumentWindowController: NSWindowController {
         let document = documentState.document
         let options = DocumentRenderer.nativeEngineOptions(documentState)
         let start = DispatchTime.now().uptimeNanoseconds
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .userInitiated) { [weak self] in
             let work = NativeEngineWork.make(document: document, options: options, pictures: true)
             MainRunLoop.perform { [weak self] in
                 self?.nativeEngineWorkDone(work, token: token, startedAt: start)
@@ -680,7 +691,7 @@ final class DocumentWindowController: NSWindowController {
                 PerformanceSignposts.measure("pages.setContent") {
                     controller.pagedView.setContent(first, display: controller.documentState.display.value)
                 }
-                controller.shownContentStyle = controller.documentState.style.value
+                controller.shownContentVersion += 1
                 controller.contentDidAppear()
                 controller.setLoading(spinner: false)
                 controller.refreshPageIndicator()
@@ -696,7 +707,7 @@ final class DocumentWindowController: NSWindowController {
         let document = documentState.document
         let options = DocumentRenderer.modernEngineOptions(documentState)
         let start = DispatchTime.now().uptimeNanoseconds
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .userInitiated) { [weak self] in
             let work = ModernEngineWork.make(document: document, options: options)
             MainRunLoop.perform { [weak self] in
                 self?.modernEngineWorkDone(work, token: token, startedAt: start)
@@ -728,7 +739,7 @@ final class DocumentWindowController: NSWindowController {
                         controller.pagedView.setContent(preview, display: controller.documentState.display.value,
                                                         firstPages: DocumentWindowController.firstLaidOutPages)
                     }
-                    controller.shownContentStyle = controller.documentState.style.value
+                    controller.shownContentVersion += 1
                     controller.contentDidAppear()
                     controller.setLoading(spinner: false)
                     controller.refreshPageIndicator()
@@ -788,7 +799,7 @@ final class DocumentWindowController: NSWindowController {
         // #271 M7: a Printed PDF already emitted for this content is shown again, not emitted again.
         if let cached = printedCache, cached.generation == contentGeneration {
             if pdfView.document !== cached.document { pdfView.document = cached.document }
-            shownContentStyle = .printed
+            shownContentVersion += 1
             return
         }
         let options = EmitOptions(
@@ -805,7 +816,7 @@ final class DocumentWindowController: NSWindowController {
         setLoading(spinner: true)
         let document = documentState.document
         let start = DispatchTime.now().uptimeNanoseconds
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .userInitiated) { [weak self] in
             let bytes = emitPDF(document, mode: .printed, options: options)
             MainRunLoop.perform { [weak self] in
                 self?.printedPDFDone(bytes, token: token, startedAt: start)
@@ -826,13 +837,12 @@ final class DocumentWindowController: NSWindowController {
         PerformanceSignposts.measure("printed.load") {
             pdfView.document = PDFDocument(data: Data(bytes))
         }
-        shownContentStyle = .printed
+        shownContentVersion += 1
         if let document = pdfView.document { printedCache = (contentGeneration, document) }
     }
 
     private func applyPrintedDisplayMode() {
-        pdfView.displayMode = documentState.display.value == .continuousScroll
-            ? .singlePageContinuous : .singlePage
+        printedContent.setDisplay(documentState.display.value)
     }
 
     // MARK: - Commands (driven by the menu extension)
@@ -850,8 +860,8 @@ final class DocumentWindowController: NSWindowController {
 
     func setDisplay(_ display: PageDisplay) {
         documentState.display.setManually(display)
-        pagedView.setDisplay(display)
-        pdfView.displayMode = display == .continuousScroll ? .singlePageContinuous : .singlePage
+        pagedContent.setDisplay(display)
+        printedContent.setDisplay(display)
         bottomBar.update(from: documentState)
         refreshPageIndicator()
         applyZoom()
@@ -929,23 +939,15 @@ final class DocumentWindowController: NSWindowController {
     /// anything — the previous parse stays on screen behind the alert.
     private func presentVariantFailure(_ variant: Variant, _ error: Error) {
         guard let window else { return }
-        let alert = NSAlert()
-        alert.messageText = "This file can’t be read as that format."
-        alert.informativeText =
-            "Soft Return couldn’t parse it that way, so it’s still showing the previous "
-            + "reading. Try another format, or Auto to go back to what was detected."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
-        alert.beginSheetModal(for: window)
+        Alert.show("This file can’t be read as that format.",
+                   informative: "Soft Return couldn’t parse it that way, so it’s still showing the previous "
+                       + "reading. Try another format, or Auto to go back to what was detected.",
+                   in: window)
     }
 
     /// What is actually on screen right now, whatever named state produced it — the figure
-    /// Zoom In/Out needs to find the nearest rung when coming from Fit. Printed reads
-    /// `pdfView.scaleFactor` instead of `scrollView.magnification` — the two views' own
-    /// native scale properties — since exactly one of the two is ever showing content.
-    var currentMagnification: CGFloat {
-        documentState.style.value == .printed ? pdfView.scaleFactor : scrollView.magnification
-    }
+    /// Zoom In/Out needs to find the nearest rung when coming from Fit.
+    var currentMagnification: CGFloat { content.magnification }
 
     /// The page size currently on screen, however it got there — `pdfView`'s own loaded
     /// `PDFDocument` for Printed, `DocumentRenderer`'s AppKit layout for Native/Modern. The
@@ -955,31 +957,26 @@ final class DocumentWindowController: NSWindowController {
         // Batch 26: while a progressive load has nothing of this style on screen yet, the named page size
         // stands in. Rendering the whole document here only to measure its page is the very block the load
         // exists to avoid; the real size replaces the stand-in when the content arrives (`contentDidAppear`).
-        let standIn = isLoadingContent ? (documentState.pageSize.value?.sizeInPoints ?? .zero) : .zero
-        if documentState.style.value == .printed {
-            return pdfView.document?.page(at: 0)?.bounds(for: .mediaBox).size ?? standIn
+        // #271 M7: the page laid out or loaded. `reloadContent()` loads it before anything asks, so this no longer
+        // renders the whole document again for every zoom, resize and first-open measure (five full renders on one
+        // open, from the code: init's applyZoom, applyFirstOpenGeometry, windowDidResize, showWindow's applyZoom,
+        // snapToViewport).
+        if let shown = content.pageSize {
+            return shown
         }
-        if isLoadingContent, pagedView.renderedPageSize == nil {
-            return standIn
+        if isLoadingContent {
+            return documentState.pageSize.value?.sizeInPoints ?? .zero
         }
-        // #271 M7: the page the pages view has laid out. `reloadContent()` loads it before anything
-        // asks, so this no longer renders the whole document again for every zoom, resize and
-        // first-open measure (five full renders on one open, from the code: init's applyZoom,
-        // applyFirstOpenGeometry, windowDidResize, showWindow's applyZoom, snapToViewport).
-        if let laidOut = pagedView.renderedPageSize {
-            return laidOut
-        }
+        // Printed has nothing to measure until its PDF is in; a paged style can render its page size here.
+        guard content === pagedContent else { return .zero }
         return PerformanceSignposts.measure("render.pageSize") {
             DocumentRenderer.render(documentState, style: documentState.style.value.renderStyle).pageSize
         }
     }
 
-    /// The viewport the current content view actually has to draw into — `scrollView`'s clip
-    /// view for Native/Modern, `pdfView`'s own bounds for Printed (it manages its own
-    /// scrolling internally, so its bounds ARE its viewport, the same role the clip view
-    /// plays for `scrollView`).
+    /// The viewport the current content view actually has to draw into (`PageContent.viewportSize`).
     func currentViewportSize() -> CGSize {
-        documentState.style.value == .printed ? pdfView.bounds.size : scrollView.contentView.frame.size
+        content.viewportSize
     }
 
     /// This window's CURRENT screen turned into an Actual Size magnification factor (see
@@ -1035,25 +1032,54 @@ final class DocumentWindowController: NSWindowController {
     /// portrait Letter page on a laptop) still spans that height, as before; one that Actual Size or
     /// the width limits (landscape) gets a window no taller than itself, where M3's window spanned the
     /// whole height and showed grey above and below the page.
+    ///
+    /// R-125 (Jon: "zero background gray visible"): the scale is one at which the page is a whole number of the screen's
+    /// pixels both ways (`pixelExactScale`), and the window is exactly that, so no fraction of a pixel is left over to
+    /// show the desk as a hairline along an edge.
     static func firstOpenLayout(page: CGSize, visible: NSRect, titleBarHeight: CGFloat,
-                                barHeight: CGFloat, actualScale: CGFloat) -> (frame: NSRect, scale: CGFloat) {
+                                barHeight: CGFloat, actualScale: CGFloat,
+                                pixelsPerPoint: CGFloat = 2) -> (frame: NSRect, scale: CGFloat) {
         let pageAreaHeight = visible.height - titleBarHeight - barHeight
-        let scale = max(0.05, min(actualScale, pageAreaHeight / page.height, visible.width / page.width))
-        let width = min(visible.width, (page.width * scale).rounded())
-        let height = min(visible.height, (page.height * scale).rounded() + titleBarHeight + barHeight)
+        let fitted = max(0.05, min(actualScale, pageAreaHeight / page.height, visible.width / page.width))
+        let scale = pixelExactScale(fitted, page: page, pixelsPerPoint: pixelsPerPoint)
+        func points(_ length: CGFloat) -> CGFloat { (length * pixelsPerPoint).rounded() / pixelsPerPoint }
+        let width = min(visible.width, points(page.width * scale))
+        let height = min(visible.height, points(page.height * scale) + titleBarHeight + barHeight)
         let frame = NSRect(x: (visible.midX - width / 2).rounded(), y: (visible.midY - height / 2).rounded(),
                            width: width, height: height)
         return (frame, scale)
     }
 
+    /// The largest scale at or below `scale` at which `page` is a whole number of device pixels wide, and no more than
+    /// `heightRemainder` of a pixel short of a whole number tall, looked for within 3% below it; `scale` itself when the page's proportions land on
+    /// no such pair that near (the window is then the page to within a fraction of a pixel, as before).
+    ///
+    /// The remainder is what keeps the step small (planning #579). Exactly whole both ways, US Letter at 2 pixels a point
+    /// lands only every 17 pixels of width, 1.4% of zoom: Actual Size's 108% became 106.9% and a laptop's window came
+    /// 6 pt short of the visible height. The remainder is only ever UNDER a whole pixel: the window rounds the height up
+    /// to it, the width stays exact and binds the fit, and at most a tenth of a pixel of desk blends into the bottom edge
+    /// pixel, at about 99% white. Over a whole pixel, the window would round the height down, the height would bind the
+    /// fit, and the narrowed width would leave a column of desk down the right edge (measured: 0.28 px at 150.6%).
+    static func pixelExactScale(_ scale: CGFloat, page: CGSize, pixelsPerPoint: CGFloat,
+                                heightRemainder: CGFloat = 0.1) -> CGFloat {
+        let widthPixels = page.width * scale * pixelsPerPoint
+        var candidate = widthPixels.rounded(.down)
+        while candidate >= widthPixels * 0.97, candidate > 0 {
+            let exact = candidate / (page.width * pixelsPerPoint)
+            let heightPixels = page.height * exact * pixelsPerPoint
+            if heightPixels.rounded(.up) - heightPixels < heightRemainder { return exact }
+            candidate -= 1
+        }
+        return scale
+    }
+
     private func applyFirstOpenGeometry() {
-        guard !hasAppliedFirstOpenGeometry, let window else { return }
+        guard firstOpen.pageSize == nil, let window else { return }
         let page = currentPageSize()
         // Nothing to size against yet — a progressive load with no page and no named size to stand in for
         // it: the rule runs once the content is on screen (`contentDidAppear`).
         guard page.width > 0, page.height > 0 else { return }
-        hasAppliedFirstOpenGeometry = true
-        firstOpenPageSize = page
+        firstOpen.pageSize = page
 
         let screen = window.screen ?? NSScreen.main
         let visible = firstOpenVisibleFrameOverride
@@ -1066,13 +1092,10 @@ final class DocumentWindowController: NSWindowController {
         let layout = Self.firstOpenLayout(page: page, visible: visible,
                                           titleBarHeight: titleBarHeight(of: window),
                                           barHeight: BottomBar.barHeight,
-                                          actualScale: currentActualScale)
-        firstOpenScale = layout.scale
-        if documentState.style.value == .printed {
-            pdfView.scaleFactor = layout.scale
-        } else {
-            scrollView.magnification = layout.scale
-        }
+                                          actualScale: currentActualScale,
+                                          pixelsPerPoint: window.backingScaleFactor)
+        firstOpen.scale = layout.scale
+        content.magnification = layout.scale
         window.setFrame(layout.frame, display: false)
     }
 
@@ -1085,30 +1108,33 @@ final class DocumentWindowController: NSWindowController {
     /// window, which is what makes "the page fills it exactly, no scrollbars" true under
     /// either style instead of under the one that happened to be set a moment ago.
     private func snapToViewport() {
-        guard !hasSnappedToViewport, let window else { return }
+        guard !firstOpen.snappedToViewport, let window else { return }
         let page = currentPageSize()
         guard page.width > 0, page.height > 0 else { return }
 
-        let wanted = NSSize(width: page.width * firstOpenScale,
-                            height: page.height * firstOpenScale)
+        let wanted = NSSize(width: page.width * firstOpen.scale,
+                            height: page.height * firstOpen.scale)
         let viewport = currentViewportSize()
-        // Sub-point differences are rounding, not scrollers. Batch 40 (M13): the height is grown too, now that a window
-        // is only as tall as its page — but never past the visible frame, which already holds the fitted page whole.
+        // R-125: the window follows the page both ways — grown by what the scrollers took, and shrunk by any viewport
+        // the title bar's measure left a point taller than the page (measured: 1194 against a 1193.2 pt page, a hairline
+        // of desk along the top and the bottom). Batch 40 (M13): never past the visible frame, which already holds the
+        // fitted page whole. Anything under half a device pixel is the page's own rounding.
         let visible = firstOpenVisibleFrameOverride ?? window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
-        let shortfallX = wanted.width - viewport.width
+        let pixel = 0.5 / max(window.backingScaleFactor, 1)
+        let changeX = wanted.width - viewport.width
         let roomY = visible.map { $0.height - window.frame.height } ?? 0
-        let shortfallY = min(wanted.height - viewport.height, max(roomY, 0))
-        hasSnappedToViewport = true
-        guard shortfallX > 0.5 || shortfallY > 0.5 else { return }
+        let changeY = min(wanted.height - viewport.height, max(roomY, 0))
+        firstOpen.snappedToViewport = true
+        guard abs(changeX) > pixel || abs(changeY) > pixel else { return }
 
         var frame = window.frame
-        if shortfallX > 0.5 {
-            frame.size.width += shortfallX
-            frame.origin.x -= (shortfallX / 2).rounded()
+        if abs(changeX) > pixel {
+            frame.size.width += changeX
+            frame.origin.x -= (changeX / 2).rounded()
         }
-        if shortfallY > 0.5 {
-            frame.size.height += shortfallY
-            frame.origin.y -= (shortfallY / 2).rounded()
+        if abs(changeY) > pixel {
+            frame.size.height += changeY
+            frame.origin.y -= (changeY / 2).rounded()
             if let visible { frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height) }
         }
         window.setFrame(frame, display: false)
@@ -1118,6 +1144,8 @@ final class DocumentWindowController: NSWindowController {
     /// The scroller style flipped under us. The window keeps the size the user (or the
     /// first-open rule) gave it; what has to change is the fit, because the viewport just
     /// grew or shrank by the scroller thickness without any resize notification firing.
+    /// Workaround, kept (reviewed 2026-10-26, macOS 26.7): legacy scrollers still take their width from the clip
+    /// view and the style still changes with the pointing device; nothing to re-test while that holds.
     @objc private func scrollerStyleChanged() {
         window?.contentView?.layoutSubtreeIfNeeded()
         snapToViewport()
@@ -1177,23 +1205,20 @@ final class DocumentWindowController: NSWindowController {
         // A non-finite magnification puts a NaN into the layer transform. Refusing is the
         // only safe response; there is no sensible value to fall back to.
         guard scale.isFinite, scale > 0 else { return }
-        if documentState.style.value == .printed {
-            pdfView.scaleFactor = scale
-        } else {
-            scrollView.magnification = scale
-            // Fit worked out against a viewport a scroller was taking room from stays short once that scroller hides.
-            // Measured: shrinking the window from its large first-open zoom, `windowDidResize` reached here while the
-            // legacy horizontal scroller still took 15pt. At the new scale the page fitted, the scroller auto-hid, the
-            // viewport grew 15pt, and the page stayed 15pt smaller than Fit (0.5189 against 0.5379 at 600x450).
-            // So once the scale is applied the scroll view tiles again, and if the viewport moved, Fit is worked out
-            // once more against the one that is really there. One extra pass is enough: a scroller that hid at this
-            // scale is not needed at a scale worked out without it.
-            if zoom == .fit, !reapplying {
-                scrollView.tile()
-                let settled = currentViewportSize()
-                if abs(settled.width - available.width) > 0.5 || abs(settled.height - available.height) > 0.5 {
-                    applyZoom(reapplying: true)
-                }
+        content.magnification = scale
+        // Fit worked out against a viewport a scroller was taking room from stays short once that scroller hides.
+        // Measured: shrinking the window from its large first-open zoom, `windowDidResize` reached here while the
+        // legacy horizontal scroller still took 15pt. At the new scale the page fitted, the scroller auto-hid, the
+        // viewport grew 15pt, and the page stayed 15pt smaller than Fit (0.5189 against 0.5379 at 600x450).
+        // So once the scale is applied the view settles again, and if the viewport moved, Fit is worked out once
+        // more against the one that is really there. One extra pass is enough: a scroller that hid at this scale is
+        // not needed at a scale worked out without it. Workaround, kept (reviewed 2026-10-26, macOS 26.7): an autohiding legacy
+        // scroller still changes the viewport only after the scale is applied.
+        if zoom == .fit, !reapplying {
+            content.settleAfterZoom()
+            let settled = currentViewportSize()
+            if abs(settled.width - available.width) > 0.5 || abs(settled.height - available.height) > 0.5 {
+                applyZoom(reapplying: true)
             }
         }
     }
@@ -1226,14 +1251,7 @@ final class DocumentWindowController: NSWindowController {
         // A print-only view: every page laid out continuously at 100%, whatever the window
         // is currently showing. Printing a document should not depend on which page happens
         // to be on screen.
-        let printView = PagedDocumentView()
-        printView.setContent(rendered, display: .continuousScroll)
-        printView.frame = CGRect(
-            origin: .zero,
-            size: NSSize(width: rendered.pageSize.width,
-                         height: printView.intrinsicContentSize.height)
-        )
-        return NSPrintOperation(view: printView, printInfo: info)
+        return NSPrintOperation(view: PagedDocumentView.laidOut(rendered), printInfo: info)
     }
 }
 
@@ -1260,6 +1278,7 @@ extension DocumentWindowController: NSWindowDelegate {
         // against the viewport that actually exists, which is what makes "no scrollbars on
         // first open" true rather than approximately true.
         window?.contentView?.layoutSubtreeIfNeeded()
+        snapToViewport()
         applyZoom()
     }
 
@@ -1359,6 +1378,10 @@ extension DocumentWindowController: BottomBarDelegate {
 /// parse finish (b26-holymac-fix1: every wait ran to its limit). A run-loop block runs on the next turn of
 /// the loop however the loop is being turned, and — like a progressive load's own slices — waits while a
 /// scroll or a resize is being tracked.
+///
+/// Workaround, kept (reviewed 2026-10-26): the test is not the only caller that turns the run loop inside a main-queue
+/// block — a modal panel or a menu does too, and the app's work must still come back then. The iPhone's
+/// `onMainRunLoop` is the same mechanism for the same reason.
 enum MainRunLoop {
     /// `body` on the main thread, on a coming turn of its run loop. Callable from any thread.
     nonisolated static func perform(_ body: @escaping @MainActor @Sendable () -> Void) {

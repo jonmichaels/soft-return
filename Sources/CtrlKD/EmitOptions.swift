@@ -64,7 +64,7 @@ public struct PageSettings: Hashable, Sendable {
 /// WordStar tags for annotations. `prefixed` shows the Markdown emitter's own labels
 /// (footnotes bare 1 2 3, endnotes e1 e2, annotations a1 a2), matched across PDF, RTF,
 /// and HTML. Printed output is a facsimile and ignores this.
-public enum NoteRefs: String, Hashable, Sendable {
+public enum NoteRefs: String, Hashable, Sendable, CaseIterable {
     case word
     case prefixed
 }
@@ -173,7 +173,7 @@ public struct EmitOptions: Hashable, Sendable {
     /// has no true embed — the CLI's own job, not this struct's). `.export`: PNG files
     /// beside the output, relative links from HTML/MD; RTF/PDF still embed (no portable
     /// reference mechanism) AND the PNGs are also written.
-    public enum PixMode: String, Hashable, Sendable {
+    public enum PixMode: String, Hashable, Sendable, Codable, CaseIterable {
         case off
         case embed
         case export
@@ -189,12 +189,12 @@ public struct EmitOptions: Hashable, Sendable {
     ///
     /// `.auto` (DEFAULT): the document's own dot commands decide -- `.pn` (ANY
     /// occurrence) or `.pg` turns it ON, `.op` turns it OFF, exactly like real WordStar
-    /// (measured, dosbox-x, 16 probes -- see `pgnumCheckpoints`/`autoPageNumberXPt` in
+    /// (measured, dosbox-x, 16 probes -- see `pgnumTimeline`/`autoPageNumberXPt` in
     /// PDFLayout.swift/PDFWriter.swift for the full ground truth). REVERSED 2026-09-07
     /// (ported from ctrl-kd b6d5d03, ws7-prints/v3 finding #2): a document that never
     /// touches any of the four now gets the STOCK automatic number, same as `.on` --
     /// the earlier "no number" default was measured against Robert J. Sawyer's own
-    /// WSCHANGE-customized install, not stock WS7 (see `pgnumCheckpoints`'s own
+    /// WSCHANGE-customized install, not stock WS7 (see `pgnumTimeline`'s own
     /// docstring for the full trace). `.on` forces stock default numbering (bottom row
     /// a footer would use; `.pc` repositions it) even on a document that explicitly
     /// turned it off with `.op`. `.off` suppresses it unconditionally. A declared footer (even with no
@@ -202,7 +202,7 @@ public struct EmitOptions: Hashable, Sendable {
     /// "active only when the footers are not in use") -- a header does not, and it is a
     /// property of the DOCUMENT, so `--headers off` neither lifts it nor suppresses the
     /// number (planning #264 R7, ruled 2026-09-14: the two flags, two subjects).
-    public enum PageNumberMode: String, Hashable, Sendable {
+    public enum PageNumberMode: String, Hashable, Sendable, Codable, CaseIterable {
         case auto
         case on
         case off
@@ -228,7 +228,7 @@ public struct EmitOptions: Hashable, Sendable {
     /// Markdown has its OWN independent guard (never a trailing double space baked
     /// into a rendered line's own text — CommonMark's hard-break marker) that applies
     /// regardless of this option's value; see `EmitMarkdown.swift`.
-    public enum SentenceSpacingMode: String, Hashable, Sendable {
+    public enum SentenceSpacingMode: String, Hashable, Sendable, CaseIterable {
         case auto
         case keep
         case single

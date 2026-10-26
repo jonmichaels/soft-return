@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -9,7 +10,7 @@ import Testing
 /// close): on -README.WS (Sawyer's list markers) the ■ drawn in Modern is Native's square — the same ink width and
 /// height — and it is still the character ■ in the text. The next word sits Native's distance past it (E8, engine ac9ddd6). Measured from the drawn page: the first
 /// three bullets' ink columns in a 70 pt strip. Before: Native 5.0 pt of ink and 9.0 pt to the next word; Modern 8.5 pt
-/// and 2.5 pt (b47-m27-probe). Renders: m27-readme-<Native|Modern>-bullet<n>.png.
+/// and 2.5 pt (b47-m27-probe).
 @Suite("Modern's square bullets (M27)", .serialized)
 @MainActor
 struct ModernBulletTests {
@@ -27,9 +28,6 @@ struct ModernBulletTests {
         let string = rendered.text.string as NSString
         var bullets: [Bullet] = []
         var search = NSRange(location: 0, length: string.length)
-        let proofs = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
         while bullets.count < 3 {
             let found = string.range(of: "\u{25A0}", options: [], range: search)
             guard found.location != NSNotFound else { break }
@@ -68,8 +66,6 @@ struct ModernBulletTests {
                                 height: CGFloat(squareRows.1 - squareRows.0 + 1) / scale,
                                 gap: CGFloat(runs[1].0 - runs[0].1 - 1) / scale)
             bullets.append(bullet)
-            let png = proofs.appendingPathComponent("m27-readme-\(style.displayName)-bullet\(bullets.count).png")
-            _ = try RenderProbeKit.renderPNG(view: view, rect: region, appearance: NSAppearance(named: .aqua)!, to: png)
             // Still the character.
             #expect((rendered.text.string as NSString).substring(with: found) == "\u{25A0}")
         }

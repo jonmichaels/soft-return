@@ -97,13 +97,13 @@ public struct EmitterRegistry: Sendable {
     /// so it returns `.data` and needs the full `Emitter` initializer.
     public static let standard = EmitterRegistry(
         emitters: [
-            "text": Emitter(name: "text", ext: ".txt", text: emitText),
-            "markdown": Emitter(name: "markdown", ext: ".md", text: emitMarkdown),
-            "html": Emitter(name: "html", ext: ".html", text: emitHTML),
-            "rtf": Emitter(name: "rtf", ext: ".rtf", text: emitRTF),
+            "text": Emitter(name: "text", ext: ".txt", text: { emitText($0, mode: $1, options: $2) }),
+            "markdown": Emitter(name: "markdown", ext: ".md", text: { emitMarkdown($0, mode: $1, options: $2) }),
+            "html": Emitter(name: "html", ext: ".html", text: { emitHTML($0, mode: $1, options: $2) }),
+            "rtf": Emitter(name: "rtf", ext: ".rtf", text: { emitRTF($0, mode: $1, options: $2) }),
             "pdf": Emitter(name: "pdf", ext: ".pdf") { .data(emitPDF($0, mode: $1, options: $2)) },
             // The full viewer contract as JSON (task #15) — see `Layout.swift`.
-            "layout": Emitter(name: "layout", ext: ".json", text: emitLayout),
+            "layout": Emitter(name: "layout", ext: ".json", text: { emitLayout($0, mode: $1, options: $2) }),
         ],
         aliases: ["txt": "text", "md": "markdown"]
     )

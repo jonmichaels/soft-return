@@ -282,12 +282,12 @@
     </suite>
 
     <suite name="Soft Return Suite" code="SRsu"
-           description="Classes and commands specific to Soft Return: converting, diagnosing, and reading WordStar-era documents.">
+           description="Classes and commands specific to Soft Return: converting, diagnosing, and reading WordStar for DOS v4–v7 documents.">
 
         <!-- ============================== Enumerations ============================== -->
 
         <enumeration name="variant" code="SRva"
-                     description="Which WordStar-era format a document was written in — the CLI's --variant.">
+                     description="Which WordStar for DOS format (v4–v7) a document was written in — the CLI's --variant.">
             <enumerator name="ws4" code="SRv4" description="WordStar 4 through 6."/>
             <enumerator name="ws5plus" code="SRv5" description="WordStar 5 through 7 (the CLI's ws5+)."/>
             <enumerator name="printstream" code="SRvp" description="A print-to-disk capture."/>
@@ -366,6 +366,13 @@
             <enumerator name="single" code="SRsl" description="Collapse it to a single space, regardless of mode."/>
         </enumeration>
 
+        <enumeration name="quirks mode" code="SRqm"
+                     description="Which quirks run before the named ones are turned on or off — the command-line tool's --quirks {off,auto,all}. A quirk is a named departure from a literal reading of the bytes; a quirk a document does not trip changes nothing.">
+            <enumerator name="off" code="SRq0" description="No quirks."/>
+            <enumerator name="auto" code="SRqa" description="The quirks that run unless turned off. The default for convert."/>
+            <enumerator name="all" code="SRql" description="Every quirk the document trips."/>
+        </enumeration>
+
         <enumeration name="zoom setting" code="SRzs"
                      description="A named zoom state; a zoom can also be a plain percentage number.">
             <enumerator name="fit" code="SRzf" description="Scaled to fill the window."/>
@@ -404,7 +411,7 @@
             <property name="converted" code="SRc1" type="integer" description="Files that produced at least one output.">
                 <cocoa key="converted"/>
             </property>
-            <property name="skipped" code="SRc2" type="integer" description="Files that were not convertible WordStar-era documents.">
+            <property name="skipped" code="SRc2" type="integer" description="Files that were not convertible WordStar for DOS v4–v7 documents.">
                 <cocoa key="skipped"/>
             </property>
             <property name="failed" code="SRc3" type="file" list="yes" description="Files that failed for some other reason.">
@@ -558,6 +565,20 @@
                       description="The typewriter double space after a sentence-ending . ? or ! (every format). Omitted: auto — there is deliberately no Settings default for this one.">
                 <cocoa key="scriptingSentenceSpacing"/>
             </parameter>
+            <parameter name="quirks" code="SRqx" type="quirks mode" optional="yes"
+                      description="Which quirks run before the named ones below. Omitted: the document's own quirks, as its window shows them.">
+                <cocoa key="scriptingQuirksMode"/>
+            </parameter>
+            <parameter name="enabling quirks" code="SRqy" optional="yes"
+                      description="Quirks to turn on, by name — the command-line tool's --quirk (sr --list-quirks lists them).">
+                <cocoa key="scriptingEnablingQuirks"/>
+                <type type="text" list="yes"/>
+            </parameter>
+            <parameter name="disabling quirks" code="SRqz" optional="yes"
+                      description="Quirks to turn off, by name — the command-line tool's --no-quirk.">
+                <cocoa key="scriptingDisablingQuirks"/>
+                <type type="text" list="yes"/>
+            </parameter>
             <result type="file" description="The file actually written — never the requested destination if that name already existed. A collision writes Finder-style, 'NAME 2.ext' (then 'NAME 3.ext', ...), never a silent overwrite; this is the name the result reports."/>
         </command>
 
@@ -641,6 +662,20 @@
             <parameter name="sentence spacing" code="SRcw" type="sentence spacing mode" optional="yes"
                       description="The typewriter double space after a sentence-ending . ? or ! (every format). Omitted: auto — there is deliberately no Settings default for this one.">
                 <cocoa key="scriptingSentenceSpacing"/>
+            </parameter>
+            <parameter name="quirks" code="SRqc" type="quirks mode" optional="yes"
+                      description="Which quirks run before the named ones below. Omitted: auto.">
+                <cocoa key="scriptingQuirksMode"/>
+            </parameter>
+            <parameter name="enabling quirks" code="SRqd" optional="yes"
+                      description="Quirks to turn on, by name — the command-line tool's --quirk (sr --list-quirks lists them).">
+                <cocoa key="scriptingEnablingQuirks"/>
+                <type type="text" list="yes"/>
+            </parameter>
+            <parameter name="disabling quirks" code="SRqe" optional="yes"
+                      description="Quirks to turn off, by name — the command-line tool's --no-quirk.">
+                <cocoa key="scriptingDisablingQuirks"/>
+                <type type="text" list="yes"/>
             </parameter>
             <result type="text" description="The output files' POSIX paths, one per line, in the order they were produced — the paths actually written, never a silent overwrite (a collision writes Finder-style, 'NAME 2.ext', 'NAME 3.ext', ...). The result is one text blob rather than a list, because a list-shaped reply cannot be returned through Cocoa Scripting at all; parse it by splitting on newlines. It is never empty: when nothing converts, convert raises a script error instead, and a partial run returns just the files it produced."/>
         </command>

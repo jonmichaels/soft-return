@@ -1,6 +1,7 @@
 import CoreGraphics
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 
 /// One page's content-stream scan: text state machine + word splitter.
 ///

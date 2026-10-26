@@ -49,9 +49,7 @@ import SoftReturnShared
 /// `NSPopUpButton`s already, but each auto-sizing to its own intrinsic content width with no
 /// shared width constraint, and the Formats/Notes/Options columns spaced with a `fillEqually`
 /// distribution that stretched the two short columns to match the widest, leaving large blank
-/// gaps. Both fixed here: one hard `widthAnchor` constant (`popupWidth`, same derivation as
-/// `BatchWindowController`'s — `SettingsWindowController.popupWidth - 5`, per job 511's
-/// ruling) on every popup, and the columns row switched to `.fill` distribution with tighter
+/// gaps. Both fixed here: one hard `widthAnchor` constant (`popupWidth`) on every popup, and the columns row switched to `.fill` distribution with tighter
 /// spacing so each column sizes to its own content.
 ///
 /// Job 536 (v4.0.0 UI notes, Part A2, Jon's ruling): two more changes on top of job 530's
@@ -89,11 +87,8 @@ final class ExportAccessoryView: NSView {
     private var pageNumbersPopup: NSPopUpButton!
     private var sentenceSpacingPopup: NSPopUpButton!
 
-    /// One width for every popup in this sheet, the same derivation job 528 used for
-    /// `BatchWindowController`'s pulldowns (job 511's ruling: Settings' own 190, minus 5) —
-    /// not `SettingsWindowController.popupWidth` directly, so this sheet's popups match
-    /// Batch's width rather than Settings'.
-    private static let popupWidth = SettingsWindowController.popupWidth - 5
+    /// One width for this sheet's full-width popups.
+    private static let popupWidth: CGFloat = 185
 
     /// Job 536 (Part A2): ~2/3 of `popupWidth` (185 * 2/3 = 123.3), for the three short-title
     /// popups (Pictures/Page Numbering/Sentence Spacing) that never needed the full form-field
@@ -178,21 +173,21 @@ final class ExportAccessoryView: NSView {
         inlineStylingCheck = inlineStyling
 
         let picturesButton = Self.makePopup(
-            titles: Self.pixModeTitles.map(\.1),
-            selectedIndex: Self.pixModeTitles.firstIndex { $0.0 == settings.defaultPictures } ?? 1,
+            titles: EmitOptions.PixMode.choices.map(\.displayName),
+            selectedIndex: EmitOptions.PixMode.choices.firstIndex(of: settings.defaultPictures) ?? 1,
             identifier: "export-pictures-popup", accessibilityLabel: "Pictures",
             width: Self.smallPopupWidth)
         picturesPopup = picturesButton
 
         let pageNumbersButton = Self.makePopup(
-            titles: Self.pageNumbersTitles.map(\.1),
-            selectedIndex: Self.pageNumbersTitles.firstIndex { $0.0 == settings.defaultPageNumbers } ?? 0,
+            titles: EmitOptions.PageNumberMode.choices.map(\.displayName),
+            selectedIndex: EmitOptions.PageNumberMode.choices.firstIndex(of: settings.defaultPageNumbers) ?? 0,
             identifier: "export-page-numbers-popup", accessibilityLabel: "Page Numbering",
             width: Self.smallPopupWidth)
         pageNumbersPopup = pageNumbersButton
 
         let sentenceSpacingButton = Self.makePopup(
-            titles: Self.sentenceSpacingTitles.map(\.1), selectedIndex: 0,
+            titles: EmitOptions.SentenceSpacingMode.choices.map(\.displayName), selectedIndex: 0,
             identifier: "export-sentence-spacing-popup", accessibilityLabel: "Sentence Spacing",
             width: Self.smallPopupWidth)
         sentenceSpacingPopup = sentenceSpacingButton
@@ -265,25 +260,13 @@ final class ExportAccessoryView: NSView {
     /// default.
     private func updateOptionAvailability() {
         let formats = selectedFormats
-        headersCheck.isEnabled = formats.contains(.rtf) || formats.contains(.pdf)
-        inlineStylingCheck.isEnabled = formats.contains(.rtf) || formats.contains(.html)
-        picturesPopup.isEnabled = formats.contains { $0 != .text }
+        headersCheck.isEnabled = ExportOption.headers.isEnabled(forFormats: formats)
+        inlineStylingCheck.isEnabled = ExportOption.inlineStyling.isEnabled(forFormats: formats)
+        picturesPopup.isEnabled = ExportOption.pictures.isEnabled(forFormats: formats)
         // Same paged-formats-only rule as Headers/Footers — `SoftReturn.sdef`'s own `page
         // numbers` parameter description: "(paged formats only — RTF/PDF)".
-        pageNumbersPopup.isEnabled = formats.contains(.rtf) || formats.contains(.pdf)
+        pageNumbersPopup.isEnabled = ExportOption.pageNumbers.isEnabled(forFormats: formats)
     }
-
-    private static let pixModeTitles: [(EmitOptions.PixMode, String)] = [
-        (.off, "Off"), (.embed, "Embed"), (.export, "Export"),
-    ]
-
-    private static let pageNumbersTitles: [(EmitOptions.PageNumberMode, String)] = [
-        (.auto, "Auto"), (.on, "On"), (.off, "Off"),
-    ]
-
-    private static let sentenceSpacingTitles: [(EmitOptions.SentenceSpacingMode, String)] = [
-        (.auto, "Auto"), (.keep, "Keep as typed"), (.single, "Single space"),
-    ]
 
     /// `FormControl.popUpButton` minus the target/action — this sheet's popups are read once
     /// at Export time (`selected*` below), never live-wired. (job 531: unified with
@@ -459,18 +442,12 @@ final class ExportAccessoryView: NSView {
     var selectedTOC: Bool { tocCheck.state == .on }
     var selectedInlineStyling: Bool { inlineStylingCheck.state == .on }
     var selectedPictures: EmitOptions.PixMode {
-        Self.pixModeTitles[safe: picturesPopup.indexOfSelectedItem]?.0 ?? .embed
+        EmitOptions.PixMode.choices[safe: picturesPopup.indexOfSelectedItem] ?? .embed
     }
     var selectedPageNumbers: EmitOptions.PageNumberMode {
-        Self.pageNumbersTitles[safe: pageNumbersPopup.indexOfSelectedItem]?.0 ?? .auto
+        EmitOptions.PageNumberMode.choices[safe: pageNumbersPopup.indexOfSelectedItem] ?? .auto
     }
     var selectedSentenceSpacing: EmitOptions.SentenceSpacingMode {
-        Self.sentenceSpacingTitles[safe: sentenceSpacingPopup.indexOfSelectedItem]?.0 ?? .auto
-    }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
+        EmitOptions.SentenceSpacingMode.choices[safe: sentenceSpacingPopup.indexOfSelectedItem] ?? .auto
     }
 }

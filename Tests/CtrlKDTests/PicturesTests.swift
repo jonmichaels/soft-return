@@ -394,7 +394,7 @@ private func footnoteAndIsolatedPixDoc() -> Document {
     // It used to: with the pix tag as a page's own FIRST line (the real-corpus shape --
     // -README's WORDSTAR.PIX opens the document), `off` renders the tag and its 8
     // contiguous following blank lines as ordinary PageLines, so
-    // `layoutPrintedPagesPlain`'s own "first line on a page is free" pagination rule
+    // `layoutPrintedPages`'s own "first line on a page is free" pagination rule
     // credits only the TAG line's one-line advance -- the other 7 blanks still cost
     // normally. `embed` bundles all 8 source lines into ONE image PageLine (`.lead` =
     // the RESERVED BAND total, `pixReservedAdvance`) and that same "first line free"
@@ -403,7 +403,7 @@ private func footnoteAndIsolatedPixDoc() -> Document {
     // own paper break does ("read the online version here:"); `embed`'s ran ~4-5 lines
     // longer ("The file OLDTIMES.WS is a sample..."). Fixed: an image PageLine's cost is
     // only credited ONE line's worth even as a page's own first line (see `cost`'s own
-    // b26-mtmb-general note in `layoutPrintedPagesPlain`), matching `off`'s natural
+    // b26-mtmb-general note in `layoutPrintedPages`), matching `off`'s natural
     // per-line accumulation exactly.
     //
     // Reproduced synthetically (`.pl 24`, the pix tag as the document's own first
@@ -458,19 +458,21 @@ private func footnoteAndIsolatedPixDoc() -> Document {
     // stderr note, conversion never fails.
     let block = wsBlock(cmd: 0x10, content: Array(#"C:\WS\INSET\PIX\NOPE.PIX"#.utf8))
     let source = bytes("Before.\r\n\r\n") + block + bytes("\r\n\r\nAfter.\r\n")
-    var written: [String: [UInt8]] = [:]
-    var err: [String] = []
+    let writtenBox = LockedBox<[String: [UInt8]]>([:])
+    let errBox = LockedBox<[String]>([])
     let env = CLIEnvironment(
         readFile: { path in
             guard path == "/in/DOC.WS" else { throw TestFSError.notFound }
             return source
         },
-        writeFile: { path, data in written[path] = data },
-        createDirectory: { _ in }, writeOut: { _ in }, writeErr: { line in err.append(line) },
+        writeFile: { path, data in writtenBox.withLock { $0[path] = data } },
+        createDirectory: { _ in }, writeOut: { _ in }, writeErr: { line in errBox.withLock { $0.append(line) } },
         listDirectory: { _ in nil }, isFile: { _ in false }
     )
     let status = run(["--mode", "modern", "-t", "pdf", "/in/DOC.WS"], environment: env)
     #expect(status == ExitStatus.ok)
+    let written = writtenBox.withLock { $0 }
+    let err = errBox.withLock { $0 }
     let pdf = try #require(written["/in/DOC.pdf"])
     #expect(!contains(pdf, bytes("/Im0 Do")))
     #expect(contains(pdf, bytes("NOPE.PIX")))
@@ -492,8 +494,8 @@ private func footnoteAndIsolatedPixDoc() -> Document {
     let source = bytes("Before.\r\n\r\n") + block + bytes("\r\n\r\nAfter.\r\n")
     let pixData = buildPixBytes(gcols: 2, grows: 1, gfore: 1, pageRows: 1, pageCols: 8,
                                 stpRows: 1, stpCols: 1, indexImg: [[1, 0, 0, 0, 0, 0, 0, 0]])
-    var written: [String: [UInt8]] = [:]
-    var err: [String] = []
+    let writtenBox = LockedBox<[String: [UInt8]]>([:])
+    let errBox = LockedBox<[String]>([])
     let env = CLIEnvironment(
         readFile: { path in
             switch path {
@@ -502,18 +504,63 @@ private func footnoteAndIsolatedPixDoc() -> Document {
             default: throw TestFSError.notFound
             }
         },
-        writeFile: { path, data in written[path] = data },
-        createDirectory: { _ in }, writeOut: { _ in }, writeErr: { line in err.append(line) },
+        writeFile: { path, data in writtenBox.withLock { $0[path] = data } },
+        createDirectory: { _ in }, writeOut: { _ in }, writeErr: { line in errBox.withLock { $0.append(line) } },
         listDirectory: { path in path == "." ? ["WORDSTAR.PIX"] : nil },
         isFile: { path in path == "1SCREEN.WS" || path == "./WORDSTAR.PIX" }
     )
     let status = run(["--mode", "modern", "-t", "pdf", "-o", "out.pdf", "1SCREEN.WS"], environment: env)
     #expect(status == ExitStatus.ok)
+    let written = writtenBox.withLock { $0 }
+    let err = errBox.withLock { $0 }
     // no "PIX image ... not found" degradation note -- the picture WAS found (the one
     // line in `err` is the ordinary "path -> destination" success notice).
     #expect(!err.contains { $0.contains("PIX image") })
     let pdf = try #require(written["out.pdf"])
     #expect(contains(pdf, bytes("/Im0 Do")))
+}
+
+// MARK: - `-t markdown` and its alias `-t md` take the same path (planning #555)
+
+/// One CLI run of a Modern-mode Markdown conversion with `--pictures embed`; returns every
+/// file the run wrote and every stderr line.
+private func runMarkdownEmbed(formatName: String) -> (files: [String: [UInt8]], err: [String], status: Int32) {
+    let block = wsBlock(cmd: 0x10, content: Array(#"C:\WS\INSET\PIX\WORDSTAR.PIX"#.utf8))
+    let source = bytes("Before.\r\n\r\n") + block + bytes("\r\n\r\nAfter.\r\n")
+    let pixData = buildPixBytes(gcols: 2, grows: 1, gfore: 1, pageRows: 1, pageCols: 8,
+                                stpRows: 1, stpCols: 1, indexImg: [[1, 0, 0, 0, 0, 0, 0, 0]])
+    let writtenBox = LockedBox<[String: [UInt8]]>([:])
+    let errBox = LockedBox<[String]>([])
+    let env = CLIEnvironment(
+        readFile: { path in
+            switch path {
+            case "DOC.WS": return source
+            case "./WORDSTAR.PIX": return pixData
+            default: throw TestFSError.notFound
+            }
+        },
+        writeFile: { path, data in writtenBox.withLock { $0[path] = data } },
+        createDirectory: { _ in }, writeOut: { _ in }, writeErr: { line in errBox.withLock { $0.append(line) } },
+        listDirectory: { path in path == "." ? ["WORDSTAR.PIX"] : nil },
+        isFile: { path in path == "DOC.WS" || path == "./WORDSTAR.PIX" }
+    )
+    let status = run(["--mode", "modern", "-t", formatName, "--pictures", "embed", "DOC.WS"],
+                     environment: env)
+    return (writtenBox.withLock { $0 }, errBox.withLock { $0 }, status)
+}
+
+@Test func cliMarkdownAndMdBehaveIdenticallyWithPicturesEmbed() throws {
+    let viaAlias = runMarkdownEmbed(formatName: "md")
+    let viaCanonical = runMarkdownEmbed(formatName: "markdown")
+    #expect(viaAlias.status == ExitStatus.ok)
+    #expect(viaCanonical.status == ExitStatus.ok)
+    #expect(viaCanonical.files == viaAlias.files)
+    #expect(viaCanonical.err == viaAlias.err)
+    // the shared result is the real behavior, not two matching failures
+    #expect(viaCanonical.files.keys.contains { $0.hasSuffix(".png") })
+    let md = try #require(viaCanonical.files.first { $0.key.hasSuffix(".md") }?.value)
+    #expect(contains(md, bytes("![WORDSTAR.PIX](DOC-images/")))
+    #expect(viaCanonical.err.contains { $0.contains("no true image embedding") })
 }
 
 // MARK: - CLI resolve layer (piximg.py/pictures.py)
@@ -619,14 +666,14 @@ private enum TestFSError: Error { case notFound }
     #expect(results[0].error == .unresolved)
 }
 
-@Test func reportPixMissesWritesProbedLocations() throws {
-    var written: [String] = []
+@Test func pixMissMessagesNameProbedLocations() throws {
     let env = CLIEnvironment(readFile: { _ in [] }, writeFile: { _, _ in }, createDirectory: { _ in },
-                             writeOut: { _ in }, writeErr: { line in written.append(line) },
+                             writeOut: { _ in }, writeErr: { _ in },
                              listDirectory: { _ in nil }, isFile: { _ in false })
     var miss = PixResult(index: 0, rawPath: #"C:\PIX\FIGURE1.PIX"#)
     miss.error = .unresolved
-    reportPixMisses([miss], pathLabel: "/doc/LETTER.WS", docPath: "/doc/LETTER.WS", environment: env)
+    let written = pixMissMessages([miss], pathLabel: "/doc/LETTER.WS", docPath: "/doc/LETTER.WS",
+                                  environment: env)
     #expect(written.count == 1)
     #expect(written[0].contains("FIGURE1.PIX"))
     #expect(written[0].contains("not found"))
@@ -634,13 +681,15 @@ private enum TestFSError: Error { case notFound }
 }
 
 @Test func writeExportImagesDedupesSharedBasenames() throws {
-    var writtenFiles: [String: [UInt8]] = [:]
+    let writtenFilesBox = LockedBox<[String: [UInt8]]>([:])
     let env = CLIEnvironment(readFile: { _ in [] },
-                             writeFile: { path, data in writtenFiles[path] = data },
+                             writeFile: { path, data in writtenFilesBox.withLock { $0[path] = data } },
                              createDirectory: { _ in }, writeOut: { _ in }, writeErr: { _ in })
     let r0 = PixResult(index: 0, rawPath: #"C:\A\FIG.PIX"#, png: bytes("png0"))
     let r1 = PixResult(index: 1, rawPath: #"C:\B\FIG.PIX"#, png: bytes("png1"))
-    let written = writeExportImages([r0, r1], imagesDir: "/out/doc-images", environment: env)
+    let written = writeExportImages(plannedExportImages([r0, r1]), imagesDir: "/out/doc-images",
+                                    environment: env)
+    let writtenFiles = writtenFilesBox.withLock { $0 }
     #expect(written[0] == "FIG.png")
     #expect(written[1] == "FIG-1.png")
     #expect(writtenFiles["/out/doc-images/FIG.png"] == bytes("png0"))

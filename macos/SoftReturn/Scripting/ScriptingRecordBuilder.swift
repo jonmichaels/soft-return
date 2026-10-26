@@ -1,19 +1,11 @@
 import Foundation
 
-/// Job 207 (-1708, continuing 143-199): builds the hand-typed `NSAppleEventDescriptor`
-/// records `SoftReturn.sdef`'s custom `<record-type>`s require for a command's `<result>`.
+/// Builds the hand-typed `NSAppleEventDescriptor` records `SoftReturn.sdef`'s custom
+/// `<record-type>`s require for a command's `<result>`.
 ///
-/// Job 199's field breadcrumbs showed `ConvertCommand` running clean end-to-end
-/// (constructed → executeCommand-entered → pdi-entered → executeCommand-returned,
-/// `scriptErrorNumber=none`) while the real sender still received -1708. Job 207's own
-/// reproduction (`ConvertCommandReceiverDispatchTests.replyResultDescriptorForA
-/// PlainDictionaryReturn`/`...AtLayer2`/`realFieldEventReplyResultDescriptorAtLayer2`) showed
-/// why: the reply's `keyAEResult` comes back completely ABSENT, at every reachable dispatch
-/// layer including a replay of the real field-captured bytes, even though dispatch status
-/// and the reply's error keys are clean. Cocoa's own reply-packaging code apparently has no
-/// general coercion from an arbitrary `NSDictionary` (what `performDefaultImplementation()`
-/// used to return) to a *custom* sdef record type — it silently drops the result instead of
-/// erroring. Every command whose sdef `<result>` is one of `SoftReturn.sdef`'s own
+/// Cocoa's reply packaging has no general coercion from an arbitrary `NSDictionary` to a
+/// *custom* sdef record type: it silently drops the result (the reply's `keyAEResult` comes
+/// back absent) instead of erroring. Every command whose sdef `<result>` is one of `SoftReturn.sdef`'s own
 /// `<record-type>`s (`conversion result`/`SRrc`, `diagnosis`/`SRrd`, `page settings`/`SRrp`)
 /// must instead hand Cocoa an already-typed `NSAppleEventDescriptor` — this is the one place
 /// that happens, so no command grows its own copy of the retyping trick.
@@ -23,10 +15,7 @@ enum ScriptingRecordBuilder {
     /// keyed properties, then `coerce(toDescriptorType:)` to the target type.
     ///
     /// `coerce(toDescriptorType:)`, not a manual `NSAppleEventDescriptor(descriptorType:
-    /// data:)` reinterpretation of the raw bytes (the trick `ConvertCommandReceiverDispatch
-    /// Tests.wholeApplicationSpecifier()`, job 185, used for `typeObjectSpecifier` — but that
-    /// code was only ever WRITTEN into an event attribute, never read back). Job 207's own
-    /// `ScriptingRecordBuilderTests.manualRetypingBreaksPropertyReadAccessButCoercionDoesNot`
+    /// data:)` reinterpretation of the raw bytes. `ScriptingRecordBuilderTests.manualRetypingBreaksPropertyReadAccessButCoercionDoesNot`
     /// proved empirically that the manual/`data:` route produces a descriptor with
     /// `isRecordDescriptor == false` and every `forKeyword` lookup returning `nil` — Cocoa
     /// does not treat an arbitrary four-char type tag as "record-like" just because its bytes

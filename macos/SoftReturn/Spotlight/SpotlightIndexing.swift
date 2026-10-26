@@ -48,7 +48,7 @@ public enum SpotlightIndexing {
         public var errorDescription: String? {
             switch self {
             case .notConvertible(let variant, let reason):
-                return "Not a convertible WordStar-era document (detected \(variant.rawValue): \(reason))."
+                return "Not a convertible WordStar for DOS v4–v7 document (detected \(variant.rawValue): \(reason))."
             }
         }
     }

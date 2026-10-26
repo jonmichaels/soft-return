@@ -117,7 +117,7 @@ import Testing
 @Test func midDocumentRepeatNoLongerRetroactivelyBecomesTheDefault() {
     // The other half of the same fix: a command whose ONLY occurrence sits AFTER real
     // body text has begun must NOT retroactively become the document's own opening
-    // default (the exact bug `hmFmCheckpoints`'s doc comment already worked around for
+    // default (the exact bug `hmFmTimeline`'s doc comment already worked around for
     // the render path -- this pins the fix at the SOURCE, `doc.page` itself). `.mb`
     // here only ever appears once, well after the opening prose -- the document's
     // global `mbLines` must stay at WordStar's own hardcoded default (8.0), not the
@@ -133,9 +133,9 @@ import Testing
     // ...while the per-page checkpoint machinery still sees it, exactly as it always
     // did -- this fix narrows `doc.page`, it does not touch the stateful mid-document
     // mechanism at all.
-    let checkpoints = mtMbCheckpoints(doc)
+    let checkpoints = doc.mtMbTimeline().entries
     let last = checkpoints[checkpoints.count - 1]
-    #expect(last.mt == 3.0 && last.mb == 2.0)
+    #expect(last.value.mt == 3.0 && last.value.mb == 2.0)
 }
 
 @Test func printedXComesFromWordStarsOwnHMIArithmetic() throws {
@@ -215,7 +215,7 @@ import Testing
     // emitter tests for Courier to make this happen -- it falls out of the same arithmetic
     // every other face goes through, which is the point: if the metrics and the grid ever
     // disagreed for Courier we would want to see it, not hide it.
-    let courier = typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("courier") }!
+    let courier = typestyleNames.firstIndex { ASCII.lowercased($0).hasPrefix("courier") }!
     let scaled = tzScale("Hello", "Courier", 12, 5 * 180 / 25.0)
     #expect(scaled.scale == nil)
     #expect(scaled.width == 5 * 7.2)

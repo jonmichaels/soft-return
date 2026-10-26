@@ -15,6 +15,11 @@ let package = Package(
     products: [
         .library(name: "CtrlKD", targets: ["CtrlKD"]),
     ],
+    dependencies: [
+        // Test-only: where the corpus variables are read, the repo root, scratch directories.
+        // Foundation only; shared with `Shared/` and the two apps' test targets.
+        .package(path: "TestSupport"),
+    ],
     targets: [
         // b24 round 21b/21c/21d: real zlib (libz), for byte-exact DEFLATE parity with
         // Python's own `zlib.compress` (the b24 PIX wave's embedded-image streams —
@@ -59,9 +64,10 @@ let package = Package(
                swiftSettings: [.enableExperimentalFeature("Extern")],
                linkerSettings: [.linkedLibrary("z", .when(platforms: [.macOS, .iOS, .linux])),
                                 .linkedLibrary("zs", .when(platforms: [.windows]))]),
-        // Everything `sr` does except talk to the OS: argument parsing, the diagnose
-        // report, the conversion loop. Split out from the executable so the tests can
-        // call it directly — an executable target's code cannot be imported.
+        // Everything `sr` does: argument parsing, the diagnose report, the conversion
+        // pipeline (`ConversionJob`), the conversion loop, and the live OS environment.
+        // Split out from the executable so the tests can call it directly — an
+        // executable target's code cannot be imported.
         .target(
             name: "SoftReturnCLI",
             dependencies: ["CtrlKD"],
@@ -88,21 +94,28 @@ let package = Package(
         // for sr-only formats (Planning #198/#195 Task 3). `swift run generate-answer-key-sr`.
         // See that target's own main.swift for the full account.
         .executableTarget(name: "generate-answer-key-sr",
-                          dependencies: ["CtrlKD"],
+                          dependencies: ["CtrlKD", "GeneratorSupport"],
                           path: "Sources/GenerateAnswerKeySR"),
         // Regenerates TestDocs/oracle/sawyer_preset_pdf_sr.json — sr's own self-recorded
         // drift file for the one PDF geometry (page-settings `sawyer` preset + real .PIX
         // resolution) the shared answer key never covers (planning #205 Task 2, replacing
         // the retired python-printed-manifest.json's `sawyer` geometry). `swift run
         // generate-sawyer-preset-drift-sr`. See that target's own main.swift for the full
-        // account. Depends on SoftReturnCLI (not just CtrlKD) for `pagePresets`/
-        // `resolveDocumentPictures` — both `package`-visibility, same-package-only.
+        // account. Depends on SoftReturnCLI (not just CtrlKD) for `pagePresets` (a
+        // `package`-visibility, same-package-only table) and `ConversionJob`.
         .executableTarget(name: "generate-sawyer-preset-drift-sr",
-                          dependencies: ["CtrlKD", "SoftReturnCLI"],
+                          dependencies: ["CtrlKD", "SoftReturnCLI", "GeneratorSupport"],
                           path: "Sources/GenerateSawyerPresetDriftSR"),
+        // What the two generators (and the tests' digest checks) share: the error type,
+        // the repo root, git info, SHA-256, and the answer key's Sawyer document list.
+        // Foundation is fine here; the engine's stdlib-only rule is about `CtrlKD`.
+        .target(name: "GeneratorSupport",
+                dependencies: ["CtrlKD", "SoftReturnCLI"],
+                path: "Sources/GeneratorSupport"),
         .testTarget(
             name: "CtrlKDTests",
-            dependencies: ["CtrlKD", "SoftReturnCLI"],
+            dependencies: ["CtrlKD", "SoftReturnCLI", "GeneratorSupport",
+                           .product(name: "TestSupport", package: "TestSupport")],
             // `Support/run_pcl_fidelity_gate.py` (PCLFidelityTests.swift) is invoked as a
             // subprocess, located via `#filePath` relative to the Swift source file next to
             // it on disk — never through `Bundle.module` — so it is excluded from resource

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// The native WordStar writer and its gauntlet (tasks #20/#21). Port of
@@ -409,7 +410,7 @@ private func rt(_ data: [UInt8]) throws -> [UInt8] {
 // Files VERIFIED byte-identical on 2026-08-06 — a deliberate spread: WS4-flagged
 // prose, style libraries, notes, Symbol/Dingbats runs, pctl rule-drawing,
 // wrapped control charts, a 526 KB macro doc. Paths relative to the Sawyer archive root
-// (`sawyerArchivePath`, the ONE place the private path lives — `CTRLKD_SAWYER_ARCHIVE`).
+// (`Corpus.sawyerArchivePath`, the ONE place the private path lives — `CTRLKD_SAWYER_ARCHIVE`).
 //
 // `LSRBOX/LSRBOXES.MRG` (mailmerge + wrapped NULs) dropped from this list, planning #192
 // (2026-09-05): the vendored `soft-return-corpus` this repo's `CTRLKD_SAWYER_ARCHIVE` is
@@ -432,19 +433,19 @@ private let gauntletFiles = [
     "MACROS/HOLYMAC/-HOLYMAC.WS",   // 526 KB, net-zero toggle pairs
 ]
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func gauntletNamedFilesByteIdentical() throws {
     for rel in gauntletFiles {
-        let path = sawyerArchivePath + "/" + rel
+        let path = Corpus.sawyerArchivePath + "/" + rel
         guard let d = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)   // armed but incomplete: fail loud
+            throw Corpus.missingSawyerFixture(path: path)   // armed but incomplete: fail loud
         }
         let data = [UInt8](d)
         #expect(try rt(data) == data, "\(rel)")
     }
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func gauntletWSCohortCensusFloor() throws {
     // Every .WS document in the archive, with a floor a regression trips. 83 of 83 were
     // byte-identical when the Python census was written (2026-08-06) against the FULL
@@ -459,10 +460,10 @@ func gauntletWSCohortCensusFloor() throws {
     // tracks the vendored corpus, since that's the shape `CTRLKD_SAWYER_ARCHIVE` names
     // under this repo's own contract. If the archive itself grows a new pathological
     // file, the failure message says which file so the census can rule on it.
-    guard FileManager.default.fileExists(atPath: sawyerArchivePath) else {
-        throw MissingSawyerFixture(path: sawyerArchivePath)   // armed but the dir isn't there
+    guard FileManager.default.fileExists(atPath: Corpus.sawyerArchivePath) else {
+        throw Corpus.missingSawyerFixture(path: Corpus.sawyerArchivePath)   // armed but the dir isn't there
     }
-    let enumerator = try #require(FileManager.default.enumerator(atPath: sawyerArchivePath))
+    let enumerator = try #require(FileManager.default.enumerator(atPath: Corpus.sawyerArchivePath))
     var ok = 0
     var total = 0
     var bad: [String] = []
@@ -471,7 +472,7 @@ func gauntletWSCohortCensusFloor() throws {
         paths.append(rel)
     }
     for rel in paths.sorted() {
-        guard let d = FileManager.default.contents(atPath: sawyerArchivePath + "/" + rel),
+        guard let d = FileManager.default.contents(atPath: Corpus.sawyerArchivePath + "/" + rel),
               !d.isEmpty else { continue }
         let data = [UInt8](d)
         let variant = detect(data).variant

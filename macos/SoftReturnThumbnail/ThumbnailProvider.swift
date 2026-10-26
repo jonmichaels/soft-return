@@ -7,6 +7,7 @@ import PDFKit
 // SoftReturnQuickLook/PreviewProvider.swift's doc comment on the same import trap for the
 // preview extension point).
 import QuickLookThumbnailing
+import SoftReturnRendering
 import SoftReturnShared
 
 /// The grid icon Finder shows before a person ever hits Space — a separate extension point
@@ -91,10 +92,7 @@ final class ThumbnailProvider: QLThumbnailProvider {
             // main thread, so a folder of files used to be parsed one file at a time; now each
             // request parses on its own queue and takes the main thread only for page 1's text,
             // its layout and the drawing. `QuickLookEngineWork` is plain `Sendable` data.
-            let work = try QuickLookEngineWork.make(
-                bytes: bytes, docPath: fileURL.path,
-                pageSettingsPreset: QuickLookPageSettingsPreference.resolvedDefault(),
-                quirks: QuickLookPageSettingsPreference.resolvedQuirkDefaults())
+            let work = try QuickLookEngineWork.makeWithAppDefaults(bytes: bytes, docPath: fileURL.path)
             let (image, thumbnailSize) = try DispatchQueue.main.sync {
                 try MainActor.assumeIsolated { () throws -> (CGImage, CGSize) in
                     // The drawing itself is `QuickLookNativeRenderer.thumbnail` — page 1, fitted and

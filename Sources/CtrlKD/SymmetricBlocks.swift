@@ -463,8 +463,8 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                     if let mark = indexOfPercentF(ptext) {
                         // Python's `ptext[mark+2:].strip().strip('"')` — whitespace
                         // first, THEN quotes, in that order.
-                        name = stripASCII(Array(ptext[(mark + 2)...]), of: 0x20)
-                        name = stripASCII(name, of: 0x22)
+                        name = ASCII.strip(Array(ptext[(mark + 2)...]), .byte(0x20))
+                        name = ASCII.strip(name, .byte(0x22))
                     }
                     if !name.isEmpty {
                         // `%F"NAME"` inside the printer payload names a file the printer
@@ -473,7 +473,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
                         includes.append(decoded)
                         out += Array("[include: \(decoded)]".utf8)
                         handled = true
-                    } else if !stripASCII(shown, of: 0x20).isEmpty {
+                    } else if !ASCII.strip(shown, .byte(0x20)).isEmpty {
                         // No file reference, but a display string the editor shows.
                         // SCREEN-ONLY: on paper WordStar sends the raw printer payload
                         // instead and advances by the block's own HMI word ("number of
@@ -699,14 +699,6 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
 /// only what a 1987 screen could show.
 private func printableASCII(_ b: [UInt8]) -> [UInt8] {
     b.map { $0 & 0x7F }.filter { $0 >= 0x20 && $0 < 0x7F }
-}
-
-/// Python's `str.strip(ch)` for one byte value.
-private func stripASCII(_ b: [UInt8], of ch: UInt8) -> [UInt8] {
-    var start = 0, end = b.count
-    while start < end, b[start] == ch { start += 1 }
-    while end > start, b[end - 1] == ch { end -= 1 }
-    return Array(b[start..<end])
 }
 
 /// `text.find('%F')` — the offset of the two-byte marker, or `nil`.

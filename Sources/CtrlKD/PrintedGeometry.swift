@@ -131,7 +131,7 @@ public func printedMetrics(_ doc: Document,
     return PrintedPageMetrics(
         // `emitPDF`'s own MediaBox width, verbatim (PDFWriter.swift): the page's resolved
         // `pwIn`, which `landscapePage` has already swapped for a landscape document.
-        pageWidth: Double(roundHalfToEven((doc.page?.pwIn ?? 8.5) * 72.0)),
+        pageWidth: Double(roundHalfToEven(inchesToPoints(doc.page?.pwIn ?? letterWidthIn))),
         pageHeight: Double(resolvedPageHeight(doc, printed: true)),
         top: Double(printedTop(doc)),
         lead: printedLead(doc),
@@ -145,7 +145,7 @@ public func printedMetrics(_ doc: Document,
 ///
 /// `printedMetrics` above answers for the DOCUMENT: its `pageWidth`/`pageHeight` are the
 /// one sheet `doc.formatting.orientation` describes. Since M31 that is no longer the whole
-/// answer — `.pr or=l`/`.pr or=p` is resolved PER PAGE (see `orCheckpoints`), and a page
+/// answer — `.pr or=l`/`.pr or=p` is resolved PER PAGE (see `orTimeline`), and a page
 /// whose own orientation differs from the document's prints on a different sheet, which is
 /// exactly what `emitPDF` writes into that page's MediaBox.
 ///
@@ -171,7 +171,7 @@ public func printedMetrics(_ doc: Document, page: Page,
           let sheet = printedDocument(doc, options: options).page else { return base }
     let eff = pageGeometryFor(sheet, orientation: pageOr)
     return PrintedPageMetrics(
-        pageWidth: Double(roundHalfToEven(eff.pwIn * 72.0)),
+        pageWidth: Double(roundHalfToEven(inchesToPoints(eff.pwIn))),
         pageHeight: Double(printedPageHeightPt(eff)),
         top: base.top, lead: base.lead, size: base.size,
         left: base.left, capacity: base.capacity)

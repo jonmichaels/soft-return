@@ -52,7 +52,7 @@ func pdfFont(bold: Bool, italic: Bool) -> String {
 /// the three patched printer drivers are and why a driver name decides this. It is CONTENT,
 /// the same class of thing as the LJ6DTP character substitutions (ruling 2026-08-06 M7), so
 /// it is applied on the paths that read the document's own spans — the printed page-lines
-/// model, the printed body and notes paginators, the endnote listing and the running
+/// model, the printed paginator and its body walk, the endnote listing and the running
 /// heads/feet — never here, where a per-renderer encoding fallback would apply it to every
 /// document alike, which is exactly the bug.
 ///
@@ -357,14 +357,13 @@ struct ResolvedHeadFoot {
 /// - Parameters:
 ///   - headers: the running head text IN FORCE on this page — `nil` (the default)
 ///     falls back to `doc.headers`, the document's final state. A per-page dict comes
-///     from replaying `doc.hfEvents` through pagination (`Page.headers`); the
-///     notes-aware paginator never replays them and so always passes `nil`.
+///     from replaying `doc.hfEvents` through pagination (`Page.headers`).
 ///   - footers: same, for `doc.footers`/`Page.footers`.
 ///   - autoPageNumber: register b31, E3 item 2 (ruled 2026-08-25, ctrl-kd 6f30157) — the
 ///     caller's ALREADY-RESOLVED answer to "does WordStar's own AUTOMATIC page number
 ///     (the one `.pc` positions — a completely separate mechanism from a `#` the author
 ///     placed inside a real `.he`/`.fo`) show on THIS page", combining
-///     `EmitOptions.PageNumberMode` and, for `.auto`, the per-page `pgnumCheckpoints`
+///     `EmitOptions.PageNumberMode` and, for `.auto`, the per-page `pgnumTimeline`
 ///     state (PDFLayout.swift). This function itself only resolves WHERE (from `.po`/
 ///     `.pc` via `autoPageNumberXPt`) and WHETHER a real footer pre-empts it
 ///     (WSFORMAT.WS: "active only when the footers are not in use") — never the on/off
@@ -468,7 +467,7 @@ func resolveHeadFootLines(
     // prints no bottom-of-page number on any of its 7 pages -- the blank footer alone
     // is what silences it. Four further documents (the HOLYMAC macro set's
     // 4MAC2/4MAC3/7MAC2/7MAC3) pair a bare `.fo` with `.op` and then a later `.pn`,
-    // which `pgnumCheckpoints` reads as "numbering back on"; real WS7 prints no number
+    // which `pgnumTimeline` reads as "numbering back on"; real WS7 prints no number
     // on any of their 41/53/35/35 pages either. WSFORMAT.WS's own `.fo` carries real
     // text and WS7 prints that footer, never the automatic number.
     //
@@ -675,7 +674,7 @@ func resolveHeadFootLines(
     // with `.lh` to begin with). `PDFMetrics.lead` (this module's own 6 LPI constant,
     // already used for the fontless/default-.lh case everywhere else) replaces `lead`
     // here; `size` is untouched (the header's own font size, never a margin-count unit).
-    let mt = doc.page?.mtLines ?? 3.0
+    let mt = doc.page?.mtLines ?? defaultMtLines
     // mechanism W: hm participates UNCONDITIONALLY -- no gate on mtSource/hmSource at
     // all. See the long comment above this function's own `headBase` block for the full
     // derivation and why every gated formula this project ever shipped (b26-header-
@@ -848,8 +847,7 @@ func resolveHeadFootLines(
 /// - Parameters:
 ///   - headers: the running head text IN FORCE on this page — `nil` (the default)
 ///     falls back to `doc.headers`, the document's final state. A per-page dict comes
-///     from replaying `doc.hfEvents` through pagination (`Page.headers`); the
-///     notes-aware paginator never replays them and so always passes `nil`.
+///     from replaying `doc.hfEvents` through pagination (`Page.headers`).
 ///   - footers: same, for `doc.footers`/`Page.footers`.
 ///   - autoPageNumber: see `resolveHeadFootLines`'s own doc comment.
 func runningOps(
@@ -1705,7 +1703,7 @@ private func lineOpsPrinted(
     // Planning #244 (the round-trip gauntlet fix) moved this expansion out of
     // `decodeSpans` (parse time) into render time, here. Planning #251 (2026-09-09)
     // moved it AGAIN, one step earlier still: body text now arrives already expanded —
-    // `PDFLayout.swift`'s own `resolvePlainBody`/`resolvePrintedBody` both call the
+    // `PrintedBody.swift`'s `resolvePrintedBody` calls the
     // model-layer `expandBareTabsForPrintedLayout(_ spans: [Span])` themselves when
     // they build each PageLine's segments, so the MODEL carries the expansion
     // (`emitLayout`'s 'printed' pagelines chief among the consumers that stopped
@@ -2287,7 +2285,7 @@ func pageStream(
     left: Double = Double(PDFMetrics.margin),
     running: [[UInt8]] = [], fonts: [FontChange] = [], res: FontResources? = nil,
     colourMap: [Int: Double] = [:], rollPt: Double? = nil, ulContinuous: Bool = true,
-    lineNoCheckpoints: [(blockIndex: Int, interval: Int?)]? = nil, pclPrograms: [[UInt8]] = [],
+    lineNoTimeline: Timeline<Int?>? = nil, pclPrograms: [[UInt8]] = [],
     driverQuirks: DriverQuirks = .none
 ) -> [UInt8] {
     let res = res ?? FontResources()
@@ -2311,7 +2309,7 @@ func pageStream(
     // planning #251(d): the `.l#` running counter that used to live here (planning
     // #247, `lineNoState`) moved to `docToPagelines`'s own `attachLineNumbersPrinted`
     // -- see `PageLine.lineNo`'s own doc comment. This call site now only gates the
-    // DRAW (`lineNoCheckpoints != nil`, below), it no longer resolves the label/x
+    // DRAW (`lineNoTimeline != nil`, below), it no longer resolves the label/x
     // itself.
     // planning #227 follow-up (2026-09-09, mirrored from ctrl-kd): `applyColumns`
     // concatenates every column's own lines into ONE flat `pagelines` array (column
@@ -2354,7 +2352,7 @@ func pageStream(
         // shift at all") is a real, present value, not an absent one.
         let rollHere = line.roll ?? rollPt
         // b24 round 19 (RULINGS-LEDGER PIX row): an image PageLine (see
-        // `resolvePlainBody`) draws its XObject instead of text. `y` has already
+        // `resolvePrintedBody`) draws its XObject instead of text. `y` has already
         // advanced by this line's `.lead`, which since round 26 wave 3 (fidelity_gate.py
         // Finding A) is the RESERVED PLACEHOLDER block's height (`pixReservedAdvance`:
         // the tag line plus its contiguous following blanks), not the raster's own
@@ -2394,7 +2392,7 @@ func pageStream(
         // b24 round 17b (RULINGS-LEDGER row 5/6, register C11), corrected by planning
         // #247 against a real WS7 capture (`PDFMetrics.lineNoRightPt`'s own doc comment):
         // `.l#`'s own gutter. N = the interval in force on THIS LINE (resolved from
-        // `lineNoCheckpoints`, by that line's own `bi` -- a single per-page value cannot
+        // `lineNoTimeline`, by that line's own `bi` -- a single per-page value cannot
         // represent PRINT.TST's own `.l#2`/`.l# 0` pair, both of which land on the SAME
         // page).
         //
@@ -2419,10 +2417,10 @@ func pageStream(
         // decision (`attachLineNumbersPrinted`, set on `PageLine.lineNo`) -- this
         // call site's only remaining job is the `--line-numbers off` gate, which
         // still works exactly as before: that flag makes `emitPDF` pass
-        // `lineNoCheckpoints: nil` into this function, same as today, so the draw
+        // `lineNoTimeline: nil` into this function, same as today, so the draw
         // is suppressed regardless of what the model carries (same shape
         // `showHeaders`/`headers` already use).
-        if lineNoCheckpoints != nil, let lineNo = line.lineNo {
+        if lineNoTimeline != nil, let lineNo = line.lineNo {
             let gutterRendered = spanRender("", font: nil, fonts: fonts, size: size)
             let gutterFont = res.ref(base14(gutterRendered.family, bold: false, italic: false))
             let gutterSize = gutterRendered.size
@@ -2468,11 +2466,11 @@ func pageStream(
 /// invoked once per PAGE, so the interval/counter pair starts fresh at every page's own
 /// first line -- planning #247's own oracle, sawyer/PRINT.TST: `.l#2` activates on a
 /// page's own first body line, `.l# 0` deactivates on its last). A document that never
-/// declares `.l#` (`lineNumberingCheckpoints` stays empty) walks every line and sets
+/// declares `.l#` (`lineNumberingTimeline` stays empty) walks every line and sets
 /// nothing -- no behaviour change, just an O(lines) no-op pass. Port of ctrl-kd's
 /// `_attach_line_numbers_printed`.
 func attachLineNumbersPrinted(_ doc: Document, _ pages: inout [Page], size: Int) {
-    let checkpoints = lineNumberingCheckpoints(doc)
+    let lineNoTimeline = doc.lineNumberingTimeline()
     let gutterRendered = spanRender("", font: nil, fonts: doc.fonts, size: size)
     let gutterSize = gutterRendered.size
     for pi in pages.indices {
@@ -2481,7 +2479,7 @@ func attachLineNumbersPrinted(_ doc: Document, _ pages: inout [Page], size: Int)
             let line = pages[pi][li]
             let interval: Int?
             if let bi = line.bi {
-                interval = lineNumberingAt(checkpoints, bi)
+                interval = lineNoTimeline.at(bi)
             } else {
                 interval = nil
             }
@@ -2643,7 +2641,7 @@ func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int
 /// own precedent above). Port of Python's `_attach_head_foot_lines_printed`.
 ///
 /// Resolves under the document's own NATURAL state — `autoPageNumber` from
-/// `pgnumCheckpoints` (the `.pn`/`.pg`/`.op` state the file itself carries) and every
+/// `pgnumTimeline` (the `.pn`/`.pg`/`.op` state the file itself carries) and every
 /// declared header/footer — the same "model states it unconditionally, a flag only
 /// tells the WRITER whether to draw it" convention `headers`/`footers`/`lineNo` already
 /// use: a caller that renders with `--headers off` or an explicit `.on`/`.off` page-
@@ -2654,40 +2652,19 @@ func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int
 ///
 /// Replicates `emitPDF`'s own per-page geometry swap (`.mt`/`.mb`/`.pl`/`.hm`/`.fm`/
 /// `.po` overrides, `pageGeomChanged`/`poParity`-gated `pageLeft`) and its `.auto`
-/// page-number-mode branch (the `.bi`-keyed `pgnumAt` lookup, with the #228 trailing-
+/// page-number-mode branch (the `.bi`-keyed `Timeline.at` lookup, with the #228 trailing-
 /// `.pa` `explicitBreakBI` fallback for a page with no lines of its own) verbatim — see
 /// that loop's own dense per-line comments for WHY each piece exists; this is the
 /// identical arithmetic, run once here instead of once per real render.
-///
-/// `isNotesPath` (planning #251(d) follow-up, found via `AnswerKeyParityTests`): ctrl-kd's
-/// own `_paginate_printed_notes` builds its body/footnote-area pages as PLAIN Python
-/// lists, never `Page` instances -- `_attach_head_foot_lines_printed`'s own `isinstance(
-/// pg, Page)` guard (pdf.py) therefore never assigns `header_lines`/`footer_lines`/
-/// `auto_pageno` to them, REGARDLESS of what `_resolve_head_foot_lines` would have
-/// computed. The one exception is `_endnote_pages`'s own trailing endnote-appendix
-/// page(s): its `_flush` wraps each one in a real `Page(...)` (setting `explicit_break_bi`
-/// in the same call, DISPLAY.WS/REF/NOTES.TST's own #228 oracle) UNLESS it is the first
-/// flush AND it continues the paginator's own last (still-bare-list) page. Swift's `Page`
-/// is uniformly a struct -- no bare-list/real-Page distinction exists to check directly --
-/// so on `isNotesPath`, `explicitBreakBI != nil` is used as the reachable proxy for "this
-/// page was one `_endnote_pages` actually wrapped," matching ctrl-kd's own isinstance
-/// gate: every page `explicitBreakBI` is ever set on, on EITHER pagination path, is a page
-/// a `Page(...)` call just constructed (`_close_page`'s own #228 branch on the plain path;
-/// `_endnote_pages`'s `_flush` here). A body/footnote-area page (`isNotesPath`, no
-/// `explicitBreakBI`) resolves nothing, matching ctrl-kd exactly -- confirmed on
-/// DISPLAY.WS: its own page 1 (46 lines, real `.bi`s, `explicitBreakBI == nil`) must NOT
-/// show an automatic page number even though `pgnumAt` alone would say yes; only page 2
-/// (the endnote appendix, `explicitBreakBI == 8`) does.
-func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: Int,
-                                isNotesPath: Bool = false) {
+func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: Int) {
     guard !pages.isEmpty else { return }
     let lead = printedLead(doc)
     let left = printedLeft(doc, size: size)
     let pageHeight = resolvedPageHeight(doc, printed: true)
-    let pgnumCheckpointsList = pgnumCheckpoints(doc)
-    let pgnumOnPage = pgnumByPage(pgnumCheckpointsList, pages)
+    let pgnumList = doc.pgnumTimeline()
+    let pgnumOnPage = pgnumByPage(pgnumList, pages)
     let bodilessDoc = pgnumIsBodiless(pages)
-    let pageNumbers = resolvePageNumbers(pnCheckpoints(doc), pages)
+    let pageNumbers = resolvePageNumbers(doc.pnTimeline(), pages)
     for pi in pages.indices {
         // THE SYNTHESIZED FALLBACK PAGE IS RESOLVED LIKE ANY OTHER (planning #274
         // follow-up, 2026-09-15). This used to `continue` on it, mirroring ctrl-kd,
@@ -2700,50 +2677,6 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
         // creates its fallback page BEFORE the pass (ed6d0658); this is the same
         // fix on this side. See `Page.isSynthesizedFallback`, which still marks the
         // page for every other consumer.
-        // planning #251 part d fix (found by the app coder, job 348 follow-up:
-        // ctrl-kd's own sawyer/-SCREEN.WS page 1, the app's own BOTHNOTE.WS page 1):
-        // this used to SKIP every notes-aware-path page with no `explicitBreakBI` and
-        // no columnar merge -- the proxy for Python's own bare-Python-list pages
-        // (`_paginate_printed_notes`'s footnote-area pages, `isinstance(pg, Page)`
-        // false there), on the theory that there was nothing TO resolve for them.
-        // That theory was wrong: `runningOps`'s real per-page render loop resolves
-        // and DRAWS their header/footer/auto-page-number regardless (a bare Python
-        // list still hits `getattr(pl, 'headers', None)`'s own `None` fallback, same
-        // as any other consumer) -- skipping here just left the MODEL's own copy
-        // stale while the PDF kept drawing correctly. Confirmed: ctrl-kd's own writer
-        // puts the automatic page number "1" at x=291.6/y=732.0 on -SCREEN.WS page 1
-        // while this function reported `nil`. ctrl-kd's own fix (pdf.py
-        // `_attach_head_foot_lines_printed`) promotes the bare list to a real `Page`
-        // instead of skipping; Swift's `Page` is uniformly a struct already (never a
-        // bare-list-equivalent type to check `isinstance` against) -- there is
-        // nothing to promote, so removing the skip is the whole fix here.
-        let page0 = pages[pi]
-        // A columnar merge's own `headers`/`footers` on the notes path -- OR, as of
-        // this fix, ANY notes-path page that is not `_endnote_pages`'s own trailing-
-        // appendix wrap (`explicitBreakBI != nil`) -- are Python's `getattr(pg,
-        // 'headers', None)` reading a bare-list source's MISSING attribute -- `None`,
-        // triggering `resolveHeadFootLines`'s own `doc.headers`/`doc.footers`
-        // fallback (`applyColumns` never replays `hfEvents` any more than the
-        // notes-aware paginator whose output it is merging does, and an ordinary
-        // notes-path body/footnote-area page never had a `Page` of its own to begin
-        // with). Swift's `Page.headers` is never optional, so `page.headers` here is
-        // always `[:]` rather than Python's `None` -- passing `nil` explicitly gets
-        // `resolveHeadFootLines` to apply the SAME fallback. `_endnote_pages`'s own
-        // wrap (the `explicitBreakBI` branch) is DIFFERENT: `Page(pg)` there defaults
-        // `headers`/`footers` to a REAL `{}` (Python never passes `None`), so
-        // no fallback applies there -- its own real (possibly empty) values are
-        // used as-is, matching DISPLAY.WS/REF/NOTES.TST's own oracle (no
-        // running head on the endnote appendix, an unaffected automatic page
-        // number).
-        let headersIn: [Int: String]? = (isNotesPath && page0.explicitBreakBI == nil) ? nil : page0.headers
-        let footersIn: [Int: String]? = (isNotesPath && page0.explicitBreakBI == nil) ? nil : page0.footers
-        // Planning #250: `page0.headHfOverride`/`footHfOverride` are `nil` for every
-        // notes-path page (`layoutPrintedPages` never replays `hfEvents`, so
-        // `closePage` there -- a DIFFERENT function -- never sets them), so no
-        // `isNotesPath` special-case is needed the way `headersIn`/`footersIn` above
-        // have one.
-        let headHfOverrideIn = page0.headHfOverride
-        let footHfOverrideIn = page0.footHfOverride
         let page = pages[pi]
         let pageGeomChanged = page.mtLines != nil || page.mbLines != nil
             || page.hmLines != nil || page.fmLines != nil
@@ -2756,35 +2689,21 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
         // automatic number is measured UP from the foot and is right either way). Caught
         // by `HeadFootModelPDFParityTests`, which is exactly what it exists for.
         let pageOr = page.orientation
-        var pageDoc = doc
-        if page.mtLines != nil || page.mbLines != nil || page.plLines != nil
-            || page.hmLines != nil || page.fmLines != nil || pageOr != nil,
-           var eff = doc.page {
-            if let mt = page.mtLines { eff.mtLines = mt; eff.mtSource = .file }
-            if let mb = page.mbLines { eff.mbLines = mb; eff.mbSource = .file }
-            if let pl = page.plLines { eff.plLines = pl }
-            if let hm = page.hmLines {
-                eff.hmLines = hm
-                eff.hmSource = hm != defaultHmLines ? .file : .default
-            }
-            if let fm = page.fmLines { eff.fmLines = fm; eff.fmSource = .file }
-            if let pageOr { eff = pageGeometryFor(eff, orientation: pageOr) }
-            pageDoc.page = eff
-        }
+        let pageDoc = pageGeometryDocument(doc, for: page) ?? doc
         let autoPageNumber: Bool
         if page.compactMap(\.bi).max() != nil {
             autoPageNumber = pgnumOnPage[pi]
         } else {
             autoPageNumber = pgnumForBodilessPage(
-                pgnumCheckpointsList, fallbackBi: page.explicitBreakBI,
+                pgnumList, fallbackBi: page.explicitBreakBI,
                 bodilessDoc: bodilessDoc)
         }
         let pageHeightThis = pageOr == nil ? pageHeight : resolvedPageHeight(pageDoc, printed: true)
         guard let resolved = resolveHeadFootLines(
             pageDoc, pageNo: pageNumbers[pi], pageHeight: pageHeightThis, lead: lead, size: size,
-            left: pageLeft, printed: true, headers: headersIn, footers: footersIn,
+            left: pageLeft, printed: true, headers: page.headers, footers: page.footers,
             autoPageNumber: autoPageNumber,
-            headHfOverride: headHfOverrideIn, footHfOverride: footHfOverrideIn,
+            headHfOverride: page.headHfOverride, footHfOverride: page.footHfOverride,
             footerInUse: page.footerInUse,
             // The automatic page number's own offset, in COLUMNS and resolved at the
             // page's CLOSE (`Page.autoPagenoPo`) -- never `pageLeft`, which is points
@@ -2905,7 +2824,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     // Width joined the page model 2026-08-06 ("the 3 main page sizes"): inferred from
     // the height -- A4-tall pages are 210mm wide, everything else is the 8.5in sheet --
     // so a default document stays exactly 612.
-    let pageWidth = roundHalfToEven((doc.page?.pwIn ?? 8.5) * 72.0)
+    let pageWidth = roundHalfToEven(inchesToPoints(doc.page?.pwIn ?? letterWidthIn))
     // M31: (width, height) in points per page, in stream order -- the MediaBox stopped
     // being one number for the whole document when `.pr or=` became per-page. Every page
     // of every document that never changes orientation mid-file appends the SAME pair
@@ -2935,14 +2854,14 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         // b24 round 17b (RULINGS-LEDGER row 5/6, register C11), corrected by planning
         // #247: `.l#`'s own interval, flag-gated — default ON (same shape as
         // `--headers`), but the FEATURE only ever fires when the document itself
-        // declared `.l#` (`lineNumberingCheckpoints` stays at its `(0, nil)` seed
+        // declared `.l#` (`lineNumberingTimeline` stays at its `(0, nil)` seed
         // otherwise): the flag's job is letting a caller SUPPRESS what the file asked
-        // for, not inventing numbering a silent file never requested. `lineNoCheckpoints`
+        // for, not inventing numbering a silent file never requested. `lineNoTimeline`
         // carries the FULL positional answer -- `pageStream` resolves the interval in
         // force PER LINE from it (a single per-page value cannot represent PRINT.TST's
         // own `.l#2`/`.l# 0` pair, both of which land on the SAME page; see
         // `pageStream`'s own comment).
-        let lineNoCheckpoints = options.lineNumbers ? lineNumberingCheckpoints(doc) : nil
+        let lineNoTimeline = options.lineNumbers ? doc.lineNumberingTimeline() : nil
         // Font runs are a PRINTED-mode facsimile feature — WS4 documents and print
         // streams have no font blocks, so `doc.fonts` is empty for them and this is a
         // no-op either way.
@@ -2962,9 +2881,9 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         // register b31-dot-command-sweep: `.pn` re-anchors mid-document too (see
         // `resolvePageNumbers`) -- one number per real page, replacing the flat
         // `startNo + pageIndex` below for the printed per-page loop.
-        let pageNumbers = resolvePageNumbers(pnCheckpoints(doc), pages)
+        let pageNumbers = resolvePageNumbers(doc.pnTimeline(), pages)
         // Register b31, E3 item 2 (ruled 2026-08-25, ctrl-kd 6f30157): `.auto` (default)
-        // lets the document's own `.pn`/`.pg`/`.op` decide (see `pgnumCheckpoints`,
+        // lets the document's own `.pn`/`.pg`/`.op` decide (see `pgnumTimeline`,
         // PDFLayout.swift, seeded ON 2026-09-07 — stock WS7's own factory default,
         // ctrl-kd b6d5d03) — byte-identical to every existing capture/oracle for the
         // overwhelming majority of documents that never touch any of those four
@@ -2975,24 +2894,21 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         // — that is running-title content, substituted by `runningOps`'s own `render()`
         // regardless of this option.
         let pageNumbersMode = options.pageNumbers
-        let pgnumCheckpointsList = pageNumbersMode == .auto ? pgnumCheckpoints(doc) : nil
-        let pgnumOnPage = pgnumCheckpointsList.map { pgnumByPage($0, pages) }
+        let pgnumList = pageNumbersMode == .auto ? doc.pgnumTimeline() : nil
+        let pgnumOnPage = pgnumList.map { pgnumByPage($0, pages) }
         let bodilessDoc = pgnumIsBodiless(pages)
         var built: [[UInt8]] = []
         for (i, page) in pages.enumerated() {
             // Per-page header/footer state, replayed from `doc.hfEvents` through
-            // pagination (`Page.headers`/`.footers`) — populated for every page
-            // regardless of which paginator built it (the notes-aware one stamps the
-            // document's final state on every page instead, matching Python's `getattr`
-            // fallback for a plain list).
+            // pagination (`Page.headers`/`.footers`) — populated for every page.
             // b24 round 17 (RULINGS-LEDGER row 1): `options.headers` (default true) —
             // `runningOps` treats `nil` as "fall back to `doc.headers`/`doc.footers`",
             // the OPPOSITE of what the flag being off means, so the off path passes
             // `[:]` (falsy, not nil) instead, reusing `runningOps`'s own existing
             // early-return with zero new rendering logic.
             // Finding 3 (b26-print-fidelity-2): a page whose own `.mt`/`.mb`
-            // (`Page.mtLines`/`mbLines`, set by `layoutPrintedPagesPlain` from
-            // `mtMbCheckpoints`) differs from the document's global pair gets ITS OWN
+            // (`Page.mtLines`/`mbLines`, set by `layoutPrintedPages` from
+            // `mtMbTimeline`) differs from the document's global pair gets ITS OWN
             // top-margin/header-footer geometry — a local COPY of `doc` with `.page`
             // swapped (this file's own established idiom for "replacement geometry
             // just for this call", see `emitPDF`'s `pageSettings` handling above),
@@ -3019,31 +2935,13 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
             // must be put back. `pageGeometryFor` recomputes the pair fresh from `.pl`
             // rather than swapping what it is handed, so both directions are exact.
             let pageOr = page.orientation
+            let pageDoc: Document
             let pageTop: Int
-            var pageDoc = doc
-            if page.mtLines != nil || page.mbLines != nil || page.plLines != nil
-                || page.hmLines != nil || page.fmLines != nil || pageOr != nil,
-               var eff = doc.page {
-                if let mt = page.mtLines { eff.mtLines = mt; eff.mtSource = .file }
-                if let mb = page.mbLines { eff.mbLines = mb; eff.mbSource = .file }
-                if let pl = page.plLines { eff.plLines = pl }
-                if let hm = page.hmLines {
-                    // `.file` only if THIS page's own resolved hm is a real override of
-                    // WordStar's hardcoded default, not merely different from the
-                    // document's (possibly WRONG, in the degenerate mid-document-only-
-                    // occurrence case) global reading -- `runningOps`'s OR-gate treats
-                    // hmSource == .file as "the author touched .hm", which must stay
-                    // false for a page that sits BEFORE a document's only `.hm` ever
-                    // fires, even though it still needs its own override (back to the
-                    // true default) to correct `ParseWS.swift`'s global reading.
-                    eff.hmLines = hm
-                    eff.hmSource = hm != 2.0 ? .file : .default
-                }
-                if let fm = page.fmLines { eff.fmLines = fm; eff.fmSource = .file }
-                if let pageOr { eff = pageGeometryFor(eff, orientation: pageOr) }
-                pageDoc.page = eff
-                pageTop = printedTop(pageDoc)
+            if let stamped = pageGeometryDocument(doc, for: page) {
+                pageDoc = stamped
+                pageTop = printedTop(stamped)
             } else {
+                pageDoc = doc
                 pageTop = top
             }
             // M31: THE SHEET ITSELF, per page. `pageHeightThis` feeds the y-flip every
@@ -3053,15 +2951,15 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
             let pageHeightThis = pageOr == nil ? pageHeight
                 : resolvedPageHeight(pageDoc, printed: true)
             let pageWidthThis = pageOr == nil ? pageWidth
-                : roundHalfToEven((pageDoc.page?.pwIn ?? 8.5) * 72.0)
+                : roundHalfToEven(inchesToPoints(pageDoc.page?.pwIn ?? letterWidthIn))
             pageBoxes.append((pageWidthThis, pageHeightThis))
             // mechanism O (ctrl-kd 55d2b52): a page whose own `.po` (`Page.poCols`, set by
-            // `layoutPrintedPagesPlain` from `poCheckpoints`) differs from the document's
+            // `layoutPrintedPages` from `poTimeline`) differs from the document's
             // global default gets its OWN header/footer LEFT edge -- SCRIPT.WS's own
             // worked-example figures reset `.po` to `.5"` alongside their `.mt`/`.hm`
             // changes, and WS7's real capture moves the running head's own left edge with
             // it. Body text already carries a mid-document `.po` change correctly
-            // (`Line.poCols`, applied per line in `resolvePlainBody`/`resolvePrintedBody`);
+            // (`Line.poCols`, applied per line in `resolvePrintedBody`);
             // `pageStream` below keeps the document's global `left` unchanged -- only
             // `runningOps` (the header/footer row) needs the page-local swap. `nil` (every
             // page of every document that never changes `.po` mid-document) leaves
@@ -3089,7 +2987,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
             // page-layout decision (WSFORMAT.WS: "specify even or odd number page
             // offsets"), not a HOLYMAC-style transient body-only `.po` excursion -- the
             // one thing `pageGeomChanged` above exists to filter out. A live parity
-            // override (`Page.poParity`, set in `layoutPrintedPagesPlain`/
+            // override (`Page.poParity`, set in `layoutPrintedPages`/
             // `layoutPrintedPages`) must reach the running head/foot regardless of
             // whether `.mt`/`.mb`/`.hm`/`.fm` also changed on this page. Measured:
             // sawyer/MAILLIST/PHONE.LST (`.poo .20"`/`.poe .20"`, no `.mt`/`.hm` change
@@ -3112,7 +3010,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                 autoPageNumber = true
             } else if let onPage = pgnumOnPage, page.compactMap(\.bi).max() != nil {
                 autoPageNumber = onPage[i]
-            } else if let checkpoints = pgnumCheckpointsList {
+            } else if let timeline = pgnumList {
                 // #228: a page with no lines at all has no `.bi` to read.
                 // `explicitBreakBI` (the `.pa` block's own index, or an
                 // endnote-only page's own fallback -- see `endnotePages`) stands
@@ -3121,7 +3019,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                 // number (WS7 stamps one). Planning #274 handles the page with
                 // NEITHER -- see `pgnumForBodilessPage`.
                 autoPageNumber = pgnumForBodilessPage(
-                    checkpoints, fallbackBi: page.explicitBreakBI,
+                    timeline, fallbackBi: page.explicitBreakBI,
                     bodilessDoc: bodilessDoc)
             } else {
                 autoPageNumber = false
@@ -3141,7 +3039,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                      // is handed over unconditionally — byte-identical
                                      // under `--headers on`, where `nil` already meant
                                      // exactly `!footers.isEmpty` to `runningOps`.
-                                     footerInUse: page.footerInUse ?? !page.footers.isEmpty,
+                                     footerInUse: page.footerInUse,
                                      headersPcl: options.headers ? page.headerPcl : nil,
                                      footersPcl: options.headers ? page.footerPcl : nil,
                                      // The automatic page number's own offset --
@@ -3153,7 +3051,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                     size: size, left: left, running: running,
                                     fonts: fonts, res: res, colourMap: colourMap,
                                     rollPt: rollPt, ulContinuous: ulContinuous,
-                                    lineNoCheckpoints: lineNoCheckpoints,
+                                    lineNoTimeline: lineNoTimeline,
                                     pclPrograms: doc.pclPrograms, driverQuirks: dq))
         }
         // b24 round 18 (RULINGS-LEDGER row 4): TOC/Index compiled as ADDITIONAL pages at
@@ -3177,7 +3075,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                         size: size, left: left, running: running,
                                         fonts: fonts, res: res, colourMap: colourMap,
                                         rollPt: rollPt, ulContinuous: ulContinuous,
-                                        lineNoCheckpoints: nil, driverQuirks: dq))
+                                        lineNoTimeline: nil, driverQuirks: dq))
                 // M31: a compiled TOC/Index sheet is the DOCUMENT's own sheet, not any
                 // body page's -- it is not part of the document's own flow and carries no
                 // running head or foot either, the same documented simplification.

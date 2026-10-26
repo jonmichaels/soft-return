@@ -210,22 +210,14 @@ private func endsTerminal(_ text: String) -> Bool {
     return last == "." || last == "!" || last == "?"
 }
 
-/// Port of `core._opens_quote`. Not `private`: b26-modern item 5's ported test
-/// (`VerseQuoteCoupletTests.swift`) calls this directly, mirroring ctrl-kd's own
-/// `core._opens_quote` reference at the test level (module-internal, same as
-/// `selfContainedQuote` below — visible to `@testable import` test targets, hidden
-/// from consumers outside this package).
-func opensQuote(_ text: String) -> Bool {
-    guard let first = text.trimmedLeading().first else { return false }
-    return openingQuoteChars.contains(first)
-}
-
 /// Whether TEXT both opens AND closes a quotation on its own single line —
 /// `verseQuoteVetoFraction`'s own evidence base (see its doc comment): real spoken
 /// dialogue is one self-contained utterance per line, but a line that only OPENS a
 /// quotation — the first line of a passage quoted across several lines, e.g. a hymn or
-/// poem excerpt — is not, even though `opensQuote` alone would also say `true` for it.
-/// Port of `core._self_contained_quote` (b26-modern item 5).
+/// poem excerpt — is not. Port of `core._self_contained_quote` (b26-modern item 5).
+/// Not `private`: `VerseQuoteCoupletTests.swift` calls it directly (module-internal,
+/// visible to `@testable import` test targets, hidden from consumers outside this
+/// package).
 func selfContainedQuote(_ text: String) -> Bool {
     let t = text.trimmedLeading()
     guard let first = t.first, openingQuoteChars.contains(first) else { return false }
@@ -448,6 +440,52 @@ func assembleParagraphUnits(_ lines: [Line], margin: Double = 65, headPosition: 
     return out
 }
 
+/// The first-line indent a run of CONSECUTIVE quote-classified blocks shares: set from the
+/// group's own first paragraph and reused for every paragraph after it, because the
+/// source's own typed indent is not reliable per paragraph. The emitter `reset()`s it
+/// wherever the group ends.
+struct QuoteIndentGroup {
+    private var cols: Int?
+    mutating func reset() { cols = nil }
+    mutating func resolve(_ own: Int) -> Int {
+        if cols == nil { cols = own }
+        return cols!
+    }
+}
+
+/// One Modern paragraph unit, with what the HTML and RTF emitters both need to render it.
+struct ModernParagraphUnit {
+    /// The unit's source lines (`lines[0]` is the first line).
+    let lines: [Line]
+    /// First-line indent in columns (the quote group's, inside a quote).
+    let indentCols: Int
+    /// The first line's spans, align-stripped and without their leading indent.
+    let first: [Span]
+    /// A verified verse/stanza unit, a screenplay region, or a hand-positioned (`wrap`
+    /// off) multi-line unit: its line structure is kept rather than flowed into one line.
+    let isVerse: Bool
+}
+
+/// `lines` assembled into paragraph units, in order, each with its indent and verse flag.
+/// The one iterator behind Modern HTML's and Modern RTF's plain runs. Units are resolved in
+/// document order, so the first unit of a quote group sets `quoteGroup`'s indent.
+func modernParagraphUnits(_ lines: [Line], block: Block, blockIndex bi: Int, margin: Double,
+                          headPosition: Bool, conventionIndent: Int?, dominant: StyleKey,
+                          screenplayBlocks: Set<Int>, quote: Bool,
+                          quoteGroup: inout QuoteIndentGroup) -> [ModernParagraphUnit] {
+    assembleParagraphUnits(lines, margin: margin, headPosition: headPosition,
+                           conventionIndent: conventionIndent, wrap: block.wrap).map { unit in
+        var (indentCols, first) = splitLeadingIndent(maybeStripAlign(block, unit[0].spans))
+        if quote { indentCols = quoteGroup.resolve(indentCols) }
+        // a wrap=off block's unit is ALWAYS verse: assembleParagraphUnits already returns
+        // it as one whole-block unit, and without this guard a non-verse multi-line unit
+        // would still flow into one run-on line.
+        let isVerse = unit.count > 1 && (!block.wrap || looksLikeVerse(unit, dominantStyles: dominant)
+                                         || screenplayBlocks.contains(bi))
+        return ModernParagraphUnit(lines: unit, indentCols: indentCols, first: first, isVerse: isVerse)
+    }
+}
+
 /// (conventionIndent, headPosition) — the two whole-document signals `assembleParagraphs`'s
 /// convention-outlier/positional route needs, computed once per document. `headPosition` is
 /// keyed by BLOCK INDEX (Swift's `Block` is a value type with no Python-`id()` equivalent;
@@ -538,7 +576,7 @@ func splitLeadingIndent(_ spans: [Span]) -> (Int, [Span]) {
 /// Quote", "MS Double-Indented Quote") — one substring test shared by every Modern format's
 /// own quote treatment. Port of `core._is_quote_name`/`_is_quote_style`.
 func isQuoteName(_ name: String?) -> Bool {
-    asciiContains(asciiLowercased(name ?? ""), "quote")
+    asciiContains(ASCII.lowercased(name ?? ""), "quote")
 }
 
 func isQuoteStyle(_ block: Block) -> Bool {

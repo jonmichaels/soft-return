@@ -29,7 +29,8 @@ import Testing
 /// "Printstream" edges it out by about 1.3pt. Both, and everything else, carry 48pt+ of slack,
 /// so his own guessed 5pt is comfortably safe: it leaves >43pt of real padding on the tightest
 /// button, nowhere near clipping. `BottomBar.buttonWidthReduction` applies exactly 5pt, equally,
-/// to all five `fixedWidth(candidates:)` results.
+/// to all five `fixedWidth(candidates:)` results. The tests below hold what Jon asked for, not the
+/// 5pt: no title clips, and the five buttons fit the window's first-open width.
 @Suite struct Job454ButtonWidthTests {
 
     @MainActor
@@ -68,25 +69,6 @@ import Testing
          [DocumentOperations.PageSettingsPreset.embeddedChoiceName]
             + DocumentOperations.PageSettingsPreset.allCases.map(\.displayName)),
     ]
-
-    // MARK: - The reduction actually applied: each button is exactly 5pt narrower than before
-
-    /// Pinned to the pre-job-454 widths themselves (109/94/88/94/106 — this suite's own
-    /// measurement, taken before `buttonWidthReduction` existed; zoom is 107 since batch 20's
-    /// "Actual Size") so this fails if the reduction ever drifts from Jon's "same amount lost on
-    /// each, 5pt."
-    @Test @MainActor func everyButtonLostExactlyFivePointsUniformly() throws {
-        let bar = try Self.makeBar()
-        let beforeWidths: [String: CGFloat] = [
-            "variant-control": 109, "style-control": 94, "zoom-control": 107,
-            "page-size-control": 94, "page-settings-control": 106,
-        ]
-        for (identifier, before) in beforeWidths.sorted(by: { $0.key < $1.key }) {
-            let button = try Self.popup(identifier, in: bar)
-            #expect(button.frame.width == before - 5,
-                    "\(identifier) is \(button.frame.width)pt wide, expected \(before - 5) (was \(before), job 454 takes exactly 5pt off every button)")
-        }
-    }
 
     // MARK: - The permanent guard: no reachable title can ever clip
 

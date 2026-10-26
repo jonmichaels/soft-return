@@ -93,15 +93,8 @@ private func firstIfOperator(in s: [UInt8]) -> (range: Range<Int>, op: [UInt8])?
     return nil
 }
 
-private func stripASCIIWhitespace(_ bytes: [UInt8]) -> [UInt8] {
-    var start = 0, end = bytes.count
-    while start < end && asciiWhitespace.contains(bytes[start]) { start += 1 }
-    while end > start && asciiWhitespace.contains(bytes[end - 1]) { end -= 1 }
-    return Array(bytes[start..<end])
-}
-
 private func ifStripQuotes(_ s: [UInt8]) -> [UInt8] {
-    let t = stripASCIIWhitespace(s)
+    let t = ASCII.strip(s, .whitespace)
     guard t.count >= 2, t.first == t.last, t.first == 0x22 || t.first == 0x27 else {
         return t
     }
@@ -112,7 +105,7 @@ private func ifStripQuotes(_ s: [UInt8]) -> [UInt8] {
 /// evaluated" (a merge-variable reference `&name&`, or an unrecognized
 /// shape — never guessed at). Direct port of `_eval_if_condition`.
 private func evalIfCondition(_ arg: [UInt8]) -> Bool? {
-    let trimmed = stripASCIIWhitespace(arg)
+    let trimmed = ASCII.strip(arg, .whitespace)
     if trimmed.contains(0x26) { return nil }            // '&' — merge variable
     guard let (range, op) = firstIfOperator(in: trimmed) else {
         // REFORM.DOT's own documented shorthand: "The command if 0 is
@@ -596,12 +589,9 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var headerStyleAttrsParity: [Int: [HFParity: Style]] = [:]
     var footerStyleAttrsParity: [Int: [HFParity: Style]] = [:]
     var hfEvents: [HFEvent] = []
-    var hfEventsParity: [HFParity?] = []
-    // 2026-09-12 (cause 10): see `Document.headerPcl`/`hfEventsPcl`.
+    // 2026-09-12 (cause 10): see `Document.headerPcl`/`HFEvent.pcl`.
     var headerPcl: [Int: [HFPrintControl]] = [:]
     var footerPcl: [Int: [HFPrintControl]] = [:]
-    var hfEventsPcl: [[HFPrintControl]] = []
-    var hfEventsWithin: [HFWithin?] = []
     // Running FORMATTING state, stamped onto each block as it opens. Stateful, unlike
     // page geometry — see `Formatting2.swift`.
     var fmt = FormatState()
@@ -943,7 +933,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         // decodeSpans/Block content.
         if consumeNextAsRuler {
             consumeNextAsRuler = false
-            let cmd = rstrippingASCIIWhitespace(raw)
+            let cmd = ASCII.rstrip(raw, .whitespace)
             dots.append(decodeCP437(cmd))
             rtDots.append(RoundtripDot(anchor: rtTally, raw: physical.text,
                                        brk: rtBrk ?? []))
@@ -1019,7 +1009,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
         }
         if stripped.first == 0x2E && !pctlLeads {             // '.' — dot command line
             // core.py:290-298 — captured as metadata; the line itself never becomes text.
-            let cmd = rstrippingASCIIWhitespace(stripped)
+            let cmd = ASCII.rstrip(stripped, .whitespace)
             dots.append(decodeCP437(cmd))
             // Round-trip ledger (tasks #20/#21): the line's UNMASKED, UNSTRIPPED bytes
             // and its own separator, anchored to the event counter. `cmd` above is
@@ -1045,7 +1035,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
             dotPositions.append(DotPosition(blockIndex: blocks.count,
                                             lineIndex: cur.lines.count,
                                             text: decodeCP437(cmd)))
-            let head2 = Array(cmd.dropFirst().prefix(2)).map(asciiUppercased)
+            let head2 = Array(cmd.dropFirst().prefix(2)).map(ASCII.upper)
             // #229: `.IF`/`.EL`/`.EI` themselves ALWAYS execute (push/flip/pop the
             // stacks above) regardless of the CURRENT suppression state —
             // round-trip bookkeeping for this dot line already happened,
@@ -1153,7 +1143,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 closeBlock()
                 blocks.append(Block(kind: .condcolumn, heading: cpLines(cmd)))
             }
-            if Array(cmd.dropFirst().prefix(1)).map(asciiLowercased) == [0x72],  // 'r'
+            if Array(cmd.dropFirst().prefix(1)).map(ASCII.lower) == [0x72],  // 'r'
                cmd.contains(0x21) {                                             // '!'
                 ruler = true
             }
@@ -1280,7 +1270,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
                     break
                 }
             }
-            parseHeadFoot(stripHibit ? cmd : rstrippingASCIIWhitespace(raw),
+            parseHeadFoot(stripHibit ? cmd : ASCII.rstrip(raw, .whitespace),
                          headers: &headers, footers: &footers,
                          headerFonts: &headerFonts, footerFonts: &footerFonts,
                          headerTabs: &headerTabs, footerTabs: &footerTabs,
@@ -1297,9 +1287,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
                          headerStyleAttrsParity: &headerStyleAttrsParity,
                          footerStyleAttrsParity: &footerStyleAttrsParity,
                          headerPcl: &headerPcl, footerPcl: &footerPcl,
-                         hfEvents: &hfEvents, hfEventsParity: &hfEventsParity,
-                         hfEventsPcl: &hfEventsPcl,
-                         hfEventsWithin: &hfEventsWithin,
+                         hfEvents: &hfEvents,
                          anchor: hfAnchor, within: hfWithin, fontIdx: hfFontIdx ?? hfStyleFontIdx,
                          tabMark: hfTabMark, align: hfAlign, styleAttrs: hfStyleAttrs,
                          // M16: the `.lh` in force RIGHT HERE, which is what the step
@@ -2020,11 +2008,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
     doc.footerAlignParity = footerAlignParity
     doc.headerStyleAttrsParity = headerStyleAttrsParity
     doc.footerStyleAttrsParity = footerStyleAttrsParity
-    doc.hfEventsParity = hfEventsParity
     doc.headerPcl = headerPcl
     doc.footerPcl = footerPcl
-    doc.hfEventsPcl = hfEventsPcl
-    doc.hfEventsWithin = hfEventsWithin
     // Register C2: raw PCL printer payloads, indexed by a span's own `pcl`.
     doc.pclPrograms = pclPrograms
     // #228 (planning #228, research/2026-09-08_trailing-pa-rule.md): only
@@ -2155,27 +2140,6 @@ func rtSplitBareFF(_ raw: [UInt8]) -> [[UInt8]] {
 // ---------------------------------------------------------------- internals
 
 /// Python `bytes.rstrip()` with no argument strips this exact set. Unlike job-003's
-/// space-only helper, the full set is needed here: the input is masked raw bytes, so
-/// e.g. a 0x8D soft return masks to 0x0D and must still be trimmed.
-private let asciiWhitespace: Set<UInt8> = [0x20, 0x09, 0x0A, 0x0D, 0x0B, 0x0C]
-
-private func rstrippingASCIIWhitespace(_ bytes: [UInt8]) -> [UInt8] {
-    var end = bytes.count
-    while end > 0 && asciiWhitespace.contains(bytes[end - 1]) { end -= 1 }
-    return Array(bytes[..<end])
-}
-
-/// ASCII-only case folding, matching `bytes.upper()`/`bytes.lower()` — which, unlike
-/// `String` case mapping, never touches non-ASCII bytes.
-// NOT private (Finding 3, b26-print-fidelity-2): `PDFLayout.swift`'s `mtMbCheckpoints`
-// needs it too, for the SAME `.mt`/`.mb` command-name case-folding the parser uses.
-func asciiUppercased(_ b: UInt8) -> UInt8 {
-    (b >= 0x61 && b <= 0x7A) ? b - 0x20 : b
-}
-
-private func asciiLowercased(_ b: UInt8) -> UInt8 {
-    (b >= 0x41 && b <= 0x5A) ? b + 0x20 : b
-}
 
 // ------------------------------------------------------------ page geometry
 //
@@ -2209,8 +2173,8 @@ private func asciiLowercased(_ b: UInt8) -> UInt8 {
 /// `.hm3`, back-to-back, nothing between them; real WS7 prints at the SECOND value's
 /// row). Once body text has begun, `parsePageDot` leaves every field here alone — a
 /// repeat mid-document is the document's own STATEFUL behaviour, the domain of the
-/// per-page checkpoint machinery in `PDFLayout.swift` (`plCheckpoints`/`hmFmCheckpoints`/
-/// `mtMbCheckpoints`/`pnCheckpoints`), never this accumulator. `hmLines`/`fmLines`/
+/// per-page checkpoint machinery in `PDFLayout.swift` (`plTimeline`/`hmFmTimeline`/
+/// `mtMbTimeline`/`pnTimeline`), never this accumulator. `hmLines`/`fmLines`/
 /// `lh48`/`ls` (ctrl-kd 1.3.0) follow the same rule; a REJECTED argument (see
 /// `resolveLhArg`/`resolveLsArg`) leaves its field unchanged, exactly as if the dot
 /// command had never been seen at that occurrence, so whatever stood before it stands.
@@ -2246,21 +2210,6 @@ private let namedPageSizes: [(name: String, heightIn: Double, widthIn: Double)] 
 /// honour the raw geometry instead of forcing a label onto it.
 private let pageSizeSnapIn = 0.25
 
-let defaultPlLines = 66.0   // WordStar's own default: 66 lines = 11in = US Letter
-let defaultMtLines = 3.0    // spec: ".MT ... Default value is 3 lines."
-let defaultMbLines = 8.0    // spec: ".MB ... The default value is 8 lines."
-private let defaultPoCols = 8.0     // WS7 manual, "Page Layout": "The default page offset
-                                    // is .8 inch" -- 8 print columns at the default 10 CPI.
-                                    // (Through ctrl-kd 1.3.0 this was 0, "least
-                                    // presumptuous", from the file-format spec stating
-                                    // none; the manual DOES state one, and 2.0.0 actually
-                                    // renders the offset, so the manual's figure governs.)
-let defaultHmLines = 2.0    // spec: ".HM ... Default is 2." (header sits INSIDE .mt) —
-                             // internal (not private): PDFLayout.swift's
-                             // `printedNotesReservePt` also reads it (mechanism U port,
-                             // ctrl-kd 26169cd), mirroring Python's `DEFAULT_HM_LINES`
-                             // import in `_printed_notes_reserve_pt`.
-private let defaultFmLines = 2.0    // spec: ".FM ... Default is 2." (footer sits INSIDE .mb)
 let defaultLh48 = 8.0       // spec: ".LH ... The default is 8/48 or 6 lines per inch."
 let defaultSr48 = 3.0       // WSFORMAT.TXT: "[.SR] ... Default is 3." (1/48in units) --
                              // the same figure PDFLayout.swift/EmitRTF.swift already
@@ -2318,67 +2267,7 @@ func parseDotNumber(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?)? {
     parseDotNumberConsuming(arg).map { ($0.value, $0.unit) }
 }
 
-/// `[(blockIndex, interval), ...]` in ascending block order -- the `.l#` line-numbering
-/// interval IN FORCE from that block onward. Same `dotPositions`-anchored shape
-/// `plCheckpoints`/`hmFmCheckpoints` (`PDFLayout.swift`) use -- kept here in `ParseWS.swift`,
-/// not `PDFLayout.swift`, because BOTH Printed renderers need the positional answer:
-/// `PDFWriter.swift`'s `pageStream` resolves it PER LINE (by that line's own block index --
-/// a single per-page value cannot represent a document whose `.l#` turns on and off again
-/// within one page, exactly sawyer/PRINT.TST's own shape) and `EmitRTF.swift`'s Printed
-/// gutter resolves it PER BLOCK (RTF has no page object to reset against, so its own
-/// numbering runs continuously from the document's start). Port of Python's
-/// `line_numbering_checkpoints`.
-///
-/// Seeded at `(0, nil)` ("off") -- unlike `plCheckpoints`'s WordStar-hardcoded-default
-/// seed, there is no retroactive first-occurrence-wins hazard to guard against here: line
-/// numbering's own real default IS off, so a `.l#` whose only occurrence sits mid-document
-/// correctly leaves every earlier block at `nil` with no special-casing needed.
-///
-/// Walked directly against `dp.text` rather than through `dotCommandNameAndArg` -- that
-/// helper's name grammar is `[A-Za-z]{1,3}` only, and `.L#`'s own two-character name ends
-/// in the literal `#`, which it can never match (see `parseCollectDot`'s own handling of
-/// the same command, `Formatting2.swift`).
-///
-/// Planning #247 (found by the #245 job on PRINT.TST/PSPRINT.TST): `doc.lineNumbering`
-/// (set by `parseCollectDot`, `.l#`'s own PARSE-time handler) is a single flat value,
-/// last-command-wins for the WHOLE document -- both real oracles here (sawyer/PRINT.TST,
-/// sawyer/DEFAULT/PRINT.TST) declare `.l#2` right before their "Line Numbers"
-/// demonstration section and `.l# 0` right after it, so the flat reading is always the OFF
-/// value and nothing ever rendered anywhere, even on the one page that turned it on. This
-/// is the `.mt`/`.mb`-shaped fix: a positional answer, not a single global one.
-/// (sawyer/PSPRINT.TST's own `..l#2` is a DIFFERENT thing entirely -- a leading `..` is
-/// WordStar's own `.IG`/comment shorthand, so that occurrence never was a real dot
-/// command; PSPRINT.TST's line numbering stays off throughout, correctly, both before and
-/// after this fix.)
-func lineNumberingCheckpoints(_ doc: Document) -> [(blockIndex: Int, interval: Int?)] {
-    var checkpoints: [(blockIndex: Int, interval: Int?)] = [(0, nil)]
-    for dp in doc.dotPositions {
-        let bytes = Array(dp.text.utf8)
-        guard bytes.count >= 3, bytes[0] == 0x2E,             // '.'
-              asciiUppercased(bytes[1]) == 0x4C,              // 'L'
-              bytes[2] == 0x23                                // '#'
-        else { continue }
-        guard let (value, _) = parseDotNumber(Array(bytes[3...])), value.isFinite
-        else { continue }
-        let interval: Int? = Int(value) > 0 ? Int(value) : nil
-        if interval != checkpoints[checkpoints.count - 1].interval {
-            checkpoints.append((dp.blockIndex, interval))
-        }
-    }
-    return checkpoints
-}
 
-/// The `.l#` interval (or `nil`) in force at block index `bi`, per `checkpoints`
-/// (ascending, from `lineNumberingCheckpoints`) -- the LAST checkpoint at or before `bi`.
-/// Mirrors `plAt` exactly. Port of Python's `line_numbering_at`.
-func lineNumberingAt(_ checkpoints: [(blockIndex: Int, interval: Int?)], _ bi: Int) -> Int? {
-    var interval = checkpoints[0].interval
-    for cp in checkpoints {
-        if cp.blockIndex > bi { break }
-        interval = cp.interval
-    }
-    return interval
-}
 
 // ------------------------------------------------------------ dot-command math
 //
@@ -2522,7 +2411,7 @@ func parseDotNumberConsuming(_ arg: [UInt8]) -> (value: Double, unit: [UInt8]?, 
 /// the same as no unit -- defensive, not a crash). Direct port of `_dot_arg_inches`.
 func dotArgInches(_ value: Double, _ unit: [UInt8]?) -> Double? {
     guard let unit, !unit.isEmpty else { return nil }
-    let upper = String(decoding: unit.map(asciiUppercased), as: UTF8.self)
+    let upper = String(decoding: unit.map(ASCII.upper), as: UTF8.self)
     switch upper {
     case "\"", "I", "IN": return value
     case "C", "CM": return value / 2.54
@@ -2538,7 +2427,7 @@ func dotArgInches(_ value: Double, _ unit: [UInt8]?) -> Double? {
 
 /// `.pl`/`.mt`/`.mb` argument -> lines, at 6 LPI. Unit-less IS lines already (see
 /// module note above); a unit suffix is inches/cm/points via 6 LPI.
-// NOT private (Finding 3, b26-print-fidelity-2): `PDFLayout.swift`'s `mtMbCheckpoints`
+// NOT private (Finding 3, b26-print-fidelity-2): `PDFLayout.swift`'s `mtMbTimeline`
 // needs the SAME `.mt`/`.mb` unit resolution the parser itself uses, so a mid-document
 // `.mt`/`.mb` checkpoint value matches byte-for-byte what parsing that same command at
 // document-open would have produced.
@@ -2664,17 +2553,15 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
                    footerStyleAttrsParity: inout [Int: [HFParity: Style]],
                    headerPcl: inout [Int: [HFPrintControl]],
                    footerPcl: inout [Int: [HFPrintControl]],
-                   hfEvents: inout [HFEvent], hfEventsParity: inout [HFParity?],
-                   hfEventsPcl: inout [[HFPrintControl]],
-                   hfEventsWithin: inout [HFWithin?],
+                   hfEvents: inout [HFEvent],
                    anchor: Int, within: HFWithin? = nil, fontIdx: Int? = nil,
                    tabMark: (offset: Int, absHMI: Int, leader: UInt8, cols: Int)? = nil,
                    align: Alignment? = nil, styleAttrs: Style = [],
                    styleRMCols: Double? = nil, lead48: Double? = nil,
                    pctlMarks: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = []) {
     guard cmd.count >= 3 else { return }
-    let first = asciiUppercased(cmd[1])
-    let second = asciiUppercased(cmd[2])
+    let first = ASCII.upper(cmd[1])
+    let second = ASCII.upper(cmd[2])
     guard first == 0x48 || first == 0x46 else { return }          // 'H' or 'F'
     let line: Int
     // Planning #250: `.H1E`/`.H1O`/`.F1E`/`.F1O` -- real 3-letter dot commands
@@ -2685,7 +2572,7 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     var parity: HFParity? = nil
     var cmdArgOffset = 3
     if second == 0x31, cmd.count >= 4 {
-        let third = asciiUppercased(cmd[3])
+        let third = ASCII.upper(cmd[3])
         if third == 0x45 {                                         // .H1E / .F1E
             parity = .even
             cmdArgOffset = 4
@@ -2818,10 +2705,8 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
             footerStyleAttrsParity[line, default: [:]][parity] = styleAttrs
         }
     }
-    hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: anchor))
-    hfEventsParity.append(parity)
-    hfEventsPcl.append(pctlHere)
-    hfEventsWithin.append(within)          // triage Q9; see the field
+    hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: anchor,
+                            parity: parity, pcl: pctlHere, within: within))
 }
 
 /// Decode header/footer TEXT, expanding `<1B x 1C>` wrapped characters: the middle byte
@@ -2997,7 +2882,7 @@ private func parsePageDot(
     hasText: Bool = false
 ) {
     if cmd.count >= 3 {
-        let head = String(decoding: [asciiUppercased(cmd[1]), asciiUppercased(cmd[2])], as: UTF8.self)
+        let head = String(decoding: [ASCII.upper(cmd[1]), ASCII.upper(cmd[2])], as: UTF8.self)
         if head == "F#" || head == "E#" {
             let isFootnote = head == "F#"
             let alreadySet = isFootnote ? footnoteNumberStart != nil : endnoteNumberStart != nil
@@ -3012,7 +2897,7 @@ private func parsePageDot(
         }
     }
     guard let (name, arg) = dotCommandNameAndArg(cmd) else { return }
-    let nameString = String(decoding: name.map(asciiUppercased), as: UTF8.self)
+    let nameString = String(decoding: name.map(ASCII.upper), as: UTF8.self)
     switch nameString {
     // Register b31 (E3 open items 2+3, ruled 2026-08-25, ctrl-kd 5f3a102):
     // PRE-TEXT-LAST-WINS, not first-occurrence-wins. Python's dispatch is generic

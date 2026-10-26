@@ -286,7 +286,7 @@ let nonTextTypestyles: Set<Int> = [
 func fontTranslitKind(_ font: FontChange) -> SymbolTranslit? {
     // NAME first: it is the specific signal. The coarse symbol-map bits can say `math`
     // for BOTH faces (PS.TST's Dingbats row transliterated to Greek until this ordering).
-    let name = asciiLowercased(font.typestyleName ?? "")
+    let name = ASCII.lowercased(font.typestyleName ?? "")
     if name.hasPrefix("symbol") { return .math }
     if asciiContains(name, "dingbat") { return .symbols }
     // A RESOLVED ORDINARY FACE WINS over the character-set bits (ruling 2026-09-16).

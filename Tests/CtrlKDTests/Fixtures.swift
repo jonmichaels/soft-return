@@ -360,14 +360,14 @@ func colourBlock(_ colour: Int, previous: Int = 0) -> [UInt8] {
 /// A typestyle number the base-14 mapping resolves to Helvetica — read out of the spec's own
 /// name table rather than written down, so a table edit can never silently retarget a test.
 func helvTypestyle() -> Int {
-    typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("helv") }!
+    typestyleNames.firstIndex { ASCII.lowercased($0).hasPrefix("helv") }!
 }
 
 /// A typestyle number the base-14 mapping resolves to Courier — same reasoning as
 /// `helvTypestyle()`. Used by mechanism G's own fixed-pitch sup/sub fixtures, which need a
 /// REAL WS7 font block (not the fontless default) that still lands on Courier.
 func courierTypestyle() -> Int {
-    typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("courier") }!
+    typestyleNames.firstIndex { ASCII.lowercased($0).hasPrefix("courier") }!
 }
 
 /// A typestyle number the base-14 mapping resolves to Times (via the `serif` generic-style

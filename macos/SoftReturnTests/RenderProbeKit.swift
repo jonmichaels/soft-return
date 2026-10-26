@@ -2,15 +2,12 @@ import AppKit
 import Foundation
 import ScreenCaptureKit
 
-/// Generic render-probe mechanics: writing a deterministic PNG, resolving where captures
-/// land, and the JSON shapes a geometry report is made of.
+/// Generic view-inspection mechanics for the hosted tests: walking a view tree, resolving a
+/// colour under an appearance, scanning rendered pixels for where ink starts, capturing a live
+/// window, and drawing a view to PNG bytes in memory.
 ///
-/// Nothing here knows about any particular app's windows, documents, or fixtures — that is
-/// the ADAPTER's job (`RenderProbeTests.swift`, for this repo: which window to build, which
-/// fixtures to feed it, which of its views count as "the popups" or "the canvas"). This
-/// file is the reusable half: the part that would be identical for a render-probe harness
-/// over a completely different AppKit app. Kept as one file with a generic API, per Jon's
-/// standing ruling on probe utilities — no separate package yet, just a clean boundary.
+/// Nothing here knows about any particular app's windows, documents, or fixtures, and nothing
+/// writes a file: a test that wants a picture asserts on it in memory.
 @MainActor
 public enum RenderProbeKit {
     public struct WindowSize: Sendable {
@@ -30,44 +27,11 @@ public enum RenderProbeKit {
 
     // MARK: - JSON shapes
 
-    public struct RectJSON: Codable, Sendable {
-        public let x: Double
-        public let y: Double
-        public let width: Double
-        public let height: Double
-        public init(_ rect: CGRect) {
-            x = Double(rect.origin.x)
-            y = Double(rect.origin.y)
-            width = Double(rect.width)
-            height = Double(rect.height)
-        }
-    }
-
     public struct ColorJSON: Codable, Sendable {
         public let red: Double
         public let green: Double
         public let blue: Double
         public let alpha: Double
-    }
-
-    public struct PopupJSON: Codable, Sendable {
-        public let identifier: String
-        public let width: Double
-        public let selectedTitle: String
-        public init(identifier: String, width: Double, selectedTitle: String) {
-            self.identifier = identifier
-            self.width = width
-            self.selectedTitle = selectedTitle
-        }
-    }
-
-    /// How far a document view sits from each edge of the clip view that scrolls it — the
-    /// evidence for whether it is centred, not an assertion that it is.
-    public struct CenteringJSON: Codable, Sendable {
-        public let insetLeft: Double
-        public let insetRight: Double
-        public let insetTop: Double
-        public let insetBottom: Double
     }
 
     // MARK: - View tree
@@ -76,44 +40,7 @@ public enum RenderProbeKit {
         view.subviews + view.subviews.flatMap(descendants)
     }
 
-    // MARK: - Output directory
-
-    /// `isWritableFile(atPath:)` checks POSIX permissions, not sandbox scope, so it can say
-    /// yes to a path the sandbox will still refuse at the syscall level. An actual write
-    /// attempt is the only check that agrees with what a later real write will be able to
-    /// do.
-    public static func canWrite(to directory: URL) -> Bool {
-        let fm = FileManager.default
-        guard (try? fm.createDirectory(at: directory, withIntermediateDirectories: true)) != nil
-        else { return false }
-        let probe = directory.appendingPathComponent(".render-probe-write-check-\(UUID().uuidString)")
-        guard fm.createFile(atPath: probe.path, contents: Data()) else { return false }
-        try? fm.removeItem(at: probe)
-        return true
-    }
-
-    /// `preferred` when this process can actually write there; otherwise a directory named
-    /// `fallbackName` inside the sandbox's own temporary directory — the one writable
-    /// location that is always available and deterministic given the bundle ID, so the
-    /// suite stays green on a machine (or a Release build) with no scope granting the
-    /// preferred path.
-    public static func resolveOutputDirectory(preferred: URL, fallbackName: String) -> URL {
-        canWrite(to: preferred) ? preferred
-            : FileManager.default.temporaryDirectory.appendingPathComponent(fallbackName, isDirectory: true)
-    }
-
     // MARK: - Geometry
-
-    /// How far `documentFrame` sits from each edge of `clipBounds` — reusable regardless of
-    /// which app's scroll view produced them.
-    public static func centering(documentFrame: CGRect, clipBounds: CGRect) -> CenteringJSON {
-        CenteringJSON(
-            insetLeft: Double(documentFrame.minX - clipBounds.minX),
-            insetRight: Double(clipBounds.maxX - documentFrame.maxX),
-            insetTop: Double(clipBounds.maxY - documentFrame.maxY),
-            insetBottom: Double(documentFrame.minY - clipBounds.minY)
-        )
-    }
 
     /// `color`, resolved to concrete sRGB components under `appearance` — the mechanism a
     /// dynamic `NSColor` needs to report what it actually draws in a given appearance,
@@ -213,6 +140,80 @@ public enum RenderProbeKit {
         )
     }
 
+    // MARK: - A view as drawn
+
+    /// A view drawn once to a bitmap and read back in its own points. SwiftUI on macOS 26 draws
+    /// text, push buttons and images inside its hosting view, with no subview of their own, so
+    /// what a person sees there is only in the pixels. Pixels nothing drew are transparent, and
+    /// SwiftUI draws grey text as part-transparent black, so each pixel is judged laid over white
+    /// (a light window's background, which the window draws and this view does not).
+    @MainActor public struct Drawing {
+        public let bounds: CGRect
+        private let bitmap: NSBitmapImageRep
+        private let scale: CGFloat
+        private let flipped: Bool
+
+        public init(_ view: NSView) throws {
+            guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+                throw RenderProbeError.cannotCreateBitmap
+            }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            self.bitmap = bitmap
+            bounds = view.bounds
+            scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+            flipped = view.isFlipped
+        }
+
+        /// Every pixel position in `rect`, in points, one per pixel.
+        public func points(in rect: CGRect) -> [CGPoint] {
+            let rect = rect.intersection(bounds)
+            guard !rect.isNull else { return [] }
+            let xs = stride(from: rect.minX, to: rect.maxX, by: 1 / scale)
+            return stride(from: rect.minY, to: rect.maxY, by: 1 / scale)
+                .flatMap { y in xs.map { CGPoint(x: $0, y: y) } }
+        }
+
+        /// The colour drawn at `point`, or nil where nothing was drawn.
+        public func color(at point: CGPoint) -> NSColor? {
+            let y = flipped ? point.y : bounds.height - point.y
+            let row = min(bitmap.pixelsHigh - 1, Int(y * scale))
+            let column = min(bitmap.pixelsWide - 1, Int(point.x * scale))
+            guard row >= 0, column >= 0,
+                  let color = bitmap.colorAt(x: column, y: row)?.usingColorSpace(.deviceRGB),
+                  color.alphaComponent > 0.05 else { return nil }
+            return color
+        }
+
+        /// 0 for black to 1 for white, laid over white; nil where nothing was drawn.
+        public func luminance(at point: CGPoint) -> CGFloat? {
+            color(at: point).map { color in
+                let own = 0.299 * color.redComponent + 0.587 * color.greenComponent + 0.114 * color.blueComponent
+                return own * color.alphaComponent + (1 - color.alphaComponent)
+            }
+        }
+
+        /// Dark drawing: label text, as against the light fills behind it.
+        public func isInk(at point: CGPoint) -> Bool {
+            (luminance(at: point) ?? 1) < 0.5
+        }
+
+        /// The smallest rectangle holding every ink pixel in `rect`, or nil if it has none.
+        public func inkBounds(in rect: CGRect) -> CGRect? {
+            extent(of: points(in: rect).filter(isInk))
+        }
+
+        /// The smallest rectangle holding everything drawn in `rect`, or nil if nothing was.
+        public func drawnBounds(in rect: CGRect) -> CGRect? {
+            extent(of: points(in: rect).filter { color(at: $0) != nil })
+        }
+
+        private func extent(of pixels: [CGPoint]) -> CGRect? {
+            guard let minX = pixels.map(\.x).min(), let maxX = pixels.map(\.x).max(),
+                  let minY = pixels.map(\.y).min(), let maxY = pixels.map(\.y).max() else { return nil }
+            return CGRect(x: minX, y: minY, width: maxX - minX + 1 / scale, height: maxY - minY + 1 / scale)
+        }
+    }
+
     // MARK: - Live window capture
 
     /// What `dataWithPDF(inside:)` and `cacheDisplay(in:to:)` cannot see: the WINDOW SERVER's
@@ -273,25 +274,22 @@ public enum RenderProbeKit {
 
     // MARK: - PNG
 
-    /// Writes the PNG and returns its size in bytes, so a geometry report can carry its own
-    /// `ls -la`-equivalent even when it runs somewhere nothing outside the process can `ls`
-    /// the result (a sandboxed host app, for instance).
-    @discardableResult
-    public static func renderPNG(view: NSView, appearance: NSAppearance, to url: URL) throws -> Int {
-        try renderPNG(view: view, rect: view.bounds, appearance: appearance, to: url)
+    /// The PNG bytes of `view` drawn under `appearance`, for a test that compares or inspects
+    /// the picture in memory and never needs a file.
+    public static func pngData(view: NSView, appearance: NSAppearance) throws -> Data {
+        try pngData(view: view, rect: view.bounds, appearance: appearance)
     }
 
-    /// Same as `renderPNG(view:appearance:to:)`, but caches only `rect` (in `view`'s own
+    /// Same as `pngData(view:appearance:)`, but caches only `rect` (in `view`'s own
     /// coordinates) rather than the whole of `view.bounds`. `cacheDisplay(in:to:)` renders
     /// the receiver AND ITS SUBVIEWS clipped to `rect`, in real z-order — the one capture
     /// shape that reproduces a composited page (background paper + text subview + overlay
     /// subview all drawn by DIFFERENT views) rather than any single view's own drawing
-    /// alone. See `NativeFidelityEvidenceTests` (job 425) for why a bare page `NSTextView`
-    /// capture undercounts what a page actually shows: it has no paper/margins (painted by
-    /// `PagedDocumentView.draw(_:)`), no running heads/feet (same), and nothing painted by
-    /// `OversizedPassOverlayView` (a separate subview, added topmost).
-    @discardableResult
-    public static func renderPNG(view: NSView, rect: NSRect, appearance: NSAppearance, to url: URL) throws -> Int {
+    /// alone. A bare page `NSTextView` capture undercounts what a page actually shows: it has
+    /// no paper/margins (painted by `PagedDocumentView.draw(_:)`), no running heads/feet
+    /// (same), and nothing painted by `OversizedPassOverlayView` (a separate subview, added
+    /// topmost).
+    public static func pngData(view: NSView, rect: NSRect, appearance: NSAppearance) throws -> Data {
         guard let bitmap = view.bitmapImageRepForCachingDisplay(in: rect) else {
             throw RenderProbeError.cannotCreateBitmap
         }
@@ -301,9 +299,6 @@ public enum RenderProbeKit {
         guard let data = bitmap.representation(using: .png, properties: [:]) else {
             throw RenderProbeError.cannotEncodePNG
         }
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
-        return data.count
+        return data
     }
 }

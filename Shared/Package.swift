@@ -20,6 +20,8 @@ let package = Package(
         // consumes it. Named so the product reference below does not depend on what the
         // checkout's directory happens to be called.
         .package(name: "CtrlKD", path: ".."),
+        // Test-only helpers shared by every test target in the repo.
+        .package(name: "TestSupport", path: "../TestSupport"),
     ],
     targets: [
         .target(
@@ -28,7 +30,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SoftReturnSharedTests",
-            dependencies: ["SoftReturnShared"]
+            dependencies: ["SoftReturnShared", .product(name: "TestSupport", package: "TestSupport")]
         ),
     ]
 )

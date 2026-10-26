@@ -21,9 +21,9 @@ import Testing
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScriptingFileArgumentTests-\(UUID().uuidString)")
         try Data().write(to: url)
-        var buffer = [Int8](repeating: 0, count: Int(PATH_MAX))
-        guard realpath(url.path, &buffer) != nil else { return url }
-        return URL(fileURLWithPath: String(cString: buffer))
+        guard let resolved = realpath(url.path, nil) else { return url }
+        defer { free(resolved) }
+        return URL(fileURLWithPath: String(cString: resolved))
     }
 
     @Test func urlPassesThroughAPlainURL() throws {

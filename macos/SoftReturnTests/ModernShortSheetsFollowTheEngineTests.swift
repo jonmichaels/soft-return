@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -32,7 +33,5 @@ struct ModernShortSheetsFollowTheEngineTests {
         #expect(abs(Double(rendered.textFrame.width) - engine.textWidth) < 0.01, "\(document): text frame width \(rendered.textFrame.width)")
         let wantHeight = engine.sheetHeight - engine.marginTop - engine.marginBottom
         #expect(abs(Double(rendered.textFrame.height) - wantHeight) < 0.01, "\(document): text frame height \(rendered.textFrame.height), the engine's \(wantHeight)")
-        let stem = document.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        try InvisiblesDesignPassTests.photograph(rendered: rendered, page: 0, name: "b41-b-\(stem)-modern-p1.png")
     }
 }

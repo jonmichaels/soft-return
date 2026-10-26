@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import SoftReturn
 
 /// `SpotlightIndexQueue` — job 178's app-group hand-off queue: the QuickLook/Thumbnail
@@ -7,7 +8,7 @@ import Testing
 /// `/usr/bin/mdimport` — see the type's own doc comment), and the app drains through the
 /// existing `SpotlightFileIndexer`.
 ///
-/// Every test uses a throwaway temp directory standing in for the app-group container, injected
+/// Every test uses a throwaway scratch directory standing in for the app-group container, injected
 /// via `containerURL:` — the REAL app-group container needs the `com.apple.security.
 /// application-groups` entitlement provisioned, which this headless test host cannot be assumed
 /// to have (see the job report for what ran here vs. what needs console verification). This is
@@ -16,30 +17,26 @@ import Testing
 /// call sites (`ThumbnailProvider`/`PreviewProvider`) are exercised here at the ONE call they
 /// both actually make — `SpotlightIndexQueue.enqueue(path:category:)` — not through the
 /// extension modules themselves.
-private func throwawayContainer() -> URL {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("SpotlightIndexQueueTests.\(UUID().uuidString)")
-    try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url
-}
-
 private func throwawayDefaults() -> UserDefaults {
     UserDefaults(suiteName: "SpotlightIndexQueueTests.\(UUID().uuidString)")!
-}
-
-private final class FakeMDImportRunner: MDImportRunning {
-    private(set) var calls: [[String]] = []
-    var result = SpotlightNudge.RunResult(exitCode: 0, output: "")
-
-    func run(arguments: [String]) -> SpotlightNudge.RunResult {
-        calls.append(arguments)
-        return result
-    }
 }
 
 // MARK: - enqueue: append / dedupe / cap
 
 @Suite struct SpotlightIndexQueueTests {
+    /// Every container lives in here; the directory goes with the test's own instance.
+    private let scratch: TestScratch
+
+    init() throws {
+        scratch = try TestScratch(prefix: "SpotlightIndexQueueTests")
+    }
+
+    private func throwawayContainer() -> URL {
+        let url = scratch.url(for: UUID().uuidString)
+        try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
     @Test func enqueueAppendsAnEntryReadableBackViaPeekAll() {
         let container = throwawayContainer()
         let defaults = throwawayDefaults()

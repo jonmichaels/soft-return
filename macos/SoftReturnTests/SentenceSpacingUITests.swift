@@ -58,7 +58,7 @@ import Testing
         return try DocumentState(data: doubleSpaceFixtureBytes(), settings: SettingsStore(defaults: defaults))
     }
 
-    private static func text(_ products: [ExportEngine.Product]) throws -> String {
+    private static func text(_ products: [ExportProduct]) throws -> String {
         String(decoding: try #require(products.first).bytes, as: UTF8.self)
     }
 

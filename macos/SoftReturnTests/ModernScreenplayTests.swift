@@ -1,6 +1,7 @@
 import AppKit
 import CoreText
 import CtrlKD
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Foundation
 import Testing

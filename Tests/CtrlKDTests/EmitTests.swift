@@ -34,7 +34,7 @@ import Testing
     // whitespace: markup wrapped around the spaces wouldn't render. No vector has a styled
     // span with leading/trailing space, so skipping the peel passes the whole suite.
     let span = Span(text: "  bold words  ", styles: .bold)
-    #expect(markdownSpan(span) == "  **bold words**  ")
+    #expect(markdownSpanParts(span).text == "  **bold words**  ")
 }
 
 @Test func markdownSpanEscapesBackslashBeforeOtherCharacters() {
@@ -44,13 +44,13 @@ import Testing
     // direct statement of the rule, with a literal backslash in the INPUT, which no vector
     // has.
     let span = Span(text: #"a\b *c*"#, styles: [])
-    #expect(markdownSpan(span) == #"a\\b \*c\*"#)
+    #expect(markdownSpanParts(span).text == #"a\\b \*c\*"#)
 }
 
 @Test func markdownWhitespaceOnlySpanPassesThroughUnescaped() {
     // _md_span returns whitespace-only spans untouched, BEFORE escaping — so a span that
     // is only spaces never acquires backslashes. The wrap-join space spans hit this path.
-    #expect(markdownSpan(Span(text: "   ", styles: .bold)) == "   ")
+    #expect(markdownSpanParts(Span(text: "   ", styles: .bold)).text == "   ")
 }
 
 @Test func markdownSpanNestsMultipleStylesInPythonSortedOrder() {
@@ -61,8 +61,8 @@ import Testing
     // `<u>` for any span carrying two or more of {sub, sup, underline} — verified against
     // the Python reference (`_md_span(Span('w', frozenset({'sub','sup'})))` ==
     // `'<sup><sub>w</sub></sup>'`).
-    #expect(markdownSpan(Span(text: "w", styles: [.sub, .sup])) == "<sup><sub>w</sub></sup>")
-    #expect(markdownSpan(Span(text: "w", styles: [.bold, .italic, .underline, .sup, .sub, .strike]))
+    #expect(markdownSpanParts(Span(text: "w", styles: [.sub, .sup])).text == "<sup><sub>w</sub></sup>")
+    #expect(markdownSpanParts(Span(text: "w", styles: [.bold, .italic, .underline, .sup, .sub, .strike])).text
             == "<u><sup><sub>~~***w***~~</sub></sup></u>")
 }
 

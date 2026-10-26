@@ -73,11 +73,10 @@ public struct WindowRestorableState: Codable, Equatable {
 
 // MARK: - Codable-through-NSCoder
 
-/// `CtrlKD.Variant` and `SettingProvenance` are plain-string enums with no Codable
-/// conformance of their own; both get the standard library's free `RawRepresentable`
-/// synthesis, exactly the pattern `SettingsStore.swift` already uses for `ViewStyle`,
-/// `PageDisplay` and `NamedPageSize`.
-extension Variant: Codable {}
+/// `CtrlKD.Variant` is Codable in the engine itself (a plain-string enum); `SettingProvenance`
+/// is a plain-string enum of this package and gets the standard library's free
+/// `RawRepresentable` synthesis, exactly the pattern `SettingsStore.swift` already uses for
+/// `ViewStyle`, `PageDisplay` and `NamedPageSize`.
 extension SettingProvenance: Codable {}
 
 /// One key, one JSON blob, gated by `SettingsStore.restoreWindowsOnLaunch` — see

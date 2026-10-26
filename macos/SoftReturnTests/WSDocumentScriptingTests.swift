@@ -164,7 +164,7 @@ import Testing
 
 /// Batch 27 item 1: a long document opened with NO window is still parsed. Batch 26 started the deferred
 /// parse from `makeWindowControllers`, so a document of 64 KB or more read without one — the path a script's
-/// `open`, `export` or `AppleEventSelfSendProbe` takes (`openDocument(withContentsOf:display: false)`) — never
+/// `open` or `export` takes (`openDocument(withContentsOf:display: false)`) — never
 /// parsed, and its state stayed the empty placeholder. Both tests open -HOLYMAC.WS (538 KB) through
 /// `NSDocumentController.makeDocument(withContentsOf:ofType:)`: `read`, and no window.
 @Suite(.tags(.corpus), .serialized, .enabled(if: PrivateCorpusSupport.isArmed, PrivateCorpusSupport.skipReason))

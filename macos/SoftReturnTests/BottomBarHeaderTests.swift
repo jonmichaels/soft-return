@@ -386,12 +386,6 @@ import Testing
     }
 }
 
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
-    }
-}
-
 /// Job 359 (b24): `BottomBar.addHeader` no longer branches on OS version or references
 /// `NSMenuItem.sectionHeader`/`isSectionHeader` at all — see that function's doc comment.
 /// Every header, on every OS version, is `view != nil`, `isEnabled == false`. NOT

@@ -133,7 +133,7 @@ public func pdfFamily(_ entry: FontChange?) -> PDFFamily {
     case nil: break
     }
     if !entry.proportional { return .courier }
-    let family = asciiLowercased(entry.family)
+    let family = ASCII.lowercased(entry.family)
     if monoFamilies.contains(where: { family.hasPrefix($0) }) { return .courier }
     switch entry.genericStyle {
     case .serif, .script: return .times

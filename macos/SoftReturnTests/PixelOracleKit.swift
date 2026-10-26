@@ -6,7 +6,7 @@ import Testing
 ///
 /// Job 223 (Jon's generalization ruling, finding E, supersedes the job's narrower framing):
 /// inputs are (a) any page-producer (a closure yielding page bitmaps) and (b) any
-/// reference-producer (same shape); output is a region-diff report + PNG artifacts. Nothing in
+/// reference-producer (same shape); output is a region-diff report + PNG diff pictures attached to the test result. Nothing in
 /// THIS file knows about Soft Return, WordStar, CtrlKD, or PDF — that knowledge lives entirely
 /// in the ADAPTER (`PixelOracleAppEngineTests.swift`, the FIRST CUSTOMER: the app's real view
 /// pipeline vs the engine's real `emitPDF`, not the shape of the harness). Same clean-boundary
@@ -100,8 +100,6 @@ public enum PixelOracleKit {
     public struct PageReport: Sendable {
         public let page: String
         public let findings: [Finding]
-        public let sideBySideURL: URL?
-        public let deltaURL: URL?
     }
 
     public struct FixtureReport: Sendable {
@@ -185,7 +183,6 @@ public enum PixelOracleKit {
         fixture: String,
         actual: [PageImage],
         reference: [PageImage],
-        outputDirectory: URL,
         gridCellPt: CGFloat = 12,
         tolerance: Double = 0.12,
         inkThreshold: Double = 0.02,
@@ -200,7 +197,7 @@ public enum PixelOracleKit {
         var pageReports: [PageReport] = []
         for (a, r) in zip(actual, reference) {
             let report = try comparePage(
-                fixture: fixture, actual: a, reference: r, outputDirectory: outputDirectory,
+                fixture: fixture, actual: a, reference: r,
                 gridCellPt: gridCellPt, tolerance: tolerance, inkThreshold: inkThreshold,
                 sampleStride: sampleStride, blurRadiusDevicePx: blurRadiusDevicePx,
                 background: background, attach: attach)
@@ -212,7 +209,7 @@ public enum PixelOracleKit {
     // MARK: - Per-page comparison
 
     private static func comparePage(
-        fixture: String, actual: PageImage, reference: PageImage, outputDirectory: URL,
+        fixture: String, actual: PageImage, reference: PageImage,
         gridCellPt: CGFloat, tolerance: Double, inkThreshold: Double, sampleStride: Int,
         blurRadiusDevicePx: Int, background: NSColor, attach: Bool
     ) throws -> PageReport {
@@ -307,25 +304,19 @@ public enum PixelOracleKit {
             return lhs.regionPt.minX < rhs.regionPt.minX
         }
 
-        let safeFixture = fixture.replacingOccurrences(of: "/", with: "_")
-        let safePage = actual.label.replacingOccurrences(of: "/", with: "_")
-        let fixtureDir = outputDirectory.appendingPathComponent(safeFixture, isDirectory: true)
-        let sideBySideURL = fixtureDir.appendingPathComponent("\(safePage)-side-by-side.png")
-        let deltaURL = fixtureDir.appendingPathComponent("\(safePage)-delta.png")
-
-        try writeSideBySide(actual: actual, reference: reference, findings: findings,
-                             gridCellPt: gridCellPt, to: sideBySideURL)
-        try writeDelta(pageSize: actual.pointSize, classGrid: classGrid,
-                        actualGrid: actualGrid, referenceGrid: referenceGrid,
-                        gridCellPt: gridCellPt, to: deltaURL)
-
         if attach {
-            attachPNG(at: sideBySideURL, named: "\(safeFixture)-\(safePage)-side-by-side.png")
-            attachPNG(at: deltaURL, named: "\(safeFixture)-\(safePage)-delta.png")
+            let safeFixture = fixture.replacingOccurrences(of: "/", with: "_")
+            let safePage = actual.label.replacingOccurrences(of: "/", with: "_")
+            let sideBySide = try sideBySidePNG(actual: actual, reference: reference, findings: findings,
+                                                gridCellPt: gridCellPt)
+            let delta = try deltaPNG(pageSize: actual.pointSize, classGrid: classGrid,
+                                      actualGrid: actualGrid, referenceGrid: referenceGrid,
+                                      gridCellPt: gridCellPt)
+            Attachment.record(sideBySide, named: "\(safeFixture)-\(safePage)-side-by-side.png")
+            Attachment.record(delta, named: "\(safeFixture)-\(safePage)-delta.png")
         }
 
-        return PageReport(page: actual.label, findings: findings,
-                           sideBySideURL: sideBySideURL, deltaURL: deltaURL)
+        return PageReport(page: actual.label, findings: findings)
     }
 
     // MARK: - Ink density (sub-sampled, not exhaustive — see compareFixture's doc comment)
@@ -409,11 +400,10 @@ public enum PixelOracleKit {
         return hits / Double(total)
     }
 
-    // MARK: - Artifacts
+    // MARK: - Diff pictures (attached to the test result, never written to disk)
 
-    private static func writeSideBySide(actual: PageImage, reference: PageImage,
-                                         findings: [Finding], gridCellPt: CGFloat,
-                                         to url: URL) throws {
+    private static func sideBySidePNG(actual: PageImage, reference: PageImage,
+                                       findings: [Finding], gridCellPt: CGFloat) throws -> Data {
         let gap: CGFloat = 8
         let totalWidth = actual.bitmap.pixelsWide + reference.bitmap.pixelsWide + Int(gap)
         let totalHeight = max(actual.bitmap.pixelsHigh, reference.bitmap.pixelsHigh)
@@ -456,13 +446,12 @@ public enum PixelOracleKit {
         guard let data = composite.representation(using: .png, properties: [:]) else {
             throw PixelOracleError.cannotEncodePNG("\(actual.label) side-by-side")
         }
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
+        return data
     }
 
-    private static func writeDelta(pageSize: CGSize, classGrid: [[RegionClass?]],
-                                    actualGrid: [[Double]], referenceGrid: [[Double]],
-                                    gridCellPt: CGFloat, to url: URL) throws {
+    private static func deltaPNG(pageSize: CGSize, classGrid: [[RegionClass?]],
+                                  actualGrid: [[Double]], referenceGrid: [[Double]],
+                                  gridCellPt: CGFloat) throws -> Data {
         let rows = classGrid.count
         let cols = rows > 0 ? classGrid[0].count : 0
         let width = max(1, Int(pageSize.width))
@@ -506,17 +495,6 @@ public enum PixelOracleKit {
         guard let data = bitmap.representation(using: .png, properties: [:]) else {
             throw PixelOracleError.cannotEncodePNG("delta")
         }
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
-    }
-
-    /// Lands the PNG in the test's own result bundle (Apple's own attachment machinery, per
-    /// this job's generalization mandate) IN ADDITION to the PNG directory on disk — the two
-    /// are complementary, not redundant: the result bundle travels with `xcrun xcresulttool`
-    /// inspection and CI artifact collection, the on-disk copy is what a human (or the next
-    /// job) can open directly at a known path without extracting an xcresult bundle first.
-    private static func attachPNG(at url: URL, named name: String) {
-        guard let data = try? Data(contentsOf: url) else { return }
-        Attachment.record(data, named: name)
+        return data
     }
 }

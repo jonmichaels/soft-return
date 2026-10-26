@@ -20,7 +20,7 @@ enum SpotlightFileIndexer {
                              runner: MDImportRunning = ProcessMDImportRunner(),
                              dedupe: DedupeWindow = .shared,
                              defaults: UserDefaults = .standard,
-                             perform: @escaping (@escaping () -> Void) -> Void =
+                             perform: @escaping (@escaping @Sendable () -> Void) -> Void =
                                  { DispatchQueue.global(qos: .utility).async(execute: $0) }) {
         // job-173: recorded synchronously, before the dedupe guard and before `perform`, so a
         // hook that fires but dies later (the field symptom this exists to diagnose) still
@@ -36,6 +36,8 @@ enum SpotlightFileIndexer {
                                                detail: "requested within the dedupe window", defaults: defaults)
             return
         }
+        // `UserDefaults` is thread-safe (Apple's documentation says so) but not marked `Sendable`.
+        nonisolated(unsafe) let defaults = defaults
         perform {
             let result = runner.run(arguments: [path])
             if result.exitCode == 0 {

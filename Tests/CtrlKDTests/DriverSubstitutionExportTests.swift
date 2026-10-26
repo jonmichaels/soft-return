@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// planning #264 item 1 (packet rows B1+B2): the driver's character substitutions and
@@ -182,11 +183,11 @@ import Testing
 
     // MARK: the real corpus
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func theArchivesLJ6DTPExportsCarryTheSubstitutions() throws {
-        let path = sawyerArchivePath + "/LJ6DTP.WS"
+        let path = Corpus.sawyerArchivePath + "/LJ6DTP.WS"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let d = try parse([UInt8](data))
         for (name, out) in Self.exports(d) {
@@ -196,11 +197,11 @@ import Testing
         }
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func theArchiveReadMeExportsCarryTheEuro() throws {
-        let path = sawyerArchivePath + "/-README.WS"
+        let path = Corpus.sawyerArchivePath + "/-README.WS"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let d = try parse([UInt8](data))
         for (name, out) in Self.exports(d) {

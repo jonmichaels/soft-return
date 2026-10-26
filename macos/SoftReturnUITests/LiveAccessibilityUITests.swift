@@ -91,7 +91,7 @@ final class LiveAccessibilityUITests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("SoftReturnTests/Fixtures/report.ps")
         let app = XCUIApplication()
-        app.launchArguments = ["-SoftReturnOpenDocument", fixture.path]
+        app.launchArguments = ["-SoftReturnOpenDocument", fixture.path] + UITestLaunch.arguments
         app.launch()
         XCTAssertTrue(app.windows["document-window"].waitForExistence(timeout: 20), "no document window")
         Thread.sleep(forTimeInterval: 2)

@@ -10,7 +10,7 @@ import Testing
 /// ROOT CAUSE (real corpus, WARPRAYR.WS — Mark Twain's "The War Prayer", the hymn
 /// couplet '"God the all-terrible! Thou who ordainest, / Thunder thy clarion and
 /// lightning thy sword!"'): `verseQuoteVetoFraction`'s veto counted ANY line starting
-/// with a quote mark (`opensQuote`) toward its fraction, without checking whether that
+/// with a quote mark toward its fraction, without checking whether that
 /// line's quotation was ALSO CLOSED on the same line. For this couplet, only line 1
 /// opens with `"` (1-of-2 = 0.5), comfortably past the 1/3 veto bar — but that single
 /// opening line does not itself close the quotation; the quotation spans into line 2,
@@ -65,11 +65,9 @@ private func typedParagraphDoc(_ lines: [[UInt8]]) -> Document {
 
 @Test func selfContainedQuoteHelperDistinguishesSpanFromUtterance() {
     // The mechanism directly: a line that both opens and closes its own quotation
-    // counts; a line that only opens one (the quote continues past it) does not — even
-    // though `opensQuote` alone says `true` for both.
+    // counts; a line that only opens one (the quote continues past it) does not.
     #expect(selfContainedQuote("\"Where are you going?\"") == true)
     #expect(selfContainedQuote("\"God the all-terrible! Thou who ordainest,") == false)
-    #expect(opensQuote("\"God the all-terrible! Thou who ordainest,") == true)
     #expect(selfContainedQuote("Thunder thy clarion and lightning thy sword!\"") == false)
     #expect(selfContainedQuote("An ordinary line, no quote at all.") == false)
 }

@@ -136,11 +136,12 @@ manifest was deleted. This suite now checks that ONE geometry against a NEW,
   recording (corpus drift), then re-renders and compares sha256 + byte count
   + per-image resolution STATE (not just the final hash — a placeholder
   substitution names itself instead of surfacing as an opaque sha diff).
-- `pagePresets`/`resolveDocumentPictures` (`Sources/SoftReturnCLI/
-  Arguments.swift`/`PixResolve.swift`) are `package`-visibility (not
-  `internal`) specifically so this generator — a same-package, non-`@testable`
-  executable target — can call them; still not part of the library's PUBLIC
-  API.
+- The generator and this suite render through one `ConversionJob`
+  (`Sources/GeneratorSupport/SawyerPreset.swift`, over `Sources/SoftReturnCLI/
+  ConversionJob.swift`), so the recorded geometry has one definition.
+  `pagePresets` (`Arguments.swift`) is `package`-visibility (not `internal`)
+  so `GeneratorSupport` — a same-package, non-`@testable` target — can read
+  it; still not part of the library's PUBLIC API.
 
 Gated on `CTRLKD_SAWYER_ARCHIVE`, same as the rest of this tier — the
 recorded file is committed in-repo (no `CTRLKD_SRC` needed to READ it), but
@@ -175,8 +176,7 @@ otherwise treats as a masked failure, not a legitimate skip. That file's
 `OutputParityTests` and its `output-manifest-v*.json` recordings were RETIRED
 on 2026-09-07 (ONE answer key, Jon's ruling 2026-09-05): the app's export
 bytes are asserted by `AppAnswerKeyParityTests` (macos/SoftReturnTests)
-against ctrl-kd's `tests/answer_key.json` (via `CTRLKD_SRC`, drop-box key
-`CTRLKD=1`) plus the private overlay — the same two files this package's
+against ctrl-kd's `tests/answer_key.json` (via `CTRLKD_SRC`) plus the private overlay — the same two files this package's
 `AnswerKeyParityTests` use. A missing key or corpus is a NAMED skip, never a
 pass.
 
@@ -488,6 +488,56 @@ of an unchanged document back from disk.
   `RENDER-CACHE hit|miss|off <view> <document>`.
 - **Safety proof:** `RenderCacheTests` shows a stale key renders again and a cached page is pixel
   for pixel the render it replaced.
+
+## `TestSupport` — the shared test helpers
+
+`TestSupport/` is a local package (Foundation only, no test framework) that every test
+target in the repo takes as a path dependency. The engine tests (`Package.swift`),
+`Shared/Tests`, the Mac app's tests (`macos/Project.swift`, both test targets) and the iPhone
+app's hosted tests (`ios/Project.swift`) use it. The iPhone tests' `CorpusTraits.swift` holds their
+`requiresPrivateCorpus` trait; their waits live in `Waiting.swift` (`settle(seconds:)` for a
+time-based pause, `waitUntil(_:timeout:_:)` for a state). It holds the three things that used to be
+copied per file.
+
+- **`Corpus`** reads `CTRLKD_PRIVATE_CORPUS`, `CTRLKD_SAWYER_ARCHIVE` and `CTRLKD_SRC`. Each is
+  read as `NAME`, then as `TEST_RUNNER_NAME` (what `xcodebuild test` forwards into a test host);
+  an empty value is unset; one trailing `/` is dropped. Unarmed is a recorded Skip whose reason
+  always has the shape `gated: <NAME> unset — see docs/TESTING.md`. Armed but incomplete (the
+  variable is set and a file it should hold is missing) throws `Corpus.MissingFixture`, which
+  names the variable and the path: a failure, never a Skip. `CTRLKD_SRC` names ctrl-kd's
+  `src/` directory; `ctrlkdCheckoutRoot` accepts it or its parent. `sawyerArchiveRoot` is the
+  Sawyer archive a test reads: `CTRLKD_SAWYER_ARCHIVE` when set, else `<CTRLKD_PRIVATE_CORPUS>/sawyer`,
+  so arming the corpus alone runs the curated Sawyer subset.
+- **`RepoPaths.root`** is the repo root, found from the package's own location. Use
+  `RepoPaths.url("TestDocs/oracle/...")` rather than counting `deletingLastPathComponent()` from
+  a test file.
+- **`TestScratch`** is a unique directory under the temporary directory that removes itself:
+  `try TestScratch.with(prefix: "name") { dir in ... }` (also `async`), or a stored property
+  whose `deinit` removes it. In XCTest, `let s = try TestScratch(); addTeardownBlock { s.remove() }`.
+  A local that keeps being used after its first line needs `defer { s.remove() }`, because Swift
+  may release a local after its last use. Something built once per process and shared (the Mac
+  tests' materialized corpus) uses `TestScratch.processWide(prefix:)`: nothing owns it, so it is
+  removed when the process exits, and a killed run's leftovers are removed by the next run once a
+  day old (`TestScratch.removeStale(prefix:olderThan:)`).
+
+Tests assert; they do not leave pictures or dumps behind for a reader who is not there. A picture
+a test compares is drawn in memory (`RenderProbeKit.pngData`), the pixel oracle attaches its diff
+pictures to the test result instead of writing files, and a picture made for a review is made for
+that review and deleted after it. A test that needs a file to assert on writes it in a
+`TestScratch`.
+
+`TestSupport` has no `Testing` import, so the gates become traits in each test target. The
+engine target's `CorpusTraits.swift` is the pattern:
+
+```swift
+extension Trait where Self == ConditionTrait {
+    static var requiresSawyerArchive: Self {
+        .enabled(if: Corpus.sawyerArchiveArmed, Comment(rawValue: Corpus.sawyerArchiveSkipReason))
+    }
+}
+```
+
+A test then reads `@Test(.requiresSawyerArchive)`. Its own tests: `swift test` in `TestSupport/`.
 
 ## Test isolation guard (planning #191)
 

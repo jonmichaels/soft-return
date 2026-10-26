@@ -17,4 +17,4 @@ let application = NSApplication.shared
 let appDelegate = AppDelegate()
 application.delegate = appDelegate
 
-NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv)
+exit(NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv))

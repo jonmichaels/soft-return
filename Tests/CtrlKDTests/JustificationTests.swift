@@ -174,8 +174,8 @@ private func justifyDoc(_ src: [UInt8]) -> Document {
 
 /// Planning #238 scope gap, ctrl-kd port (aeb34ad's sibling fix, same commit as this
 /// file): a document carrying a REAL footnote/endnote/annotation anywhere routes its
-/// ENTIRE Printed body through `resolvePrintedBody` (`hasPlaceableNotes` gates
-/// `layoutPrintedPages` to this path instead of `resolvePlainBody`) -- a SEPARATE
+/// ENTIRE Printed body through `resolvePrintedBody(withNotes: true)` (`hasPlaceableNotes`
+/// gates `layoutPrintedPages` to it) -- at the time a SEPARATE
 /// PageLine-building walk that, before this fix, never set `justifyRightX` at all, so
 /// `.oj on` silently stopped stretching ANY line in such a document, not just a line
 /// that itself carries the footnote reference. Two-line `.oj on` block here carries no

@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -74,18 +75,5 @@ struct NativeOffSheetRowsTests {
         let got = appLines[fixture.page - 1].filter { !Oracle.EngineText.isAllGeometry($0) }
         print("E11 \(fixture): engine PDF \(engineAll[fixture.page - 1].count) lines, \(engineLines[fixture.page - 1].count) on the sheet; Native \(appLines[fixture.page - 1].count)")
         #expect(got.count == want.count, "\(fixture): Native draws \(got.count) lines, the engine \(want.count) on the sheet")
-
-        let view = PagedDocumentView()
-        view.setContent(rendered, display: .continuousScroll)
-        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
-        view.layoutSubtreeIfNeeded()
-        let rect = view.rect(ofPage: fixture.page - 1)
-        let foot = NSRect(x: rect.minX, y: rect.maxY - 90, width: rect.width, height: 90)
-        let name = (url.lastPathComponent as NSString).deletingPathExtension.lowercased()
-        let png = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs").appendingPathComponent("e11-\(name)-p\(fixture.page)-foot.png")
-        #expect(try RenderProbeKit.renderPNG(view: view, rect: foot, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
-        print("PROOF: \(png.path)")
     }
 }

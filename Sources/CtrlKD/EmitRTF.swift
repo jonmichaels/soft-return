@@ -170,8 +170,8 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], labels: [String], optio
         let goalW: Int
         let goalH: Int
         if let widthIn = result.widthIn, let heightIn = result.heightIn {
-            goalW = roundHalfToEven(widthIn * 1440.0)      // inches -> twips
-            goalH = roundHalfToEven(heightIn * 1440.0)
+            goalW = roundHalfToEven(inchesToTwips(widthIn))      // inches -> twips
+            goalH = roundHalfToEven(inchesToTwips(heightIn))
         } else {
             // No authoritative print-options size: render at the common 96dpi screen
             // reference (1440 twips/in / 96 = 15 twips/px) rather than force a
@@ -471,16 +471,16 @@ func hfRuns(_ txt: String) -> [(text: String, styles: Style)] {
 /// `{slot: {parity: text}}` for one head/foot family — every `.he`/`.h1`-`.h5`/`.fo`/
 /// `.f1`-`.f5` the document declared, keyed by line slot and then by PAGE PARITY: `.odd`
 /// for `.h1o`/`.f1o` (the right-hand page), `.even` for `.h1e`/`.f1e`, `nil` for a plain
-/// definition that applies to both. `hfEventsParity` is INDEX-ALIGNED with `hfEvents`
+/// definition that applies to both. The parity is `HFEvent.parity`
 /// (planning #250); first definition of each (slot, parity) wins, exactly as the flat
 /// reading did before parity existed. Port of `_hf_slots`.
 func hfSlots(_ doc: Document, _ which: HFKind) -> (slots: [Int: [HFParity?: String]],
                                                    firstAnchor: Int?) {
     var slots: [Int: [HFParity?: String]] = [:]
     var firstAnchor: Int? = nil
-    for (i, event) in doc.hfEvents.enumerated() {
+    for event in doc.hfEvents {
         guard event.kind == which, !event.text.isEmpty else { continue }
-        let parity: HFParity? = i < doc.hfEventsParity.count ? doc.hfEventsParity[i] : nil
+        let parity = event.parity
         var byParity = slots[event.line] ?? [:]
         if byParity[parity] == nil {
             byParity[parity] = event.text
@@ -506,10 +506,10 @@ func hfSlots(_ doc: Document, _ which: HFKind) -> (slots: [Int: [HFParity?: Stri
 /// `_rtf_hf_slots_at`.
 func rtfHFSlotsAt(_ doc: Document, _ which: HFKind, anchor: Int) -> [Int: [HFParity?: String]] {
     var slots: [Int: [HFParity?: String]] = [:]
-    for (i, event) in doc.hfEvents.enumerated() {
+    for event in doc.hfEvents {
         guard event.kind == which, !event.text.isEmpty, event.blockAnchor <= anchor
         else { continue }
-        let parity: HFParity? = i < doc.hfEventsParity.count ? doc.hfEventsParity[i] : nil
+        let parity = event.parity
         var byParity = slots[event.line] ?? [:]
         byParity[parity] = event.text
         slots[event.line] = byParity
@@ -532,9 +532,9 @@ func rtfHFRedefinitions(_ doc: Document) -> Set<Int> {
     }
     var inForce: [Key: String] = [:]
     var anchors: Set<Int> = []
-    for (i, event) in doc.hfEvents.enumerated() {
+    for event in doc.hfEvents {
         guard !event.text.isEmpty else { continue }
-        let parity: HFParity? = i < doc.hfEventsParity.count ? doc.hfEventsParity[i] : nil
+        let parity = event.parity
         let key = Key(kind: event.kind, line: event.line, parity: parity)
         if let previous = inForce[key], previous != event.text, event.blockAnchor > 0 {
             anchors.insert(event.blockAnchor)
@@ -871,7 +871,7 @@ func rtfSectionPageSize(_ doc: Document, _ sectionOr: Orientation) -> String {
         heightIn = h
         pwIn = w
     }
-    var out = #"\pgwsxn\#(roundHalfToEven(pwIn * 1440))\pghsxn\#(roundHalfToEven(heightIn * 1440))"#
+    var out = #"\pgwsxn\#(roundHalfToEven(inchesToTwips(pwIn)))\pghsxn\#(roundHalfToEven(inchesToTwips(heightIn)))"#
     if sectionLandscape { out += #"\lndscpsxn"# }
     return out
 }
@@ -890,7 +890,7 @@ func rtfSectionBreaks(_ doc: Document, printed: Bool = true) -> [Int: RTFSection
     // (`\pgwsxn`/`\pghsxn`/`\lndscpsxn`), so this is the one place RTF can say what the
     // Printed PDF's per-page MediaBox now says. It is the only opener that also FORCES a
     // page break in the reader -- `\sect` always does -- but that costs nothing: real WS7
-    // defers a mid-page `.pr or=` to the next page anyway (measured, see `orCheckpoints`),
+    // defers a mid-page `.pr or=` to the next page anyway (measured, see `orTimeline`),
     // and every column-1 `.pr or=` in the corpus sits immediately after a `.pa`.
     //
     // PRINTED ONLY, unlike the other two openers, because Modern PDF is the printed form
@@ -899,9 +899,9 @@ func rtfSectionBreaks(_ doc: Document, printed: Bool = true) -> [Int: RTFSection
     // does not print. Whether Modern should follow orientation per section as well is a
     // real open question and a separate ruling: Modern reflows, so its pages are this
     // engine's own and no capture can adjudicate them.
-    let orCheckpointsList = orCheckpoints(doc)
+    let orList = doc.orTimeline()
     if printed {
-        for cp in orCheckpointsList.dropFirst() {
+        for cp in orList.entries.dropFirst() {
             // A command that OPENS its block (`lineIndex == 0`) starts the section at that
             // block. One typed further in has text before it in the same paragraph -- real
             // WS7 defers such a command to the next page, and RTF can only break at a
@@ -916,7 +916,7 @@ func rtfSectionBreaks(_ doc: Document, printed: Bool = true) -> [Int: RTFSection
         out[bi] = RTFSection(cols: pair.cols, gutter: pair.gutter,
                              headerSlots: rtfHFSlotsAt(doc, .header, anchor: bi),
                              footerSlots: rtfHFSlotsAt(doc, .footer, anchor: bi),
-                             orientation: printed ? orAt(orCheckpointsList, bi) : nil)
+                             orientation: printed ? orList.at(bi) : nil)
     }
     return out
 }
@@ -972,12 +972,12 @@ func hfAttr<T>(_ plain: [Int: T], _ byParity: [Int: [HFParity: T]],
 func rtfHeadFootDistance(_ page: PageGeometry?, headSlots: [Int],
                          printed: Bool) -> (headery: Int?, footery: Int?) {
     guard printed else { return (nil, nil) }
-    let line = 240.0                                 // one line at 6 LPI
-    let mt = page?.mtLines ?? 3.0
-    let hm = page?.hmLines ?? 2.0
+    let line = twipsPerLine                          // one line at 6 LPI
+    let mt = page?.mtLines ?? defaultMtLines
+    let hm = page?.hmLines ?? defaultHmLines
     let topHead = Double(headSlots.max() ?? 1)
-    let mb = page?.mbLines ?? 8.0
-    let fm = page?.fmLines ?? 2.0
+    let mb = page?.mbLines ?? defaultMbLines
+    let fm = page?.fmLines ?? defaultFmLines
     return (roundHalfToEven(max(0.0, mt - hm - topHead) * line),
             roundHalfToEven(max(0.0, mb - fm - 1.0) * line))
 }
@@ -985,7 +985,7 @@ func rtfHeadFootDistance(_ page: PageGeometry?, headSlots: [Int],
 /// `(.poe, .poo)` in print columns, or `(nil, nil)` — the document's own even/odd page
 /// offsets (planning #231), resolved AT BLOCK 0.
 ///
-/// The same `poeOrPooCheckpoints`/`poAt` machinery `closePage` and `resolveHeadFootLines`
+/// The same `parityPoTimeline`/`Timeline.at` machinery `closePage` and `resolveHeadFootLines`
 /// already use, called at block 0 because RTF has one section: whatever is in force where
 /// the document opens is the only answer this format can carry. Block 0 is also the only
 /// anchor a `.DOT` TEMPLATE has at all — the corpus's galley and advance templates declare
@@ -993,10 +993,8 @@ func rtfHeadFootDistance(_ page: PageGeometry?, headSlots: [Int],
 /// no body lines for the per-line `Line.poeCols`/`pooCols` state to ride on. Port of
 /// `_rtf_po_parity`.
 func rtfPoParity(_ doc: Document) -> (poe: Double?, poo: Double?) {
-    let poeList = poeOrPooCheckpoints(doc, dotName: "POE")
-    let pooList = poeOrPooCheckpoints(doc, dotName: "POO")
-    return (poeList.isEmpty ? nil : poAt(poeList, 0),
-            pooList.isEmpty ? nil : poAt(pooList, 0))
+    return (doc.parityPoTimeline(dotName: "POE").atIfAny(0),
+            doc.parityPoTimeline(dotName: "POO").atIfAny(0))
 }
 
 /// The alignment control a head/foot group's own paragraph carries (planning #264 item 4,
@@ -1009,7 +1007,7 @@ private let rtfHFAlign: [Alignment: String] = [.right: #"\qr"#, .center: #"\qc"#
 /// 3, packet row A1).
 ///
 /// `.auto` (the default) asks the document's own `.pn`/`.pg`/`.op` state, the same
-/// `pgnumCheckpoints` the PDF reads, resolved AT THE DOCUMENT'S FIRST BLOCK: RTF has one
+/// `pgnumTimeline` the PDF reads, resolved AT THE DOCUMENT'S FIRST BLOCK: RTF has one
 /// section and one footer, so a document that turns numbering off half-way through cannot
 /// be expressed here (that needs the section spine, packet section 3, deliberately not
 /// built). `.on`/`.off` force it either way, exactly as for the PDF. Port of
@@ -1038,7 +1036,7 @@ func rtfAutoPageNumber(_ doc: Document, _ mode: EmitOptions.PageNumberMode) -> B
     switch mode {
     case .off: return false
     case .on: return true
-    case .auto: return pgnumAt(pgnumCheckpoints(doc), 0)
+    case .auto: return doc.pgnumTimeline().at(0)
     }
 }
 
@@ -1395,31 +1393,6 @@ func rtfVerseTightSlTwips(_ spans: [Span], _ doc: Document,
                                               nonpropFallback: nonpropFallback) * 20.0)
 }
 
-/// `\fi` (RTF's first-line indent, relative to `\li`) from `.pm` — `block.paraMargin`.
-/// WSFORMAT semantics: ".pm is the PARAGRAPH margin — the first line's own indent," a
-/// column position in the SAME absolute frame `.lm`/`.po` use, not a delta against
-/// `.lm`. RTF reads `\fi` as relative to `\li`, so the direct token is the DIFFERENCE
-/// between the indent's own absolute column (in twips) and wherever `\li` (the block's
-/// own style margin, round 4) already places the body — `\li + \fi` then lands exactly
-/// on it, whether that's deeper (an ordinary indent) or shallower (a hanging indent)
-/// than the body. `nil` (the block never set `.pm`) leaves `\fi` untouched — no override
-/// where there is no evidence. Port of `_rtf_pm_fi_twips`.
-///
-/// WHICH COLUMN (planning #264 item 2, packet row B6): `pmFirstLineIndentCols`
-/// (EmitterRules.swift), the same function the Printed PDF calls, not `.pm`'s raw value.
-/// Printed RTF renders PHYSICAL lines, so a first line that already types its own
-/// leading spaces carries them into the output as real characters; adding `.pm`'s full
-/// column on top of that is the same double-count the PDF stopped making in planning
-/// #202, and it is why such a paragraph indented too far here. The resolved column is
-/// `max(0, .pm - already typed)`, so `\li + \fi + the typed spaces` now lands where the
-/// PDF puts the same line — and the clamp at zero is planning #257's half of it, which
-/// keeps a `.pm 0"` block from pulling its first line LEFT of the column its author
-/// typed.
-func rtfPMFiTwips(_ block: Block, liTwips: Int) -> Int? {
-    guard let cols = pmFirstLineIndentCols(block) else { return nil }
-    return roundHalfToEven(cols * rtfTwipsPerCol) - liTwips
-}
-
 /// `(sb, sa)` in twips from WordTsar's own `.psa`/`.psb` extensions
 /// (`doc.spaceBeforeLines`/`spaceAfterLines` — "not a WordStar command" per WordTsar's
 /// own source, so their presence is a producer signal; a real WordStar 4/5/7 file never
@@ -1470,7 +1443,7 @@ struct RTFParaState {
 /// paragraphs reading as one continuous inset block with no reset in between.
 ///
 /// `fiTwips`, when given, OVERRIDES `fiCols` with an exact twip value computed elsewhere
-/// (`.pm`'s own `rtfPMFiTwips`, round 6) — `fiCols * 144` would round-trip a twip value
+/// (`.pm`'s resolved first-line indent, from `printedPMFiPt`) — `fiCols * 144` would round-trip a twip value
 /// that was never actually columns through a lossy columns-shaped parameter twice.
 /// Port of `_rtf_emit_para`.
 func rtfEmitPara(_ parts: inout [String], _ state: inout RTFParaState, _ block: Block,
@@ -1646,22 +1619,23 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         options.notes.remove(.comment)
     }
     // N9 (b33 field notes): mode-aware default, flag overrides either way.
-    let ssOn = resolveSentenceSpacing(options.sentenceSpacing, printed: printed)
+    let ctx = RenderContext(doc, printed: printed, sentenceSpacing: options.sentenceSpacing)
+    let ssOn = ctx.sentenceSpacing
     // \f0 Times, \f1 Courier — a printed document's alignment only survives in a
     // fixed-width font (emit.py:210).
     let font = printed ? #"\f1"# : #"\f0"#
-    let refNotes = inlineReferenceNotes(doc)
+    let refNotes = ctx.refNotes
     // RTF must NEVER renumber (ruling 2026-08-24 item 1) -- it already sidesteps the
     // page-less-collision problem entirely by emitting `\chftn` auto-numbers with
     // `\ftnalt`, letting Word number them; a tagged note's own mark is what shows
     // instead (item 4, `rtfReferenceMarker`/`rtfDestination` below).
-    let labels = annotatedNoteLabels(doc)
+    let labels = ctx.noteLabels(.annotated)
     // `prefixed` note references (ruling 2026-08-06 M8) — never printed: the facsimile
     // shows what WordStar printed.
     let shownMap: [Int: String]? = (options.noteRefs == .prefixed && !printed)
         ? noteRefLabels(refNotes, labels: labels, scheme: .prefixed) : nil
     // b24 round 20b (slate item 13): see emitText's identical comment for the doctrine.
-    let screenplayBlocks = printed ? [] : detectScreenplayBlocks(doc)
+    let screenplayBlocks = ctx.screenplayBlocks
     var parts: [String] = []
     let stylesheet = options.styles ? rtfStylesheet(doc, printed: printed) : ""
     let fontTable = options.styles
@@ -1671,8 +1645,8 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         ? Set(doc.styles.filter { $0.record != nil }.map(\.slot))
         : []
     var rtfState = RTFParaState(styledSlots: styledSlots)
-    let margin = docMargin(doc)
-    let (conventionIndent, headPosition) = paragraphLayoutContext(doc)
+    let margin = ctx.margin
+    let (conventionIndent, headPosition) = (ctx.conventionIndent, ctx.headPosition)
     // round 4: li/ri per style, looked up per paragraph so they can ride along as DIRECT
     // formatting — see `rtfDirectMargins`.
     let directMargins = options.styles ? rtfDirectMargins(doc, printed: printed) : [:]
@@ -1691,8 +1665,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // first paragraph, reused for every paragraph in a run of CONSECUTIVE quote-classified
     // blocks — the source's own typed indent is NOT reliable per paragraph. Grouped by
     // "quote-classified at all", not the exact style name.
-    var quoteOpen = false
-    var quoteFiCols: Int? = nil
+    var quoteGroup = QuoteIndentGroup()
 
     // b24 round 17 (RULINGS-LEDGER row 3, register C22): `.sr`'s roll, in half-points —
     // Printed only (`\super`/`\sub` alone, unchanged, still carry Modern's sup/sub
@@ -1712,7 +1685,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // and reasoning as `modernFlow`'s own `nonpropFallback` (`PDFModernLayout.swift`)
     // -- Printed keeps its own Courier-body doctrine untouched (`.ps` never governed
     // it and still doesn't), so this is Modern-only. Ported from ctrl-kd emit.py.
-    let nonpropFallback = !printed && !doc.fonts.isEmpty && doc.formatting.proportional == false
+    let nonpropFallback = ctx.nonpropFallback
 
     // round 5: DIRECT FORMATTING IS THE ONLY RENDERING MECHANISM IN RTF. Every run's
     // effective attributes — its own toggles merged with whatever the containing Block's
@@ -1752,7 +1725,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // choice for this continuous-text format — a true per-page reset would need RTF's
     // own pagination model, which this format doesn't have and isn't being built here.
     //
-    // `lineNoCheckpoints` (`lineNumberingCheckpoints`) replaces a single flat
+    // `lineNoTimeline` (`lineNumberingTimeline`) replaces a single flat
     // `doc.lineNumbering` read, which is the LAST `.l#` in the whole document -- both
     // real oracles (sawyer/PRINT.TST, sawyer/DEFAULT/PRINT.TST) turn numbering back OFF
     // right after their demonstration section, so the flat reading was always off,
@@ -1774,13 +1747,12 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // bullet-marker discovery and nesting both need the whole row order, not one block in
     // isolation.
     let blockRows = printed ? [:] : classifyModernBlocks(doc)
-    let lineNoCheckpoints: [(blockIndex: Int, interval: Int?)]? =
-        printed ? lineNumberingCheckpoints(doc) : nil
+    let lineNoTimeline: Timeline<Int?>? = printed ? doc.lineNumberingTimeline() : nil
     let lineNumbersEnabled = printed && options.lineNumbers
     var lineNoState: (interval: Int?, k: Int) = (nil, 0)
     func numbered(_ renderedLine: String, bi: Int) -> String {
-        let interval: Int? = (lineNumbersEnabled ? lineNoCheckpoints.flatMap {
-            lineNumberingAt($0, bi)
+        let interval: Int? = (lineNumbersEnabled ? lineNoTimeline.flatMap {
+            $0.at(bi)
         } : nil)
         if interval != lineNoState.interval {
             lineNoState = (interval, 0)
@@ -1848,8 +1820,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             rtfState.sa = 0
             rtfState.keep = false
             rtfState.keepn = false
-            quoteOpen = false
-            quoteFiCols = nil
+            quoteGroup.reset()
         }
         if block.kind == .colbreak {
             // planning #264 R1 (packet row A9): `.cb` breaks to the next column — the
@@ -1858,16 +1829,14 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             // WordStar did with it either, so nothing is written. BOTH MODES since
             // M17b: Modern PDF's own column cursor takes `.cb` to the next column
             // (`modernStreams`), so its RTF says the same.
-            quoteOpen = false
-            quoteFiCols = nil
+            quoteGroup.reset()
             if let state = columnsState, state[bi].cols > 1 {
                 parts.append(#"\column "#)
             }
             continue
         }
         if block.kind == .pagebreak {
-            quoteOpen = false
-            quoteFiCols = nil
+            quoteGroup.reset()
             if bi == skipPA { continue }
             // planning #264 R1: a bare `.pa` INSIDE an active `.co n>1` region is
             // absorbed, not honoured — the identical reading the Printed PDF has carried
@@ -1936,7 +1905,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             // continuation never inherits. It was never part of this defect.
             //
             // It is asked through the PDF's OWN gate (`printedPMFiPt`) rather than
-            // `rtfPMFiTwips` directly: WordStar auto-indents a first line when it
+            // from `.pm` directly: WordStar auto-indents a first line when it
             // REFLOWS the paragraph at print time, so the PDF applies the indent only
             // under `.pf on` (measured on -HOLYMAC.WS against real WS7 — pages
             // 223/258/293 open at the plain left edge, `.pm4` and no `.pf` anywhere in
@@ -1953,8 +1922,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             continue
         }
         if block.heading != 0 {
-            quoteOpen = false
-            quoteFiCols = nil
+            quoteGroup.reset()
             // a heading is a logical unit, not reflowed prose — unaffected by paragraph
             // assembly, same as before. Alignment stripping goes through the shared
             // helper explicitly (it used to inherit the fix only by accident of loop
@@ -1968,11 +1936,8 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
             continue
         }
         let quote = isQuoteStyle(block)
-        if quote {
-            quoteOpen = true
-        } else {
-            quoteOpen = false
-            quoteFiCols = nil
+        if !quote {
+            quoteGroup.reset()
         }
         // Modern body: one \par per PARAGRAPH UNIT. A unit's own first line loses its
         // typed/machine indent to a real \fi; every other line in the unit keeps its
@@ -1993,25 +1958,16 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
 
         func flushPlainRun() {
             guard !plainRunLines.isEmpty else { return }
-            let units = assembleParagraphUnits(
-                plainRunLines, margin: margin,
+            let units = modernParagraphUnits(
+                plainRunLines, block: block, blockIndex: bi, margin: margin,
                 headPosition: plainRunIsBlockStart ? (headPosition[bi] ?? false) : false,
                 conventionIndent: plainRunIsBlockStart ? conventionIndent : nil,
-                wrap: block.wrap)
+                dominant: dominant, screenplayBlocks: screenplayBlocks,
+                quote: quote, quoteGroup: &quoteGroup)
             plainRunLines.removeAll()
-            for unit in units {
-                var (indentCols, first) = splitLeadingIndent(maybeStripAlign(block, unit[0].spans))
-                if quote {
-                    // the quote GROUP's own first paragraph sets \\fi for every paragraph
-                    // in the group, not each one's own raw column count.
-                    if quoteFiCols == nil { quoteFiCols = indentCols }
-                    indentCols = quoteFiCols!
-                }
-                // round 7 (Register C23): a wrap=off block's unit is ALWAYS verse --
-                // without this guard a non-verse multi-line unit still flows into one
-                // run-on line.
-                let isVerse = unit.count > 1 && (!block.wrap || looksLikeVerse(unit, dominantStyles: dominant)
-                                                 || screenplayBlocks.contains(bi))
+            for paragraph in units {
+                let (unit, indentCols, first, isVerse) =
+                    (paragraph.lines, paragraph.indentCols, paragraph.first, paragraph.isVerse)
                 var rendered = [rtfSeg(first, block)]
                 for line in unit.dropFirst() {
                     var spans = maybeStripAlign(block, line.spans)
@@ -2136,7 +2092,7 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     let landscape = doc.formatting.orientation == .landscape
     let page = (landscape ? doc.page.map(landscapePage) : doc.page)
     func twipsLines(_ value: Double?, default defaultLines: Double) -> Int {
-        roundHalfToEven((value ?? defaultLines) * 240.0)     // 1 line at 6 LPI = 240 twips
+        roundHalfToEven((value ?? defaultLines) * twipsPerLine)     // 1 line at 6 LPI = 240 twips
     }
     /// A declared sheet height in inches -> `\paperh` twips, with `.pl 0` falling back
     /// to Letter.
@@ -2153,40 +2109,38 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     /// `RTF-RJS/1-SINGLE.WS`, `RTF-RJS/2-DOUBLE.WS`, plus `REF/-PATCHES.WS`. A document
     /// that declares any real height is untouched.
     func paperTwips(_ heightIn: Double?) -> Int {
-        let twips = roundHalfToEven((heightIn ?? 11.0) * 1440.0)
-        return twips > 0 ? twips : 15840
+        let twips = roundHalfToEven(inchesToTwips(heightIn ?? letterHeightIn))
+        return twips > 0 ? twips : letterHeightTwips
     }
     let margt: Int
     let margb: Int
     let margl: Int
     let paperh: Int
     if printed {
-        margt = twipsLines(page?.mtLines, default: 3.0)
-        margb = twipsLines(page?.mbLines, default: 8.0)
-        margl = roundHalfToEven((page?.poCols ?? 8.0) * 144.0)
+        margt = twipsLines(page?.mtLines, default: defaultMtLines)
+        margb = twipsLines(page?.mbLines, default: defaultMbLines)
+        margl = roundHalfToEven((page?.poCols ?? defaultPoCols) * twipsPerCol)
         paperh = paperTwips(page?.heightIn)
     } else {
         // Modern mode only trusts a field the document (or a --page-settings override,
         // which is applied as though it were the document's own — see `effectivePage`)
         // actually DECLARED; an undeclared field falls back to Modern's own fixed 1in
         // page rather than whatever WordStar factory number `doc.page` already carries.
-        let mtDeclared = (page?.mtSource ?? .default) != .default
-        let mbDeclared = (page?.mbSource ?? .default) != .default
-        let poDeclared = (page?.poSource ?? .default) != .default
-        margt = mtDeclared ? twipsLines(page?.mtLines, default: 6.0) : 1440
-        margb = mbDeclared ? twipsLines(page?.mbLines, default: 6.0) : 1440
-        margl = poDeclared ? roundHalfToEven((page?.poCols ?? 10.0) * 144.0) : 1440
+        let modern = modernMargins(page, unitsPerInch: twipsPerInch)
+        margt = roundHalfToEven(modern.top)
+        margb = roundHalfToEven(modern.bottom)
+        margl = roundHalfToEven(modern.left)
         // A LANDSCAPE sheet is a declared sheet whatever `.pl` says, so it is never the
         // 11in default: `page` above is already the swapped, orientation-aware pair (a
         // `.pl 8.5"` resolves to 8.5 tall x 11 wide, not to the un-landscape-aware
         // 8.5x8.5 SQUARE the portrait resolution gives). Modern PDF composes on exactly
         // that height (`modernSheetHeight`), which is what makes the two agree.
         paperh = (landscape || (page?.sizeSource ?? .default) != .default)
-            ? paperTwips(page?.heightIn) : 15840
+            ? paperTwips(page?.heightIn) : letterHeightTwips
     }
     // width joined the page model 2026-08-06: A4-tall documents get the 210mm sheet;
     // everything else (and every default) stays 12240 twips
-    var paperw = roundHalfToEven((page?.pwIn ?? 8.5) * 1440.0)
+    var paperw = roundHalfToEven(inchesToTwips(page?.pwIn ?? letterWidthIn))
     // planning #264 item 4 (packet row A6): `.poe`/`.poo` — a wider margin on the binding
     // side — become `\margmirror` under `\facingp`, which is RTF's own inside/outside
     // reading of `\margl`/`\margr`: on an odd (right-hand) page the left margin is
@@ -2200,10 +2154,10 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     var leftMargin = margl
     var rightMargin = margl
     if mirrorMargins {
-        let inside = pooCols ?? page?.poCols ?? 8.0
-        let outside = poeCols ?? page?.poCols ?? 8.0
-        leftMargin = roundHalfToEven(inside * 144.0)
-        rightMargin = roundHalfToEven(outside * 144.0)
+        let inside = pooCols ?? page?.poCols ?? defaultPoCols
+        let outside = poeCols ?? page?.poCols ?? defaultPoCols
+        leftMargin = roundHalfToEven(inside * twipsPerCol)
+        rightMargin = roundHalfToEven(outside * twipsPerCol)
     }
     // planning #264 item 3/4: the running heads are resolved BEFORE the page setup —
     // `\facingp`, `\headery` and `\footery` are page properties the head/foot groups

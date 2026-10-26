@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 
 #if canImport(Glibc)
 import Glibc
@@ -25,17 +26,11 @@ import ucrt
 
 private let sampleBaseNames = ["LYING", "OCAPTAIN", "TWAINLET", "WARPRAYR"]
 
-/// `Tests/CtrlKDTests/SampleDocumentsTests.swift` -> repo root is three levels up, same
-/// arithmetic `SRBinaryTests.swift`'s own `runSR` uses for the same reason: the checked-in
-/// repo copy at `Sources/SoftReturnCLI/Resources/SampleDocuments/` is the independent
-/// answer to "did packaging preserve these bytes exactly", so it has to be read via a real
-/// path, not via `Bundle.module` (which is the thing being checked).
-private let repoRoot: URL = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-
+/// The checked-in repo copy at `Sources/SoftReturnCLI/Resources/SampleDocuments/` is the
+/// independent answer to "did packaging preserve these bytes exactly", so it has to be read
+/// via a real path, not via `Bundle.module` (which is the thing being checked).
 private func repoSampleBytes(_ baseName: String) throws -> [UInt8] {
-    let url = repoRoot.appendingPathComponent(
-        "Sources/SoftReturnCLI/Resources/SampleDocuments/\(baseName).WS")
+    let url = RepoPaths.url("Sources/SoftReturnCLI/Resources/SampleDocuments/\(baseName).WS")
     return [UInt8](try Data(contentsOf: url))
 }
 
@@ -142,18 +137,15 @@ private func sampleDocumentsCLIEnvironment() -> CLIEnvironment {
 /// The happy path: `--samples DIR` writes all four files, byte-identical, against a real
 /// writable directory. Runs regardless of who owns the process (root or not).
 @Test func samplesFlagRealDiskRoundTrip() throws {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("sr-samples-test-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: dir) }
+    try TestScratch.with(prefix: "sr-samples-test") { dir in
+        let environment = sampleDocumentsCLIEnvironment()
 
-    let environment = sampleDocumentsCLIEnvironment()
-
-    #expect(run(["--samples", dir.path], environment: environment) == ExitStatus.ok)
-    for base in sampleBaseNames {
-        let written = try Data(contentsOf: dir.appendingPathComponent("\(base).WS"))
-        let expected = try repoSampleBytes(base)
-        #expect([UInt8](written) == expected, "\(base).WS not byte-identical on real disk")
+        #expect(run(["--samples", dir.path], environment: environment) == ExitStatus.ok)
+        for base in sampleBaseNames {
+            let written = try Data(contentsOf: dir.appendingPathComponent("\(base).WS"))
+            let expected = try repoSampleBytes(base)
+            #expect([UInt8](written) == expected, "\(base).WS not byte-identical on real disk")
+        }
     }
 }
 
@@ -168,21 +160,17 @@ private func sampleDocumentsCLIEnvironment() -> CLIEnvironment {
     "running as root — permission bits are ignored, the failure path cannot be exercised"
 ))
 func samplesFlagRealPermissionFailure() throws {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("sr-samples-test-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: dir) }
+    try TestScratch.with(prefix: "sr-samples-test") { dir in
+        let environment = sampleDocumentsCLIEnvironment()
 
-    let environment = sampleDocumentsCLIEnvironment()
-
-    // Linux checks the OWNER's own permission bits regardless of who is running the
-    // process (no root here), so chmod 555 on our own tempdir really does deny our own
-    // writes into it.
-    let locked = dir.appendingPathComponent("locked")
-    try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
-    try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
-    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
-    #expect(run(["--samples", locked.path], environment: environment) == ExitStatus.fileFailure)
+        // Linux checks the OWNER's own permission bits regardless of who is running the
+        // process (no root here), so chmod 555 on our own tempdir really does deny our own
+        // writes into it. `TestScratch` makes it writable again before removing it.
+        let locked = dir.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+        #expect(run(["--samples", locked.path], environment: environment) == ExitStatus.fileFailure)
+    }
 }
 
 // MARK: - Conversion smoke test

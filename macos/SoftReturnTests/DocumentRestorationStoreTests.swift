@@ -1,5 +1,6 @@
 import AppKit
 import Testing
+import TestSupport
 @testable import SoftReturn
 import SoftReturnShared
 
@@ -7,20 +8,11 @@ import SoftReturnShared
 /// for why AppKit's own secure state restoration is not enough on its own. These tests never
 /// touch the real `NSDocumentController` or open a real window — `FakeDocumentController`
 /// stands in wherever `reopenIfNeeded` would otherwise drive one, and every file involved is
-/// a scratch temp file, never a real document.
+/// a file in a self-removing scratch directory, never a real document.
 @MainActor
 private func throwawaySettings() -> (SettingsStore, UserDefaults) {
     let defaults = UserDefaults(suiteName: "DocumentRestorationStoreTests.\(UUID().uuidString)")!
     return (SettingsStore(defaults: defaults), defaults)
-}
-
-private func scratchDocumentURL(name: String = "LETTER.ws4") throws -> URL {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("DocumentRestorationStoreTests-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let url = dir.appendingPathComponent(name)
-    try Data("PLAIN TEXT DOCUMENT\r\nSecond line.\r\n".utf8).write(to: url)
-    return url
 }
 
 @MainActor
@@ -39,6 +31,21 @@ private final class FakeDocumentController: DocumentOpening {
 // MARK: - Persist / resolve round trip
 
 @Suite struct DocumentRestorationStoreTests {
+    /// Every scratch document lives in here; the directory goes with the test's own instance.
+    private let scratch: TestScratch
+
+    init() throws {
+        scratch = try TestScratch(prefix: "DocumentRestorationStoreTests")
+    }
+
+    private func scratchDocumentURL(name: String = "LETTER.ws4") throws -> URL {
+        let dir = scratch.url(for: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(name)
+        try Data("PLAIN TEXT DOCUMENT\r\nSecond line.\r\n".utf8).write(to: url)
+        return url
+    }
+
     @Test @MainActor func persistingWritesBookmarksThatResolveBackToTheSameFile() throws {
         let (settings, defaults) = throwawaySettings()
         settings.restoreWindowsOnLaunch = true

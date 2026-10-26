@@ -25,21 +25,24 @@ public enum DocumentOperations {
     public enum OperationError: Error, LocalizedError, Sendable {
         case notConvertible(variant: Variant, reason: String)
         case unknownFormat(name: String, known: [String])
+        case unknownQuirk(name: String, known: [String])
 
         public var errorDescription: String? {
             switch self {
             case .notConvertible(let variant, let reason):
-                return "Not a convertible WordStar-era document (detected \(variant.rawValue): \(reason))."
+                return "Not a convertible WordStar for DOS v4–v7 document (detected \(variant.rawValue): \(reason))."
             case .unknownFormat(let name, let known):
                 return "Unknown format \"\(name)\" (known: \(known.joined(separator: ",")))."
+            case .unknownQuirk(let name, let known):
+                return "Unknown quirk \"\(name)\" (known: \(known.joined(separator: ", ")))."
             }
         }
     }
 
     // MARK: - Page-settings presets
 
-    /// The CLI's three named `--page-settings` presets (`Arguments.swift`'s `pagePresets`),
-    /// reproduced verbatim so a caller can request "sawyer" without hand-building margins.
+    /// The engine's three named `--page-settings` presets (`PageSettings.factory`/`.sawyer`/
+    /// `.modern`), so a caller can request "sawyer" without hand-building margins.
     public enum PageSettingsPreset: String, CaseIterable, Sendable {
         case `default`
         case sawyer
@@ -47,9 +50,9 @@ public enum DocumentOperations {
 
         public var settings: PageSettings {
             switch self {
-            case .default: return PageSettings()
-            case .sawyer:  return PageSettings(mtLines: 1195.0 / 1440.0 * 6.0, mbLines: 6.0, poCols: 7.0)
-            case .modern:  return PageSettings(mtLines: 6.0, mbLines: 6.0, poCols: 10.0)
+            case .default: return .factory
+            case .sawyer:  return .sawyer
+            case .modern:  return .modern
             }
         }
 
@@ -133,33 +136,48 @@ public enum DocumentOperations {
         /// placeholder shows, exactly the pre-wiring behavior, so a caller with no real file
         /// on disk (bytes-only Intents input, a library caller) is unaffected.
         public var docPath: String
-        /// Job 373 (b24 FLAG UI): the export-sheet/AppleScript-visible half of the b24 flag
-        /// wave (rounds 17-18 — see `EmitOptions`' own field comments for what each governs).
-        /// Defaults mirror `EmitOptions`' own ruled defaults exactly (headers ON, TOC OFF,
-        /// pictures Embed, inline styling ON) — this layer's own doc comment already promises
-        /// its surface is shaped like `sr`'s, and `sr` itself takes these flags at these same
-        /// defaults.
-        public var headers: Bool
-        public var toc: Bool
-        public var inlineStyling: Bool
-        public var pictures: EmitOptions.PixMode
+        /// Job 373 (b24 FLAG UI), job 506 (page numbers), job 521 (sentence spacing): the
+        /// export-sheet/AppleScript-visible per-export choices, as one value. Defaults mirror
+        /// `EmitOptions`' own ruled defaults exactly (headers ON, TOC OFF, pictures Embed,
+        /// inline styling ON, page numbers and sentence spacing Auto) — this layer's own doc
+        /// comment already promises its surface is shaped like `sr`'s, and `sr` itself takes
+        /// these flags at these same defaults. There is deliberately no Settings-backed default
+        /// for sentence spacing (Jon's ruling). The six fields below read and write through it.
+        public var choices: ExportChoices
+        public var headers: Bool {
+            get { choices.headers }
+            set { choices.headers = newValue }
+        }
+        public var toc: Bool {
+            get { choices.toc }
+            set { choices.toc = newValue }
+        }
+        public var inlineStyling: Bool {
+            get { choices.inlineStyling }
+            set { choices.inlineStyling = newValue }
+        }
+        public var pictures: EmitOptions.PixMode {
+            get { choices.pictures }
+            set { choices.pictures = newValue }
+        }
+        public var pageNumbers: EmitOptions.PageNumberMode {
+            get { choices.pageNumbers }
+            set { choices.pageNumbers = newValue }
+        }
+        public var sentenceSpacing: EmitOptions.SentenceSpacingMode {
+            get { choices.sentenceSpacing }
+            set { choices.sentenceSpacing = newValue }
+        }
         /// Job 504 (AppleScript CLI parity): the document's own `.l#` line-number gutter
         /// in the paged surfaces — `EmitOptions.lineNumbers` (the CLI's `--line-numbers`),
         /// threaded through here the same way `styles`/`fontsTarget` already are. Default
         /// true, matching `EmitOptions`' own ruled default.
         public var lineNumbers: Bool
-        /// Job 506 (b31, AppleScript CLI parity): WordStar's own AUTOMATIC page number —
-        /// `EmitOptions.pageNumbers` (the CLI's `--page-numbers`), threaded through here the
-        /// same way `lineNumbers` above is. Default `.auto`, matching `EmitOptions`' own
-        /// ruled default.
-        public var pageNumbers: EmitOptions.PageNumberMode
-        /// Job 521 (N9, b33, AppleScript CLI parity): the typewriter double space after a
-        /// sentence-ending `.`/`?`/`!` — `EmitOptions.sentenceSpacing` (the CLI's
-        /// `--sentence-spacing`), threaded through here the same way `pageNumbers` above is.
-        /// Default `.auto`, matching `EmitOptions`' own default — but unlike `pageNumbers`
-        /// there is deliberately no Settings-backed default for this one (Jon's ruling).
-        public var sentenceSpacing: EmitOptions.SentenceSpacingMode
+        /// The quirks this conversion runs — `sr`'s default, the shipped auto quirks, unless the caller asks otherwise
+        /// (`QuirkChoices.requested`, R-74).
+        public var quirks: QuirkChoices = .shipped
 
+        /// The six choices field by field, for callers that decode them one at a time.
         public init(
             formats: [String], mode: EmitMode = .modern, variant: Variant? = nil,
             title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes,
@@ -169,6 +187,25 @@ public enum DocumentOperations {
             pictures: EmitOptions.PixMode = .embed, lineNumbers: Bool = true,
             pageNumbers: EmitOptions.PageNumberMode = .auto,
             sentenceSpacing: EmitOptions.SentenceSpacingMode = .auto
+        ) {
+            self.init(
+                formats: formats, mode: mode, variant: variant, title: title, notes: notes,
+                styles: styles, fontsTarget: fontsTarget, pageSettings: pageSettings,
+                noteRefs: noteRefs, docPath: docPath,
+                choices: ExportChoices(
+                    headers: headers, toc: toc, inlineStyling: inlineStyling, pictures: pictures,
+                    pageNumbers: pageNumbers, sentenceSpacing: sentenceSpacing),
+                lineNumbers: lineNumbers)
+        }
+
+        /// The six choices as one `ExportChoices` — what a sheet, Settings or a decoded script
+        /// call already holds.
+        public init(
+            formats: [String], mode: EmitMode = .modern, variant: Variant? = nil,
+            title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes,
+            styles: Bool = true, fontsTarget: FontsTarget = .mac,
+            pageSettings: PageSettings? = nil, noteRefs: NoteRefs = .word, docPath: String = "",
+            choices: ExportChoices, lineNumbers: Bool = true
         ) {
             self.formats = formats
             self.mode = mode
@@ -180,13 +217,8 @@ public enum DocumentOperations {
             self.pageSettings = pageSettings
             self.noteRefs = noteRefs
             self.docPath = docPath
-            self.headers = headers
-            self.toc = toc
-            self.inlineStyling = inlineStyling
-            self.pictures = pictures
+            self.choices = choices
             self.lineNumbers = lineNumbers
-            self.pageNumbers = pageNumbers
-            self.sentenceSpacing = sentenceSpacing
         }
     }
 
@@ -195,7 +227,7 @@ public enum DocumentOperations {
         public let bytes: [UInt8]
 
         /// Without the leading dot — `Emitter.ext` carries one (".txt"), but
-        /// `uniqueFileName(basename:extension:exists:)` adds its own, Finder-style.
+        /// `ExportNaming.uniqueName(basename:extension:exists:)` adds its own, Finder-style.
         public var fileExtension: String {
             let ext = EmitterRegistry.standard.getEmitter(format)?.ext ?? format
             return ext.hasPrefix(".") ? String(ext.dropFirst()) : ext
@@ -216,7 +248,8 @@ public enum DocumentOperations {
     /// `NSGraphicsContext`, so it stays app-only; a headless caller gets the library's own
     /// PDF, which is a documented difference, not a bug.
     public static func convert(data: [UInt8], options: ConversionOptions) throws -> [ConvertedFile] {
-        var doc = try open(data: data, variant: options.variant).document
+        // Parse, quirks, then the page: `sr`'s own order (`ConversionJob`).
+        var doc = options.quirks.apply(to: try open(data: data, variant: options.variant).document)
         if let pageSettings = options.pageSettings, let page = doc.page {
             doc.page = effectivePage(page, settings: pageSettings)
         }
@@ -231,13 +264,12 @@ public enum DocumentOperations {
                 throw OperationError.unknownFormat(
                     name: format, known: EmitterRegistry.standard.formats())
             }
-            let output = emitter.emit(doc, options.mode, EmitOptions(
+            var emitOptions = EmitOptions(
                 title: options.title, notes: options.notes, styles: options.styles,
                 fontsTarget: options.fontsTarget, noteRefs: options.noteRefs,
-                headers: options.headers, lineNumbers: options.lineNumbers, toc: options.toc,
-                inlineStyling: options.inlineStyling,
-                pictures: options.pictures, pageNumbers: options.pageNumbers,
-                sentenceSpacing: options.sentenceSpacing, pixResults: pixResults))
+                lineNumbers: options.lineNumbers, pixResults: pixResults)
+            options.choices.apply(to: &emitOptions)
+            let output = emitter.emit(doc, options.mode, emitOptions)
             results.append(ConvertedFile(format: format, bytes: output.asBytes))
         }
         return results
@@ -334,27 +366,6 @@ public enum DocumentOperations {
     public static func pageCount(data: [UInt8], variant: Variant? = nil) throws -> Int {
         let opened = try open(data: data, variant: variant)
         return max(1, docToPagelines(opened.document, printed: true).count)
-    }
-
-    // MARK: - Naming
-
-    /// Finder's own collision rule, so a headless caller (an Intent, a future AppleScript
-    /// call) never overwrites a file the same way the windowed app's Export As sheet and
-    /// Batch window never do — see `ExportEngine.uniqueName`, the app-side twin of this
-    /// exact rule. Kept here too because `ExportEngine` is `@MainActor` (its Modern-PDF path
-    /// needs AppKit) and an Intent's `perform()` runs off the main actor.
-    public static func uniqueFileName(basename: String, extension ext: String,
-                                      exists: (String) -> Bool) -> String {
-        let suffix = ext.isEmpty ? "" : ".\(ext)"
-        let first = basename + suffix
-        guard exists(first) else { return first }
-        var counter = 2
-        while true {
-            let candidate = "\(basename) \(counter)\(suffix)"
-            if !exists(candidate) { return candidate }
-            counter += 1
-            if counter > 10_000 { return candidate }
-        }
     }
 
     // MARK: - Plain text content (Spotlight indexing)

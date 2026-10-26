@@ -7,6 +7,7 @@ import AppKit
 /// `SettingsWindowController`..."). `BatchWindowController`'s `BatchPopUpButton` is NOT
 /// folded in here: it is a SwiftUI `NSViewRepresentable` wrapper (Batch's window is SwiftUI,
 /// not plain AppKit), a different construction shape, not a duplicate of this one.
+@MainActor
 enum FormControl {
     static func popUpButton(
         titles: [String], identifier: String, accessibilityLabel: String, width: CGFloat,

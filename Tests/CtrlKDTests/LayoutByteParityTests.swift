@@ -11,16 +11,17 @@
 ///     int 0, and `structure.col` inherits the flavor;
 ///   - the page dict's key order (pn/pc first) and its float geometry values;
 ///   - `json.dumps`' short escapes: the literal form feed's break `"origin": "\f"`;
-///   - all four note kinds: labels, `fnref` runs, the printed footnote area (the
-///     notes-path pages carry `{}` headers/footers, Python's plain-list truth);
+///   - all four note kinds: labels, `fnref` runs, the printed footnote area (its pages
+///     carry the running head/foot in force like any other page);
 ///   - structure classification (bullets, def-list, spaces-centered line), `.tb` tab
 ///     stops, running heads, `.cp`, `.pa`, and a soft-return merge.
 ///
 /// The expected files are the PYTHON ORACLE'S OWN OUTPUT, committed verbatim
 /// (ctrl-kd @ 7fa1d5c, refreshed @ 3c5eb9f for the b26 visual pass note-marker-hang
 /// fix -- the fixture's own footnote/endnote/annotation area mixes marker widths, so
-/// `notesMarkerPadCols`/`_notes_marker_pad_cols` now pads three of its entries:
-/// `ctrl-kd -t layout --fonts mac [--comments]` on the fixture) — regenerate them
+/// `notesMarkerPadCols`/`_notes_marker_pad_cols` now pads three of its entries -- and
+/// again for planning #577, when its note pages began carrying the running head/foot
+/// the plain pages do: `ctrl-kd -t layout --fonts mac [--comments]` on the fixture) — regenerate them
 /// from the oracle, never by hand and never from sr itself.
 /// `layout-parity-modern-comments.json` covers the non-default `--comments` path: kept
 /// comments produce zero-width anchor runs (`"text": ""` + `ref`) and positional
@@ -66,9 +67,8 @@ private func loadResource(_ name: String, ext: String) throws -> Data {
     // bare Python list with no `.headers` attribute at all -- `emit_layout`'s
     // `getattr(page, 'headers', {})` therefore yields `{}` for that page. That's the exact
     // duck-typing gap the PDF fix worked around, left unpatched on ctrl-kd's JSON path, so
-    // matching it byte-for-byte means blanking headers/footers here too -- the same
-    // treatment `notesPath` already gets for its own analogous gap (see the doc comment
-    // above `jsonHFDict`'s call site in `emitLayout`). Before that fix this test failed:
+    // matching it byte-for-byte means blanking headers/footers here too (see the doc
+    // comment above `jsonHFDict`'s call site in `emitLayout`). Before that fix this test failed:
     // sr's JSON carried a real "1": "HEADER-#" entry where ctrl-kd's has `{}`.
     //
     // REWRITTEN 2026-09-15 (planning #274 follow-up). The RAW `headers`/`footers` dict

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import SoftReturn
+import SoftReturnShared
 
 /// Job 218 (b12), when this app was still sandboxed: pinned that every write site writes
 /// EXACTLY the URL/folder it was handed, never a reconstructed sibling — the property a
@@ -21,7 +22,7 @@ import Testing
         // from `basename`/format — proving the write target is the URL itself, not something
         // rebuilt from a directory + a format's own extension.
         let grantedURL = dir.appendingPathComponent("Whatever The User Typed.rtf")
-        let product = ExportEngine.Product(format: .rtf, bytes: Array("{\\rtf1 hi}".utf8))
+        let product = ExportProduct(format: .rtf, bytes: Array("{\\rtf1 hi}".utf8))
 
         try ExportEngine.writeSingle(product, to: grantedURL)
 
@@ -104,7 +105,7 @@ import Testing
         let missingDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("SandboxWriteTests-missing-\(UUID().uuidString)")
         let missingURL = missingDir.appendingPathComponent("OUT.rtf")
-        let product = ExportEngine.Product(format: .rtf, bytes: Array("x".utf8))
+        let product = ExportProduct(format: .rtf, bytes: Array("x".utf8))
 
         #expect(throws: (any Error).self) {
             try ExportEngine.writeSingle(product, to: missingURL)

@@ -7,12 +7,17 @@ import Foundation
 /// fakes standing in for what Cocoa would have decoded.
 enum ScriptingFileArgument {
     enum DecodeError: Error, LocalizedError {
-        case notAFileReference(Any?)
+        /// What the script passed instead, as text: the value itself is not Sendable.
+        case notAFileReference(String)
+
+        init(notAFileReference value: Any?) {
+            self = .notAFileReference(String(describing: value))
+        }
 
         var errorDescription: String? {
             switch self {
             case .notAFileReference(let value):
-                return "Expected a file reference, got \(String(describing: value))."
+                return "Expected a file reference, got \(value)."
             }
         }
     }
@@ -39,9 +44,9 @@ enum ScriptingFileArgument {
             if let fileURL = descriptor.fileURLValue {
                 return fileURL
             }
-            throw DecodeError.notAFileReference(descriptor)
+            throw DecodeError(notAFileReference: descriptor)
         default:
-            throw DecodeError.notAFileReference(raw)
+            throw DecodeError(notAFileReference: raw)
         }
     }
 

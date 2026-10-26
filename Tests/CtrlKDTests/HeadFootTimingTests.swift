@@ -53,11 +53,11 @@ private func lines(_ prefix: String, _ range: ClosedRange<Int>) -> [UInt8] {
 }
 
 private func pageHeads(_ doc: Document) -> [String?] {
-    layoutPrintedPagesPlain(doc).map { $0.headers[1] }
+    layoutPrintedPages(doc).map { $0.headers[1] }
 }
 
 private func pageFeet(_ doc: Document) -> [String?] {
-    layoutPrintedPagesPlain(doc).map { $0.footers[1] }
+    layoutPrintedPages(doc).map { $0.footers[1] }
 }
 
 // ------------------------------------------------------------------ the rule itself
@@ -114,7 +114,7 @@ private func pageFeet(_ doc: Document) -> [String?] {
     body += bytes("P4")
     body += hard
     let doc = timingDoc(body)
-    #expect(doc.hfEventsWithin.contains { $0 != nil },
+    #expect(doc.hfEvents.contains { $0.within != nil },
             "the command sits inside a block and must record where")
     let heads = pageHeads(doc)
     #expect(heads[0] == "FIRST", "\(heads)")
@@ -129,7 +129,7 @@ private func pageFeet(_ doc: Document) -> [String?] {
     body += bytes("text")
     body += hard
     let doc = timingDoc(body)
-    #expect(doc.hfEventsWithin == [nil], "\(doc.hfEventsWithin)")
+    #expect(doc.hfEvents.map(\.within) == [nil], "\(doc.hfEvents.map(\.within))")
 }
 
 // ----------------------------------- 2: a page ends the moment it is full

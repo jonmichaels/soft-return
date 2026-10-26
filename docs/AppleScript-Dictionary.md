@@ -211,7 +211,7 @@ scripting verb — revisit only if asked).
 ## Job 252 (`ae-all-verbs`, 2026-08-12): all four verbs field-proofed, not just `convert`
 
 Job 241 fixed and proved `convert`'s reply shape with a real self-addressed `AESendMessage`
-(`AppleEventSelfSendProbe`) — but `export`/`diagnose`/`import page settings` shipped through
+(a self-send probe, since removed) — but `export`/`diagnose`/`import page settings` shipped through
 the same job-207/216/241 reply-shape eras and had never run a single real cross-process (or
 even self-addressed) Apple Event. This job audited all four commands' actual
 `performDefaultImplementation()` return values against job 241's CONFIRMED LAW (no list-shaped
@@ -225,10 +225,8 @@ reply, ever) and extended the self-send probe to exercise the other three:
 | `import page settings` | `type="text"` | `ScriptingJSONRendering.render(...)` — a `String` | yes |
 
 No offender found — all four already return scalar values, so no command code changed here.
-`AppleEventSelfSendProbe.runOtherVerbsIfRequested()` (same `SRDiagnosticsGate` +
-`SRSelfSendProbe` env-flag opt-in as `convert`'s own probe, called right after it from
-`AppDelegate.applicationDidFinishLaunching`, unconditionally compiled — not `#if DEBUG` — so it
-also runs against RELEASE) now sends real self-addressed events for all three:
+The probe (since removed; the standing check is now the external `osascript` scripts in
+`docs/CONSOLE-ROUND.md`) sent real self-addressed events for all three:
 - `export`: stages a real open document (`NSDocumentController.shared.openDocument`, the
   scripting `document` class) against the `convert` probe's own `OLDTIMES.WS` fixture, then
   exports it to RTF; side effect = the output file exists and is non-empty.
@@ -237,10 +235,6 @@ also runs against RELEASE) now sends real self-addressed events for all three:
 - `import page settings`: a synthesized 68-byte WSCHANGE `.PAT` fixture (same layout
   `PageSettingsScriptingTests.syntheticPAT()` proves decodes correctly), written at runtime, no
   external provisioning needed; side effect = the reply contains all 6 expected field names.
-
-Results land in `UserDefaults` (`aeDiagnostics.selfSendProbe.<verb>`) and plain marker files
-(`aeSelfSendProbe.<verb>.result.txt` / `.replyDump.txt` in the app's temp dir), same
-no-daemon-round-trip convention as `convert`'s own markers.
 
 ### The 4×2 field matrix (cold Debug + cold Release, 2026-08-12, machine-verified)
 
@@ -286,7 +280,7 @@ Job 252 left `export` as the one verb still returning `-1708` with a genuinely e
 despite an already-scalar return value and a structurally sound `NSDocument.objectSpecifier`
 (`document named "OLDTIMES.WS"`) — narrowing the suspect to specifier RESOLUTION rather than
 reply packaging. Two candidates were tested against job 252's own field probe
-(`AppleEventSelfSendProbe.performExport`), cold Debug and cold Release, per Jon's brief:
+(since removed), cold Debug and cold Release, per Jon's brief:
 
 - **Candidate A — evaluate the specifier by hand inside `performDefaultImplementation()`**
   (`(directParameter as? NSScriptObjectSpecifier)?.objectsByEvaluatingSpecifier as? WSDocument`

@@ -1,5 +1,77 @@
 # Known-Issues Register
 
+### 2026-10-26 — The v4.6.0 release runs, every failure by name
+
+- **Engine (`swift test`, armed, tree 6d4cda0e):** 1436 tests in 16 suites. Every issue is inside
+  `PCLFidelityTests.pclFidelity(doc:)` (194 documents): 62 issues, 61 of them known — the same shape as the
+  2026-09-14 run below (26 excluded by ruling, 35 v4-expansion divergences softened, 1 hard failure). The hard
+  failure is LJ6DTP, 431 non-font-substitution divergences (extra-word-in-engine 270, word-unmatched 105,
+  exact-drift 49, cgtimes-drift-exceeds-tolerance 10, line-start-shift 7), parked on planning #210.
+- **Python tier 3 (`ctrlkd-private-tests`, armed):** 955 passed, 2 skipped — both "got empty parameter set"
+  (the private answer key's refused and non-document lists are empty).
+- **ctrl-kd full suite (fd5a388, armed):** 7198 passed, 76 skipped, 1 failed: `test_pcl_fidelity[LJ6DTP]`,
+  parked on #210.
+- **Mac Corpus plan (armed, through the isolation gate, tree 304fb64a):** 966 tests; 955 passed, 8 failed,
+  0 skipped, 3 expected failures (`CorpusDocumentFilterTests`' three, as in 4.5.0). The gate found no offender.
+  - The LJ6DTP rows parked on #210, unchanged: `AppNativeFidelityTests` (exact-drift),
+    `GeometryOracleTests.everyLineStartsAtTheLibrarysLeftMargin` (LJ6DTP.WS line 11; -LASERJE.FNT line 9),
+    `NativeStructuralParityTests.structuralParity` (LJ6DTP.WS size, page 1 and 6) and
+    `knockoutRunsClassifyTheSameWayTheEngineDoes`.
+  - `DocumentWindowFirstOpenTests` ×4: a regression from #564's whole-pixel first open. FIXED in #579
+    (29cc2f37); the class and `FirstOpenFitTests` pass, 28/28, armed.
+  - `HolymacTimingTests.openAndPageChangeTimings`: one 110.4 ms turn, "Show Invisibles off's first page
+    comes", -HOLYMAC.WS warm. That turn is one call, `pages.setContent` of the cached Modern render (70–85 ms
+    alone); the run-loop batching (#572) is fixed and the class passed alone on the fix tree. OPEN as planning
+    #580 (make `setContent` cheaper or split it).
+  - The UI tests (`SoftReturnUITests`): the runner failed to start ("Authentication canceled"): the
+    UI-automation prompt was raised mid-run and not answered. The run is now two parts so the prompt comes
+    first (`macos/scripts/full-mac-test-run.sh`). Run alone afterwards, the causes found one by one: unit tests
+    had written the real app's reopen list (#581); AppKit restored windows from saved state; a bare launch flag
+    left a value over that AppKit opened as a document; and with the console locked no app can come to the
+    front. FIXED (#581, #582): every launch flag paired, `-ApplePersistenceIgnoreState YES`; 7 of 7 pass,
+    authorized, screen unlocked. The `LivePrintedFramingTests` passed in the Corpus run; a later class run
+    failed them ("Failed to start stream") only because the console was locked.
+- **iPhone, whole target, armed:** iOS 26.5 (Xcode 27.1) 125 tests: 109 passed, 1 failed, 13 skipped, 2
+  expected; iOS 16.0 (Xcode 26.6) 125: 117 passed, 0 failed, 6 skipped, 2 expected; iOS 27.0 (Xcode 27.1)
+  125: 109 passed, 1 failed, 13 skipped, 2 expected.
+  - The iOS 27.0 run's write guard listed 8 offenders, all `macos/` files edited during it (the #581 fix,
+    commit 08c97d7f); none is in the iPhone target, so the run stands. Its one failure,
+    `ArtboardScreenshotTests.pictureFolderNotice`, was the test's: iOS 27's folder picker takes longer than the
+    fixed 1.5 s the test gave it, and one dismiss takes down only the top layer. The test now waits for the
+    picker and dismisses until nothing is over the document; rerun alone on iOS 27.0, it passes.
+  - iOS 26.5's failure is the register-named `LongDocumentLayoutTests` -HOLYMAC Modern bound: "the render
+    finishes" 103 ms (4.5.0: 126 ms).
+  - The skips are conditions, each by name: `AppStoreScreenshots.appStoreSet` (its own device only);
+    `CollapsingBarTests` ×4, `NativeScreenshotTests` ×3 and `ShareExportPrintScreenshotTests.shareMenu`
+    (the hand-built bars, iOS 16–18; iOS 26 and later use the system's — on iOS 16.0 only `shareMenu`
+    skips); `RealScreenTests` ×4 (only with the screen watcher up).
+  - Expected failures: `CorpusDocumentFilterTests`' two, as in 4.5.0.
+- **iPhone Duo, iOS 27.1 (not a release gate, Jon):** 125 tests: 109 passed, 5 failed, 9 skipped, 2 expected.
+  The 5 are layout tests on its wider outer screen; planning #583.
+
+### 2026-10-26 — `openAndPageChangeTimings`: FIXED — a load's turns ran several to a pass of the run loop
+
+- **Test:** `HolymacTimingTests.openAndPageChangeTimings()` in `SoftReturnTests` (the 2026-09-15 entry below).
+- **What it showed:** -HOLYMAC.WS failed on every run, alone and in the Corpus plan, with 25 to 34 main-thread
+  stretches of 100 to 128 ms, almost all "a run-loop turn while Modern finishes". The same tree from 2026-09-30
+  failed the same way with either Xcode, so no change since 4.5.0 brought it in: this machine is slower now.
+- **Cause:** the Mac's progressive load queued each next turn as a run-loop block due at once. One pass of the run
+  loop runs every block due in it, so a turn that queued the next got it in the same pass. Four and five 20 ms turns
+  then held the loop 100 ms and more before it drew or took an event. The batch 41 note below ("nothing in them is a
+  90 ms turn to slice") was this: every turn was short, and the stretch was several of them.
+- **Fix:** each turn is a run-loop timer 2 ms out (`DocumentWindowController.onNextTurn`), the iPhone's rule since
+  batch 27. While the reader scrolls, the spacing stays 8 ms.
+- **Measured, two before/after pairs on the same machine:** stretches over 100 ms 30/34 and 25/34 before, 0/0 and
+  0/0 after; the longest 119–128 ms before, 75–86 ms after. Every page laid out 3–10% later (4.19 s to 4.45 s cold);
+  Modern's first page unchanged.
+- **Also:** a test host no longer runs `mdimport` (`ProcessMDImportRunner`, `TestHost`). Tests that opened corpus
+  documents asked Spotlight to import each one, and a test host launched from a new build path re-imported every
+  WordStar file on the Mac. Spotlight's workers then ran beside the timing tests.
+- **`ContinuousScrollAfterSwitchTests.scrollingRightAfterTheSwitch()`**, which failed at 38–45 fps in one large
+  armed run (about 150 windows open), passes alone before and after this fix.
+- **Status:** FIXED for the batching. The 2026-09-15 entry below is closed by this one. One stretch is left, a
+  single `setContent` call (the v4.6.0 release runs, above; planning #580).
+
 ### 2026-09-17 — `theAppPaginatesExactlyLikeTheLibrary`: RETIRED — every failing row was an off-sheet page number (E11, batch 48b)
 
 - **Test:** `GeometryOracleTests.theAppPaginatesExactlyLikeTheLibrary()`, one of the six Mac register-named rows of the
@@ -38,6 +110,21 @@
   from a whole layout of the same render. Only the length of one main-thread turn moved.
 - **Same class as** the Mac's `openAndPageChangeTimings` entry below: a machine-marginal timing bound that fails when
   the box is loaded, here during the whole-target release run.
+- **History of the measurement** (the same test, the same simulator, this machine):
+
+  | run | what it measured | ms |
+  |---|---|---|
+  | `rel440-ios26` (v4.4.0 whole target, 2026-09-16) | the render finishes | 100.16 |
+  | `b45-i28-final26` (batch 45, class) | the render finishes | 96 |
+  | `b47-m30fix-26` (batch 47, classes) | the render finishes | 103.4 |
+  | `b47-m30fix-26b` / `-26c` (batch 47, class alone) | the render finishes | 95 / 98 |
+  | `b47-m31-ios16` (batch 47, classes, iOS 16.0) | a scroll to the end lays out pages | 101.5 |
+  | `rel450-ios26` (v4.5.0 whole target, 2026-09-17) | the render finishes | 126.3 |
+  | `rel450-timing-ios26` (v4.5.0, class alone, 2026-09-17) | the render finishes | 95 |
+
+  The class alone passes every time it is asked (95, 95, 98); the bound is exceeded only inside a whole-target or
+  multi-class run, where the box is carrying the rest of the suite. 126.3 ms is the widest yet and was measured in the
+  v4.5.0 whole-target run; the same tree measured 95 ms one run later with nothing else going on.
 - **Status:** OPEN — machine-marginal bound, named so the release gate accounts for it by name rather than as an
   unexplained failure.
 
@@ -112,8 +199,8 @@
   per-phase intervals the timing harness emits are either cumulative spans over the whole progressive build
   (`open.allPages` 4294 ms) or already well under the target (`render.chunk`, 28-34 ms each), so nothing in
   them is a 90 ms turn to slice.
-- **Status:** OPEN — machine-marginal bound, named so the release gate accounts for it by name rather than
-  as an unexplained failure.
+- **Status:** CLOSED 2026-10-26 by the entry at the top: the stretches were several turns to a pass of the run
+  loop, now one.
 
 
 ### 2026-09-15 — Modern's page counts differ from the engine's: the two set the body in different FACES (batch 41)
@@ -242,7 +329,8 @@ moved a long way between the two: 96 issues then, 62 now, and the
     two-line "bar, then caption" chain, not this three-line one.
 - **C. `GeometryOracleTests.everyLineStartsAtTheLibrarysLeftMargin()`, -LASERJE.FNT line 9.**
   - This is the 2026-09-07 OPEN tab-stop row below ("-LASERJE.FNT line 9 — tab stop 4.46pt left").
-  - Its numbers are now app 242.10 / engine PDF 234.50; they were app 237.24 / engine 241.70 then.
+  - Its numbers are now app 242.10 / engine PDF 235.30 (2026-10-26; 234.50 on 2026-09-15); they were app 237.24 / engine
+    241.70 then.
   - The engine's line is 12 graphic cells (font6) from x=14.4, a `tabhmi4680` tab, then "Scalable" in font11 (Univers
     10.0pt).
 - **Status:** parked (#210); not fixed for 4.2.0.

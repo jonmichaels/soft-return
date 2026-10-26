@@ -3,8 +3,8 @@
 asset this app's own code depends on, BEFORE the release chain undrafts it.
 
 The requirement list here must stay in lockstep with
-`SoftReturn/Support/ReleaseAssets.swift` — that is the app-code side of the SAME two rules
-(`ReleaseAssetCompletenessTests.swift` pins the literal cross-check). Two rules, not a
+`SoftReturnTests/ReleaseAssetCompletenessTests.swift` (its `ReleaseAssets` type) — that is the
+app-side statement of the SAME two rules, and that file pins the literal cross-check. Two rules, not a
 config file: this app has exactly two release-asset dependencies today, and a third one
 appearing should be a loud, deliberate edit to BOTH files, not a silent config change either
 side of the pair could miss (the b23 CLI-pkg-leg omission — this job's own brief — was
@@ -16,7 +16,7 @@ Usage:
 Fetches the release's asset list via `gh release view <tag> --repo <repo> --json assets`
 (the same `gh` the rest of the release chain already depends on — see docs/RUNBOOK.md) and
 checks:
-    1. an asset named exactly "Soft-Return-CLI.pkg" (case-insensitive) exists
+    1. an asset named exactly "Soft-Return-CLI.pkg" (case-sensitive: the app downloads it by that fixed URL) exists
     2. at least one asset whose name ends in ".dmg" exists
 
 Exit codes: 0 ok, 1 one or more requirements unmet, 2 usage/gh/parse error.
@@ -41,7 +41,7 @@ def fetch_asset_names(repo, tag):
 
 def missing_requirements(asset_names):
     missing = []
-    if not any(name.lower() == INSTALLER_PACKAGE_FILENAME.lower() for name in asset_names):
+    if not any(name == INSTALLER_PACKAGE_FILENAME for name in asset_names):
         missing.append(INSTALLER_PACKAGE_FILENAME)
     if not any(name.lower().endswith(DMG_SUFFIX) for name in asset_names):
         missing.append(f"an asset ending in \"{DMG_SUFFIX}\"")

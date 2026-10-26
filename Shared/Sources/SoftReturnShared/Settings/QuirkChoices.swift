@@ -77,6 +77,27 @@ public struct QuirkChoices: Hashable, Sendable {
         return result
     }
 
+    /// `sr`'s `--quirks MODE`, `--quirk NAME` and `--no-quirk NAME` as choices, for a script or a shortcut (R-74):
+    /// MODE's quirks (off: none; auto: the shipped ones; all: every one), or `baseline` when no mode is given, then the
+    /// named ones turned on and off. A quirk a document does not trip stays a no-op, as in `sr`; a name the engine does
+    /// not know throws, as `sr` refuses it.
+    public static func requested(mode: QuirkMode?, enable: [String] = [], disable: [String] = [],
+                                 baseline: QuirkChoices = .shipped) throws -> QuirkChoices {
+        for name in enable + disable where QuirkRegistry.standard.quirk(name) == nil {
+            throw DocumentOperations.OperationError.unknownQuirk(name: name, known: names)
+        }
+        var choices: QuirkChoices
+        switch mode {
+        case .off: choices = .off
+        case .auto: choices = .shipped
+        case .all: choices = .all
+        case nil: choices = baseline
+        }
+        for name in enable { choices.set(name, on: true) }
+        for name in disable { choices.set(name, on: false) }
+        return choices
+    }
+
     /// `document` with these quirks applied and the decision recorded on it — the one call every parse goes through.
     public func apply(to document: CtrlKD.Document) -> CtrlKD.Document {
         let registry = QuirkRegistry.standard

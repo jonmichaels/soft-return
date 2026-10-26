@@ -1,4 +1,5 @@
 import AppKit
+@testable import SoftReturnRendering
 import Testing
 @testable import CtrlKD
 @testable import SoftReturn
@@ -31,7 +32,7 @@ import Testing
     // MARK: - Fractions match the engine's, on both sides of the port
 
     @Test func appPartBlockFractionsMatchEngineForSquareBullet() throws {
-        let appFrac = try #require(SoftReturn.partBlocks["\u{25A0}"],
+        let appFrac = try #require(SoftReturnRendering.partBlocks["\u{25A0}"],
                                     "app's partBlocks has no U+25A0 entry")
         let engineFrac = try #require(CtrlKD.partBlocks["\u{25A0}"],
                                        "engine's partBlocks has no U+25A0 entry")
@@ -41,7 +42,7 @@ import Testing
         #expect(appFrac.h == engineFrac.h)
         #expect(appFrac.w == appFrac.h,
                 "■'s own fraction pair isn't square: w=\(appFrac.w) h=\(appFrac.h)")
-        #expect(SoftReturn.squarePartBlocks.contains("\u{25A0}"),
+        #expect(SoftReturnRendering.squarePartBlocks.contains("\u{25A0}"),
                 "app's squarePartBlocks is missing U+25A0 — the scaling branch this job ports won't fire")
         #expect(CtrlKD.squarePartBlocks.contains("\u{25A0}"))
     }

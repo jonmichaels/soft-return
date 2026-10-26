@@ -171,6 +171,19 @@ extension WSDocument {
     /// to find the receiver (this document) before calling this method, so — unlike the
     /// old `performDefaultImplementation()` — there is no `directParameter` to cast; the
     /// receiver already IS the document.
+    /// `state` itself when `quirks` are already its own, else a copy under them — same bytes, variant and page
+    /// settings — so a script's quirk choices reach a Native PDF without changing the open window.
+    private static func state(_ state: DocumentState, withQuirks quirks: QuirkChoices) throws -> DocumentState {
+        guard quirks != state.quirkChoices else { return state }
+        let copy = try DocumentState(data: state.data, settings: SettingsStore.shared, docPath: state.docPath)
+        if state.variant.provenance == .manual { copy.setVariant(state.variant.value) }
+        copy.setPageSettingsPreset(state.pageSettingsPreset.value)
+        var overrides: [String: Bool] = [:]
+        for name in QuirkChoices.names { overrides[name] = quirks.isOn(name) }
+        _ = copy.setQuirkOverrides(overrides)
+        return copy
+    }
+
     @objc func handleExportScriptCommand(_ command: NSScriptCommand) -> Any? {
         do {
             // Batch 27: the document parsed, even when no window has waited for it.
@@ -182,7 +195,8 @@ extension WSDocument {
                 defaultHeaders: settings.defaultHeaders, defaultTOC: settings.defaultTOC,
                 defaultInlineStyling: settings.defaultInlineStyling,
                 defaultPictures: settings.defaultPictures,
-                defaultPageNumbers: settings.defaultPageNumbers)
+                defaultPageNumbers: settings.defaultPageNumbers,
+                documentQuirks: state.quirkChoices)
 
             let basename = fileURL?.deletingPathExtension().lastPathComponent ?? ""
             let bytes: [UInt8]
@@ -192,6 +206,8 @@ extension WSDocument {
             // style) keeps going through the library's own `DocumentOperations.convert`,
             // unchanged from before this job.
             if args.format == ExportFormat.pdf.libraryFormatName, args.viewStyle == .native {
+                // The window's own state, or a copy of it with the script's quirks: the window keeps its own.
+                let state = try Self.state(state, withQuirks: args.quirks)
                 let products = try ExportEngine.render(
                     document: state.document, state: state, formats: [.pdf],
                     notes: NoteSelection(), style: .native, viewStyle: .native, title: basename,
@@ -206,23 +222,22 @@ extension WSDocument {
                 // user-facing RTF fonttbl defaults to the mac mapping, never the library's
                 // `.office` default) but is no longer pinned there — job 504's `fonts`
                 // parameter lets a script override it via `args.fontsTarget`.
-                let options = DocumentOperations.ConversionOptions(
+                var options = DocumentOperations.ConversionOptions(
                     formats: [args.format], mode: args.mode, variant: state.variant.value,
                     title: basename, notes: args.notes, styles: args.styles,
                     fontsTarget: args.fontsTarget, pageSettings: args.pageSettings,
                     noteRefs: args.noteRefs, docPath: fileURL?.path ?? "",
-                    headers: args.headers, toc: args.toc, inlineStyling: args.inlineStyling,
-                    pictures: args.pictures, lineNumbers: args.lineNumbers,
-                    pageNumbers: args.pageNumbers, sentenceSpacing: args.sentenceSpacing)
+                    choices: args.choices, lineNumbers: args.lineNumbers)
+                options.quirks = args.quirks
                 let converted = try DocumentOperations.convert(data: state.data, options: options)
                 guard let product = converted.first else { throw ExportCommand.DecodeError.unknownFormat }
                 bytes = product.bytes
             }
 
             // Job 504: never clobber a pre-existing file at the requested destination — see
-            // `ExportCommand.uniqueDestination`'s own doc comment for the ruling. The result
+            // `ExportNaming.uniqueURL`'s own doc comment for the ruling. The result
             // is the file actually written, not necessarily `args.destination`.
-            let destination = ExportCommand.uniqueDestination(for: args.destination) {
+            let destination = ExportNaming.uniqueURL(for: args.destination) {
                 FileManager.default.fileExists(atPath: $0.path)
             }
             try Data(bytes).write(to: destination, options: .atomic)

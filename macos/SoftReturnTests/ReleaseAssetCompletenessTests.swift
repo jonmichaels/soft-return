@@ -2,7 +2,57 @@ import Foundation
 import Testing
 @testable import SoftReturn
 
-/// Job 374 (b24, RELEASE-ASSET COMPLETENESS GATE). `ReleaseAssets` is the Swift-side half —
+/// What must exist on a published release for this app's own in-app download paths to work:
+/// the CLI installer pkg (`CLIHelpWindowController.installerPackageFilename`) and the DMG.
+/// Only this test reads it; the release chain's own copy of the two rules is
+/// `scripts/verify-release-assets.py`, which `docs/RUNBOOK.md`'s release chain runs before
+/// undraft, and the last test below pins the two against each other.
+enum ReleaseAssets {
+    /// A single release-asset requirement: either an EXACT filename (case-insensitive) or a filename
+    /// SUFFIX/pattern (the DMG, whose real name always carries the version, so no exact literal exists to
+    /// check against).
+    enum Requirement: Equatable {
+        case exactFilename(String)
+        case filenameSuffix(String)
+
+        /// A human-readable description of what's missing, for a failing gate's own error text.
+        var describedRequirement: String {
+            switch self {
+            case .exactFilename(let name): return name
+            case .filenameSuffix(let suffix): return "an asset ending in \"\(suffix)\""
+            }
+        }
+
+        func isSatisfied(by assetNames: [String]) -> Bool {
+            switch self {
+            case .exactFilename(let name):
+                // Exact: GitHub asset download URLs are case-sensitive.
+                return assetNames.contains(name)
+            case .filenameSuffix(let suffix):
+                return assetNames.contains { $0.lowercased().hasSuffix(suffix.lowercased()) }
+            }
+        }
+    }
+
+    /// Every asset a published release must carry. The CLI name is read off
+    /// `CLIHelpWindowController.installerPackageFilename` rather than a second copy of the
+    /// string, so this list cannot silently drift from what the app actually looks for.
+    static let requirements: [Requirement] = [
+        .exactFilename(CLIHelpWindowController.installerPackageFilename),
+        .filenameSuffix(".dmg"),
+    ]
+
+    /// `requirements` not satisfied by `assetNames` (a release's real asset-name list), each as
+    /// its own `describedRequirement` — empty means the release is complete. Pure and
+    /// synchronous: fetching the real asset list (a GitHub API call) is the CALLER's job.
+    static func missingRequirements(assetNames: [String]) -> [String] {
+        requirements
+            .filter { !$0.isSatisfied(by: assetNames) }
+            .map(\.describedRequirement)
+    }
+}
+
+/// Job 374 (b24, RELEASE-ASSET COMPLETENESS GATE). `ReleaseAssets` (above) is the Swift-side half —
 /// pure logic, exercised directly here. `scripts/verify-release-assets.py` is the chain-side
 /// half that actually queries a published release's real asset list (a `gh` call this test
 /// environment has no business making — see that script's own doc comment); the LAST test
@@ -19,10 +69,12 @@ import Testing
         #expect(missing.isEmpty)
     }
 
-    @Test func matchingIsCaseInsensitiveJustLikeGitHubUpdateFeedsOwnMatch() throws {
-        let missing = ReleaseAssets.missingRequirements(
-            assetNames: ["soft-return-4.0.0b24.DMG", "SOFT-RETURN-CLI.PKG"])
-        #expect(missing.isEmpty)
+    @Test func theDMGSuffixIsCaseInsensitiveButThePkgNameIsExact() throws {
+        #expect(ReleaseAssets.missingRequirements(
+            assetNames: ["soft-return-4.0.0b24.DMG", "Soft-Return-CLI.pkg"]).isEmpty)
+        #expect(ReleaseAssets.missingRequirements(
+            assetNames: ["Soft-Return-4.0.0b24.dmg", "SOFT-RETURN-CLI.PKG"]) == ["Soft-Return-CLI.pkg"],
+            "the app downloads the pkg by a case-sensitive fixed URL")
     }
 
     @Test func aReleaseMissingTheCLIPkgReportsExactlyThat() throws {

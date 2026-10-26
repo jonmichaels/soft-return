@@ -1,5 +1,7 @@
 import Foundation
+import GeneratorSupport
 import Testing
+import TestSupport
 @testable import CtrlKD
 @testable import SoftReturnCLI
 
@@ -66,7 +68,7 @@ import Testing
 ///     broader corpus; see that file's own header and `docs/TESTING.md`).
 ///
 /// ## Gating
-/// `CTRLKD_SAWYER_ARCHIVE` (`sawyerArchivePath`/`sawyerArchiveArmed`/`sawyerArchiveSkipReason`,
+/// `CTRLKD_SAWYER_ARCHIVE` (`Corpus.sawyerArchivePath`/`Corpus.sawyerArchiveArmed`/`Corpus.sawyerArchiveSkipReason`,
 /// declared once in `WSChangeTests.swift`, reused here) — the 4 bundled samples need no
 /// archive, but they are gated the same way as everything else in this suite so there is
 /// exactly ONE arming knob and one documented skip, matching every sibling corpus suite.
@@ -123,9 +125,7 @@ enum AnswerKeyFixture {
     /// Documented path, per this file's header: ctrl-kd's own `tests/answer_key.json`, a
     /// sibling of `$CTRLKD_SRC`'s `src/`.
     static let path: String? = {
-        guard let src = ProcessInfo.processInfo.environment["CTRLKD_SRC"], !src.isEmpty else {
-            return nil
-        }
+        guard let src = Corpus.current.path(.ctrlkdSrc) else { return nil }
         return URL(fileURLWithPath: src)
             .deletingLastPathComponent()
             .appendingPathComponent("tests/answer_key.json")
@@ -134,7 +134,7 @@ enum AnswerKeyFixture {
 
     /// `nil` load reason when everything worked; otherwise the LOUD, specific complaint
     /// `answerKeyGateIsArmed` reports. Computed once, lazily — never touched by an unarmed
-    /// run (see `gridCaseIDs`/etc. below, which all check `sawyerArchiveArmed` FIRST).
+    /// run (see `gridCaseIDs`/etc. below, which all check `Corpus.sawyerArchiveArmed` FIRST).
     private static let loadResult: (key: Key?, failure: String?) = {
         guard let path else {
             return (nil, "CTRLKD_SRC is unset — cannot locate ctrl-kd's tests/answer_key.json " +
@@ -251,10 +251,10 @@ enum AnswerKeyDocSource {
         case .sample(let baseName):
             return try BundledSamples.bytes(for: baseName)
         case .sawyer(let relativePath):
-            let url = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent(relativePath)
+            let url = URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent(relativePath)
             return [UInt8](try Data(contentsOf: url))
         case .privateCorpus(let group, let relativePath):
-            let url = URL(fileURLWithPath: ctrlkdPrivateCorpusRoot)
+            let url = URL(fileURLWithPath: Corpus.privateCorpusPath)
                 .appendingPathComponent(group)
                 .appendingPathComponent(relativePath)
             return [UInt8](try Data(contentsOf: url))
@@ -275,42 +275,14 @@ enum AnswerKeyDocSource {
         case .sample:
             return ""
         case .sawyer(let relativePath):
-            return URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent(relativePath).path
+            return URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent(relativePath).path
         case .privateCorpus(let group, let relativePath):
-            return URL(fileURLWithPath: ctrlkdPrivateCorpusRoot)
+            return URL(fileURLWithPath: Corpus.privateCorpusPath)
                 .appendingPathComponent(group)
                 .appendingPathComponent(relativePath)
                 .path
         }
     }
-}
-
-/// `resolveDocumentPictures` needs real directory listing to walk the Sawyer/private-corpus
-/// archive trees the same way the CLI/app do — `FileManager`-backed, same shape as
-/// `CorpusParityTests.realFilesystemEnvironment()` (that one is `private` to its own file, so
-/// this is its own copy rather than a cross-file reference).
-private struct AnswerKeyRealFileReadError: Error, CustomStringConvertible {
-    let path: String
-    var description: String { "could not read \(path)" }
-}
-
-func answerKeyRealFilesystemEnvironment() -> CLIEnvironment {
-    let fm = FileManager.default
-    return CLIEnvironment(
-        readFile: { path in
-            guard let data = fm.contents(atPath: path) else { throw AnswerKeyRealFileReadError(path: path) }
-            return [UInt8](data)
-        },
-        writeFile: { _, _ in },
-        createDirectory: { _ in },
-        writeOut: { _ in },
-        writeErr: { _ in },
-        listDirectory: { path in try? fm.contentsOfDirectory(atPath: path) },
-        isFile: { path in
-            var isDir: ObjCBool = false
-            return fm.fileExists(atPath: path, isDirectory: &isDir) && !isDir.boolValue
-        }
-    )
 }
 
 struct AnswerKeyGridCase {
@@ -418,7 +390,7 @@ struct AnswerKeyUnknownFormat: Error, CustomStringConvertible {
 
     /// Built once per process, only when armed — an unarmed run never touches the key file.
     static let gridCases: [String: AnswerKeyGridCase] = {
-        guard sawyerArchiveArmed, let key = AnswerKeyFixture.loaded else { return [:] }
+        guard Corpus.sawyerArchiveArmed, let key = AnswerKeyFixture.loaded else { return [:] }
         var cases: [String: AnswerKeyGridCase] = [:]
         for (name, entry) in key.samplesDocs {
             let baseName = name.hasSuffix(".WS") ? String(name.dropLast(3)) : name
@@ -441,19 +413,19 @@ struct AnswerKeyUnknownFormat: Error, CustomStringConvertible {
     /// distinct answer-key doc entries (Sawyer's own disambiguation for same-named files in
     /// different archive directories) — see `AnswerKeyFixture`'s own doc-naming convention.
     static var pictureBearingDocNames: [String] {
-        guard sawyerArchiveArmed, let key = AnswerKeyFixture.loaded else { return [] }
+        guard Corpus.sawyerArchiveArmed, let key = AnswerKeyFixture.loaded else { return [] }
         return key.sawyerConvertible.filter { $0.value.pictureBearing }.keys.sorted()
     }
 
     static var gridCaseIDs: [String] {
-        guard sawyerArchiveArmed else { return [] }
+        guard Corpus.sawyerArchiveArmed else { return [] }
         return gridCases.keys.sorted()
     }
 
     // MARK: - Known-nonconvertible negatives (10) + the one non-document asset
 
     static var knownNonConvertibleNames: [String] {
-        guard sawyerArchiveArmed, let key = AnswerKeyFixture.loaded else { return [] }
+        guard Corpus.sawyerArchiveArmed, let key = AnswerKeyFixture.loaded else { return [] }
         return key.sawyerKnownNonConvertible.keys.sorted()
     }
 
@@ -472,7 +444,7 @@ struct AnswerKeyUnknownFormat: Error, CustomStringConvertible {
         "not a convertible file (detected: \(variant.rawValue) -- \(reason))"
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func answerKeyGateIsArmed() {
         let failureMessage = AnswerKeyFixture.loadFailure ??
             "expected ctrl-kd's tests/answer_key.json to load with real entries once armed"
@@ -491,7 +463,7 @@ struct AnswerKeyUnknownFormat: Error, CustomStringConvertible {
     /// Planning #211's own named 7 — the full archive walk's mechanical picture-bearing set,
     /// pinned by name so a corpus change that silently adds/drops one is a loud, specific
     /// failure rather than an opaque case-count drift buried in `gridCaseIDs`.
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func pictureBearingDocsAreTheNamedSeven() {
         #expect(Set(Self.pictureBearingDocNames) == [
             "-README.WS (root)", "-README.WS (APP)", "-README.WS (APP/vDosPlus)",
@@ -513,7 +485,7 @@ struct AnswerKeyUnknownFormat: Error, CustomStringConvertible {
         // costs one no-op directory-listing attempt; the `pictures_off` variant never resolves
         // anything at all, matching ctrl-kd's own `pix_results=None`.
         let pixResults: [PixResult] = c.pictures == .off ? [] :
-            resolveDocumentPictures(doc, docPath: c.source.docPath, environment: answerKeyRealFilesystemEnvironment())
+            resolveDocumentPictures(doc, docPath: c.source.docPath, environment: .live)
         let got = try renderAnswerKeyCell(doc: doc, format: c.format, mode: mode,
                                           pictures: c.pictures, pixResults: pixResults)
         #expect(got.bytes == c.expected.bytes, """
@@ -536,7 +508,7 @@ struct AnswerKeyUnknownFormat: Error, CustomStringConvertible {
     @Test(arguments: knownNonConvertibleNames) func knownNonConvertibleRefusedAsRecorded(name: String) throws {
         guard let key = AnswerKeyFixture.loaded, let entry = key.sawyerKnownNonConvertible[name]
         else { Issue.record("no known-nonconvertible entry for \(name)"); return }
-        let url = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent(entry.path)
+        let url = URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent(entry.path)
         let data = try Data(contentsOf: url)
         #expect(sha256Hex([UInt8](data)) == entry.sourceSHA256, """
             \(name): source bytes at \(entry.path) do not match the answer key's recorded \
@@ -563,12 +535,12 @@ struct AnswerKeyUnknownFormat: Error, CustomStringConvertible {
         }
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func wordstarPixIsSourceHashOnly() throws {
         let key = try #require(AnswerKeyFixture.loaded)
         let entry = try #require(key.sawyerNonDocumentAssets["WORDSTAR.PIX"],
                                   "WORDSTAR.PIX missing from answer key's non_document_assets")
-        let url = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent(entry.path)
+        let url = URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent(entry.path)
         let data = try Data(contentsOf: url)
         #expect(sha256Hex([UInt8](data)) == entry.sourceSHA256, """
             WORDSTAR.PIX: source bytes at \(entry.path) do not match the answer key's \
@@ -605,9 +577,9 @@ struct AnswerKeyUnknownFormat: Error, CustomStringConvertible {
 /// Unlike the public key (a sibling of `$CTRLKD_SRC`'s `src/`, outside this repo), the
 /// private key is committed IN this repo at a fixed path — no `CTRLKD_SRC` needed to find
 /// it, only `CTRLKD_PRIVATE_CORPUS` to load the actual source documents it hashes.
-/// Gated on `ctrlkdPrivateCorpusArmed`/`ctrlkdPrivateCorpusRoot`/`ctrlkdPrivateCorpusSkipReason`
+/// Gated on `Corpus.privateCorpusArmed`/`Corpus.privateCorpusPath`/`Corpus.privateCorpusSkipReason`
 /// (declared once in `PCLFidelityTests.swift`, reused here — one arming knob per corpus,
-/// same convention `sawyerArchiveArmed` follows for the Sawyer-gated suites above). Armed
+/// same convention `Corpus.sawyerArchiveArmed` follows for the Sawyer-gated suites above). Armed
 /// but the committed key file itself is missing or unparsable: FAILS LOUD (a broken repo
 /// state, not a legitimate skip) — same doctrine as the public key's `answerKeyGateIsArmed`.
 enum AnswerKeyPrivateFixture {
@@ -648,15 +620,8 @@ enum AnswerKeyPrivateFixture {
         let groups: [String: Group]
     }
 
-    /// Committed in-repo: `Tests/CtrlKDTests/AnswerKeyParityTests.swift` -> repo root is
-    /// three directories up (`Tests/CtrlKDTests` -> `Tests` -> repo root), then
-    /// `TestDocs/oracle/answer_key_private.json`.
-    static let path: String = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .appendingPathComponent("TestDocs/oracle/answer_key_private.json")
-        .path
+    /// Committed in-repo: `TestDocs/oracle/answer_key_private.json`.
+    static let path: String = RepoPaths.url("TestDocs/oracle/answer_key_private.json").path
 
     private static let loadResult: (key: Key?, failure: String?) = {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
@@ -766,7 +731,7 @@ enum AnswerKeyPrivateFixture {
     /// documents (the key file itself is always readable, being in-repo, but its cells are
     /// only checked against real bytes once `CTRLKD_PRIVATE_CORPUS` is armed).
     static let gridCases: [String: AnswerKeyGridCase] = {
-        guard ctrlkdPrivateCorpusArmed, let key = AnswerKeyPrivateFixture.loaded else { return [:] }
+        guard Corpus.privateCorpusArmed, let key = AnswerKeyPrivateFixture.loaded else { return [:] }
         var cases: [String: AnswerKeyGridCase] = [:]
         for (groupName, grp) in key.groups {
             for (name, entry) in grp.convertible {
@@ -797,14 +762,14 @@ enum AnswerKeyPrivateFixture {
     }()
 
     static var gridCaseIDs: [String] {
-        guard ctrlkdPrivateCorpusArmed else { return [] }
+        guard Corpus.privateCorpusArmed else { return [] }
         return gridCases.keys.sorted()
     }
 
     /// (group, name) for every grid case — used to also verify `detect()` agrees with the
     /// key's recorded `detected_variant`, once per document rather than once per cell.
     static var detectedVariantCaseIDs: [String] {
-        guard ctrlkdPrivateCorpusArmed, let key = AnswerKeyPrivateFixture.loaded else { return [] }
+        guard Corpus.privateCorpusArmed, let key = AnswerKeyPrivateFixture.loaded else { return [] }
         var ids: [String] = []
         for (groupName, grp) in key.groups {
             for name in grp.convertible.keys {
@@ -817,7 +782,7 @@ enum AnswerKeyPrivateFixture {
     // MARK: - Known-nonconvertible / non-document-asset negatives (both empty as of this writing)
 
     static var knownNonConvertibleIDs: [String] {
-        guard ctrlkdPrivateCorpusArmed, let key = AnswerKeyPrivateFixture.loaded else { return [] }
+        guard Corpus.privateCorpusArmed, let key = AnswerKeyPrivateFixture.loaded else { return [] }
         var ids: [String] = []
         for (groupName, grp) in key.groups {
             for name in grp.knownNonConvertible.keys { ids.append("\(groupName)/\(name)") }
@@ -826,7 +791,7 @@ enum AnswerKeyPrivateFixture {
     }
 
     static var nonDocumentAssetIDs: [String] {
-        guard ctrlkdPrivateCorpusArmed, let key = AnswerKeyPrivateFixture.loaded else { return [] }
+        guard Corpus.privateCorpusArmed, let key = AnswerKeyPrivateFixture.loaded else { return [] }
         var ids: [String] = []
         for (groupName, grp) in key.groups {
             for name in grp.nonDocumentAssets.keys { ids.append("\(groupName)/\(name)") }
@@ -839,7 +804,7 @@ enum AnswerKeyPrivateFixture {
         return (String(id[id.startIndex..<slash]), String(id[id.index(after: slash)...]))
     }
 
-    @Test(.enabled(if: ctrlkdPrivateCorpusArmed, ctrlkdPrivateCorpusSkipReason))
+    @Test(.requiresPrivateCorpus)
     func privateAnswerKeyGateIsArmed() {
         let failureMessage = AnswerKeyPrivateFixture.loadFailure ??
             "expected TestDocs/oracle/answer_key_private.json to load with real entries once armed"
@@ -873,7 +838,7 @@ enum AnswerKeyPrivateFixture {
             Issue.record("unknown mode \(c.mode) in private answer key"); return
         }
         let pixResults: [PixResult] = c.pictures == .off ? [] :
-            resolveDocumentPictures(doc, docPath: c.source.docPath, environment: answerKeyRealFilesystemEnvironment())
+            resolveDocumentPictures(doc, docPath: c.source.docPath, environment: .live)
         let got = try renderAnswerKeyCell(doc: doc, format: c.format, mode: mode,
                                           pictures: c.pictures, pixResults: pixResults)
         #expect(got.bytes == c.expected.bytes, """

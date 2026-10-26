@@ -17,7 +17,7 @@ import Testing
 /// ever drives `PagedDocumentView` through `.continuousScroll`
 /// (`Job439ModernAppendixLiveTests.swift:71`), and `.singlePage` is the app's actual default
 /// (`SettingsStore.swift:40`) — the exact mode Jon was in. This file drives the REAL app object
-/// graph (`DocumentWindowController`, same construction `Job454PageIndicatorTests` uses) in
+/// graph (`DocumentWindowController`, same construction `PageIndicatorTests` uses) in
 /// `.singlePage`, navigates to page 2 the way the Go menu does, and inspects the real, live,
 /// embedded `NSTextView` AppKit is actually showing — not a synthetic probe.
 ///
@@ -178,47 +178,6 @@ struct Job457ModernSinglePageBlankTests {
         #expect(afterFrame.width > 0 && afterFrame.height > 0)
         #expect(afterIsHidden == false)
         _ = afterGlyphRange
-    }
-
-    /// Job 460 — step 4's own regression guard: exercises the `SRDiagnostics=1` logging path
-    /// (`PagedDocumentView.logPageDiagnostics`, fired from `applyDisplayMode` on every display-
-    /// mode change and page navigation) end to end through real navigation, proving it doesn't
-    /// throw/crash when enabled. NOT proof of the log's actual TEXT — that write goes to NSLog/
-    /// the unified log, which this harness has no supported way to capture assertions against;
-    /// see the job report for what remains unverified. `UserDefaults.standard` (not the test's
-    /// own scoped suite) because `SRDiagnosticsGate.isEnabled()` reads the real default suite at
-    /// every other call site in this module — reset in `defer` so this test can't leak the flag
-    /// into any test that runs after it.
-    @Test @MainActor func diagnosticLoggingPathDoesNotCrashWhenEnabled() throws {
-        let key = SRDiagnosticsGate.defaultsKey
-        let hadPriorValue = UserDefaults.standard.object(forKey: key) != nil
-        let priorValue = UserDefaults.standard.bool(forKey: key)
-        UserDefaults.standard.set(true, forKey: key)
-        defer {
-            if hadPriorValue {
-                UserDefaults.standard.set(priorValue, forKey: key)
-            } else {
-                UserDefaults.standard.removeObject(forKey: key)
-            }
-        }
-
-        let controller = try Self.controller(fixture: "-SCREEN.WS")
-        try #require(controller.pageTotal == 2)
-        controller.goDown(nil)
-        try #require(controller.currentPage == 1)
-        // Job 460 report: a style switch (`setStyle(.native)`) was tried here first and dropped
-        // — Native lays -SCREEN.WS out to a single page, so switching to it and back clamps
-        // `currentPageIndex` to 0 (`setContent`'s own documented behaviour, not a bug), which
-        // made this test's own assertion fail for a reason unrelated to the diagnostic under
-        // test. `setDisplay` exercises `applyDisplayMode`'s OTHER branch (Continuous Scroll)
-        // without touching page count or index.
-        controller.setDisplay(.continuousScroll)
-        controller.setDisplay(.singlePage)
-
-        // If `logPageDiagnostics`'s async dispatch or its optional-chaining through
-        // `layoutManager`/`textContainer` were wrong, one of the calls above would have crashed
-        // this process already — Swift Testing has no separate "did not crash" assertion.
-        #expect(controller.currentPage == 1)
     }
 
     // A second scenario was explored and ruled out, not committed as a test: note 4's wording

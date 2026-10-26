@@ -1,8 +1,10 @@
 import AppKit
 import CtrlKD
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Foundation
 import Testing
+import TestSupport
 @testable import SoftReturn
 
 /// Job 374 (b24, SAMPLES IN-APP): `SampleDocuments` is data-driven off a bundled resource
@@ -21,18 +23,32 @@ private final class FakeDocumentController: DocumentOpening {
     }
 }
 
-private func scratchBundle(files: [String: String]) throws -> Bundle {
-    let root = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("SampleDocumentsTests-\(UUID().uuidString)")
-    let sampleDirectory = root.appendingPathComponent("SampleDocuments")
-    try FileManager.default.createDirectory(at: sampleDirectory, withIntermediateDirectories: true)
-    for (name, contents) in files {
-        try Data(contents.utf8).write(to: sampleDirectory.appendingPathComponent(name))
-    }
-    return try #require(Bundle(url: root))
-}
-
 @Suite struct SampleDocumentsTests {
+    /// Every scratch bundle lives in here; the directory goes with the test's own instance.
+    private let scratch: TestScratch
+
+    init() throws {
+        scratch = try TestScratch(prefix: "SampleDocumentsTests")
+    }
+
+    private func scratchBundle(files: [String: String]) throws -> Bundle {
+        let root = scratch.url(for: UUID().uuidString)
+        let sampleDirectory = root.appendingPathComponent("SampleDocuments")
+        try FileManager.default.createDirectory(at: sampleDirectory, withIntermediateDirectories: true)
+        for (name, contents) in files {
+            try Data(contents.utf8).write(to: sampleDirectory.appendingPathComponent(name))
+        }
+        return try #require(Bundle(url: root))
+    }
+
+    /// `SampleDocuments.open` copies into a fresh directory under the temporary folder; the test
+    /// removes each copy it caused.
+    @MainActor
+    private func removeCopies(opened by: FakeDocumentController) {
+        for url in by.openedURLs {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+    }
 
     // MARK: - items()
 
@@ -58,8 +74,7 @@ private func scratchBundle(files: [String: String]) throws -> Bundle {
     }
 
     @Test func itemsReturnsEmptyWhenTheResourceFolderIsMissing() throws {
-        let emptyRoot = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("SampleDocumentsTests-empty-\(UUID().uuidString)")
+        let emptyRoot = scratch.url(for: "empty")
         try FileManager.default.createDirectory(at: emptyRoot, withIntermediateDirectories: true)
         let bundle = try #require(Bundle(url: emptyRoot))
         #expect(SampleDocuments.items(bundle: bundle).isEmpty)
@@ -191,6 +206,7 @@ private func scratchBundle(files: [String: String]) throws -> Bundle {
         let bundle = try scratchBundle(files: ["PREFACE.WS": "original bytes"])
         let item = try #require(SampleDocuments.items(bundle: bundle).first)
         let controller = FakeDocumentController()
+        defer { removeCopies(opened: controller) }
 
         SampleDocuments.open(item, documentController: controller)
 
@@ -210,6 +226,7 @@ private func scratchBundle(files: [String: String]) throws -> Bundle {
         let bundle = try scratchBundle(files: ["PREFACE.WS": "x"])
         let item = try #require(SampleDocuments.items(bundle: bundle).first)
         let controller = FakeDocumentController()
+        defer { removeCopies(opened: controller) }
 
         SampleDocuments.open(item, documentController: controller)
         SampleDocuments.open(item, documentController: controller)

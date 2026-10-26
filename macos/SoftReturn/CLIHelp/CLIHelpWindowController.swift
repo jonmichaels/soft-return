@@ -29,12 +29,16 @@ final class CLIHelpWindowController: NSWindowController {
     /// nonisolated requirement) references it.
     nonisolated static let installerPackageFilename = "Soft-Return-CLI.pkg"
 
+    /// GitHub redirects `releases/latest/download/<asset name>` to that asset on the newest
+    /// published release, so the app needs no API client, no token and no version lookup.
+    static let installerPackageURL = URL(
+        string: "https://github.com/jonmichaels/soft-return/releases/latest/download/\(installerPackageFilename)")!
+
     private static let contentWidth: CGFloat = 460
 
     private let workspace: CLIHelpWorkspace
     private let bundledExecutableURL: URL?
-    private let feed: UpdateFeed
-    private let downloader: UpdateAssetDownloading
+    private let downloader: CLIPackageDownloading
     /// Job 342 (addendum): the real `~/Downloads` by default, but an injectable seam —
     /// `UpdateDownloadDestination.moveStableNamed` already takes a `downloadsFolder:`
     /// parameter for exactly this. `CLIHelpWindowControllerTests`' download test points this
@@ -52,13 +56,11 @@ final class CLIHelpWindowController: NSWindowController {
     init(
         workspace: CLIHelpWorkspace = SystemCLIHelpWorkspace(),
         bundledExecutableURL: URL? = CommandLineToolInstaller.bundledExecutableURL(),
-        feed: UpdateFeed = GitHubUpdateFeed(),
-        downloader: UpdateAssetDownloading = GitHubAssetDownloader(),
+        downloader: CLIPackageDownloading = URLSessionCLIPackageDownloader(),
         downloadsFolder: URL = UpdateDownloadDestination.downloadsFolderURL()
     ) {
         self.workspace = workspace
         self.bundledExecutableURL = bundledExecutableURL
-        self.feed = feed
         self.downloader = downloader
         self.downloadsFolder = downloadsFolder
 
@@ -194,47 +196,28 @@ final class CLIHelpWindowController: NSWindowController {
         return section
     }
 
-    /// Job 313C (Jon: "The CLI PKG option here should be 'Download', not 'View Releases'"):
-    /// fetches the latest release from the same `GitHubUpdateFeed`/`UpdateChannel.forVersion`
-    /// channel logic `UpdateChecker.swift` defines, then downloads `installerPackageFilename`
-    /// through the exact in-app downloader shape (`UpdateAssetDownloading`/
-    /// `DownloadProgressWindowController`/`UpdateDownloadDestination`) — no browser fallback,
-    /// per the ruling: a missing asset or a network failure surfaces this window's own
-    /// plain-English alert (`presentDownloadFailure` below), never a re-route to the releases
-    /// page. Job 532: this is now the ONLY user-facing surface driving the GitHub-releases
-    /// checker directly — the app-wide "Check for Updates…" menu moved to Sparkle.
+    /// Downloads `installerPackageFilename` from the newest release (`installerPackageURL`)
+    /// with a progress window, moves it to Downloads and reveals it. No browser fallback: a
+    /// failure surfaces this window's own alert (`presentDownloadFailure`).
     @objc func downloadCLIPackage(_ sender: Any?) {
         Task { @MainActor in await performDownload() }
-    }
-
-    @MainActor
-    private func performDownload() async {
-        let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
-        let channel = UpdateChannel.forVersion(current)
-        do {
-            let release = try await feed.latestRelease(channel: channel)
-            guard let asset = release.cliAsset else {
-                presentDownloadFailure(CLIPackageDownloadError.assetNotFound)
-                return
-            }
-            await downloadAsset(asset)
-        } catch {
-            presentDownloadFailure(error)
-        }
     }
 
     /// A fresh progress window, a cancellable `Task`, move-then-reveal on success. Reveals
     /// through `workspace` rather than `NSWorkspace` directly, so this stays testable without
     /// opening a real Finder window.
     @MainActor
-    private func downloadAsset(_ asset: UpdateFeedAsset) async {
-        let progressController = DownloadProgressWindowController(assetName: asset.name)
+    private func performDownload() async {
+        let progressController = DownloadProgressWindowController(assetName: Self.installerPackageFilename)
         downloadProgressWindowController = progressController
         progressController.showWindow(nil)
         progressController.window?.makeKeyAndOrderFront(nil)
 
-        let downloadTask = Task { @MainActor in
-            try await downloader.download(asset: asset) { _ in }
+        let downloader = self.downloader
+        let downloadTask = Task {
+            try await downloader.download(from: Self.installerPackageURL) { fraction in
+                Task { @MainActor in progressController.showProgress(fraction) }
+            }
         }
         progressController.onCancel = { downloadTask.cancel() }
 
@@ -243,45 +226,22 @@ final class CLIHelpWindowController: NSWindowController {
             progressController.close()
             downloadProgressWindowController = nil
             let destination = try UpdateDownloadDestination.moveStableNamed(
-                tempURL, assetName: asset.name, downloadsFolder: downloadsFolder)
+                tempURL, assetName: Self.installerPackageFilename, downloadsFolder: downloadsFolder)
             workspace.reveal([destination])
         } catch {
             progressController.close()
             downloadProgressWindowController = nil
-            // A user-initiated Cancel surfaces as `URLError(.cancelled)` via
-            // `GitHubAssetDownloader`'s `withTaskCancellationHandler` — not a failure worth
+            // A user-initiated Cancel surfaces as `URLError(.cancelled)` — not a failure worth
             // alerting about.
             if (error as? URLError)?.code == .cancelled { return }
             presentDownloadFailure(error)
         }
     }
 
-    /// Job 251's `authHint` extra sentence for a missing/bad update token — same copy this
-    /// window's alert has always used for a GitHub-releases download failure.
     @MainActor
     private func presentDownloadFailure(_ error: Error) {
-        var authHint = false
-        if let feedError = error as? UpdateFeedError {
-            switch feedError {
-            case .unauthorized, .notFound: authHint = true
-            case .badResponse, .noReleaseForChannel: authHint = false
-            }
-        }
-
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Couldn’t download \(Self.installerPackageFilename)."
-        var informativeText = "Soft Return couldn’t download it. Check your connection and try again."
-        if authHint {
-            informativeText += " If this is a beta build, an update token may be required — see Help."
-        }
-        alert.informativeText = informativeText
-        alert.addButton(withTitle: "OK")
-        if let window {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
+        Alert.show("Couldn’t download \(Self.installerPackageFilename).",
+                   informative: "Soft Return couldn’t download it. Check your connection and try again.", in: window)
     }
 
     // MARK: - Section 3: Manual
@@ -326,17 +286,6 @@ final class CLIHelpWindowController: NSWindowController {
         pasteboard.clearContents()
         pasteboard.setString(CommandLineToolInstaller.installCommand(bundledPath: bundledExecutableURL.path),
                              forType: .string)
-    }
-}
-
-/// The one failure `presentDownloadFailure` needs a message for that isn't already a
-/// `UpdateFeedError`/`URLError` — the latest release simply did not carry
-/// `installerPackageFilename` as one of its assets.
-enum CLIPackageDownloadError: LocalizedError {
-    case assetNotFound
-
-    var errorDescription: String? {
-        "The latest release doesn’t include \(CLIHelpWindowController.installerPackageFilename)."
     }
 }
 

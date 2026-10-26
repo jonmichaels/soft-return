@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// Tests that execute the REAL `sr` binary as a subprocess.
@@ -13,12 +14,7 @@ import Testing
 ///
 /// `swift test` builds executable targets, so the binary is present whenever these run.
 private func runSR(_ args: [String]) throws -> (status: Int32, out: String, err: String) {
-    // Tests/CtrlKDTests/<this file> -> repo root is three levels up.
-    let root = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    let candidates = ["debug", "release"].map {
-        root.appendingPathComponent(".build/\($0)/sr")
-    }
+    let candidates = ["debug", "release"].map { RepoPaths.url(".build/\($0)/sr") }
     guard let binary = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
         // Deliberately a failure, not a skip: silently skipping would recreate exactly the
         // blind spot this file exists to remove.
@@ -42,20 +38,18 @@ private func runSR(_ args: [String]) throws -> (status: Int32, out: String, err:
 
 /// A WS5+ document carrying one of each note kind, written to a temp file.
 private func withFourKindFile(_ body: (String) throws -> Void) throws {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("sr-bin-tests-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let path = dir.appendingPathComponent("SAMPLE.WS")
-    try Data(fourKindData()).write(to: path)
-    try body(path.path)
+    try TestScratch.with(prefix: "sr-bin-tests") { dir in
+        let path = dir.appendingPathComponent("SAMPLE.WS")
+        try Data(fourKindData()).write(to: path)
+        try body(path.path)
+    }
 }
 
 @Test func binaryRunsAndReportsItsVersion() throws {
     let r = try runSR(["--version"])
     #expect(r.status == 0, "sr --version exited \(r.status): \(r.err)")
     #expect(r.out.contains("sr "), "no version string in: \(r.out)")
-    #expect(r.out.contains("sr v4.5.0"), "banner missing sr v4.5.0 in: \(r.out)")
+    #expect(r.out.contains("sr v4.6.0"), "banner missing sr v4.6.0 in: \(r.out)")
     #expect(!r.out.contains("parity"), "parity clause must stay gone: \(r.out)")
 }
 
@@ -85,9 +79,9 @@ private func withFourKindFile(_ body: (String) throws -> Void) throws {
 
 @Test func binaryConvertsAndHonoursTheNoteFlags() throws {
     try withFourKindFile { path in
-        let out = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("sr-out-\(UUID().uuidString).txt")
-        defer { try? FileManager.default.removeItem(at: out) }
+        // Inside the scratch directory `withFourKindFile` already removes.
+        let out = URL(fileURLWithPath: path).deletingLastPathComponent()
+            .appendingPathComponent("sr-out.txt")
 
         func convert(_ extra: [String]) throws -> String {
             // --force: this test reuses one output path across three conversions to

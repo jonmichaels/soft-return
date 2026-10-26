@@ -1,4 +1,5 @@
 import AppKit
+@testable import SoftReturnRendering
 import Testing
 @testable import SoftReturn
 import SoftReturnShared

@@ -23,6 +23,10 @@ import AppKit
 /// because the underscore prefixes on those identifiers are private and have churned
 /// between releases. If Apple renames them outright the items reappear — a cosmetic
 /// regression, visible immediately, and not a crash.
+///
+/// Workaround, kept (reviewed 2026-10-26, macOS 26.7): no public opt-out for the Edit menu's Writing Tools or AutoFill items
+/// yet. Re-test when the app's floor reaches macOS 15, whose `NSTextView.writingToolsBehavior = .none` may take
+/// Writing Tools away without a private identifier.
 @MainActor
 final class EditMenuGuard: NSObject, NSMenuDelegate {
     /// Retained by the app delegate for the process's lifetime; `NSMenu.delegate` is weak.

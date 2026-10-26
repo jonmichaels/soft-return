@@ -1118,7 +1118,7 @@ private func loadJob013Vectors() throws -> Job013VectorFile {
     //
     // `printed_stream`'s `expected_hex` was RE-TAKEN a second time (2026-09-07, against the
     // live Python reference directly, same as `modern_ws4` above): this printstream sets
-    // none of `.pn`/`.pg`/`.op`, so `pgnumCheckpoints`'s corrected default (ws7-prints/v3
+    // none of `.pn`/`.pg`/`.op`, so `pgnumTimeline`'s corrected default (ws7-prints/v3
     // finding #2, seeded ON to match stock WS7, ported from ctrl-kd b6d5d03) now adds a
     // stock automatic page number to both of its pages — a real, evidenced, deliberate
     // content and byte-length change (every object offset after the affected streams

@@ -6,16 +6,6 @@ import Testing
 /// a document is opened (Part A) or viewed via thumbnail/QuickLook (Part B). Every test injects
 /// `FakeMDImportRunner` and a synchronous `perform` so nothing here spawns a real `mdimport` or
 /// depends on timing.
-private final class FakeMDImportRunner: MDImportRunning {
-    private(set) var calls: [[String]] = []
-    var result = SpotlightNudge.RunResult(exitCode: 0, output: "")
-
-    func run(arguments: [String]) -> SpotlightNudge.RunResult {
-        calls.append(arguments)
-        return result
-    }
-}
-
 @Suite struct SpotlightFileIndexerTests {
     @Test func requestIndexSpawnsMdimportWithTheFilePathOnOpen() {
         let runner = FakeMDImportRunner()

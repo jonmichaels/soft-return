@@ -108,10 +108,8 @@ struct AppNativeFidelityTests {
     /// capture set, and measuring against it would mark the very corrections this round
     /// landed (auto-leading, page numbering, `.mt`/`.hm`) as failures.
     static var v3Captures: URL? {
-        guard let root = ProcessInfo.processInfo.environment["CTRLKD_PRIVATE_CORPUS"]
-            ?? ProcessInfo.processInfo.environment["TEST_RUNNER_CTRLKD_PRIVATE_CORPUS"]
-        else { return nil }
-        let v3 = URL(fileURLWithPath: root).appendingPathComponent("ws7-prints/v3", isDirectory: true)
+        guard let root = PrivateCorpusSupport.privateCorpusRoot else { return nil }
+        let v3 = root.appendingPathComponent("ws7-prints/v3", isDirectory: true)
         return FileManager.default.fileExists(atPath: v3.path) ? v3 : nil
     }
 

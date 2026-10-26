@@ -61,6 +61,17 @@ final class DownloadProgressWindowController: NSWindowController {
         window.center()
     }
 
+    /// `fraction` is `0...1`. The bar stays an indeterminate spinner until the first call, so a
+    /// response with no `Content-Length` still shows activity.
+    func showProgress(_ fraction: Double) {
+        if progressIndicator.isIndeterminate {
+            progressIndicator.isIndeterminate = false
+            progressIndicator.minValue = 0
+            progressIndicator.maxValue = 1
+        }
+        progressIndicator.doubleValue = fraction
+    }
+
     @objc private func cancelTapped() {
         onCancel?()
         close()

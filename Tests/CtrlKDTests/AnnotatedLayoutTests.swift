@@ -1,11 +1,12 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// Show Invisibles, part 1/4 (job 255): `annotatedLayout`'s five invisible-ink classes.
 /// Synthetic fixtures exercise each class in isolation; the corpus gauntlet at the
 /// bottom runs OLDTIMES.WS/LJ6DTP.WS/BOX.WS from the Sawyer archive
-/// (`CTRLKD_SAWYER_ARCHIVE`, `sawyerArchivePath`/`sawyerArchiveArmed` in
+/// (`CTRLKD_SAWYER_ARCHIVE`, `Corpus.sawyerArchivePath`/`Corpus.sawyerArchiveArmed` in
 /// WSChangeTests.swift) — a recorded Skip when unarmed, a hard failure naming the
 /// missing path when armed but incomplete, same convention as every other
 /// Sawyer-archive test in this suite.
@@ -149,11 +150,11 @@ private func styleToggleTokens(_ doc: AnnotatedDocument) -> [String] {
 @Test func naturalOverflowIsDetectedViaTheRealPaginator() {
     // No page geometry, no dot commands at all -- 70 short hard-returned lines, well
     // past the ~55-line default printed capacity (`PDFMetrics`/`printedCap`'s doc
-    // comment). Natural breaks come ONLY from the real paginator (`layoutPrintedPagesPlain`,
+    // comment). Natural breaks come ONLY from the real paginator (`layoutPrintedPages`,
     // widened to internal for this), never from a re-derived guess.
     //
     // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version's
-    // "expected" page count was `layoutPrintedPagesPlain(doc)` called a SECOND time --
+    // "expected" page count was `layoutPrintedPages(doc)` called a SECOND time --
     // the exact function `annotatedLayout` itself calls (AnnotatedLayout.swift:229) to find
     // its natural breaks -- so a bug in the paginator's OWN page count would pass here
     // regardless; only a mismatch between annotatedLayout's break-counting and whatever the
@@ -179,18 +180,18 @@ private func styleToggleTokens(_ doc: AnnotatedDocument) -> [String] {
 
     // The real paginator directly, kept as a SEPARATE, secondary wiring check (not the
     // source of the expectation above): its own page count must agree too.
-    let pages = layoutPrintedPagesPlain(doc)
+    let pages = layoutPrintedPages(doc)
     #expect(pages.count == 2)
     #expect(naturalBreaks.count == pages.count - 1)
 }
 
 // ------------------------------------------------------------ corpus gauntlet
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func oldtimesSurfacesItsDotCommandsAndComments() throws {
-    let path = sawyerArchivePath + "/OLDTIMES.WS"
+    let path = Corpus.sawyerArchivePath + "/OLDTIMES.WS"
     guard let d = FileManager.default.contents(atPath: path) else {
-        throw MissingSawyerFixture(path: path)
+        throw Corpus.missingSawyerFixture(path: path)
     }
     let doc = parseWS([UInt8](d))
     let annotated = annotatedLayout(doc)
@@ -207,11 +208,11 @@ func oldtimesSurfacesItsDotCommandsAndComments() throws {
     #expect(visibleText(annotated) == plain)
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func lj6dtpSurfacesStyleToggleBoundaries() throws {
-    let path = sawyerArchivePath + "/LJ6DTP.WS"
+    let path = Corpus.sawyerArchivePath + "/LJ6DTP.WS"
     guard let d = FileManager.default.contents(atPath: path) else {
-        throw MissingSawyerFixture(path: path)
+        throw Corpus.missingSawyerFixture(path: path)
     }
     let doc = parseWS([UInt8](d))
     let annotated = annotatedLayout(doc)
@@ -226,12 +227,12 @@ func lj6dtpSurfacesStyleToggleBoundaries() throws {
 /// byte-identity proof this repo can make directly; the app-side manifest/oracle gate
 /// (BOX/OLDTIMES/LJ6DTP printed shas) is a separate, later verification this job's brief
 /// scopes to the engine checkout alone (see LESSONS).
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func annotatedLayoutDoesNotAffectSubsequentEmission() throws {
     for name in ["BOX.WS", "OLDTIMES.WS", "LJ6DTP.WS"] {
-        let path = sawyerArchivePath + "/" + name
+        let path = Corpus.sawyerArchivePath + "/" + name
         guard let d = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = parseWS([UInt8](d))
         let before = emitPDF(doc, mode: .printed)

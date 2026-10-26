@@ -11,14 +11,6 @@ private struct FakeFinder: MetadataQuerying, Sendable {
     func candidates(extensions: [String]) async -> [URL] { urls }
 }
 
-private final class FakeMDImportRunner: MDImportRunning {
-    private(set) var calls: [[String]] = []
-    func run(arguments: [String]) -> SpotlightNudge.RunResult {
-        calls.append(arguments)
-        return SpotlightNudge.RunResult(exitCode: 0, output: "")
-    }
-}
-
 /// Records every `Snapshot` `progress` was called with, in order — the shape a caller (the
 /// menu's progress sheet) actually observes.
 private final class ProgressRecorder {
@@ -148,16 +140,6 @@ private final class ProgressRecorder {
     }
 
     // MARK: - Tier-1 extension list
-
-    @Test func tier1ExtensionsMatchesTheInfoPlistRulingExactly() {
-        // Info.plist's UTExportedTypeDeclarations ▸ public.filename-extension is the ruled source
-        // of truth (Jon, 2026-08-08); this is the copy the query predicate actually uses. If they
-        // ever drift, this test — not a human re-reading the plist — is what catches it.
-        #expect(SpotlightBackfill.tier1Extensions == [
-            "ws", "ws0", "ws1", "ws2", "ws3", "ws4", "ws5", "ws6", "ws7", "ws8", "ws9",
-            "wsd", "wsm", "ws-bak", "ws-$$$",
-        ])
-    }
 
     // MARK: - NSMetadataQuery predicate shape (job 152's real-launch crash)
 

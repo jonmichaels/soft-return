@@ -5,8 +5,8 @@
 ///
 /// ADDITIVE ONLY: reads `Document`/`Block`/`Line`/`Span`/`Style`/`FontChange` and the
 /// existing note/dot-position/pagination machinery; emits nothing of its own and
-/// changes no existing emission path. The one non-additive touch is `PDFLayout.swift`'s
-/// `layoutPrintedPagesPlain` losing its `private` — a pure visibility widening (see the
+/// changes no existing emission path. The one non-additive touch is
+/// `layoutPrintedPages` losing its `private` — a pure visibility widening (see the
 /// comment there) so natural page-break detection can call the real paginator instead
 /// of re-deriving its budget math here, per the registry rule: the engine is the single
 /// source of truth, USE it, do not re-parse.
@@ -155,7 +155,7 @@ public func annotatedLayout(_ doc: Document) -> AnnotatedDocument {
     var out: [AnnotatedLine] = []
     // Parallel to the paginator's own `.line` item order (every block this loop visits
     // contributes its lines in order; pagebreak/condpage blocks contribute none, exactly
-    // like `resolvePlainBody`) — natural-overflow correlation below indexes through this.
+    // like `resolvePrintedBody`) — natural-overflow correlation below indexes through this.
     var realLineOutIndices: [Int] = []
 
     // Running inline-style/font state, threaded across the WHOLE document: a toggle is
@@ -231,43 +231,41 @@ public func annotatedLayout(_ doc: Document) -> AnnotatedDocument {
         out.append(dotLine)
     }
 
-    // Natural-overflow page breaks: only where the real paginator can tell us, and only
-    // for the plain (no footnote/endnote/annotation area) path — the notes-aware
-    // paginator's page-bottom area growth has no line-for-line correlation back to the
-    // source Lines this pass can cheaply reconstruct, and misreporting a break is worse
-    // than omitting one. `.pa`/`.cp` origins above are unaffected either way — they come
-    // from `Block.kind` directly, never from pagination.
-    if !hasPlaceableNotes(doc) {
-        let pages = layoutPrintedPagesPlain(doc)
-        var pageIndexByOrdinal: [Int] = []
-        for (pi, page) in pages.enumerated() {
-            pageIndexByOrdinal.append(contentsOf: Array(repeating: pi, count: page.lines.count))
+    // Natural-overflow page breaks, from the real paginator. A page's note area (and an
+    // endnote-only page) are the emitter's own lines, not source lines: they carry no
+    // block index, so only the lines that do are matched back to the source's real lines.
+    // `.pa`/`.cp` origins above are unaffected either way — they come from `Block.kind`
+    // directly, never from pagination.
+    let pages = layoutPrintedPages(doc)
+    var pageIndexByOrdinal: [Int] = []
+    for (pi, page) in pages.enumerated() {
+        let sourceLines = page.lines.filter { $0.bi != nil }.count
+        pageIndexByOrdinal.append(contentsOf: Array(repeating: pi, count: sourceLines))
+    }
+    // A break is "already explained" if its annotation sits on the new page's first
+    // real line OR anywhere in the ink-free run immediately before it — explicit
+    // `.pa`/`.cp` reasons ride a dot-command line or an empty placeholder line
+    // (the no-lines pagebreak-block path above), never the following real line.
+    // Stamping that real line too would double-report the same break as a phantom
+    // unlabeled origin.
+    func breakAlreadyExplained(at outIdx: Int) -> Bool {
+        if out[outIdx].pageBreakBefore != nil { return true }
+        var i = outIdx - 1
+        while i >= 0, out[i].spans.allSatisfy({ $0.kind == .dotCommand }) {
+            if out[i].pageBreakBefore != nil { return true }
+            i -= 1
         }
-        // A break is "already explained" if its annotation sits on the new page's first
-        // real line OR anywhere in the ink-free run immediately before it — explicit
-        // `.pa`/`.cp` reasons ride a dot-command line or an empty placeholder line
-        // (the no-lines pagebreak-block path above), never the following real line.
-        // Stamping that real line too would double-report the same break as a phantom
-        // unlabeled origin.
-        func breakAlreadyExplained(at outIdx: Int) -> Bool {
-            if out[outIdx].pageBreakBefore != nil { return true }
-            var i = outIdx - 1
-            while i >= 0, out[i].spans.allSatisfy({ $0.kind == .dotCommand }) {
-                if out[i].pageBreakBefore != nil { return true }
-                i -= 1
-            }
-            return false
+        return false
+    }
+    var prevPage = 0
+    for (ordinal, outIdx) in realLineOutIndices.enumerated() {
+        guard ordinal < pageIndexByOrdinal.count else { break }
+        let pi = pageIndexByOrdinal[ordinal]
+        if ordinal > 0, pi != prevPage, !breakAlreadyExplained(at: outIdx) {
+            out[outIdx] = AnnotatedLine(spans: out[outIdx].spans, endMark: out[outIdx].endMark,
+                                        pageBreakBefore: .pageBreakOrigin(""))
         }
-        var prevPage = 0
-        for (ordinal, outIdx) in realLineOutIndices.enumerated() {
-            guard ordinal < pageIndexByOrdinal.count else { break }
-            let pi = pageIndexByOrdinal[ordinal]
-            if ordinal > 0, pi != prevPage, !breakAlreadyExplained(at: outIdx) {
-                out[outIdx] = AnnotatedLine(spans: out[outIdx].spans, endMark: out[outIdx].endMark,
-                                            pageBreakBefore: .pageBreakOrigin(""))
-            }
-            prevPage = pi
-        }
+        prevPage = pi
     }
 
     return AnnotatedDocument(lines: out)

@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -90,11 +91,6 @@ struct NativeRunningLineStylesTests {
         default: break
         }
         #expect(result.failures.isEmpty, "\(document): \(result.failures)")
-        if document == "REF/BOOKLET.WS" {
-            let rendered = DocumentRenderer.render(state, style: .native)
-            try NativeSupSubRiseTests.writeComparison(state: state, rendered: rendered,
-                                                      name: "b41-head-styles-booklet-native-vs-printed.png")
-        }
     }
 
     @Test(.enabled(if: NativeRunningLinesFollowTheEngineTests.sawyer != nil, NativeRunningLinesFollowTheEngineTests.skipReason))

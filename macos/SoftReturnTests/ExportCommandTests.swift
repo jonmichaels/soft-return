@@ -197,17 +197,17 @@ import Testing
 
     @Test func uniqueDestinationReturnsTheRequestedNameWhenNothingExistsThere() {
         let destination = URL(fileURLWithPath: "/tmp/soft-return-export-test/OUT.rtf")
-        let result = ExportCommand.uniqueDestination(for: destination) { _ in false }
+        let result = ExportNaming.uniqueURL(for: destination) { _ in false }
         #expect(result == destination)
     }
 
     @Test func uniqueDestinationAddsA2BeforeTheExtensionOnCollision() {
         let destination = URL(fileURLWithPath: "/tmp/soft-return-export-test/OUT.rtf")
         var taken: Set<String> = [destination.path]
-        let result = ExportCommand.uniqueDestination(for: destination) { taken.contains($0.path) }
+        let result = ExportNaming.uniqueURL(for: destination) { taken.contains($0.path) }
         #expect(result == URL(fileURLWithPath: "/tmp/soft-return-export-test/OUT 2.rtf"))
         taken.insert(result.path)
-        let third = ExportCommand.uniqueDestination(for: destination) { taken.contains($0.path) }
+        let third = ExportNaming.uniqueURL(for: destination) { taken.contains($0.path) }
         #expect(third == URL(fileURLWithPath: "/tmp/soft-return-export-test/OUT 3.rtf"))
     }
 
@@ -224,7 +224,7 @@ import Testing
         let requested = tempDir.appendingPathComponent("OUT.rtf")
         try Data("pre-existing".utf8).write(to: requested)
 
-        let written = ExportCommand.uniqueDestination(for: requested) {
+        let written = ExportNaming.uniqueURL(for: requested) {
             FileManager.default.fileExists(atPath: $0.path)
         }
         try Data("new export".utf8).write(to: written)

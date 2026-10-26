@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Foundation
 import PDFKit
@@ -139,7 +140,7 @@ struct HeadersInViewsTests {
     /// own fontless face — the reader's Modern face — at the body size less 2 pt; a line whose `.h#` opens a font block
     /// in that block's face. POWERUSE.WS (fontless): every page's head, and its number, in the Modern face at 12 against
     /// the 14 pt body. OLDTIMES.WS page 2: its `.h1` opens Courier 12, so Courier at 12. The engine's furniture reports
-    /// the same pairs. Renders e10-<doc>-modern-page<n>-head.png.
+    /// the same pairs.
     @Test @MainActor func modernFurnitureTakesTheBodysFontRules() throws {
         let power = try Self.state(fixture: "POWERUSE.WS")
         let powerView = Self.pagedModernView(for: power)
@@ -160,7 +161,6 @@ struct HeadersInViewsTests {
         print("E10 POWERUSE: \(checked) furniture lines on \(powerView.pageCount) pages; engine heads \(Set(engineHeads.map { "\($0.family) \($0.pt)" }))")
         #expect(checked >= powerView.pageCount)
         #expect(!engineHeads.isEmpty && engineHeads.allSatisfy { $0.family == .times && $0.pt == 12 })
-        try Self.renderHead(powerView, page: 0, name: "e10-poweruse-modern-page1-head.png")
 
         let old = try Self.state(fixture: "OLDTIMES.WS")
         let oldView = Self.pagedModernView(for: old)
@@ -173,19 +173,6 @@ struct HeadersInViewsTests {
         #expect(engineHead.family == .courier && engineHead.pt == 12)
         #expect(headFont.familyName?.contains("Courier") == true && headFont.pointSize == 12,
                 "OLDTIMES page 2's head is \(headFont.fontName) \(headFont.pointSize)")
-        try Self.renderHead(oldView, page: 1, name: "e10-oldtimes-modern-page2-head.png")
-    }
-
-    /// The top 90 pt of page `page` as drawn, written to the proofs folder.
-    @MainActor
-    private static func renderHead(_ view: PagedDocumentView, page: Int, name: String) throws {
-        let sheet = view.rect(ofPage: page)
-        let png = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs").appendingPathComponent(name)
-        let rect = NSRect(x: sheet.minX, y: sheet.minY, width: sheet.width, height: 90)
-        #expect(try RenderProbeKit.renderPNG(view: view, rect: rect, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
-        print("PROOF: \(png.path)")
     }
 
     // MARK: - Engine-oracle cross-check: the view must agree with `emitPDF(mode: .modern)`

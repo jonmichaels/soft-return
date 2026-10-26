@@ -16,6 +16,7 @@
 /// Port of ctrl-kd's `tests/test_merge_page_number_variable.py`. Synthetic fixtures.
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 private let hard: [UInt8] = [0x0D, 0x0A]
@@ -169,9 +170,9 @@ private func printedPageText(_ doc: Document) -> [[String]] {
 /// ordinary text, on every line, on a document that had nothing to substitute. Running
 /// the real thing end to end is the only assertion that matters here; a green run IS the
 /// result.
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func bookletRJSGoesThroughTheMergePageNumberPassWithoutCrashing() throws {
-    let url = URL(fileURLWithPath: sawyerArchivePath)
+    let url = URL(fileURLWithPath: Corpus.sawyerArchivePath)
         .appendingPathComponent("REF/BOOKLET.RJS")
     let raw = [UInt8](try Data(contentsOf: url))
     let doc = parseWS(raw)
@@ -457,7 +458,7 @@ func theMarkerNeverSurvivesIntoTheRTF(mode: EmitMode) {
 private let mergePagenoDocs = ["REF/TOCTRICK.WS", "ARTICLES/POWERUSE.WS", "REF/CODES.WS"]
 
 private func archiveDocument(_ name: String) throws -> Document {
-    let url = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent(name)
+    let url = URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent(name)
     return try parse([UInt8](try Data(contentsOf: url)))
 }
 
@@ -479,7 +480,7 @@ private func modernPageShape(_ doc: Document) -> [Int] {
         }
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: mergePagenoDocs)
 func modernMeasuringAndRenderingPaginateAlike(name: String) throws {
     let doc = try archiveDocument(name)
@@ -492,7 +493,7 @@ func modernMeasuringAndRenderingPaginateAlike(name: String) throws {
     #expect(measured == rendered, "\(name): \(measured) vs \(rendered)")
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: mergePagenoDocs)
 func noPagedExportOfARealDocumentStillShowsTheVariable(name: String) throws {
     let doc = try archiveDocument(name)

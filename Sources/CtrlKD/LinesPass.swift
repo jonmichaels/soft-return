@@ -115,7 +115,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
     for line in lines where line.kind == .soft {
         let vis = visible(line.text)
         if !isBlank(vis) {
-            softLens.append(rstrippingSpaces(vis).count)
+            softLens.append(ASCII.rstrip(vis, .space).count)
         }
     }
     softLens.sort()
@@ -233,7 +233,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
                 // export review, 2026-08-04).
                 sep = .wrap
             } else {
-                let L = rstrippingSpaces(vis).count
+                let L = ASCII.rstrip(vis, .space).count
                 let W = firstWordLength(nextVis)
                 // STRICT `<`: WS4 wrapped even when the next word would land EXACTLY at
                 // the margin, so an exact fit is still wrap, not a deliberate break.
@@ -558,12 +558,6 @@ private func visible(_ text: [UInt8]) -> [UInt8] {
 
 private func isBlank(_ visible: [UInt8]) -> Bool {
     visible.allSatisfy { $0 == 0x20 }
-}
-
-private func rstrippingSpaces(_ visible: [UInt8]) -> [UInt8] {
-    var end = visible.count
-    while end > 0 && visible[end - 1] == 0x20 { end -= 1 }
-    return Array(visible[..<end])
 }
 
 /// Length of the next line's first word — `nxt_vis.split(b' ', 1)[0]` at core.py:153.

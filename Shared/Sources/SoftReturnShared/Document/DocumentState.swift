@@ -545,7 +545,7 @@ public final class DocumentState {
         guard document.page != nil, let page = printedDocument(document, options: printedOptions).page else { return "—" }
         let metrics = printedMetrics(document, options: printedOptions)
         return String(format: "Top %.1fin  Bottom %.1fin  Left %.1fin",
-                      metrics.top / 72.0, page.mbLines * page.lh48 / 48.0, metrics.left / 72.0)
+                      metrics.top / pointsPerInch, page.mbLines * page.lh48 / 48.0, metrics.left / pointsPerInch)
     }
 
     /// A different variant means different (or absent) dot commands, so the resolved page

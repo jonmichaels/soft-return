@@ -1,4 +1,5 @@
 import CtrlKD
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Foundation
 import Testing
@@ -224,11 +225,5 @@ import Testing
         let y = rendered.pageSize.height - header.baselineFromTop
         #expect(abs(y - 780.0) < 0.5,
                 "QuickLookNativeRenderer with an explicit nil preset put the page-2 head at y=\(y), expected the bare ~780.0 regardless of the real app-group container")
-    }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
     }
 }

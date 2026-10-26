@@ -10,7 +10,7 @@ import Foundation
 struct ConvertWordStarDocumentIntent: AppIntent {
     static let title: LocalizedStringResource = "Convert WordStar Document"
     static let description = IntentDescription(
-        "Converts one or more WordStar-era documents to text, Markdown, HTML, RTF, or PDF.")
+        "Converts one or more WordStar for DOS v4–v7 documents to text, Markdown, HTML, RTF, or PDF.")
 
     // Job 342 (b23 floor drop): `@Parameter(title:supportedContentTypes:)` for an
     // `IntentFile`/`[IntentFile]` property resolves to an initializer that is macOS 15+ only
@@ -51,6 +51,16 @@ struct ConvertWordStarDocumentIntent: AppIntent {
     @Parameter(title: "Pictures")
     var pictures: ConversionPictures?
 
+    /// R-127: the CLI's `--quirks`, `--quirk` and `--no-quirk`. Omitted: auto, `sr`'s default.
+    @Parameter(title: "Quirks", default: .auto)
+    var quirksMode: ConversionQuirksMode
+
+    @Parameter(title: "Turn On Quirks")
+    var enabledQuirks: [ConversionQuirk]?
+
+    @Parameter(title: "Turn Off Quirks")
+    var disabledQuirks: [ConversionQuirk]?
+
     static var parameterSummary: some ParameterSummary {
         Summary("Convert \(\.$files) to \(\.$formats), \(\.$style) mode") {
             \.$destinationFolder
@@ -58,6 +68,9 @@ struct ConvertWordStarDocumentIntent: AppIntent {
             \.$tableOfContents
             \.$inlineStyling
             \.$pictures
+            \.$quirksMode
+            \.$enabledQuirks
+            \.$disabledQuirks
         }
     }
 
@@ -72,6 +85,9 @@ struct ConvertWordStarDocumentIntent: AppIntent {
         let resolvedTOC = tableOfContents ?? settings.defaultTOC
         let resolvedInlineStyling = inlineStyling ?? settings.defaultInlineStyling
         let resolvedPictures = (pictures.map(\.pixMode)) ?? settings.defaultPictures
+        let quirks = try QuirkChoices.requested(
+            mode: quirksMode.quirkMode, enable: (enabledQuirks ?? []).map(\.rawValue),
+            disable: (disabledQuirks ?? []).map(\.rawValue))
 
         var outputs: [IntentFile] = []
         for file in files {
@@ -79,7 +95,7 @@ struct ConvertWordStarDocumentIntent: AppIntent {
             let basename = (file.filename as NSString).deletingPathExtension
             // fontsTarget pinned to `.mac` — mistake-registry #24: a Mac app's user-facing
             // RTF fonttbl always uses the mac mapping, never the library's `.office` default.
-            let options = DocumentOperations.ConversionOptions(
+            var options = DocumentOperations.ConversionOptions(
                 formats: formats.map(\.libraryFormatName),
                 mode: style.emitMode,
                 title: basename,
@@ -87,6 +103,7 @@ struct ConvertWordStarDocumentIntent: AppIntent {
                 docPath: file.fileURL?.path ?? "",
                 headers: resolvedHeaders, toc: resolvedTOC, inlineStyling: resolvedInlineStyling,
                 pictures: resolvedPictures)
+            options.quirks = quirks
 
             let converted: [DocumentOperations.ConvertedFile]
             do {
@@ -120,7 +137,7 @@ struct ConvertWordStarDocumentIntent: AppIntent {
                 at: directory, withIntermediateDirectories: true)
 
             for product in converted {
-                let name = DocumentOperations.uniqueFileName(
+                let name = ExportNaming.uniqueName(
                     basename: basename, extension: product.fileExtension
                 ) { candidate in
                     FileManager.default.fileExists(

@@ -1,14 +1,9 @@
 import Foundation
 import SoftReturnShared
 
-/// Job 276: where the downloaded DMG ends up, and under what name. Split from
-/// `GitHubAssetDownloader` (which only ever answers "here are the bytes, at this temp path") so
-/// the naming rule is unit testable with no filesystem access at all, the same split
-/// `BesideSourceWriter` and `DocumentOperations.uniqueFileName` already use elsewhere in this
-/// app. Job 532: the version-named DMG path (`fileName(for:)`/`move`) served the in-app "Check
-/// for Updates" download flow, retired in favor of Sparkle — removed as dead code alongside it.
-/// `moveStableNamed`/`downloadsFolderURL` remain: `CLIHelpWindowController`'s installer-package
-/// download (job-530's interim GitHub-releases checker) still uses both.
+/// Where `CLIHelpWindowController`'s downloaded installer package ends up, and under what
+/// name. Split from the downloader (which only ever answers "here are the bytes, at this temp
+/// path") so the naming rule is unit testable with no network.
 enum UpdateDownloadDestination {
     enum DestinationError: Error, LocalizedError {
         case downloadsFolderUnreachable(String)
@@ -22,11 +17,10 @@ enum UpdateDownloadDestination {
         }
     }
 
-    /// Job 313C: for an asset whose own name IS the stable identity (`Soft-Return-CLI.pkg` —
-    /// unlike the DMG, a brew/curl recipe or a support instruction references this exact
-    /// filename literally, so it must not be renamed per-version the way `fileName(for:)`
-    /// renames the DMG). Same Finder-style "(2)" collision counter as the DMG path, just
-    /// keyed off the asset's own name instead of a version string.
+    /// For an asset whose own name IS the stable identity (`Soft-Return-CLI.pkg` — a brew/curl
+    /// recipe or a support instruction references this exact filename literally, so it is
+    /// never renamed per-version). A Finder-style "(2)" counter avoids overwriting a file
+    /// already in `downloadsFolder`.
     @discardableResult
     static func moveStableNamed(
         _ tempURL: URL, assetName: String, downloadsFolder: URL = downloadsFolderURL()
@@ -34,7 +28,7 @@ enum UpdateDownloadDestination {
         let fileManager = FileManager.default
         let basename = (assetName as NSString).deletingPathExtension
         let ext = (assetName as NSString).pathExtension
-        let name = DocumentOperations.uniqueFileName(basename: basename, extension: ext) { candidate in
+        let name = ExportNaming.uniqueName(basename: basename, extension: ext) { candidate in
             fileManager.fileExists(atPath: downloadsFolder.appendingPathComponent(candidate).path)
         }
         return try performMove(tempURL, to: downloadsFolder.appendingPathComponent(name))

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 @testable import SoftReturnCLI
 
@@ -348,20 +349,6 @@ private let capturedDocsV4: [String] = [
 private let capturedDocs = capturedDocsV1V3 + capturedDocsV4
 private let inventoryModeDocs = Set(capturedDocsV4)
 
-let ctrlkdPrivateCorpusRoot = (ProcessInfo.processInfo.environment["CTRLKD_PRIVATE_CORPUS"]
-    .map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }) ?? ""
-
-/// `true` exactly when `CTRLKD_PRIVATE_CORPUS` is set — every PCL-fidelity test in this
-/// file cites this via `.enabled(if:)` so an unset var is a recorded Skip, not a pass or
-/// a failure. Deliberately does NOT also check `CTRLKD_SAWYER_ARCHIVE`: some captured
-/// documents resolve without it (see `run_pcl_fidelity_gate.py`'s own resolution
-/// docstring), and the ones that still need it report their own per-document
-/// `resolvable: false` from the driver rather than being pre-filtered out here.
-let ctrlkdPrivateCorpusArmed = !ctrlkdPrivateCorpusRoot.isEmpty
-
-let ctrlkdPrivateCorpusSkipReason: Comment =
-    "private-corpus-gated: CTRLKD_PRIVATE_CORPUS unset — see docs/TESTING.md"
-
 /// THE RACE (found 2026-09-06, `swift test` run in parallel with 18 `pclFidelity(doc:)`
 /// cases in flight): every one of those cases' TWO subprocess calls (`resolve` then
 /// `gate`) does a bare `import fidelity_gate`/`import pcl_tolerance` straight off
@@ -402,19 +389,14 @@ enum PCLFidelitySnapshot {
     /// subprocess exists yet; kept in lockstep by citing that function by name so a
     /// future change to one is a prompt to check the other.
     private static func resolveLiveCtrlKDRoot() throws -> String {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         var tried: [String] = []
-        if let env = ProcessInfo.processInfo.environment["CTRLKD_SRC"], !env.isEmpty {
-            let trimmed = env.hasSuffix("/") ? String(env.dropLast()) : env
-            let root = (trimmed as NSString).lastPathComponent == "src"
-                ? (trimmed as NSString).deletingLastPathComponent : trimmed
-            tried.append("\(root) (from $CTRLKD_SRC=\(trimmed))")
+        if let root = Corpus.current.ctrlkdCheckoutRoot {
+            tried.append("\(root) (from $CTRLKD_SRC=\(Corpus.current.path(.ctrlkdSrc) ?? ""))")
             if FileManager.default.fileExists(atPath: root + "/tools/fidelity_gate.py") {
                 return root
             }
         } else {
-            let sibling = repoRoot.deletingLastPathComponent().appendingPathComponent("ctrl-kd").path
+            let sibling = RepoPaths.root.deletingLastPathComponent().appendingPathComponent("ctrl-kd").path
             tried.append("\(sibling) (CTRLKD_SRC unset -- sibling-checkout fallback)")
             if FileManager.default.fileExists(atPath: sibling + "/tools/fidelity_gate.py") {
                 return sibling
@@ -437,11 +419,7 @@ enum PCLFidelitySnapshot {
     /// fails the JSON-parse check below and is retried, never accepted silently — the
     /// same "never a silent skip, never a silent pass" rule the driver's own module
     /// docstring states for a missing ctrl-kd checkout.
-    private static func copySnapshot(from root: String) throws -> String {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ctrlkd-snapshot-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-
+    private static func copySnapshot(from root: String, into dir: URL) throws -> String {
         var lastError: String = "no attempt made"
         for attempt in 1...3 {
             for sub in ["tools", "src"] {
@@ -533,9 +511,10 @@ enum PCLFidelitySnapshot {
         _ = atexit_cleanup_registered
         do {
             let live = try resolveLiveCtrlKDRoot()
-            let copy = try copySnapshot(from: live)
-            atexit_cleanup_paths.withLock { $0.append(copy) }
-            return .success(copy)
+            // Registered before the copy, so a copy that throws still gets removed.
+            let scratch = try TestScratch(prefix: "ctrlkd-snapshot")
+            atexit_cleanup_scratch.withLock { $0.append(scratch) }
+            return .success(try copySnapshot(from: live, into: scratch.url))
         } catch {
             return .failure(error)
         }
@@ -566,11 +545,11 @@ private final class LockedArray<T>: @unchecked Sendable {
         return body(&items)
     }
 }
-private let atexit_cleanup_paths = LockedArray<String>()
+private let atexit_cleanup_scratch = LockedArray<TestScratch>()
 private let atexit_cleanup_registered: Bool = {
     atexit {
-        for path in atexit_cleanup_paths.withLock({ $0 }) {
-            try? FileManager.default.removeItem(atPath: path)
+        for scratch in atexit_cleanup_scratch.withLock({ $0 }) {
+            scratch.remove()
         }
     }
     return true
@@ -584,9 +563,7 @@ enum PCLFidelityDriver {
 
     /// `Tests/CtrlKDTests/PCLFidelityTests.swift` -> `Support/run_pcl_fidelity_gate.py`
     /// sits directly alongside this file's own directory.
-    static let scriptURL: URL = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Support/run_pcl_fidelity_gate.py")
+    static let scriptURL: URL = RepoPaths.url("Tests/CtrlKDTests/Support/run_pcl_fidelity_gate.py")
 
     /// Runs `run_pcl_fidelity_gate.py` with `args`, parsed stdout as a JSON object.
     /// stdout and stderr share ONE pipe (never two): a subprocess whose combined output
@@ -685,7 +662,7 @@ enum PCLFidelityDriver {
         }
         let doc = try parse([UInt8](data), variant: nil)
         let pixResults = resolveDocumentPictures(doc, docPath: wsPath,
-                                                  environment: answerKeyRealFilesystemEnvironment())
+                                                  environment: .live)
         return emitPDF(doc, mode: .printed, options: EmitOptions(pictures: .embed, pixResults: pixResults))
     }
 }
@@ -694,7 +671,7 @@ enum PCLFidelityDriver {
 
     // MARK: - Gate sentinel — the ONE named skip when unarmed
 
-    @Test(.enabled(if: ctrlkdPrivateCorpusArmed, ctrlkdPrivateCorpusSkipReason))
+    @Test(.requiresPrivateCorpus)
     func pclFidelityGateIsArmed() throws {
         // A real armed run must at least be able to reach ctrl-kd and its manifest for
         // one known document — if this fails, every parameterized case below will fail
@@ -709,7 +686,7 @@ enum PCLFidelityDriver {
     // MARK: - Per-document PCL fidelity, cross-checked against ctrl-kd's own manifest
 
     static var armedDocs: [String] {
-        ctrlkdPrivateCorpusArmed ? capturedDocs : []
+        Corpus.privateCorpusArmed ? capturedDocs : []
     }
 
     @Test(arguments: armedDocs)
@@ -775,14 +752,11 @@ enum PCLFidelityDriver {
         }
 
         let pdf = try PCLFidelityDriver.renderPrintedPDF(wsPath: wsPath)
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pcl-fidelity-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        let pdfURL = tempDir.appendingPathComponent("\(doc)-sr-printed.pdf")
-        try Data(pdf).write(to: pdfURL)
-
-        let report = try PCLFidelityDriver.gate(doc, pdfPath: pdfURL.path)
+        let report = try TestScratch.with(prefix: "pcl-fidelity") { tempDir in
+            let pdfURL = tempDir.appendingPathComponent("\(doc)-sr-printed.pdf")
+            try Data(pdf).write(to: pdfURL)
+            return try PCLFidelityDriver.gate(doc, pdfPath: pdfURL.path)
+        }
         guard let live = report["live"] as? [String: Any] else {
             Issue.record("\(doc): driver returned no live report: \(report)")
             return

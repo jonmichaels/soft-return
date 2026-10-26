@@ -10,7 +10,9 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 4.3.0 is the v4.3.0 minor release: sr carries ctrl-kd
+/// CLI's user-visible contract. 4.6.0 is the v4.6.0 minor release: sr carries ctrl-kd 4.10.1's
+/// one Printed paginator for documents with and without notes, and `-t markdown --pictures
+/// embed` exports the pictures as `-t md` does. 4.3.0 is the v4.3.0 minor release: sr carries ctrl-kd
 /// 4.8.0's Modern round — the document's own sheet and newspaper columns in Modern PDF and
 /// RTF, short sheets, the automatic page number in Modern, head alignment and footer timing,
 /// the distinct-label definition rule, page-number placement from the page's own `.po`,
@@ -244,32 +246,31 @@ public enum ParsedCommand: Equatable, Sendable {
 
 /// The variants `--variant` accepts. `binary` is missing on purpose, here as in Python
 /// (cli.py:41): forcing "this is not a convertible file" is not an override anyone wants.
-let variantChoices = ["ws4", "ws5+", "printstream", "text"]
+let variantChoices = Variant.allCases.filter { $0 != .binary }.map(\.rawValue)
 
-let modeChoices = ["modern", "printed"]
+/// Every list below is the enum's own cases, in declaration order, so a new case cannot
+/// leave a stale error message. Each enum's initializer IS the validation; the list only
+/// spells the message (argparse's `choices=` order).
+let modeChoices = EmitMode.allCases.map(\.rawValue)
 
-/// `--fonts`. `FontsTarget` has exactly these four cases, so — as with `--mode` — the
-/// initializer IS the validation and this list only spells the error message.
-let fontsChoices = ["office", "mac", "google", "linux"]
+/// `--fonts`.
+let fontsChoices = FontsTarget.allCases.map(\.rawValue)
 
-/// `--note-refs`. Same pattern: `NoteRefs` has exactly these two cases.
-let noteRefsChoices = ["word", "prefixed"]
+/// `--note-refs`.
+let noteRefsChoices = NoteRefs.allCases.map(\.rawValue)
 
 /// `--pictures` (b24 round 18 item 3): reserved shape ahead of R19's actual wiring --
 /// every use refuses, so this list only spells the error message's own choice set.
-let picturesChoices = ["off", "embed", "export"]
+let picturesChoices = EmitOptions.PixMode.allCases.map(\.rawValue)
 
-/// `--page-numbers` (register b31, E3 item 2, ruled 2026-08-25). Same pattern:
-/// `EmitOptions.PageNumberMode` has exactly these three cases.
-let pageNumbersChoices = ["auto", "on", "off"]
+/// `--page-numbers` (register b31, E3 item 2, ruled 2026-08-25).
+let pageNumbersChoices = EmitOptions.PageNumberMode.allCases.map(\.rawValue)
 
-/// `--sentence-spacing` (b33 N9, mirrored from ctrl-kd 0750948). Same pattern:
-/// `EmitOptions.SentenceSpacingMode` has exactly these three cases.
-let sentenceSpacingChoices = ["auto", "keep", "single"]
+/// `--sentence-spacing` (b33 N9, mirrored from ctrl-kd 0750948).
+let sentenceSpacingChoices = EmitOptions.SentenceSpacingMode.allCases.map(\.rawValue)
 
-/// `--quirks`. Same pattern as every other choice list here: `QuirkMode` has exactly
-/// these three cases, so the initializer IS the validation and this only spells the error.
-let quirksModeChoices = ["auto", "off", "all"]
+/// `--quirks`.
+let quirksModeChoices = QuirkMode.allCases.map(\.rawValue)
 
 /// `--page-settings` presets (ruling 2026-08-05, D8): `default` is the explicit no-op —
 /// WordStar factory geometry IS what an empty settings value means, since a document's own
@@ -277,20 +278,6 @@ let quirksModeChoices = ["auto", "off", "all"]
 /// `sawyer` is Robert J. Sawyer's own WSCHANGE-recovered machine (DEFAULT.PAT vs
 /// PRISTINE.PAT, the INIEDT block): mt ~=0.83in (1195/1440in, expressed here in the same
 /// LINES-at-6-LPI unit `mtLines` always uses), mb exactly 1in, po 0.7in. `modern` is
-/// Modern mode's own page, named and made inspectable: 1in margins on Letter (6 lines
-/// top/bottom at 6 LPI, 10 columns at 10 CPI). Port of cli.py's `PAGE_PRESETS`.
-///
-/// `package` (not `internal`), planning #205 Task 2: `Sources/GenerateSawyerPresetDriftSR`
-/// (a same-package, non-`@testable` executable target) needs this table to render the
-/// `sawyer`-preset self-recorded drift file the corpus geometry-drift test suite (in
-/// `Tests/CtrlKDTests/`) checks against — still not part of this library's PUBLIC API
-/// surface, just visible package-wide.
-package let pagePresets: [String: PageSettings] = [
-    "default": PageSettings(),
-    "sawyer": PageSettings(mtLines: 1195.0 / 1440.0 * 6.0, mbLines: 6.0, poCols: 7.0),
-    "modern": PageSettings(mtLines: 6.0, mbLines: 6.0, poCols: 10.0),
-]
-
 /// `--page-settings` parse outcome: the resolved geometry, or a usage-error message.
 enum PageSettingsParseResult {
     case success(PageSettings)

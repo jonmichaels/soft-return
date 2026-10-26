@@ -325,7 +325,7 @@ import Testing
             .appendingPathComponent("FlagUIScriptingTests-\(ProcessInfo.processInfo.globallyUniqueString)")
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        var intent = ConvertWordStarDocumentIntent()
+        let intent = ConvertWordStarDocumentIntent()
         intent.files = [IntentFile(data: Self.tocFixtureData(), filename: "toc.ws7")]
         intent.formats = [.text]
         intent.style = .modern
@@ -349,7 +349,7 @@ import Testing
             .appendingPathComponent("FlagUIScriptingTests-\(ProcessInfo.processInfo.globallyUniqueString)")
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        var intent = ConvertWordStarDocumentIntent()
+        let intent = ConvertWordStarDocumentIntent()
         intent.files = [IntentFile(data: Self.tocFixtureData(), filename: "toc.ws7")]
         intent.formats = [.text]
         intent.style = .modern

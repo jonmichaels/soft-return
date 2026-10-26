@@ -2,6 +2,7 @@ import AppKit
 import CtrlKD
 import Foundation
 import PDFKit
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn

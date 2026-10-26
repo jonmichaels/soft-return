@@ -124,26 +124,31 @@ import Testing
             Issue.record("no window")
             return
         }
-        window.setContentSize(NSSize(width: 1040, height: 575))
+        let minimum = window.contentMinSize
+        window.setContentSize(minimum)
         content.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         try await Task.sleep(for: .milliseconds(300))
         content.layoutSubtreeIfNeeded()
 
         let contentHeight = content.bounds.height
-        #expect(abs(contentHeight - 575) < 1, "window did not actually shrink to its declared 575pt minimum")
+        #expect(abs(contentHeight - minimum.height) < 1, "window did not shrink to its declared \(minimum.height)pt minimum")
 
         let scrollViews = RenderProbeKit.descendants(content).compactMap { $0 as? NSScrollView }
         let scrollMessage = "expected exactly 1 NSScrollView (the file list's own Table) at minimum size, found "
             + "\(scrollViews.count): \(scrollViews.map(\.frame))"
         #expect(scrollViews.count == 1, "\(scrollMessage)")
 
-        let allFrames: [CGRect] = RenderProbeKit.descendants(content).map { view in view.convert(view.bounds, to: content) }
+        let allFrames: [CGRect] = RenderProbeKit.descendants(content)
+            .filter { $0.subviews.isEmpty && !$0.isHidden }
+            .map { view in view.convert(view.bounds, to: content) }
         let columnFrames = allFrames.filter { frame -> Bool in
             guard frame.width > 0, frame.height > 0 else { return false }
             guard frame.minX >= 0, frame.maxX <= 300 else { return false }
             return true
         }
+        let topMostY = try #require(columnFrames.map(\.minY).min(), "no controlsColumn content found")
+        #expect(topMostY >= 0, "Left column's top content (y=\(topMostY)) sits above the content view at the minimum size")
         let bottomMostY = try #require(columnFrames.map(\.maxY).max(), "no controlsColumn content found")
         let fitMessage = "Left column's bottommost content (y=\(bottomMostY)) sits below the content view's "
             + "own height (\(contentHeight)) at the window's MINIMUM size — needs a scrollbar to reach"

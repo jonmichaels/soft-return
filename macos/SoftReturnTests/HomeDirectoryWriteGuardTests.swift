@@ -42,8 +42,7 @@ import Testing
 /// check the last — Swift Testing schedules a `.serialized` suite's tests one at a time, in
 /// the stable order it discovers them, which for plain alphabetical names is name order.
 /// Neither test is `@MainActor`; this only ever touches the filesystem and
-/// `nonisolated(unsafe)` static storage, guarded by `.serialized` the same way
-/// `UpdateCheckerTests`' `RecordingURLProtocol` subclasses guard their own shared static state.
+/// `nonisolated(unsafe)` static storage, guarded by `.serialized`.
 @Suite(.serialized)
 struct HomeDirectoryWriteGuardTests {
     /// Package/library bundle extensions to never descend into, matched case-insensitively.

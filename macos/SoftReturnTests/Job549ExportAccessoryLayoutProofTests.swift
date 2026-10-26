@@ -8,26 +8,8 @@ import SoftReturnShared
 /// `LayoutProof`, not the bare `layoutSubtreeIfNeeded()` (no window at all)
 /// `ExportSheetOptionsTests` uses for its non-geometric assertions. Job 545's own equivalent
 /// test ran the same way and still missed what Jon's real macOS 26 screenshot showed — this
-/// suite exists specifically to close that gap, and also drops the job's required proof
-/// artifacts (`export-accessory.png`, `frames.txt`) into `outbox/job549/` for Athena's eyeball
-/// pass before anything reaches Jon.
+/// suite exists specifically to close that gap.
 @Suite @MainActor struct Job549ExportAccessoryLayoutProofTests {
-    /// Repo bug fix (planning #191 audit): `preferred` used to be
-    /// `repoRoot.appendingPathComponent("outbox/job549")` — a path INSIDE this checkout,
-    /// which is always writable on any machine that has the repo cloned at all. That defeated
-    /// `resolveOutputDirectory`'s whole fallback contract: the tracked `outbox/job549/
-    /// export-accessory.png` committed at job 549 got silently overwritten by every later test
-    /// run, dirtying the working tree on every `swift test`/`xcodebuild test`, never falling
-    /// back to a throwaway location the way this evidence writer is meant to. `preferred` now
-    /// points outside the checkout (the system temp directory) instead, so a real writable
-    /// location is tried first and a further fallback temp directory is the backstop — never a
-    /// path this repo tracks.
-    private static var outputDirectory: URL {
-        RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("job549", isDirectory: true),
-            fallbackName: "job549-evidence")
-    }
-
     private static func checkbox(_ root: NSView, _ identifier: String) throws -> NSButton {
         try #require(
             LayoutProof.descendants(root).compactMap { $0 as? NSButton }
@@ -110,15 +92,6 @@ import SoftReturnShared
         let window = await LayoutProof.host(accessory, size: sheetSize)
         let root = try #require(window.contentView)
 
-        // Proof artifacts, dumped before any assertions run so a failing assertion still
-        // leaves the evidence behind for Athena to eyeball.
-        let frameTableText = try LayoutProof.writeFrameTable(
-            root: root, to: Self.outputDirectory.appendingPathComponent("frames.txt"))
-        #expect(!frameTableText.isEmpty, "frames.txt was written empty")
-        let pngSize = try LayoutProof.renderPNG(
-            view: root, to: Self.outputDirectory.appendingPathComponent("export-accessory.png"))
-        #expect(pngSize > 0, "export-accessory.png was written empty")
-
         let headersCheck = try Self.checkbox(root, "export-headers-checkbox")
         let tocCheck = try Self.checkbox(root, "export-toc-checkbox")
         let picturesLabel = try Self.label(root, text: "Pictures:")
@@ -176,13 +149,6 @@ import SoftReturnShared
         // Consequence Jon called out explicitly, not a requirement to enforce either way: Page
         // Numbering (row 2 of the popups column) is NOT expected to land on Table of Contents'
         // row (row 2 of Options) — the popup is taller than the checkbox, so the two columns'
-        // pitches diverge below row 1. Left unasserted deliberately; `frames.txt` carries the
-        // real numbers for anyone who wants to check.
-    }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
+        // pitches diverge below row 1. Left unasserted deliberately.
     }
 }

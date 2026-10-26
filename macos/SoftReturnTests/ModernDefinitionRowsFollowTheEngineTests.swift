@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -91,8 +92,5 @@ struct ModernDefinitionRowsFollowTheEngineTests {
             break
         }
         #expect(unhungDefRows.isEmpty, "\(document): def rows the Modern view does not hang: \(unhungDefRows)")
-        try InvisiblesDesignPassTests.photograph(
-            rendered: rendered, page: 0,
-            name: "b41-e-\(document.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-"))-modern-p1.png")
     }
 }

@@ -84,10 +84,14 @@ swift_build_env=(PATH="${PATH}" HOME="${HOME}")
 if [ -n "${DEVELOPER_DIR:-}" ]; then
     swift_build_env+=(DEVELOPER_DIR="${DEVELOPER_DIR}")
 fi
-env -i "${swift_build_env[@]}" swift build --package-path "${CHECKOUT}" --scratch-path "${SCRATCH}" \
-    -c release --arch arm64 --arch x86_64 --product sr
+swift_build_args=(--package-path "${CHECKOUT}" --scratch-path "${SCRATCH}" \
+    -c release --arch arm64 --arch x86_64 --product sr)
+env -i "${swift_build_env[@]}" swift build "${swift_build_args[@]}"
 
-BUILT_BINARY="${SCRATCH}/apple/Products/Release/sr"
+# SwiftPM names the universal build's folder, and the name changed with Xcode
+# 27 (`apple/Products/Release` became `out/Products/Release`), so ask it.
+BIN_PATH="$(env -i "${swift_build_env[@]}" swift build "${swift_build_args[@]}" --show-bin-path)"
+BUILT_BINARY="${BIN_PATH}/sr"
 if [ ! -f "${BUILT_BINARY}" ]; then
     echo "error: swift build did not produce ${BUILT_BINARY}" >&2
     exit 1

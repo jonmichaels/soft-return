@@ -37,7 +37,7 @@ final class DocumentVisibleUITests: XCTestCase {
                       "fixture missing at \(fixture.path) — this test would pass vacuously")
 
         let app = XCUIApplication()
-        app.launchArguments = ["-SoftReturnOpenDocument", fixture.path]
+        app.launchArguments = ["-SoftReturnOpenDocument", fixture.path] + UITestLaunch.arguments
         app.launch()
 
         let window = app.windows.firstMatch

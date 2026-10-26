@@ -53,21 +53,6 @@ private func splitPATItems(_ rest: [UInt8]) -> [[UInt8]] {
     return items
 }
 
-private func rstripPAT(_ line: ArraySlice<UInt8>) -> [UInt8] {
-    var out = Array(line)
-    while let last = out.last, last == 0x0D || last == 0x09 || last == 0x20 {
-        out.removeLast()
-    }
-    return out
-}
-
-private func stripPAT(_ item: [UInt8]) -> [UInt8] {
-    var out = item
-    while let first = out.first, first == 0x20 || first == 0x09 { out.removeFirst() }
-    while let last = out.last, last == 0x20 || last == 0x09 { out.removeLast() }
-    return out
-}
-
 private func hexNibble(_ b: UInt8) -> Int? {
     switch b {
     case 0x30...0x39: return Int(b - 0x30)
@@ -101,7 +86,7 @@ public func parsePAT(_ data: [UInt8]) throws -> [String: [UInt8]] {
     var lineno = 0
     for raw in data.split(separator: 0x0A, omittingEmptySubsequences: false) {
         lineno += 1
-        let line = rstripPAT(raw)
+        let line = ASCII.rstrip(Array(raw), .blanksAndReturn)
         if line.isEmpty { continue }
         guard let eq = line.firstIndex(of: 0x3D) else {   // '='
             let head = String(decoding: line.prefix(40), as: UTF8.self)
@@ -111,7 +96,7 @@ public func parsePAT(_ data: [UInt8]) throws -> [String: [UInt8]] {
         let rest = Array(line[(eq + 1)...])
         var vals: [UInt8] = []
         for rawItem in splitPATItems(rest) {
-            let item = stripPAT(rawItem)
+            let item = ASCII.strip(rawItem, .blanks)
             if item.isEmpty { continue }                  // trailing comma / bare '='
             if item.count >= 2, item.first == 0x22, item.last == 0x22 {
                 vals += item.dropFirst().dropLast()       // quoted literal ASCII
@@ -163,7 +148,6 @@ private let plOff = 0x1231 - 0x1219    // 0x18  page length (.pl)          1/144
 private let hmOff = 0x1238 - 0x1219    // 0x1F  heading margin (.hm)       1/1440 in
 private let fmOff = 0x123A - 0x1219    // 0x21  footing margin (.fm)       1/1440 in
 private let poEvenOff = 0x123D - 0x1219   // 0x24  page offset, even pages (.po)  1/1800 in
-private let poOddOff = 0x123F - 0x1219    // 0x26  page offset, odd pages  (.po)  1/1800 in
 private let lhOff = 0x1259 - 0x1219    // 0x40  line height (.lh)          1/1440 in
 
 /// LE16 at `off`, or nil when the block is too short to carry it — a truncated INIEDT

@@ -32,7 +32,7 @@ private let markdownEscapes: [Character] = ["*", "_", "#", "`", "[", "]", "<", "
 /// `text` with every Markdown-significant character backslash-escaped. Port of
 /// `emit._md_escape`.
 ///
-/// ONE definition for the two places that render document text: `markdownSpan` (every
+/// ONE definition for the two places that render document text: `markdownSpanParts` (every
 /// span) and the note-definition block in `emitMarkdown` (a note's raw text, which
 /// bypasses the span path). They escaped different sets until E7 — the note path handled
 /// only the backslash — so `<-Repeated` in a real TAGS annotation still vanished after
@@ -128,12 +128,8 @@ func markdownHardBreakParagraphs(_ lines: [String]) -> [String] {
 /// Python. For multi-style spans it is one of several orderings Python might produce, and
 /// deliberately the stable one. See the job-008 response: the Python side is the thing
 /// that needs fixing here, not this port.
-func markdownSpan(_ span: Span, plain: Bool = false) -> String {
-    markdownSpanParts(span, plain: plain).text
-}
-
-/// `markdownSpan` plus the outermost delimiter it wrapped with — the one thing
-/// `markdownJoin` needs to tell a real collision from two different runs.
+/// One span, Markdown: the styled text plus the outermost delimiter it wrapped with — the
+/// one thing `markdownJoin` needs to tell a real collision from two different runs.
 func markdownSpanParts(_ span: Span, plain: Bool = false) -> (text: String, outer: String) {
     // NOTE: this function deliberately does NOT special-case `.fnref` (ctrl-kd 1.2.0 moved
     // that decision up into `emitMarkdown`'s block loop, alongside note-kind selection and
@@ -235,9 +231,9 @@ private func markdownReferenceKey(_ kind: NoteKind, label: String) -> String {
     }
 }
 
-/// One span, Markdown: an ordinary span goes through `markdownSpan`; a valid, included
+/// One span, Markdown: an ordinary span goes through `markdownSpanParts`; a valid, included
 /// `fnref` becomes `[^key]` with no styling of its own; an excluded kind's reference
-/// vanishes; an invalid one (task item 3) falls back to `markdownSpan`'s ordinary styling,
+/// vanishes; an invalid one (task item 3) falls back to `markdownSpanParts`'s ordinary styling,
 /// which is what turns a stray sentinel into `<sup>1</sup>`.
 private func markdownReferenceSpan(
     _ span: Span, refNotes: [Note], labels: [String], options: EmitOptions, plain: Bool = false
@@ -313,21 +309,22 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
         return out
     }
 
-    let refNotes = inlineReferenceNotes(doc)
+    let ctx = RenderContext(doc, printed: false, sentenceSpacing: options.sentenceSpacing)
+    let refNotes = ctx.refNotes
     // Reached only in Modern mode (printed returned above via emit_text's own printed
     // facsimile, `\f` pages included) -- Modern MD has no pages of its own, so it
     // takes the same collision-triggered continuous renumbering as Modern TXT (ruling
     // 2026-08-24).
-    let labels = pagelessNoteLabels(doc)
-    let margin = docMargin(doc)
-    let (conventionIndent, headPosition) = paragraphLayoutContext(doc)
+    let labels = ctx.noteLabels(.pageless)
+    let margin = ctx.margin
+    let (conventionIndent, headPosition) = (ctx.conventionIndent, ctx.headPosition)
     // N9 (b33 field notes): always the Modern side of the mode-aware default here
     // (Printed already returned above, inside its own fenced-facsimile branch).
-    let ssOn = resolveSentenceSpacing(options.sentenceSpacing, printed: false)
+    let ssOn = ctx.sentenceSpacing
     // b24 round 20b (slate item 13): reached only in Modern mode (printed returns
     // above, inside its own fenced-facsimile branch) -- see emitText's identical
     // comment for the doctrine.
-    let screenplayBlocks = detectScreenplayBlocks(doc)
+    let screenplayBlocks = ctx.screenplayBlocks
     // planning #264 item 4 (packet row A10, extended): see `trailingPASkipIndex`
     // (EmitterRules.swift).
     let skipPA = trailingPASkipIndex(doc)
@@ -407,9 +404,9 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
     var defs: [String] = []
     for kind in noteKindOrder where options.notes.contains(kind) {
         for entry in noteListEntries(doc, kind: kind, labels: labels) {
-            // ctrl-kd round 12: also backslash-escape it, same as `markdownSpan` already
+            // ctrl-kd round 12: also backslash-escape it, same as `markdownSpanParts` already
             // does for every other piece of rendered text. A note's text bypasses
-            // `markdownSpan` entirely (embedded verbatim, here), so it was the one path
+            // `markdownSpanParts` entirely (embedded verbatim, here), so it was the one path
             // in this emitter a content backslash reached CommonMark unescaped --
             // doubled at ANY position (not just end of line), since a bare backslash is
             // CommonMark's ESCAPE character everywhere it appears, not only where it

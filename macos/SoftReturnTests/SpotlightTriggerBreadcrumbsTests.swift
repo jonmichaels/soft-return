@@ -10,16 +10,6 @@ private func throwawayDefaults() -> UserDefaults {
     UserDefaults(suiteName: "SpotlightTriggerBreadcrumbsTests.\(UUID().uuidString)")!
 }
 
-private final class FakeMDImportRunner: MDImportRunning {
-    private(set) var calls: [[String]] = []
-    var result = SpotlightNudge.RunResult(exitCode: 0, output: "")
-
-    func run(arguments: [String]) -> SpotlightNudge.RunResult {
-        calls.append(arguments)
-        return result
-    }
-}
-
 // MARK: - SpotlightTriggerBreadcrumbs.record directly
 
 @Suite struct SpotlightTriggerBreadcrumbsTests {

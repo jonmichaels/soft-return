@@ -51,7 +51,7 @@ final class WSDocument: NSDocument {
     ///
     /// Batch 27: the deferral is a WINDOW's concern, not the document's. Batch 26 started the parse from
     /// `makeWindowControllers`, so a long document opened with no window — `openDocument(withContentsOf:
-    /// display: false)`, as a script's export or `AppleEventSelfSendProbe` does it — never parsed at all,
+    /// display: false)`, as a script's export does it — never parsed at all,
     /// and a script read the empty placeholder. The parse now starts in `read`, window or not, and
     /// anything that needs the document without a window to wait in takes it from `ensureParsed()`.
     static var backgroundParseThreshold = 64 * 1024
@@ -163,7 +163,7 @@ final class WSDocument: NSDocument {
         let quirks = state.quirkChoices
         let fileName = fileURL?.lastPathComponent
         let start = DispatchTime.now().uptimeNanoseconds
-        deferredParse = Task.detached(priority: .userInitiated) {
+        deferredParse = Task.detached(priority: .userInitiated) { [weak self] in
             let result = Result { try DocumentState.parsed(from: bytes, docPath: docPath, quirks: quirks) }
             MainRunLoop.perform { [weak self] in
                 self?.completeDeferredParse(result, startedAt: start, fileName: fileName)

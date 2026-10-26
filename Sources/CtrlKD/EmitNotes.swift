@@ -111,63 +111,6 @@ private func notePosition(_ note: Note, doc: Document, index: Int) -> Int {
     return count + 1
 }
 
-/// Letters for `alphaLabel`'s bijective base-26 count.
-private let noteAlphaLetters = Array("abcdefghijklmnopqrstuvwxyz")
-
-/// WordStar's own traditional "symbol" footnote sequence (WSFORMAT.TXT conversion-flag
-/// high nybble, value 0: "0 means to use symbols") is not enumerated anywhere in the
-/// format reference beyond that one sentence, and no archive document uses anything but
-/// numeric (3) — RESEARCHED, NOT ESTABLISHED: this is the classical printer's
-/// footnote-symbol cycle (asterisk, dagger, double dagger, section mark, parallel,
-/// pilcrow), which is also Word's own built-in "symbol" note-number-format option —
-/// picked as the documented fallback because it is the one symbol sequence an actual
-/// word processor of WordStar's own era already shipped under this exact name, not
-/// because it has been confirmed as WordStar's. UNVERIFIED AGAINST A REAL WORDSTAR
-/// DOCUMENT. Direct port of emit.py's `_NOTE_SYMBOLS`.
-private let noteSymbols = ["*", "\u{2020}", "\u{2021}", "\u{00A7}", "\u{2016}", "\u{00B6}"]
-
-/// 1->a, 2->b, ..., 26->z, 27->aa, ... — bijective base-26, the standard way to keep
-/// counting past one alphabet's worth of labels. Port of `_alpha_label`.
-func alphaLabel(_ n: Int, upper: Bool) -> String {
-    var s = ""
-    var remaining = n
-    while remaining > 0 {
-        let r = (remaining - 1) % 26
-        remaining = (remaining - 1) / 26
-        s = String(noteAlphaLetters[r]) + s
-    }
-    return upper ? s.uppercased() : s
-}
-
-/// The nth entry of the symbol cycle (see `noteSymbols` above), doubling once the
-/// six-symbol cycle exhausts (7th = '**', 13th = '***', ...) exactly as that convention
-/// has always extended past six notes. Port of `_note_symbol`.
-func noteSymbol(_ n: Int) -> String {
-    let cycle = noteSymbols.count
-    let reps = (n - 1) / cycle + 1
-    return String(repeating: noteSymbols[(n - 1) % cycle], count: reps)
-}
-
-/// A footnote/endnote's display index, ALWAYS arabic.
-///
-/// WordStar's format spec documents a conversion-flag high nybble ("0 means to use
-/// symbols, 1 is for upper case, 2 is for lower case, and three is for numbers"), and
-/// this function briefly honoured it (ruling 2026-08-24 item 5). GROUND TRUTH SAYS
-/// OTHERWISE.
-///
-/// `DISPLAY.WS` — WordStar's own tutorial file in the archive — carries a footnote at
-/// numberFormat=2 and an endnote at numberFormat=1. Printed through REAL WordStar 7
-/// under DOSBox-X, it puts `1.` and `(1)` on the page: plain arabic, the same as every
-/// other document. WordStar does not use those bits for the printed label. Capture kept
-/// as ground truth (`ws7-prints/ws7-captures/DISPLAY.pcl`) so this never has to be re-derived.
-///
-/// `numberFormat` stays PARSED on `Note` — preserve-what-you-find governs the IR — and
-/// is simply not consulted here any more. `n` arrives 1-based via `noteLabel` below.
-/// Port of ctrl-kd's reverted `_format_note_number` (commit d1598ae).
-func formatNoteNumber(_ n: Int, _ numberFormat: Int) -> String {
-    return String(n)
-}
-
 /// The 1-based, per-kind display label (task item 2). Footnotes and endnotes number
 /// independently (WordStar's separate `.f#`/`.e#`), each against its own start value
 /// (defaulting to 1 when the file never set one) plus `Note.number` — the file's own 0-based
@@ -182,9 +125,11 @@ func formatNoteNumber(_ n: Int, _ numberFormat: Int) -> String {
 /// instead and is never renumbered — the same treatment an annotation's tag already got.
 /// UNTESTED AGAINST A REAL DOCUMENT: no archive specimen carries a footnote/endnote tag; this
 /// is spec-faithful, synthetic-fixture-verified code only. A plain (untagged) footnote/endnote's
-/// numeric label goes through `formatNoteNumber`, which (ruling 2026-08-24 item 5, REVERTED —
-/// see that function's doc comment) always renders arabic regardless of `Note.numberFormat`:
-/// `DISPLAY.WS`, printed through real WordStar 7, disproved the format-honouring reading.
+/// numeric label is ALWAYS arabic, whatever `Note.numberFormat` says: WordStar's format spec
+/// documents a conversion-flag high nybble (symbols / upper / lower / numbers), but
+/// `DISPLAY.WS` — a footnote at numberFormat=2 and an endnote at numberFormat=1 — printed
+/// through real WordStar 7 shows plain `1.` and `(1)`. The field stays parsed (preserve what
+/// you find) and is not consulted for display.
 ///
 /// Annotations carry no number at all in the format; their tag stands in for a label
 /// instead — but WordStar's tag field is itself nullable/empty, and Python falls back to the
@@ -197,11 +142,11 @@ func noteLabel(_ note: Note, doc: Document, index: Int) -> String {
     case .footnote:
         if let tag = note.tag { return tag }
         let n = note.number ?? (notePosition(note, doc: doc, index: index) - 1)
-        return formatNoteNumber(n + (doc.footnoteNumberStart ?? 1), note.numberFormat)
+        return String(n + (doc.footnoteNumberStart ?? 1))
     case .endnote:
         if let tag = note.tag { return tag }
         let n = note.number ?? (notePosition(note, doc: doc, index: index) - 1)
-        return formatNoteNumber(n + (doc.endnoteNumberStart ?? 1), note.numberFormat)
+        return String(n + (doc.endnoteNumberStart ?? 1))
     case .annotation:
         if let tag = note.tag, !tag.isEmpty {
             return tag
@@ -245,7 +190,7 @@ func pagelessNoteLabels(_ doc: Document) -> [String] {
         let memberLabels = members.map { labels[$0.offset] }
         guard Set(memberLabels).count != memberLabels.count else { continue }   // no collision
         for (rank, m) in members.enumerated() {
-            labels[m.offset] = formatNoteNumber(rank + 1, m.element.numberFormat)
+            labels[m.offset] = String(rank + 1)
         }
     }
     return labels

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// planning #266: cp437 code 158 is driver-keyed, and the peseta draws.
@@ -199,8 +200,8 @@ import Testing
         let flow = modernSemanticFlow(Self.doc(driver))
         var text = ""
         for item in flow.items {
-            if case .para(let para) = item {
-                for run in para.runs { text += run.text }
+            if case .para(_, _, _, let runs, _, _, _, _) = item {
+                for run in runs { text += run.text }
             }
         }
         #expect(text.contains(shown), "\(driver): expected \(shown) in the semantic flow")
@@ -403,11 +404,11 @@ import Testing
     ///
     /// The Printed page is BYTE-IDENTICAL to what it was before planning #266 -- a
     /// patched-driver document was already getting the euro, just for the wrong reason.
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func readmePrintsTheEuroWhereItAlwaysDid() throws {
-        let path = sawyerArchivePath + "/-README.WS"
+        let path = Corpus.sawyerArchivePath + "/-README.WS"
         guard let d = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = try parse([UInt8](d))
         #expect(doc.printerDriver == "LASERJET")
@@ -424,11 +425,11 @@ import Testing
     /// Under the driver rule it is not a special case at all: it names LASERJET in its own
     /// header, so it is a patched-driver document and its chart entry shows the euro that
     /// driver actually put on paper.
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func displayChartEntryFollowsItsOwnDriver() throws {
-        let path = sawyerArchivePath + "/DISPLAY.WS"
+        let path = Corpus.sawyerArchivePath + "/DISPLAY.WS"
         guard let d = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = try parse([UInt8](d))
         #expect(doc.printerDriver == "LASERJET")
@@ -438,11 +439,11 @@ import Testing
 
     /// A real corpus document on the OTHER side of the rule: REF/ASCIITAB.WS declares no
     /// patched driver, so its own code 158 stays the peseta and draws as geometry.
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func asciitabKeepsItsPeseta() throws {
-        let path = sawyerArchivePath + "/REF/ASCIITAB.WS"
+        let path = Corpus.sawyerArchivePath + "/REF/ASCIITAB.WS"
         guard let d = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = try parse([UInt8](d))
         #expect(!euroPatchedDrivers.contains((doc.printerDriver ?? "").uppercased()))

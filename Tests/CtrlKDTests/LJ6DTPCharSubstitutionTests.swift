@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// planning #260: three real, byte-verified spots in the real LJ6DTP.WS (offsets
@@ -19,11 +20,11 @@ import Testing
 /// Byte fixtures below are built with `+=` (never chained `+`) per this repo's own
 /// pre-push fixture rule (planning #253).
 @Suite struct LJ6DTPCharSubstitutionTests {
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func colorHeadingQuotesAtOffset0x4859() throws {
-        let path = sawyerArchivePath + "/LJ6DTP.WS"
+        let path = Corpus.sawyerArchivePath + "/LJ6DTP.WS"
         guard let d = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let data = [UInt8](d)
         // 0x4859: <ESC><AE><FS>Color<ESC><AF><FS> -- the extended-character triples
@@ -47,11 +48,11 @@ import Testing
         #expect(contains(out, needle), "expected (\\x93Color\\x94) Tj in the printed PDF content stream")
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func copyrightClusterAtOffset0x3da() throws {
-        let path = sawyerArchivePath + "/LJ6DTP.WS"
+        let path = Corpus.sawyerArchivePath + "/LJ6DTP.WS"
         guard let d = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let data = [UInt8](d)
         // 0x3da+: "Copyright " then (after a font-change block) <ESC>\x02<FS> -- the
@@ -79,11 +80,11 @@ import Testing
         #expect(contains(out, needle), "expected (\\xa9) Tj in the printed PDF content stream")
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func wordStarsApostropheCurlyOnProportionalFace() throws {
-        let path = sawyerArchivePath + "/LJ6DTP.WS"
+        let path = Corpus.sawyerArchivePath + "/LJ6DTP.WS"
         guard let d = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let data = [UInt8](d)
         // "WordStar's" (plain typed apostrophe, 0x27) on a PROPORTIONAL face (Times/

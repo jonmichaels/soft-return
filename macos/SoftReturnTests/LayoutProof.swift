@@ -1,9 +1,8 @@
 import AppKit
 
-/// Job 549: a reusable GUI layout-proof harness — hosts any `NSView` in a real, window-server-
-/// backed `NSWindow`, forces a full layout pass, and hands back two forms of PROOF: a
-/// machine-readable frame dump (every descendant's identifier/class/frame) and a rendered PNG
-/// of what actually got drawn.
+/// A reusable GUI layout-proof harness — hosts any `NSView` in a real, window-server-
+/// backed `NSWindow` and forces a full layout pass, so a test measures the frames the view
+/// has once it is actually on screen.
 ///
 /// Why a real window at all, rather than the bare `view.layoutSubtreeIfNeeded()` most existing
 /// tests use: job 545's own honesty caveat records that its "verification" ran on a headless
@@ -21,12 +20,6 @@ import AppKit
 /// this existed.
 @MainActor
 public enum LayoutProof {
-    public struct FrameRow: Sendable {
-        public let className: String
-        public let identifier: String
-        public let frame: CGRect
-    }
-
     // MARK: - Hosting
 
     /// Hosts `view` at `size` in a real, borderless, offscreen `NSWindow`: sets it as the
@@ -50,7 +43,7 @@ public enum LayoutProof {
         return window
     }
 
-    // MARK: - Frame dump
+    // MARK: - Tree walk
 
     /// Every descendant of `view`, tree order (a view before its own children, siblings in
     /// declaration order) — the same order `RenderProbeKit.descendants` already establishes
@@ -58,56 +51,5 @@ public enum LayoutProof {
     /// no dependency of its own and can be lifted into another target verbatim.
     public static func descendants(_ view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap(descendants)
-    }
-
-    /// One row per view in `root`'s subtree (root itself included first), every frame
-    /// converted into `root`'s own coordinate space so the table reads as one flat, directly
-    /// comparable geometry regardless of how deep a view actually sits in the tree.
-    public static func frameTable(root: NSView) -> [FrameRow] {
-        func row(_ view: NSView) -> FrameRow {
-            let identifier = view.accessibilityIdentifier()
-            return FrameRow(
-                className: String(describing: type(of: view)),
-                identifier: identifier.isEmpty ? "(no identifier)" : identifier,
-                frame: view.convert(view.bounds, to: root))
-        }
-        return [row(root)] + descendants(root).map(row)
-    }
-
-    /// Deterministic, machine-readable text table: one line per view, fixed column order,
-    /// coordinates rounded to 2 decimal places so two runs of an unchanged layout diff clean.
-    public static func renderFrameTable(_ rows: [FrameRow]) -> String {
-        func fmt(_ value: CGFloat) -> String { String(format: "%.2f", value) }
-        let lines = rows.map { row in
-            "\(row.className)\t\(row.identifier)\tx=\(fmt(row.frame.minX)) y=\(fmt(row.frame.minY)) "
-                + "w=\(fmt(row.frame.width)) h=\(fmt(row.frame.height))"
-        }
-        return lines.joined(separator: "\n") + "\n"
-    }
-
-    /// Renders and writes `frameTable(root:)` in one call — the shape every caller actually
-    /// wants (a proof artifact on disk), returning the text too so a test can assert on it
-    /// without re-reading the file it just wrote.
-    @discardableResult
-    public static func writeFrameTable(root: NSView, to url: URL) throws -> String {
-        let text = renderFrameTable(frameTable(root: root))
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try text.write(to: url, atomically: true, encoding: .utf8)
-        return text
-    }
-
-    // MARK: - Rendered PNG
-
-    /// Full-size rendered bitmap of `view` via `cacheDisplay(in:to:)` — real composited pixels
-    /// (background, subviews, and any overlay all drawn in real z-order), the same mechanism
-    /// and the same reasoning `RenderProbeKit.renderPNG` already documents: a page/accessory
-    /// view's own chrome (paper, borders, popup bezels) is often painted by a DIFFERENT view
-    /// than the one a naive single-view capture would target.
-    @discardableResult
-    public static func renderPNG(
-        view: NSView, appearance: NSAppearance = NSAppearance(named: .aqua)!, to url: URL
-    ) throws -> Int {
-        try RenderProbeKit.renderPNG(view: view, appearance: appearance, to: url)
     }
 }

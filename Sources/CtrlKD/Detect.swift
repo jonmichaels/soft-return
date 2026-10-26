@@ -4,7 +4,7 @@
 /// Direct port of `detect()` in the Python reference (`src/ctrlkd/core.py`); every
 /// threshold below is empirical and battle-tested, so they are copied literally
 /// (comments cite the Python line each mirrors) rather than "cleaned up."
-public enum Variant: String, Hashable, Sendable {
+public enum Variant: String, Hashable, Sendable, Codable, CaseIterable {
     case ws4
     case ws5plus = "ws5+"
     case printstream

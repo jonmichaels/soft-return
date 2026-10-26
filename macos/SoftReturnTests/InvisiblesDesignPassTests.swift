@@ -1,12 +1,13 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
 
 /// Batch 40 (M14, Jon: "It moves text AND things overlap all over the place. Show invisibles is pretty ugly right
-/// now."): Show Invisibles in Native and Modern on -README.WS and BOXES.WS, measured and photographed.
+/// now."): Show Invisibles in Native and Modern on -README.WS and BOXES.WS, measured.
 ///
 /// The rules (Athena): invisibles MAY reflow (Jon's register E3), but marks never overlap text or each other, and each
 /// kind of mark has one glyph and one colour. Measured on every page, in each page's own coordinates:
@@ -17,7 +18,6 @@ import Testing
 /// - Native lines whose height is not the lead their paragraph pins (a taller line pushes everything after it down,
 ///   past where the page's budget put it);
 /// - the colours and faces each kind of mark is drawn in.
-/// Pages 1 and 2 of each are photographed as the screen draws them: m14-<document>-<view>-p<N>.png.
 @Suite(.tags(.corpus), .serialized)
 @MainActor
 struct InvisiblesDesignPassTests {
@@ -130,9 +130,6 @@ struct InvisiblesDesignPassTests {
         }
         let paletteText = palette.keys.sorted().map { "\($0): \(palette[$0]!.sorted())" }.joined(separator: "; ")
         print("M14-INVISIBLES \(document) \(style.displayName): \(pages.pageCount) pages, \(lines) lines; marks over text \(markOverText), marks over marks \(markOverMark), running lines over text \(headOverText), Native lines off their lead \(offLeadLines); marks drawn as \(paletteText); e.g. \(examples)")
-        for index in 0..<min(2, pages.pageCount) {
-            try Self.photograph(rendered: rendered, page: index, name: "m14-\(document.replacingOccurrences(of: ".", with: "-"))-\(style.displayName.lowercased())-p\(index + 1).png")
-        }
 
         #expect(markOverText == 0, "\(document) \(style.displayName): \(markOverText) marks over text")
         #expect(markOverMark == 0, "\(document) \(style.displayName): \(markOverMark) marks over marks")
@@ -187,30 +184,5 @@ struct InvisiblesDesignPassTests {
 
     static func snippet(_ storage: NSTextStorage, _ range: NSRange) -> String {
         String((storage.string as NSString).substring(with: range).prefix(40))
-    }
-
-    /// One page as the screen draws it, Single Page, at 2x, to the temporary proofs folder.
-    static func photograph(rendered: RenderedDocument, page: Int, name: String) throws {
-        let view = PagedDocumentView()
-        view.setContent(rendered, display: .singlePage)
-        view.showPage(page)
-        view.frame = CGRect(origin: .zero, size: view.intrinsicContentSize)
-        view.layoutSubtreeIfNeeded()
-        let scale: CGFloat = 2
-        let rep = try #require(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * scale), pixelsHigh: Int(view.bounds.height * scale),
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-            bytesPerRow: 0, bitsPerPixel: 0))
-        rep.size = view.bounds.size
-        NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
-            view.cacheDisplay(in: view.bounds, to: rep)
-        }
-        let png = try #require(rep.representation(using: .png, properties: [:]))
-        let proofs = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
-        let file = proofs.appendingPathComponent(name)
-        try png.write(to: file)
-        print("PROOF: \(file.path)")
     }
 }

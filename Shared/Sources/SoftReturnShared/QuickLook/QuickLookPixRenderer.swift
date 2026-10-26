@@ -35,7 +35,7 @@ public enum QuickLookPixRenderer {
         let png = try Data(pixToPNG(bytes))
         let sizeInPoints: CGSize
         if let physical = pixPhysicalSizeIn(bytes) {
-            sizeInPoints = CGSize(width: physical.widthIn * 72, height: physical.heightIn * 72)
+            sizeInPoints = CGSize(width: inchesToPoints(physical.widthIn), height: inchesToPoints(physical.heightIn))
         } else {
             sizeInPoints = CGSize(width: width, height: height)
         }
@@ -47,7 +47,7 @@ public enum QuickLookPixRenderer {
     /// already applies to its own `PDFPage`) plus that scaled size, ready to hand straight to
     /// `QLThumbnailReply`'s `contextSize`/`drawing:`.
     public static func thumbnailImage(
-        fromFileBytes bytes: [UInt8], maximumSize: CGSize, maxDimension: CGFloat = 1024
+        fromFileBytes bytes: [UInt8], maximumSize: CGSize, maxDimension: CGFloat = QuickLookThumbnail.maxDimension
     ) throws -> (image: CGImage, size: CGSize) {
         let (width, height, rgbRows) = try pixDecode(bytes)
         guard width > 0, height > 0 else { throw RenderError.emptyImage }

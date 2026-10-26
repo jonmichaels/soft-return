@@ -22,6 +22,7 @@
 /// Port of ctrl-kd's `tests/test_mailmerge_data_files.py`. Synthetic fixtures.
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 private let mergeHard: [UInt8] = [0x0D, 0x0A]
@@ -304,7 +305,7 @@ func textIsThePlainList(mode: EmitMode) throws {
 
 // MARK: - the corpus
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func noArchiveDocumentIsTakenForADataFile() throws {
     // The false-positive gate that matters: every document the committed manifest names,
     // judged by the real `detect()`.
@@ -319,7 +320,7 @@ func noArchiveDocumentIsTakenForADataFile() throws {
     var seen = 0
     for (name, entry) in AnswerKeyFixture.loaded?.sawyerConvertible ?? [:] {
         guard let relativePath = entry.path else { continue }
-        let url = URL(fileURLWithPath: sawyerArchivePath)
+        let url = URL(fileURLWithPath: Corpus.sawyerArchivePath)
             .appendingPathComponent(relativePath)
         guard let data = try? Data(contentsOf: url) else { continue }
         seen += 1

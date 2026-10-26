@@ -20,6 +20,7 @@
 /// the identity is proved for them too rather than assumed away.
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// The same ten documents the structural checks curate (`StructuralChecksTests`), for
@@ -41,11 +42,11 @@ private let prefixDocs = [
 ]
 
 private func prefixDocument(_ name: String) throws -> Document {
-    let url = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent(name)
+    let url = URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent(name)
     return try parse([UInt8](try Data(contentsOf: url)))
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: prefixDocs, [true, false])
 func firstPageOfAPrefixIsTheFirstPageOfTheWholeRun(name: String, printed: Bool) throws {
     let doc = try prefixDocument(name)
@@ -56,7 +57,7 @@ func firstPageOfAPrefixIsTheFirstPageOfTheWholeRun(name: String, printed: Bool) 
     #expect(a == b, "\(name) printed=\(printed): page 1 differs under maxPages: 1")
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: prefixDocs)
 func aTwoPagePrefixIsTheFirstTwoPagesOfTheWholeRun(name: String) throws {
     // One page is the thumbnail's case and the easy one — a cap that lands mid-document

@@ -80,6 +80,8 @@ let ctrlKDPackage: TargetDependency = .package(product: "CtrlKD")
 // share — `../Shared`, a local package like the engine. The app and both appexes link it;
 // the test bundle reaches it through the app host, the same way it reaches CtrlKD.
 let sharedPackage: TargetDependency = .package(product: "SoftReturnShared")
+// The renderer, `../Rendering`, a local package like Shared: the app and both appexes link it.
+let renderingPackage: TargetDependency = .package(product: "SoftReturnRendering")
 // Job 532: Sparkle 2.9.6, exact (Jon's ruling: Sparkle IS in b34) -- see `project.packages`
 // below for the remote package declaration. App target only; no other target imports Sparkle.
 let sparklePackage: TargetDependency = .package(product: "Sparkle")
@@ -156,6 +158,7 @@ let appTarget: Target = .target(
         .target(name: "SoftReturnThumbnail"),
         ctrlKDPackage,
         sharedPackage,
+        renderingPackage,
         // Job 532: the RUNBOOK "FUTURE: Sparkle public-feed cutover" step 6 cashed in --
         // Sparkle now comes from its own SPM package (see `project.packages` below) instead
         // of the job-285 vendored Vendor/Sparkle-2.9.5/Sparkle.framework, which is deleted.
@@ -177,12 +180,15 @@ let appTarget: Target = .target(
             // generated renditions and AppIcon.appiconset's own into one asset, which is the
             // exact failure job 336 hit ("LG bundle blocked by actool"). NO keeps them apart.
             "ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS": "NO",
+            // No accent colour of our own: the system's stays. Tuist names "AccentColor" by default, and with no such
+            // colour set actool warns on every build.
+            "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "",
             "COMBINE_HIDPI_IMAGES": "YES",
-            "CURRENT_PROJECT_VERSION": "26",
+            "CURRENT_PROJECT_VERSION": "27",
             "ENABLE_HARDENED_RUNTIME": "YES",
             "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/../Frameworks"],
             "LSApplicationCategoryType": "public.app-category.productivity",
-            "MARKETING_VERSION": "4.5.0",
+            "MARKETING_VERSION": "4.6.0",
             "PRODUCT_MODULE_NAME": "SoftReturn",
             "SWIFT_EMIT_LOC_STRINGS": "YES",
         ],
@@ -206,7 +212,9 @@ let testsTarget: Target = .target(
     destinations: .macOS,
     product: .unitTests,
     bundleId: "me.beforeti.softreturn.tests",
-    deploymentTargets: .macOS("13.0"),
+    // macOS 14, not the app's 13: Xcode's XCTest and Swift Testing frameworks are built for 14 and later, and the
+    // tests only ever run on the Mac that builds them.
+    deploymentTargets: .macOS("14.0"),
     infoPlist: .default,
     sources: ["SoftReturnTests/**/*.swift", "SoftReturnTests/**/*.h", "SoftReturnTests/**/*.m"],
     resources: ["SoftReturnTests/Fixtures/**"],
@@ -223,6 +231,8 @@ let testsTarget: Target = .target(
     ],
     dependencies: [
         .target(name: "SoftReturn"),
+        // Test helpers (corpus gating, repo paths, self-removing scratch directories): tests only.
+        .package(product: "TestSupport"),
     ],
     settings: targetSettings(base: [
         // MDImporterTestHarness.m (job-101's executed-path CFPlugIn client) is Objective-C;
@@ -236,11 +246,16 @@ let uiTestsTarget: Target = .target(
     destinations: .macOS,
     product: .uiTests,
     bundleId: "me.beforeti.softreturn.uitests",
-    deploymentTargets: .macOS("13.0"),
+    // macOS 14, not the app's 13: Xcode's XCTest and Swift Testing frameworks are built for 14 and later, and the
+    // tests only ever run on the Mac that builds them.
+    deploymentTargets: .macOS("14.0"),
     infoPlist: .default,
     sources: ["SoftReturnUITests/**/*.swift"],
     dependencies: [
         .target(name: "SoftReturn"),
+        // The private-corpus gate the unit tests use (`Corpus`), so the two targets read the
+        // same variables the same way.
+        .package(product: "TestSupport"),
     ],
     settings: targetSettings(base: [:])
 )
@@ -252,48 +267,13 @@ let quickLookTarget: Target = .target(
     bundleId: "me.beforeti.softreturn.quicklook",
     deploymentTargets: .macOS("13.0"),
     infoPlist: .file(path: "SoftReturnQuickLook/Info.plist"),
-    // SpotlightFileIndexer/SpotlightNudge/SpotlightTriggerBreadcrumbs (Foundation+os only, no
-    // AppKit) are mirrored in verbatim, not hand-copied like ImportProvider's CtrlKD calls —
-    // an appex target can't import the app module, but Tuist can compile the SAME source path
-    // into both targets, so there is nothing here to drift out of sync the way a hand copy could.
+    // The Spotlight helpers (Foundation and os only) by path: an appex cannot import the app module, and Tuist can
+    // compile the same source into both, so nothing here can drift the way a hand copy could. The renderer is the
+    // SoftReturnRendering package; the Mac's own page views over it are the whole `SoftReturn/Rendering` folder.
     sources: ["SoftReturnQuickLook/**/*.swift", "SoftReturn/Support/SpotlightFileIndexer.swift",
               "SoftReturn/Support/SpotlightNudge.swift", "SoftReturn/Support/SpotlightTriggerBreadcrumbs.swift",
               "SoftReturn/Support/SpotlightIndexQueue.swift",
-              // Job 203: the QL default-preset preference — Foundation+CtrlKD only, so it
-              // mirrors in the same way the four files above already do. The preset registry
-              // it reads (`DocumentOperations.PageSettingsPreset`) comes from SoftReturnShared.
-              "SoftReturn/Support/QuickLookPageSettingsPreference.swift",
-              // Job 247 (ql-native): the native rendering path itself, mirrored the same
-              // way — `QuickLookNativeRenderer` and everything it calls
-              // (`DocumentRenderer`/`PagedDocumentView`/`NativeVectorGraphics`/
-              // `CanvasColor`, plus `DocumentState`/`Provenance`/`SettingsStore` from
-              // SoftReturnShared), all AppKit + CtrlKD + Foundation only, no app-only type
-              // outside this list.
-              "SoftReturn/Rendering/QuickLookNativeRenderer.swift",
-              // Batch 40 (M11): the view-based preview's progressive page loading, compiled into the app too for its tests.
-              "SoftReturn/Rendering/QuickLookProgressivePreview.swift",
-              // Batch 47 (M28a): a `.PIX` picture's preview, fitted; compiled into the app too for its tests.
-              "SoftReturn/Rendering/QuickLookPictureView.swift",
-              // Batch 29: the Quick Look render's platform-free half, shared with the iPhone's extensions.
-              "SoftReturn/Rendering/QuickLookEngineWork.swift",
-              "SoftReturn/Rendering/DocumentRenderer.swift",
-              "SoftReturn/Rendering/ModernScreenplay.swift",
-              "SoftReturn/Rendering/PagedDocumentView.swift",
-              "SoftReturn/Rendering/NativeVectorGraphics.swift",
-              // Job 490: `PageTextView.drawPCLGraphics`'s own PCL rectangle port — same
-              // mirror, same reasoning as `NativeVectorGraphics.swift` just above.
-              "SoftReturn/Rendering/NativePCLGraphics.swift",
-              "SoftReturn/Rendering/CanvasColor.swift",
-              // Job 306 (b18): same mirror — QL renders through the Native font mapping
-              // (job 247 ruling), so it needs its OWN registration of the bundled faces,
-              // same as SoftReturnThumbnail below.
-              "SoftReturn/Rendering/CourierPrimeFontRegistration.swift",
-              // Job 460: `PagedDocumentView`'s own diagnostic logging (`logPageDiagnostics`)
-              // gates on `SRDiagnosticsGate`, the module's ONE switch (see that file's own doc
-              // comment: "Foundation-only, no AppKit" — built to be shared exactly like this).
-              // Mirrored in the same way every other cross-target dependency of this file
-              // already is above, not hand-copied.
-              "SoftReturn/Diagnostics/SRDiagnosticsGate.swift"],
+              "SoftReturn/Rendering/**/*.swift"],
     resources: [
         // Job 306 (b18): this appex's own bundle is separate from the host app's — it
         // needs its own copy of the four TTFs to register from.
@@ -303,10 +283,11 @@ let quickLookTarget: Target = .target(
     dependencies: [
         ctrlKDPackage,
         sharedPackage,
+        renderingPackage,
     ],
     settings: targetSettings(base: [
-        "CURRENT_PROJECT_VERSION": "26",
-        "MARKETING_VERSION": "4.5.0",
+        "CURRENT_PROJECT_VERSION": "27",
+        "MARKETING_VERSION": "4.6.0",
         "SKIP_INSTALL": "YES",
         // Job 369: explicitly pinned, not a fix by itself — `xcodebuild -showBuildSettings`
         // confirmed this key is absent/unset project-wide (Tuist never sets it, and this
@@ -338,9 +319,9 @@ let importerTarget: Target = .target(
         ctrlKDPackage,
     ],
     settings: targetSettings(base: [
-        "CURRENT_PROJECT_VERSION": "26",
+        "CURRENT_PROJECT_VERSION": "27",
         "GENERATE_INFOPLIST_FILE": "NO",
-        "MARKETING_VERSION": "4.5.0",
+        "MARKETING_VERSION": "4.6.0",
         "SKIP_INSTALL": "YES",
         "WRAPPER_EXTENSION": "mdimporter",
         // Xcode auto-injects -lz (CtrlKD's linkedLibrary) for .app/.appExtension
@@ -357,30 +338,11 @@ let thumbnailTarget: Target = .target(
     bundleId: "me.beforeti.softreturn.thumbnail",
     deploymentTargets: .macOS("13.0"),
     infoPlist: .file(path: "SoftReturnThumbnail/Info.plist"),
-    // Same mirror as SoftReturnQuickLook — see that target's `sources` comment.
+    // As SoftReturnQuickLook: see that target's `sources` comment.
     sources: ["SoftReturnThumbnail/**/*.swift", "SoftReturn/Support/SpotlightFileIndexer.swift",
               "SoftReturn/Support/SpotlightNudge.swift", "SoftReturn/Support/SpotlightTriggerBreadcrumbs.swift",
               "SoftReturn/Support/SpotlightIndexQueue.swift",
-              "SoftReturn/Support/QuickLookPageSettingsPreference.swift",
-              // Job 247 (ql-native): same mirror as SoftReturnQuickLook — see that target's
-              // own comment.
-              "SoftReturn/Rendering/QuickLookNativeRenderer.swift",
-              // Batch 29: the Quick Look render's platform-free half, shared with the iPhone's extensions.
-              "SoftReturn/Rendering/QuickLookEngineWork.swift",
-              "SoftReturn/Rendering/DocumentRenderer.swift",
-              "SoftReturn/Rendering/ModernScreenplay.swift",
-              "SoftReturn/Rendering/PagedDocumentView.swift",
-              "SoftReturn/Rendering/NativeVectorGraphics.swift",
-              // Job 490: `PageTextView.drawPCLGraphics`'s own PCL rectangle port — same
-              // mirror, same reasoning as `NativeVectorGraphics.swift` just above.
-              "SoftReturn/Rendering/NativePCLGraphics.swift",
-              "SoftReturn/Rendering/CanvasColor.swift",
-              // Job 306 (b18): same mirror — the thumbnail also renders through the Native
-              // font mapping, same reasoning as SoftReturnQuickLook above.
-              "SoftReturn/Rendering/CourierPrimeFontRegistration.swift",
-              // Job 460: same mirror as SoftReturnQuickLook above — see that target's own
-              // comment on why `PagedDocumentView`'s diagnostic logging needs this file too.
-              "SoftReturn/Diagnostics/SRDiagnosticsGate.swift"],
+              "SoftReturn/Rendering/**/*.swift"],
     resources: [
         "Vendor/CourierPrime/*.ttf",
     ],
@@ -388,10 +350,11 @@ let thumbnailTarget: Target = .target(
     dependencies: [
         ctrlKDPackage,
         sharedPackage,
+        renderingPackage,
     ],
     settings: targetSettings(base: [
-        "CURRENT_PROJECT_VERSION": "26",
-        "MARKETING_VERSION": "4.5.0",
+        "CURRENT_PROJECT_VERSION": "27",
+        "MARKETING_VERSION": "4.6.0",
         "SKIP_INSTALL": "YES",
         // Job 369: same pin, same reasoning — see `quickLookTarget`'s settings above.
         "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
@@ -410,6 +373,9 @@ let softReturnScheme: Scheme = .scheme(
         [
             .relativeToManifest("TestPlans/Corpus.xctestplan"),
             .relativeToManifest("TestPlans/Fast.xctestplan"),
+            // The Corpus plan less the UI tests: the second half of a full run, which must start no UI-test runner and so
+            // raise no UI-automation prompt (macos/scripts/full-mac-test-run.sh).
+            .relativeToManifest("TestPlans/CorpusUnits.xctestplan"),
         ],
         configuration: "Debug"
     ),
@@ -445,6 +411,8 @@ let project = Project(
     packages: [
         .package(path: "../"),
         .package(path: "../Shared"),
+        .package(path: "../Rendering"),
+        .package(path: "../TestSupport"),
         .package(url: "https://github.com/sparkle-project/Sparkle", .exact("2.9.6")),
     ],
     settings: projectSettings,

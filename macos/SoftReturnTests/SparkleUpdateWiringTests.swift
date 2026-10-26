@@ -11,7 +11,7 @@ import Testing
 ///    would point every update check at the wrong feed or make signature verification fail.
 /// 2. The real app launch actually built a controller that resolved that SAME feed URL from
 ///    Info.plist (not just that the key exists) — and that under THIS test host specifically it
-///    stayed un-started (`AppDelegate`'s own `isTestHost` gate), so no test run ever risks
+///    stayed un-started (`AppDelegate`'s own `TestHost.isActive` gate), so no test run ever risks
 ///    Sparkle's first-launch automatic-checks permission prompt (a real, blocking `NSAlert`) or
 ///    touches the network. Deliberately does NOT invoke `checkForUpdates(_:)` itself — same
 ///    restraint job 285's file used for the old GitHub-based IBAction, which "ends in
@@ -44,7 +44,7 @@ import Testing
             URL(string: "https://raw.githubusercontent.com/jonmichaels/soft-return/main/appcast.xml"),
                 "the updater's own feedURL must resolve from Info.plist's SUFeedURL, not just exist there")
         // `XCTestConfigurationFilePath` is set for this very process, so `AppDelegate`'s own
-        // `isTestHost` check must have kept `startingUpdater: false` here -- an unstarted updater
+        // `TestHost.isActive` check must have kept `startingUpdater: false` here -- an unstarted updater
         // never reports itself checkable, regardless of how a real (non-test) launch would behave.
         #expect(!delegate.sparkleCanCheckForUpdatesForTesting,
                 "an unstarted-under-test updater should not report itself checkable")

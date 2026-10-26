@@ -103,6 +103,9 @@ public func run(
     }
 }
 
+/// The I/O half of `sr`: read each input, hand it to `ConversionJob`, then print what the
+/// job warns about and write what it produces. Which bytes come out, and what they are
+/// called, is the job's business.
 private func convertAll(
     _ options: Options,
     environment: CLIEnvironment,
@@ -117,6 +120,8 @@ private func convertAll(
         environment.writeOut(quirkListingJSON(QuirkRegistry.standard.list()).render())
         return ExitStatus.ok
     }
+
+    let job = ConversionJob(options: options, registry: registry)
 
     for path in options.files {
         let data: [UInt8]
@@ -135,30 +140,25 @@ private func convertAll(
             continue
         }
 
-        var doc: Document
+        let doc: Document
         do {
-            doc = try parse(data, variant: options.variant)
-        } catch {
+            doc = try job.parseDocument(data)
+        } catch ConversionJob.Failure.parse(let error) {
             environment.writeErr(
                 "sr: \(path): \(message(for: error)) "
                     + "(use --diagnose to inspect, --variant to force)")
             status = ExitStatus.fileFailure
             continue
-        }
-
-        // Quirks are resolved ONCE per document, here, before any emitter reads it -- so
-        // every requested format renders the same decision and the layout JSON's own
-        // report can never disagree with what ran. A name this build does not know is a
-        // usage error, not something to swallow: swallowing it would hand back output the
-        // caller did not ask for.
-        do {
-            doc = try QuirkRegistry.standard.applyQuirks(
-                to: doc, enable: options.quirksEnabled, disable: options.quirksDisabled,
-                mode: options.quirksMode)
-        } catch let QuirkError.unknownQuirk(name, known) {
+        } catch ConversionJob.Failure.unknownQuirk(let name, let known) {
+            // A name this build does not know is a usage error, not something to
+            // swallow: swallowing it would hand back output the caller did not ask for.
             environment.writeErr("sr: error: unknown quirk '\(name)' "
                 + "(known: \(known.joined(separator: ", ")))")
             return ExitStatus.usage
+        } catch ConversionJob.Failure.quirks(let error) {
+            environment.writeErr("sr: \(path): \(message(for: error))")
+            status = ExitStatus.fileFailure
+            continue
         } catch {
             environment.writeErr("sr: \(path): \(message(for: error))")
             status = ExitStatus.fileFailure
@@ -173,123 +173,38 @@ private func convertAll(
             continue
         }
 
-        // D5 (ruled 2026-08-05): when the user EXPLICITLY asked for modern and the input
-        // can only render printed (a print stream, or a ruler-line/columnar document —
-        // `isPrinted` is exactly that gate), say so once instead of silently disobeying
-        // the flag. The override itself stands — a print stream has no soft returns to
-        // unwrap — the CLI only explains itself. Quiet when modern was merely defaulted:
-        // every bare run of one of these files would otherwise print this on every file.
-        if options.modeExplicit, options.mode == .modern, isPrinted(doc) {
-            let kind = doc.detection?.variant == .printstream
-                ? "print stream" : "ruler-line document"
-            environment.writeErr("sr: \(path): \(kind) -- modern reflow is not possible; "
-                + "rendering printed")
-        }
-
-        // --comments + printed is a contradiction the CLI explains rather than silently
-        // resolving (ruling 2026-08-06 M9): WordStar printed nothing for a comment, and
-        // the facsimile doesn't either.
-        if options.commentsRequested,
-           options.mode == .printed || doc.detection?.variant == .printstream || doc.columnar,
-           doc.notes.contains(where: { $0.kind == .comment }) {
-            environment.writeErr("sr: \(path): comments are never part of the printed "
-                + "page -- WordStar did not print them, so the facsimile doesn't either; "
-                + "convert with --mode modern to see them")
-        }
-
-        // A driver-art document reflowed under modern will look strange, and the log
-        // should say why (ruling 2026-08-06): the driver's page art (colour knockouts,
-        // rules, hand-laid boxes) exists only at print time. Its CHARACTER substitutions
-        // are content and ARE applied.
-        if options.mode == .modern, doc.printerDriver == "LJ6DTP" {
-            environment.writeErr("sr: \(path): LJ6DTP driver document -- its print-time "
-                + "page art (boxes, rules, color) does not reflow; character "
-                + "substitutions applied. --mode printed reproduces the page")
-        }
-
-        // --page-settings applies ONCE to the resolved page, so every emitter (PDF
-        // geometry, RTF page setup) sees the same effective page (ruling 2026-08-05,
-        // "Page Settings at every layer") — mirrors `PDFWriter.swift`'s own `emitPDF`
-        // option for a caller using the library directly, without going through the CLI.
-        if let pageSettings = options.pageSettings, let page = doc.page {
-            doc.page = effectivePage(page, settings: pageSettings)
-        }
-
-        let base = stem(path)
-
-        // b24 round 19 (RULINGS-LEDGER PIX row, "PIX images RULED IN"): resolved+
-        // decoded ONCE per document, reused across every requested format (each PIX
-        // file is read and decoded at most once regardless of how many -t flags this
-        // run carries). Misses are reported on stderr once per document (not once per
-        // format) unless --pictures off, since a user who turned pictures off doesn't
-        // want to hear about missing ones either.
-        let pixResults: [PixResult] = doc.graphics.isEmpty ? []
-            : resolveDocumentPictures(doc, docPath: path, environment: environment)
-        if !pixResults.isEmpty, options.pictures != .off {
-            reportPixMisses(pixResults, pathLabel: path, docPath: path, environment: environment)
+        let plan = job.plan(doc, path: path, environment: environment)
+        for warning in plan.warnings {
+            environment.writeErr(warning)
         }
 
         for format in options.formats {
-            // Already validated at parse time, so a miss here is impossible unless the caller
-            // passed a different registry to `run` than to `parseArguments`.
-            guard let emitter = registry.getEmitter(format) else {
+            let target: ConversionJob.Target
+            do {
+                target = try job.target(format: format, plan: plan)
+            } catch {
                 environment.writeErr("sr: unknown format: \(format)")
                 status = ExitStatus.fileFailure
                 continue
             }
-
-            let destination: String
-            if let explicit = options.output {
-                destination = explicit
-            } else {
-                let directory = options.outdir ?? (dirname(path).isEmpty ? "." : dirname(path))
-                destination = joinPath(directory, base + emitter.ext)
-            }
+            let destination = target.destination
 
             // --pictures export writes PNG files beside the output for every applicable
             // format; MD's own embed mode degrades to the same export-and-link behavior
-            // (ruled: MD has no true embed) -- ONE stderr note for that degradation.
-            // The MD degradation note only fires in MODERN mode -- a Printed-mode MD
-            // body is emit_text's fenced facsimile (never consults imageLinks at all,
-            // by design: a fence is the emitter's own "verbatim" promise), so exporting
-            // files and printing the note for it would be pure waste, not a
-            // correctness issue but a confusing one.
+            // -- ONE stderr note for that degradation.
             var imageLinks: [Int: String] = [:]
-            let needExport = options.pictures == .export
-                || (format == "md" && options.pictures == .embed && options.mode == .modern)
-            if needExport, pixResults.contains(where: \.ok) {
-                let destDir = dirname(destination)
-                let imagesDir = joinPath(destDir.isEmpty ? "." : destDir, base + "-images")
-                let written = writeExportImages(pixResults, imagesDir: imagesDir, environment: environment)
+            if let export = target.imageExport {
+                let written = writeExportImages(export.images, imagesDir: export.directory,
+                                                environment: environment)
                 if !written.isEmpty {
-                    imageLinks = Dictionary(uniqueKeysWithValues:
-                        written.map { (idx, name) in (idx, "\(base)-images/\(name)") })
-                    if format == "md", options.pictures == .embed {
-                        environment.writeErr(
-                            "sr: \(path): Markdown has no true image embedding -- exporting "
-                                + "\(written.count) PNG file(s) to \(basename(imagesDir))/ and "
-                                + "linking to them instead (degradation per the pictures flag ruling)")
+                    imageLinks = export.links(written: written)
+                    if let note = export.degradationNote(path: path, writtenCount: written.count) {
+                        environment.writeErr(note)
                     }
                 }
             }
 
-            // No `pageSettings` here: the CLI already applied it once to `doc.page` above,
-            // so every format sees the identical effective page. (`EmitOptions.pageSettings`
-            // stays available to a caller using `emitPDF` directly, outside the CLI.)
-            let output = emitter.emit(doc, options.mode,
-                                      EmitOptions(title: base, notes: options.notes,
-                                                  styles: options.styles,
-                                                  fontsTarget: options.fontsTarget,
-                                                  noteRefs: options.noteRefs,
-                                                  headers: options.headers,
-                                                  lineNumbers: options.lineNumbers,
-                                                  toc: options.toc,
-                                                  inlineStyling: options.inlineStyling,
-                                                  pictures: options.pictures,
-                                                  pageNumbers: options.pageNumbers,
-                                                  sentenceSpacing: options.sentenceSpacing,
-                                                  pixResults: pixResults,
-                                                  imageLinks: imageLinks))
+            let bytes = job.render(plan, target, imageLinks: imageLinks)
 
             // D4 (sr-only ruling, 2026-08-05 — a sanctioned platform divergence from
             // ctrl-kd, which always overwrites silently: "it's a Mac"). `--force` bypasses
@@ -316,16 +231,6 @@ private func convertAll(
             do {
                 if let outdir = options.outdir {
                     try environment.createDirectory(outdir)
-                }
-                // Python decides between `open(dest, 'wb')` and `open(dest, 'w',
-                // encoding='utf-8')` with `isinstance(out, bytes)`. Here the emitter's return
-                // type says which it is and the compiler checks that both cases are handled —
-                // the job-010 payoff. Both arms end at the same call because the difference
-                // between them is entirely "does this need encoding first".
-                let bytes: [UInt8]
-                switch output {
-                case .text(let string): bytes = Array(string.utf8)
-                case .data(let raw): bytes = raw
                 }
                 try environment.writeFile(destination, bytes)
             } catch {

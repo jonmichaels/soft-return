@@ -1,5 +1,6 @@
 import AppKit
 import CtrlKD
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -185,7 +186,7 @@ private func makeState(_ bytes: [UInt8] = Sample.ws4) throws -> DocumentState {
         walk(MainMenu.build()) { item, path in
             guard let action = item.action else { return }
             // submenuAction: is AppKit's own for items that only open a submenu.
-            guard action != Selector(("submenuAction:")) else { return }
+            guard action != #selector(NSMenu.submenuAction(_:)) else { return }
             let handled = responders.contains { $0.instancesRespond(to: action) }
             if !handled {
                 unimplemented.append("\(path) -> \(NSStringFromSelector(action))")
@@ -628,19 +629,6 @@ extension WiringTests {
                 "Printed PDF export bytes differ with Show Invisibles on vs off")
     }
 
-    /// Finder's rule, and the spec's: never overwrite.
-    @Test @MainActor func exportNamingUniquifiesTheFinderWay() {
-        var taken: Set<String> = []
-        #expect(ExportEngine.uniqueName(basename: "PAPER", extension: "md") { taken.contains($0) }
-                == "PAPER.md")
-        taken.insert("PAPER.md")
-        #expect(ExportEngine.uniqueName(basename: "PAPER", extension: "md") { taken.contains($0) }
-                == "PAPER 2.md")
-        taken.insert("PAPER 2.md")
-        #expect(ExportEngine.uniqueName(basename: "PAPER", extension: "md") { taken.contains($0) }
-                == "PAPER 3.md")
-    }
-
     @Test @MainActor func exportActuallyWritesFiles() throws {
         let state = try makeState()
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -651,7 +639,7 @@ extension WiringTests {
         let products = try ExportEngine.render(
             document: state.document, state: state,
             formats: [.text, .markdown], notes: NoteSelection())
-        let written = try ExportEngine.write(products, to: directory, basename: "DOC")
+        let written = try ExportNaming.write(products, to: directory, basename: "DOC")
 
         #expect(written.count == 2)
         for url in written {
@@ -660,7 +648,7 @@ extension WiringTests {
             #expect(size > 0, "\(url.lastPathComponent) was written empty")
         }
         // Writing again must not overwrite.
-        let again = try ExportEngine.write(products, to: directory, basename: "DOC")
+        let again = try ExportNaming.write(products, to: directory, basename: "DOC")
         #expect(again.allSatisfy { !written.contains($0) }, "an export overwrote an existing file")
     }
 
@@ -707,12 +695,22 @@ extension WiringTests {
 
         try Data(Sample.ws4).write(to: directory.appendingPathComponent("DOC.WS"))
         try Data(Sample.plainText).write(to: directory.appendingPathComponent("NOEXT"))
-        try Data("not a document".utf8).write(to: directory.appendingPathComponent("thing.png"))
+        // Bytes the detector refuses (an Office file's header and binary blocks — the same made-up
+        // file the iPhone's error-state test proves is binary), named as a picture: the bytes decide.
+        var pictureBytes: [UInt8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1]
+        for block in 0..<64 {
+            pictureBytes += [UInt8](repeating: block % 2 == 0 ? 0x00 : 0xFF, count: 64)
+        }
+        try #require(detect(pictureBytes).variant == .binary, "the made-up file must be one the engine refuses")
+        try Data(pictureBytes).write(to: directory.appendingPathComponent("thing.png"))
+        // A WordStar document under a name WordStar never claimed: the bytes decide, not the name.
+        try Data(Sample.ws4).write(to: directory.appendingPathComponent("LETTER.DOC"))
 
         let model = BatchModel()
         model.add(urls: [directory], includeSubfolders: false)
-        #expect(model.items.count == 3, "all files must be listed, convertible or not")
-        #expect(model.items.filter(\.isConvertible).count == 2)
+        #expect(model.items.count == 4, "all files must be listed, convertible or not")
+        #expect(model.items.filter(\.isConvertible).count == 3)
+        #expect(model.items.first { $0.url.lastPathComponent == "LETTER.DOC" }?.isConvertible == true)
 
         let png = try #require(model.items.first { $0.url.pathExtension == "png" })
         #expect(!png.isConvertible)

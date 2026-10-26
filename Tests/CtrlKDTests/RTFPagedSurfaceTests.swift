@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// planning #264 items 2, 3 and 4 — the three RTF paged-surface defects the review packet
@@ -20,7 +21,7 @@ import Testing
 ///
 /// ITEM 4 (packet rows A3-A6) — FACING PAGES. The corpus's galley template sets one head on
 /// right-hand pages and another on left-hand ones; the RTF printed the first on every page
-/// and the second on none. `hfEventsParity` (planning #250) drives `\facingp` plus
+/// and the second on none. `HFEvent.parity` (planning #250) drives `\facingp` plus
 /// `\headerr`/`\headerl`; `headerAlign` (planning #255) drives `\qr`/`\qc`; `.mt`/`.hm`/
 /// `.pl`/`.mb`/`.fm` drive `\headery`/`\footery` by the PDF's own formula; `.poe`/`.poo`
 /// drive `\margmirror`.
@@ -43,7 +44,7 @@ import Testing
     }
 
     /// A one-paragraph document, with `dots` recorded the way the parser records them for
-    /// `pgnumCheckpoints`/`poeOrPooCheckpoints` to read.
+    /// `pgnumTimeline`/`parityPoTimeline` to read.
     static func doc(dots: [String] = [], trailingBreak: Bool = false,
                     paEofBlankAfter: Bool = false,
                     footers: [Int: String] = [:],
@@ -56,11 +57,10 @@ import Testing
         for (line, text) in footers {
             d.footers[line] = text
             d.hfEvents.append(HFEvent(kind: .footer, line: line, text: text, blockAnchor: 0))
-            d.hfEventsParity.append(nil)
         }
         for (kind, line, text, parity) in headEvents {
-            d.hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: 0))
-            d.hfEventsParity.append(parity)
+            d.hfEvents.append(HFEvent(kind: kind, line: line, text: text, blockAnchor: 0,
+                                      parity: parity))
             if kind == .header { d.headers[line] = text } else { d.footers[line] = text }
         }
         return d
@@ -303,12 +303,12 @@ import Testing
 
     // MARK: the real corpus
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+    @Test(.requiresSawyerArchive,
           arguments: [EmitMode.printed, .modern])
     func theGalleyTemplatePrintsBothOfItsHeads(mode: EmitMode) throws {
-        let path = sawyerArchivePath + "/REF/GALLEYS.DOT"
+        let path = Corpus.sawyerArchivePath + "/REF/GALLEYS.DOT"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let out = emitRTF(try parse([UInt8](data)), mode: mode)
         #expect(out.contains(#"\facingp"#))
@@ -316,14 +316,14 @@ import Testing
         #expect(out.contains(#"{\headerl "#) && out.contains("SAWYER"))
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func theGalleyTemplatesGeometry() throws {
         // `.mt 1.25i` (7.5 lines) `.hm .20i` (1.2) one head line -> 5.3 lines;
         // `.mb 1.50i` (9.0) `.fm .19i` (1.14) -> 6.86 lines. `.poo 5.8125i` /
         // `.poe 1.35i` mirror.
-        let path = sawyerArchivePath + "/REF/GALLEYS.DOT"
+        let path = Corpus.sawyerArchivePath + "/REF/GALLEYS.DOT"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let out = emitRTF(try parse([UInt8](data)), mode: .printed)
         #expect(out.contains(#"\headery1272"#) && out.contains(#"\footery1646"#))
@@ -336,12 +336,12 @@ import Testing
         #expect(out.contains(#"\margmirror"#))
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+    @Test(.requiresSawyerArchive,
           arguments: [EmitMode.printed, .modern])
     func aBareTrailingPaDocumentLosesItsBlankPage(mode: EmitMode) throws {
-        let path = sawyerArchivePath + "/STRENGTH.WS"
+        let path = Corpus.sawyerArchivePath + "/STRENGTH.WS"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = try parse([UInt8](data))
         #expect(!doc.paEofBlankAfter)
@@ -350,23 +350,23 @@ import Testing
         #expect(out.contains(Self.footerNum(mode)))       // and it gains its number
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+    @Test(.requiresSawyerArchive,
           arguments: [EmitMode.printed, .modern])
     func theOneDocumentThatReallyOpensAPageKeepsIt(mode: EmitMode) throws {
-        let path = sawyerArchivePath + "/REF/PAGESIZE.WS"
+        let path = Corpus.sawyerArchivePath + "/REF/PAGESIZE.WS"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = try parse([UInt8](data))
         #expect(doc.paEofBlankAfter)
         #expect(emitRTF(doc, mode: mode).contains(#"\page"#))
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func aRealPnDocumentStartsWhereItSays() throws {
-        let path = sawyerArchivePath + "/MACROS/HOLYMAC/4MAC1"
+        let path = Corpus.sawyerArchivePath + "/MACROS/HOLYMAC/4MAC1"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = try parse([UInt8](data))
         #expect(doc.page?.pnStart == 22)

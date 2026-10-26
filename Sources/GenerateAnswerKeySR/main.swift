@@ -1,5 +1,6 @@
 import Foundation
 import CtrlKD
+import GeneratorSupport
 
 /// Regenerate `TestDocs/oracle/answer_key_sr.json` — sr's OWN self-recorded oracle, for
 /// formats sr registers that ctrl-kd does not (Planning #198/#195, Engine-Test-Finalization-
@@ -46,32 +47,6 @@ let ctrlKDFormats: Set<String> = ["text", "markdown", "html", "rtf", "pdf", "lay
 let srOnlyFormats = srCanonicalFormats.filter { !ctrlKDFormats.contains($0) }.sorted()
 let modes: [EmitMode] = [.printed, .modern]
 
-struct GeneratorError: Error, CustomStringConvertible {
-    let message: String
-    var description: String { message }
-}
-
-/// This file lives at `Sources/GenerateAnswerKeySR/main.swift`; the repo root is two levels
-/// up (matching every other `#filePath`-relative lookup already in this repo, e.g.
-/// `CorpusParityManifest.url`, `PCLFidelityTests.swift`'s script path).
-let repoRoot = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-
-func gitInfo() throws -> (sha: String, date: String) {
-    func run(_ args: [String]) throws -> String {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["git", "-C", repoRoot.path] + args
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        try p.run()
-        p.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-    return (try run(["rev-parse", "HEAD"]), try run(["log", "-1", "--format=%cI", "HEAD"]))
-}
-
 struct CorpusDoc {
     let name: String
     let load: () throws -> [UInt8]
@@ -102,21 +77,9 @@ func loadCorpus() throws -> [CorpusDoc] {
         return docs
     }
     let archiveRoot = archive.hasSuffix("/") ? String(archive.dropLast()) : archive
-    let keyPath = URL(fileURLWithPath: src).deletingLastPathComponent()
-        .appendingPathComponent("tests/answer_key.json")
-    let data = try Data(contentsOf: keyPath)
-    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let groups = json["groups"] as? [String: Any],
-          let sawyer = groups["sawyer"] as? [String: Any],
-          let convertible = sawyer["convertible"] as? [String: Any]
-    else {
-        throw GeneratorError(message: "\(keyPath.path) did not parse in the expected shape")
-    }
-    for (name, raw) in convertible {
-        guard let dict = raw as? [String: Any], let path = dict["path"] as? String else { continue }
-        docs.append(CorpusDoc(name: name, load: {
-            [UInt8](try Data(contentsOf: URL(fileURLWithPath: archiveRoot).appendingPathComponent(path)))
-        }))
+    for sawyerDoc in try loadSawyerConvertibleDocs(ctrlkdSrc: src) {
+        let url = URL(fileURLWithPath: archiveRoot).appendingPathComponent(sawyerDoc.relativePath)
+        docs.append(CorpusDoc(name: sawyerDoc.name, load: { [UInt8](try Data(contentsOf: url)) }))
     }
     return docs
 }

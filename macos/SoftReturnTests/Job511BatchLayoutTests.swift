@@ -18,14 +18,11 @@ import Testing
 /// b32 misalignment under any of them — but the live pass is a strictly more trustworthy
 /// baseline going forward, and costs one settle sleep per test.
 ///
-/// Job 528 (b34 intake N2): jobs 511/518/522 above never reproduced Jon's real-session bug
-/// because none of them could — a SwiftUI `Picker` + `.frame(width:)` on macOS silently
-/// ignores that offered frame outside a headless test host (Jon's own ruling: rebuild it the
-/// way `SettingsWindowController` does, a genuine `NSPopUpButton` with a hard `widthAnchor`
-/// constraint). The pulldown-geometry tests below now query the real `NSPopUpButton`s
-/// directly and assert their width BY CONSTRAINT CONSTANT, not by re-measuring a rendered
-/// frame this headless session's negotiation happens to produce — see each test's own comment
-/// and job 528's report for the HONESTY CONSTRAINT this suite still operates under.
+/// The pulldowns are genuine `NSPopUpButton`s (`BatchPopUpButton`), so the tests below query
+/// them directly. Labels, the preview page and the info block are SwiftUI, which on macOS 26
+/// draws them inside its hosting view with no subview of their own, so those tests read the
+/// window as drawn (`RenderProbeKit.Drawing`). Each was checked against a broken layout (a
+/// wrapped label, a 240 pt preview, an off-centre info block) and failed on it.
 @Suite struct Job511BatchLayoutTests {
 
     @MainActor
@@ -48,47 +45,11 @@ import Testing
         return (controller, content)
     }
 
-    // MARK: - Job 528: real NSPopUpButtons, one shared width constraint, 5pt narrower than Settings
-
-    /// Job 528 rebuilt these 7 pulldowns as genuine `NSPopUpButton`s (`BatchPopUpButton`,
-    /// `BatchWindowController.swift`) — the same way `SettingsWindowController.popup(_:_:_:_:)`
-    /// builds its own — because the SwiftUI `Picker` + `.frame(width:)` this suite originally
-    /// measured (192.0pt: 185pt offered plus ~7pt of SwiftUI's own chrome) is exactly the
-    /// pattern Jon's b34 intake N2 ruling traced to a real-Aqua-session bug this headless suite
-    /// could never see: that offered frame is silently ignored outside a headless test host,
-    /// where each popup instead sizes to its widest menu item. This test asserts the fix BY
-    /// CONSTRAINT — every button's own active `widthAnchor` constraint constant — never by
-    /// re-measuring a rendered frame and hoping this session's negotiation matches Jon's.
-    @Test @MainActor func batchPopupWidthIsPinnedByAHardWidthConstraintOnEachControl() async throws {
-        let (_, content) = try await Self.makeWindow(withFile: false)
-        let buttons = RenderProbeKit.descendants(content).compactMap { $0 as? NSPopUpButton }
-        // Job 520 (N5): Page Numbering is a 6th pulldown, same shared width as the other five.
-        // Job 521 (N9): Sentence Spacing is a 7th, same shared width as the other six.
-        #expect(buttons.count == 7,
-                "expected 7 NSPopUpButtons (Variant/Style/Font/Size/Pictures/Page Numbering/Sentence Spacing), found \(buttons.count)")
-
-        let widthConstants: [CGFloat] = buttons.compactMap { button in
-            button.constraints.first { $0.firstAttribute == .width && $0.secondItem == nil && $0.isActive }?.constant
-        }
-        #expect(widthConstants.count == buttons.count,
-                "every pulldown must carry its own active width constraint directly on the NSPopUpButton, found \(widthConstants.count) of \(buttons.count)")
-
-        let uniqueWidths = Set(widthConstants)
-        #expect(uniqueWidths.count == 1, "all 7 pulldowns' width constraints must share one constant: \(uniqueWidths)")
-        #expect(uniqueWidths.first == 185,
-                "batch pulldown width constraint is \(uniqueWidths.first ?? -1)pt, expected 185pt (Settings' 190pt minus job 511's 5pt — BatchWindowController.popupWidth, unchanged by job 528)")
-    }
-
     // MARK: - 2b + 2c: no label wraps, every pulldown right-aligned as one column
 
-    /// Measures each `NSPopUpButton`'s own frame (no wrapping SwiftUI host to walk through
-    /// anymore — job 528 made these real controls), converted to the window content view's own
-    /// coordinate space. This is self-consistency data only, per job 528's HONESTY CONSTRAINT:
-    /// it proves the 7 hard-coded constants (label width, spacing, popup width) compose to one
-    /// shared column in THIS process — it is not, and cannot be, a claim about what a real Aqua
-    /// session renders. That said, unlike the old SwiftUI-frame measurement, this number is now
-    /// backed by an actual `NSLayoutConstraint` AutoLayout enforces the same way in every
-    /// session, not a cross-boundary size negotiation a real session was free to ignore.
+    /// The seven pulldowns read as one column: the same width, the same left and right edge,
+    /// all inside the window, and none narrower than its own widest menu item (a title that
+    /// does not fit is clipped).
     @Test @MainActor func allSevenPulldownsShareOneRightAlignedColumn() async throws {
         let (_, content) = try await Self.makeWindow(withFile: false)
         let buttons = RenderProbeKit.descendants(content).compactMap { $0 as? NSPopUpButton }
@@ -103,17 +64,21 @@ import Testing
         }
         #expect(absoluteFrames.count == buttons.count, "every pulldown must resolve an absolute frame")
 
-        // `ZZProbeJob528Diag.swift.unused` measured this directly: a bordered, rounded-bezel
-        // `NSPopUpButton`'s `.frame` is 7pt WIDER than its own `widthAnchor` constraint constant
-        // on BOTH windows (`alignmentRectInsets` — left 3 + right 4 — a universal AppKit
-        // property of this control style, not something job 528 introduced): Settings' own
-        // 190pt-constrained popup measures 197pt; Batch's 185pt-constrained popup measures
-        // 192pt. Auto Layout constrains the ALIGNMENT rect, not the raw frame, so 192 (not
-        // 185) is the CORRECT frame reading here — the same relationship Settings' own control
-        // has always had, not a regression this job introduced.
         let widths = Set(absoluteFrames.map { $0.width.rounded() })
-        #expect(widths.count == 1 && widths.first == 192,
-                "measured frame widths (\(widths)) should be 192pt (185pt widthAnchor constant + 7pt alignment-rect inset, same relationship Settings' own NSPopUpButton has)")
+        #expect(widths.count == 1, "all 7 pulldowns must be the same width: \(widths)")
+
+        for (button, frame) in zip(buttons, absoluteFrames) {
+            #expect(frame.minX >= content.bounds.minX && frame.maxX <= content.bounds.maxX,
+                    "a pulldown at \(frame) runs outside the window's \(content.bounds)")
+            // The title on show fits: a pulldown holding only its selected title needs no more
+            // than the frame. (A long font name in the Font menu is truncated when chosen, as
+            // in Settings; the default choices must not be.)
+            let probe = NSPopUpButton(frame: .zero, pullsDown: false)
+            probe.font = button.font
+            probe.addItem(withTitle: button.titleOfSelectedItem ?? "")
+            #expect(probe.intrinsicContentSize.width <= button.frame.width + 0.5,
+                    "'\(button.titleOfSelectedItem ?? "")' needs \(probe.intrinsicContentSize.width)pt in a \(button.frame.width)pt pulldown")
+        }
 
         let leftEdges = Set(absoluteFrames.map { $0.minX.rounded() })
         let rightEdges = Set(absoluteFrames.map { $0.maxX.rounded() })
@@ -124,93 +89,80 @@ import Testing
     }
 
     /// No label may wrap (Jon: "Variant" was wrapping its colon, "Pictures:" was wrapping as
-    /// "s:"). A wrapped `Text` renders as a TALLER `CGDrawingView` (two lines instead of one)
-    /// sitting where the label should be — so this finds each of the 7 pulldowns' own row
-    /// label BY POSITION (the nearest `CGDrawingView` immediately to that pulldown's left, at
-    /// the same row height) rather than guessing at glyph widths, which the window's OTHER
-    /// text (checkbox titles, GroupBox section headers, the file list's own labels) would also
-    /// match.
+    /// "s:"). SwiftUI on macOS 26 draws each label inside its hosting view, so this reads the
+    /// drawing: a label's ink sits left of its pulldown, and a one-line label stays inside the
+    /// pulldown's own height. A wrapped label is two lines tall, and its grid row centres the
+    /// pulldown on it, so its ink runs past the pulldown's top and bottom.
     @Test @MainActor func noLabelInTheLeftColumnWrapsToASecondLine() async throws {
-        let (_, content) = try await Self.makeWindow(withFile: false)
+        let (controller, content) = try await Self.makeWindow(withFile: false)
+        controller.window?.appearance = NSAppearance(named: .aqua)
         let buttons = RenderProbeKit.descendants(content).compactMap { $0 as? NSPopUpButton }
-        // Job 520 (N5): Page Numbering is a 6th pulldown. Job 521 (N9): Sentence Spacing is a 7th.
-        let countMessage = "expected 7 pulldowns (Variant/Style/Font/Size/Pictures/Page "
-            + "Numbering/Sentence Spacing), found \(buttons.count)"
-        #expect(buttons.count == 7, "\(countMessage)")
-
-        let allLabels = RenderProbeKit.descendants(content)
-            .filter { String(describing: type(of: $0)) == "CGDrawingView" }
-            .compactMap { view -> CGRect? in
-                guard let superview = view.superview else { return nil }
-                return superview.convert(view.frame, to: content)
-            }
-
-        var matchedLabels: [CGRect] = []
+        #expect(buttons.count == 7)
+        let drawing = try RenderProbeKit.Drawing(content)
         for button in buttons {
-            guard let superview = button.superview else { continue }
-            let buttonFrame = superview.convert(button.frame, to: content)
-            let sameRow = allLabels.filter { abs($0.midY - buttonFrame.midY) <= 3 && $0.maxX <= buttonFrame.minX }
-            let label = try #require(sameRow.max { $0.maxX < $1.maxX },
-                                      "no label found to the left of a pulldown at \(buttonFrame)")
-            matchedLabels.append(label)
-        }
-
-        #expect(matchedLabels.count == 7)
-        for label in matchedLabels {
-            #expect(label.height <= 16,
-                    "a label glyph is \(label.height)pt tall — taller than one line (16pt), suggesting it wrapped")
+            let pulldown = button.convert(button.bounds, to: content)
+            let strip = CGRect(x: 0, y: pulldown.minY - 3, width: pulldown.minX - 2, height: pulldown.height + 6)
+            let label = try #require(drawing.inkBounds(in: strip),
+                                     "no label drawn to the left of the pulldown at \(pulldown)")
+            #expect(label.minY >= pulldown.minY && label.maxY <= pulldown.maxY,
+                    "the label of '\(button.titleOfSelectedItem ?? "")' is drawn at \(label), past its pulldown's \(pulldown): it wrapped")
         }
     }
 
     // MARK: - 2a: preview fills the column and is centered with its info block
 
-    /// The preview page's own bordered image view (`_NSShapeHitTestingView`, the probe's own
-    /// finding for what `.border(_:)` backs on macOS) must reach close to the previewColumn's
-    /// real width (300pt, `BatchView.previewColumn`'s own `.frame(width: 300)`) rather than the
-    /// old 240pt-tall cap that left it around 185pt wide — "bigger... there's room in the
-    /// column" (Jon).
-    @Test @MainActor func previewImageFillsTheColumnWidth() async throws {
-        let (_, content) = try await Self.makeWindow(withFile: true)
-        let shapeViews = RenderProbeKit.descendants(content)
-            .filter { String(describing: type(of: $0)) == "_NSShapeHitTestingView" }
-        let preview = try #require(shapeViews.max { $0.frame.width < $1.frame.width },
-                                    "no bordered preview shape view found")
-        #expect(preview.frame.width >= 280,
-                "preview image is only \(preview.frame.width)pt wide — expected close to the column's 300pt")
+    /// The preview page as drawn: the unbroken drawn run through the preview column's middle,
+    /// down and then across (the page is white with a 1 pt border; the column around it is
+    /// undrawn, apart from the faint dividers at its edges). The column lies between the 300 pt
+    /// form and the file list.
+    @MainActor
+    private static func previewPage(in content: NSView, _ drawing: RenderProbeKit.Drawing) throws -> CGRect {
+        let list = try #require(RenderProbeKit.descendants(content).compactMap { $0 as? NSTableView }.first?.enclosingScrollView,
+                                "no file list")
+        let midX = (300 + list.convert(list.bounds, to: content).minX) / 2
+        func drawn(_ x: CGFloat, _ y: CGFloat) -> Bool { drawing.color(at: CGPoint(x: x, y: y)) != nil }
+        // The tallest unbroken run straight down the middle is the page.
+        var runs: [ClosedRange<CGFloat>] = []
+        for point in drawing.points(in: CGRect(x: midX, y: 0, width: 0.1, height: content.bounds.height))
+        where drawn(point.x, point.y) {
+            if let last = runs.last, point.y - last.upperBound <= 1 {
+                runs[runs.count - 1] = last.lowerBound...point.y
+            } else {
+                runs.append(point.y...point.y)
+            }
+        }
+        let tall = try #require(runs.max { $0.upperBound - $0.lowerBound < $1.upperBound - $1.lowerBound },
+                                "nothing drawn down the preview column at x \(midX)")
+        let midY = (tall.lowerBound + tall.upperBound) / 2
+        var left = midX, right = midX
+        while left > 0, drawn(left - 0.5, midY) { left -= 0.5 }
+        while right < content.bounds.maxX, drawn(right + 0.5, midY) { right += 0.5 }
+        return CGRect(x: left, y: tall.lowerBound, width: right - left + 0.5, height: tall.upperBound - tall.lowerBound)
     }
 
-    /// The Get-Info-style block beneath the preview must be centered UNDER the (now full-
-    /// width) preview, not pinned to the column's leading edge. Measured as: the block's own
-    /// bounding box (leftmost label start to rightmost value end, converted to the content
-    /// view's coordinate space) sits within a few points of the preview image's own midpoint —
-    /// exactly what the probe's real capture showed (block centre 467.25pt vs image centre
-    /// 467pt, both against the previewColumn's own 300pt span).
+    /// The preview page fills the 300 pt preview column (Jon: "bigger... there's room in the
+    /// column").
+    @Test @MainActor func previewImageFillsTheColumnWidth() async throws {
+        let (controller, content) = try await Self.makeWindow(withFile: true)
+        controller.window?.appearance = NSAppearance(named: .aqua)
+        let preview = try Self.previewPage(in: content, try RenderProbeKit.Drawing(content))
+        #expect(preview.width >= 280,
+                "the preview is drawn \(preview.width)pt wide at \(preview) — expected close to the column's 300pt")
+    }
+
+    /// The Get-Info block below the preview is centered under it: what is drawn below the page,
+    /// within the page's own span (grey labels and black values alike), is as far from the
+    /// page's left edge as from its right.
     @Test @MainActor func infoBlockIsCenteredUnderThePreview() async throws {
-        let (_, content) = try await Self.makeWindow(withFile: true)
-        let shapeViews = RenderProbeKit.descendants(content)
-            .filter { String(describing: type(of: $0)) == "_NSShapeHitTestingView" }
-        let preview = try #require(shapeViews.max { $0.frame.width < $1.frame.width })
-        let previewMidX = preview.frame.midX
-
-        // The info panel's rows are plain `CGDrawingView`s below the preview image — narrow
-        // (label) and wider (value) glyphs both included, so the block's bounding box is
-        // "everything below the preview's bottom edge". Also constrained to the preview
-        // column's own x-range: the controls column (a separate, unrelated set of GroupBoxes)
-        // shares this same absolute y-range and would otherwise get swept in too.
-        let belowPreview = RenderProbeKit.descendants(content)
-            .filter { String(describing: type(of: $0)) == "CGDrawingView" }
-            .compactMap { view -> CGRect? in
-                guard let superview = view.superview else { return nil }
-                return superview.convert(view.frame, to: content)
-            }
-            .filter { $0.minY >= preview.frame.maxY }
-            .filter { $0.minX >= preview.frame.minX - 30 && $0.maxX <= preview.frame.maxX + 30 }
-        #expect(belowPreview.count >= 8, "expected at least 8 info-panel label/value glyphs below the preview, found \(belowPreview.count)")
-
-        let blockMinX = belowPreview.map(\.minX).min() ?? 0
-        let blockMaxX = belowPreview.map(\.maxX).max() ?? 0
-        let blockMidX = (blockMinX + blockMaxX) / 2
-        #expect(abs(blockMidX - previewMidX) <= 4,
-                "info block's own centre (\(blockMidX)) is more than 4pt from the preview image's centre (\(previewMidX)) — not centered under it")
+        let (controller, content) = try await Self.makeWindow(withFile: true)
+        controller.window?.appearance = NSAppearance(named: .aqua)
+        let drawing = try RenderProbeKit.Drawing(content)
+        let preview = try Self.previewPage(in: content, drawing)
+        let below = CGRect(x: preview.minX, y: preview.maxY + 2,
+                           width: preview.width, height: content.bounds.height - preview.maxY - 2)
+        let block = try #require(drawing.drawnBounds(in: below), "no info block drawn below the preview at \(preview)")
+        #expect(block.height >= 100, "the info block below the preview is only \(block.height)pt tall: \(block)")
+        #expect(abs(block.midX - preview.midX) <= 4,
+                "the info block's centre (\(block.midX), \(block)) is not under the preview's (\(preview.midX), \(preview))")
     }
 }

@@ -43,7 +43,7 @@ public enum QuirkClass: String, Hashable, Sendable {
 }
 
 /// The baseline a caller starts from, before any per-name `enable`/`disable`.
-public enum QuirkMode: String, Hashable, Sendable {
+public enum QuirkMode: String, Hashable, Sendable, CaseIterable {
     /// Every applicable `auto` quirk, and no `opt-in` one. The default, and what the
     /// engine did before quirks existed.
     case auto

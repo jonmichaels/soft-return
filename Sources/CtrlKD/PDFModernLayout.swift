@@ -196,7 +196,7 @@ enum ModernFlowItem {
 /// captures with zero counter-examples):
 ///
 ///   1. `.op` — and `.pn`/`.pg` turn it back on, from where THEY sit. Read here through
-///      `pgnumAt`, the same block-granular state Printed reads.
+///      `Timeline.at`, the same block-granular state Printed reads.
 ///   2. ANY footer command (`.fo`, `.f1`-`.f8`), with text, bare, or carrying only
 ///      invisible characters. The footer REPLACES the number.
 ///   3. `.mb 0` — no footer row on the sheet at all. `autoPagenoRowY` is the one
@@ -209,21 +209,21 @@ enum ModernFlowItem {
 /// conjure a row onto a sheet that has none or overwrite a footer that occupies it.
 func modernAutoPagenoShows(_ doc: Document, bi: Int,
                            pageNumbers: EmitOptions.PageNumberMode,
-                           pgnumCheckpoints cps: [PgnumCheckpoint],
+                           pgnumTimeline cps: Timeline<Bool>,
                            footerInUse: Bool) -> Bool {
     if pageNumbers == .off || footerInUse { return false }
     // A page that closed with no content of its own (an explicit break with nothing
     // after it) has no position to read; it falls back to the document's opening state.
     let bi = max(bi, 0)
-    let pl = plAt(plCheckpoints(doc), bi)
-    let mb = mtMbAt(mtMbCheckpoints(doc), bi).mb
+    let pl = doc.plTimeline().at(bi)
+    let mb = doc.mtMbTimeline().at(bi).mb
     let fm = doc.page?.fmLines ?? 2.0
     guard autoPagenoRowY(pageHeight: resolvedPageHeight(doc, printed: true),
                          pl: pl, mb: mb, fm: fm, size: printedSize(doc)) != nil else {
         return false
     }
     if pageNumbers == .on { return true }
-    return pgnumAt(cps, bi)
+    return cps.at(bi)
 }
 
 func modernPageDict(_ doc: Document) -> PageGeometry? {
@@ -262,10 +262,10 @@ func modernPageDict(_ doc: Document) -> PageGeometry? {
 /// The floor is Printed's own, for Printed's own reason: a page has to hold the footnote
 /// floor's worth of lines (`footnoteFloor + 1`).
 func modernSheetH(_ doc: Document) -> Double {
-    let heightIn = modernPageDict(doc)?.heightIn ?? 11.0
+    let heightIn = modernPageDict(doc)?.heightIn ?? letterHeightIn
     if heightIn == 0 { return Double(PDFMetrics.pageHeight) }
     let floorPoints = PDFMetrics.lead * (footnoteFloor + 1)
-    return Double(max(floorPoints, roundHalfToEven(heightIn * 72.0)))
+    return Double(max(floorPoints, roundHalfToEven(inchesToPoints(heightIn))))
 }
 
 /// `(one column's own measure, the gutter)` in points, inside Modern's text frame —
@@ -314,13 +314,8 @@ func modernColumnWidth(_ width: Double, cols: Int, gutter: Double?)
 /// DECLARED value harms none of those. Port of `_modern_geometry`.
 public func modernGeometry(_ doc: Document) -> (left: Double, top: Double, bottom: Double, width: Double) {
     let page = modernPageDict(doc)
-    let mtDeclared = (page?.mtSource ?? .default) != .default
-    let mbDeclared = (page?.mbSource ?? .default) != .default
-    let poDeclared = (page?.poSource ?? .default) != .default
-    let margt = mtDeclared ? (page?.mtLines ?? 6.0) * 12.0 : 72.0
-    let margb = mbDeclared ? (page?.mbLines ?? 6.0) * 12.0 : 72.0
-    let margl = poDeclared ? (page?.poCols ?? 10.0) * 7.2 : 72.0
-    let pageW = (page?.pwIn ?? 8.5) * 72.0     // A4 files are narrower (2026-08-06)
+    let (margt, margb, margl) = modernMargins(page, unitsPerInch: pointsPerInch)
+    let pageW = inchesToPoints(page?.pwIn ?? letterWidthIn)     // A4 files are narrower (2026-08-06)
     let width = max(144.0, pageW - margl - margl)
     return (margl, margt, margb, width)
 }
@@ -938,7 +933,8 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
     // b26-modern item 3 (screenplay ruling, BUILD-SLATES.md item 27, Jon's decided
     // ruling): computed once, not per-line -- `detectScreenplayBlocks` already walks
     // the whole document itself.
-    let screenplayBlocks = detectScreenplayBlocks(doc)
+    let ctx = RenderContext(doc, printed: false)
+    let screenplayBlocks = ctx.screenplayBlocks
     // The page-marker rule (a)/(b) needs one more block index than `screenplayBlocks`
     // itself carries: a real screenplay's own page-number marker sits BEFORE its
     // scene's slugline (SCRIPT.WS's own shape -- the marker block immediately precedes
@@ -956,7 +952,7 @@ func modernFlow(_ doc: Document, keep: Set<NoteKind>,
     // planning #252 (Jon's ruling 2026-09-09): resolved ONCE per document, not per
     // token -- see `modernTokFont`'s own doc comment for the full reasoning. Ported
     // from ctrl-kd pdf.py's identical `nonprop_fallback` local, added the same round.
-    let nonpropFallback = !doc.fonts.isEmpty && doc.formatting.proportional == false
+    let nonpropFallback = ctx.nonpropFallback
     var flow: [ModernFlowItem] = []
     for (semI, item) in sem.items.enumerated() {
         switch item {
@@ -1948,7 +1944,8 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     // N9 (b33 field notes): this function only ever runs the Modern path (printed=false
     // by construction -- `emitPDF`'s own `else` branch), so 'auto' always resolves to
     // single here.
-    let ssOn = resolveSentenceSpacing(options.sentenceSpacing, printed: false)
+    let ctx = RenderContext(doc, printed: false, sentenceSpacing: options.sentenceSpacing)
+    let ssOn = ctx.sentenceSpacing
     // Also armed by `recordFurniture`: `ModernColumnRange` reports SEMANTIC item indices,
     // and this is where the flow's own items are mapped back to them. Arming it changes
     // no emitted byte -- the recorded index only ever reaches `BodyLine.semIndex`, which
@@ -1980,7 +1977,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     // E10 (Jon 2026-09-17): page furniture takes the body's own font chain, so this
     // function needs the same document-level `.ps off` predicate `modernFlow`/
     // `modernTokFont` resolve for body runs. Same expression, resolved once per render.
-    let nonpropFallback = !doc.fonts.isEmpty && doc.formatting.proportional == false
+    let nonpropFallback = ctx.nonpropFallback
 
     /// `image` non-nil marks an embedded pix line (b24 round 22) — `toks` is empty then,
     /// mirroring Python's `('image', ...)` tuple riding in the `toks` slot.
@@ -2482,7 +2479,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
     // M15: the `.op`/`.pn`/`.pg` state, resolved once for the document and read per page
     // at that page's own block — the same checkpoints the Printed writer reads.
     let pageNumbersMode = options.pageNumbers
-    let pgnumCps = pgnumCheckpoints(doc)
+    let pgnumCps = doc.pgnumTimeline()
     // M15: WHERE EACH FOOTER COMMAND WAS READ, off the document's own `hfEvents` rather
     // than off the page's `curF` snapshot. Two reasons, both measured:
     //   * "A FOOTER is emitted at the BOTTOM, so a `.fo`/`.f#` read ANYWHERE before the
@@ -2591,7 +2588,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
             && (footAnchors[0] <= page.endBlock || pi == pages.count - 1)
         if page.endBlock >= 0,
            modernAutoPagenoShows(doc, bi: page.endBlock, pageNumbers: pageNumbersMode,
-                                 pgnumCheckpoints: pgnumCps, footerInUse: footerInUse) {
+                                 pgnumTimeline: pgnumCps, footerInUse: footerInUse) {
             if recordFurniture != nil {
                 let placed = modernPlaceLine(modernHFToks(String(pageNo), pageNo: pageNo,
                                                           nonpropFallback: nonpropFallback),
@@ -2607,7 +2604,7 @@ func modernStreams(_ doc: Document, options: EmitOptions, res: FontResources,
             let sheet = modernPageDict(doc)
             recordFurniture.pointee.append(ModernPageFurniture(
                 pageIndex: pi, pageNumber: pageNo,
-                sheetWidth: Double(roundHalfToEven((sheet?.pwIn ?? 8.5) * 72.0)),
+                sheetWidth: Double(roundHalfToEven(inchesToPoints(sheet?.pwIn ?? letterWidthIn))),
                 sheetHeight: sheetH,
                 marginLeft: margl, marginTop: margt, marginBottom: margb,
                 textWidth: width,

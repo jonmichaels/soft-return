@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// A form feed on a physical line no longer throws that line's marks away (planning #270,
@@ -153,12 +154,12 @@ import Testing
 
     // MARK: the measured documents
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+    @Test(.requiresSawyerArchive,
           arguments: ["PRINT.TST", "DEFAULT/PRINT.TST"])
     func printTSTSetsItsHeadingInHelvLikeWS7(_ rel: String) throws {
-        let path = sawyerArchivePath + "/" + rel
+        let path = Corpus.sawyerArchivePath + "/" + rel
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = parseWS([UInt8](data))
         let heading = doc.blocks.flatMap { $0.lines }.flatMap { $0.spans }
@@ -173,13 +174,13 @@ import Testing
         #expect(lines.contains { $0.contains("Paragraph Indentation") })
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func noFontBlockInPrintTSTIsLeftUnapplied() throws {
         // `fonts[0]` is the document's own header default and carries no mark of its
         // own, so it is the one entry legitimately never tagged.
-        let path = sawyerArchivePath + "/PRINT.TST"
+        let path = Corpus.sawyerArchivePath + "/PRINT.TST"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = parseWS([UInt8](data))
         let used = Set(doc.blocks.flatMap { $0.lines }.flatMap { $0.spans }
@@ -187,15 +188,15 @@ import Testing
         #expect(Set(1..<doc.fonts.count).subtracting(used).isEmpty)
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+    @Test(.requiresSawyerArchive,
           arguments: [("REF/CODES.WS", [[108, 170], [180, 240]]),
                       ("REF/-TOC-TAG.WS", [[180, 240], [108, 170], [180, 210], [180, 240]])])
     func theTwoArchiveDocumentsWith15hBlocksReadRealFonts(
         _ rel: String, _ expected: [[Int]]
     ) throws {
-        let path = sawyerArchivePath + "/" + rel
+        let path = Corpus.sawyerArchivePath + "/" + rel
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let doc = parseWS([UInt8](data))
         #expect(doc.fonts.map { [$0.width1800, $0.height1440] } == expected)

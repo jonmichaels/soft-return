@@ -79,7 +79,7 @@ private func tailSuffixes(_ parts: [String]) -> [[String]] {
 /// filesystem root, whichever comes first. Port of `_ancestors` -- ported against
 /// `pathlib.Path.parent`'s contract (which `_ancestors` actually walks), not
 /// `os.path.dirname`'s: a bare relative path component (no `/` at all, e.g.
-/// "subdir", or the "." this walk's own base case produces) has `dirname() == ""`,
+/// "subdir", or the "." this walk's own base case produces) has `pathDirname() == ""`,
 /// but its pathlib parent is `Path(".")` -- a real, listable ancestor -- not the
 /// empty string. Round 2026-09-07: this is the same substitution `resolveDocDir`
 /// makes at the top of the walk, needed again here for every step ABOVE it, or a
@@ -90,7 +90,7 @@ private func ancestors(_ start: String, maxUp: Int) -> [String] {
     var out = [start]
     var cur = start
     for _ in 0..<maxUp {
-        let d = dirname(cur)
+        let d = pathDirname(cur)
         let parent = d.isEmpty ? "." : d      // "" -> cwd, pathlib's own base case
         if parent == cur { break }
         out.append(parent)
@@ -122,7 +122,7 @@ private func ciResolve(_ base: String, _ components: [String],
 /// input shape: a RELATIVE document path with no directory component at all (e.g.
 /// `sr -t pdf -o out.pdf 1SCREEN.WS`, run from the document's own directory).
 /// `Path("1SCREEN.WS").parent` is `Path('.')` -- a real, listable path meaning "the
-/// current directory" -- but this module's own `dirname()` (a deliberate mirror of
+/// current directory" -- but this module's own `pathDirname()` (a deliberate mirror of
 /// `os.path.dirname`, used elsewhere for output-filename naming, where `os.path`'s
 /// contract IS the right one) returns `""` for that same input, and `""` is not a
 /// directory `environment.listDirectory` can list (`FileManager.contentsOfDirectory
@@ -131,12 +131,12 @@ private func ciResolve(_ base: String, _ components: [String],
 /// Round 2026-09-07 (Jon, sr 4.0.3 field report, reproduced on Linux): this was
 /// the whole bug -- a RELATIVE document path could never find a sibling `.PIX` file,
 /// while the SAME document opened by its ABSOLUTE path worked, because an absolute
-/// path's `dirname()` is never empty. ctrl-kd was never affected: `pathlib.Path`'s
+/// path's `pathDirname()` is never empty. ctrl-kd was never affected: `pathlib.Path`'s
 /// `.parent` already returns `.` here, not `''`. The fix is this one substitution,
-/// not a change to `dirname()` itself -- `dirname()`'s other callers (output
+/// not a change to `pathDirname()` itself -- `pathDirname()`'s other callers (output
 /// filenames) still want the `os.path` answer.
 func resolveDocDir(_ docPath: String, environment: CLIEnvironment) -> String {
-    let raw = environment.isFile(docPath) ? dirname(docPath) : docPath
+    let raw = environment.isFile(docPath) ? pathDirname(docPath) : docPath
     return raw.isEmpty ? "." : raw
 }
 
@@ -198,11 +198,9 @@ func probePixCandidates(_ tagPayload: String, docPath: String, environment: CLIE
 /// every tag then reports `.unresolved`, exactly like a genuinely missing file.
 /// Decoding happens ONCE per document here regardless of how many output formats get
 /// requested — call this once, pass the result array to every emit call for that
-/// document. Port of `resolve_document_pictures`.
-/// `package` (not `internal`), planning #205 Task 2 -- same reasoning as `pagePresets`
-/// (`Arguments.swift`): `Sources/GenerateSawyerPresetDriftSR` needs real pix resolution to
-/// render the self-recorded `sawyer`-preset drift file.
-package func resolveDocumentPictures(_ doc: Document, docPath: String, environment: CLIEnvironment) -> [PixResult] {
+/// document. Port of `resolve_document_pictures`. `ConversionJob.plan` is the entry point
+/// for anything outside this module.
+func resolveDocumentPictures(_ doc: Document, docPath: String, environment: CLIEnvironment) -> [PixResult] {
     var results: [PixResult] = []
     for (idx, rawPath) in doc.graphics.enumerated() {
         var r = PixResult(index: idx, rawPath: rawPath)
@@ -248,10 +246,11 @@ package func resolveDocumentPictures(_ doc: Document, docPath: String, environme
 }
 
 /// One stderr line per unresolved/undecodable tag: "report, never fail" (ruled
-/// 2026-08-17). Not called automatically anywhere — `Run.swift` calls this once per
-/// document after `resolveDocumentPictures`. Port of `report_misses`.
-func reportPixMisses(_ results: [PixResult], pathLabel: String, docPath: String,
-                     environment: CLIEnvironment, maxAncestors: Int = 8) {
+/// 2026-08-17). `ConversionJob.plan` collects these once per document after
+/// `resolveDocumentPictures`. Port of `report_misses`.
+func pixMissMessages(_ results: [PixResult], pathLabel: String, docPath: String,
+                     environment: CLIEnvironment, maxAncestors: Int = 8) -> [String] {
+    var lines: [String] = []
     for r in results {
         guard let error = r.error else { continue }
         let name = pixBasename(r.rawPath)
@@ -268,36 +267,35 @@ func reportPixMisses(_ results: [PixResult], pathLabel: String, docPath: String,
                 where_ = " (no document path given to search near)"
             }
             let reason = error == .unresolved ? "not found" : "found but not readable"
-            environment.writeErr(
+            lines.append(
                 "sr: \(pathLabel): PIX image '\(name)' \(reason)\(where_) -- placeholder kept")
         case .textMode:
-            environment.writeErr(
+            lines.append(
                 "sr: \(pathLabel): PIX image '\(name)' is a text-mode (alphanumeric) "
                     + "capture -- not previewable in WordStar either, decoding not implemented "
                     + "-- placeholder kept")
         case .formatError:
-            environment.writeErr(
+            lines.append(
                 "sr: \(pathLabel): PIX image '\(name)' could not be decoded (malformed "
                     + "or an unsupported .PIX shape) -- placeholder kept")
         }
     }
+    return lines
 }
 
-/// Write every successfully-decoded image as a PNG file under `imagesDir` (created if
-/// needed), named from the tag's own basename (deduplicated when two tags share one).
-/// Returns `{index: filename}` (bare filename, not a path — callers join it under
-/// whatever relative prefix their own output uses). Used for `--pictures export`
-/// (every applicable format), AND for MD's embed mode (ruled degradation: MD has no
-/// true embed, so "embed" for MD means "export files + one stderr note"). Port of
-/// `write_export_images`.
-func writeExportImages(_ results: [PixResult], imagesDir: String,
-                       environment: CLIEnvironment) -> [Int: String] {
-    var written: [Int: String] = [:]
-    let okResults = results.filter { $0.ok }
-    guard !okResults.isEmpty else { return written }
-    guard (try? environment.createDirectory(imagesDir)) != nil else { return written }
+/// One PNG to write under an images directory, named from its tag.
+public struct ExportImage {
+    public let index: Int
+    public let name: String
+    public let png: [UInt8]
+}
+
+/// The file name for every successfully-decoded image, from the tag's own basename
+/// (deduplicated when two tags share one). Pure: nothing is written.
+func plannedExportImages(_ results: [PixResult]) -> [ExportImage] {
+    var planned: [ExportImage] = []
     var used: Set<String> = []
-    for r in okResults {
+    for r in results where r.ok {
         let base = stem(pixBasename(r.rawPath))
         let stemName = base.isEmpty ? "image\(r.index)" : base
         var name = stemName + ".png"
@@ -307,10 +305,29 @@ func writeExportImages(_ results: [PixResult], imagesDir: String,
             n += 1
         }
         used.insert(name)
-        guard let png = r.png, (try? environment.writeFile(joinPath(imagesDir, name), png)) != nil else {
+        if let png = r.png {
+            planned.append(ExportImage(index: r.index, name: name, png: png))
+        }
+    }
+    return planned
+}
+
+/// Write planned images under `imagesDir` (created if needed). Returns `{index: filename}`
+/// (bare filename, not a path) for the ones that were written; an image that fails to
+/// write is absent, so its output keeps the placeholder rather than link to a file that
+/// was never written. Used for `--pictures export` (every applicable format), AND for
+/// MD's embed mode (ruled degradation: MD has no true embed, so "embed" for MD means
+/// "export files + one stderr note"). Port of `write_export_images`.
+func writeExportImages(_ images: [ExportImage], imagesDir: String,
+                       environment: CLIEnvironment) -> [Int: String] {
+    var written: [Int: String] = [:]
+    guard !images.isEmpty else { return written }
+    guard (try? environment.createDirectory(imagesDir)) != nil else { return written }
+    for image in images {
+        guard (try? environment.writeFile(joinPath(imagesDir, image.name), image.png)) != nil else {
             continue
         }
-        written[r.index] = name
+        written[image.index] = image.name
     }
     return written
 }

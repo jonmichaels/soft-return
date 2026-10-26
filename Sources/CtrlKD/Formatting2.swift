@@ -213,20 +213,14 @@ public struct Formatting: Hashable, Sendable {
 /// neither (a stray `.oc` inside a manual's own prose, and the archive has those) leaves
 /// the state alone rather than guessing — which is why this returns nil, not false.
 private func onOff(_ arg: [UInt8]) -> Bool? {
-    let a = trimmed(arg).map(asciiUpper)
+    let a = trimmed(arg).map(ASCII.upper)
     if a.starts(with: Array("ON".utf8)) { return true }
     if a.starts(with: Array("OFF".utf8)) { return false }
     return nil
 }
 
-private func asciiUpper(_ b: UInt8) -> UInt8 { (b >= 0x61 && b <= 0x7A) ? b - 0x20 : b }
-private func asciiLower(_ b: UInt8) -> UInt8 { (b >= 0x41 && b <= 0x5A) ? b + 0x20 : b }
-
 private func trimmed(_ b: [UInt8]) -> [UInt8] {
-    var s = 0, e = b.count
-    while s < e, b[s] == 0x20 || b[s] == 0x09 { s += 1 }
-    while e > s, b[e - 1] == 0x20 || b[e - 1] == 0x09 || b[e - 1] == 0x0D { e -= 1 }
-    return Array(b[s..<e])
+    ASCII.rstrip(ASCII.lstrip(b, .blanks), .blanksAndReturn)
 }
 
 /// Planning #241 remainder (indent-state leak, sawyer/REF/WSFORMAT.WS) —
@@ -263,7 +257,7 @@ private func trimmed(_ b: [UInt8]) -> [UInt8] {
 /// reads raw `cmd` past `.RR`, the bare form reads the swallowed next
 /// physical line, whichever call site actually has the real bytes.
 func rulerPips(_ ruler: [UInt8]) -> (left: Int?, para: Int?, right: Int?) {
-    let upper = ruler.map(asciiUpper)
+    let upper = ruler.map(ASCII.upper)
     func find(_ b: UInt8) -> Int? {
         upper.firstIndex(of: b)
     }
@@ -283,12 +277,12 @@ func applyRulerMargins(_ ruler: [UInt8], _ state: inout FormatState) {
 /// Update running formatting state from one dot-command line.
 func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
     guard var (name, arg) = dotCommandNameAndArg(cmd) else { return }
-    if name.map(asciiUpper) == Array("P".utf8), arg.first == 0x23 {
+    if name.map(ASCII.upper) == Array("P".utf8), arg.first == 0x23 {
         // `.p#` — '#' is not a letter, so the shared name scanner splits it into name
         // 'P', arg '#...'; rejoin before dispatch.
         name = Array("P#".utf8)
         arg = Array(arg.dropFirst())
-    } else if name.map(asciiUpper) == Array("LHA".utf8), arg.isEmpty {
+    } else if name.map(ASCII.upper) == Array("LHA".utf8), arg.isEmpty {
         // `.lha` — auto-leading, written with no space. The shared name scanner takes
         // up to THREE letters, so it swallows the argument into the name; split it
         // back, the same repair `.p#` needs just above. `sawyer/DEFAULT/PRINT.TST` and
@@ -297,14 +291,14 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         name = Array("LH".utf8)
         arg = Array("a".utf8)
     }
-    switch String(decoding: name.map(asciiUpper), as: UTF8.self) {
+    switch String(decoding: name.map(ASCII.upper), as: UTF8.self) {
     case "OC":
         if let v = onOff(arg) { state.centering = v }
     case "OJ":
         // The manual leads with on/off; the archive really uses `.oj r` and `.oj c`.
         if let v = onOff(arg) {
             state.justify = v ? .justify : nil
-        } else if let first = trimmed(arg).first.map(asciiUpper) {
+        } else if let first = trimmed(arg).first.map(ASCII.upper) {
             if first == 0x43 { state.justify = .center }        // 'C'
             else if first == 0x52 { state.justify = .right }    // 'R'
         }
@@ -322,9 +316,9 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // else leaves the state standing, the same doctrine every other command in this
         // function follows for junk arguments. The archive writes `.pf on`, `.PF OFF`.
         //
-        // Byte-wise, and `trimmed`/`asciiLower` rather than Foundation's
+        // Byte-wise, and `trimmed`/`ASCII.lower` rather than Foundation's
         // `trimmingCharacters`/`lowercased`: this module deliberately imports nothing.
-        let pfArg = trimmed(arg).map(asciiLower)
+        let pfArg = trimmed(arg).map(ASCII.lower)
         if pfArg.starts(with: Array("dis".utf8)) {
             state.printReformat = "dis"
         } else if pfArg.starts(with: Array("off".utf8)) {
@@ -338,7 +332,7 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // Real syntax, from the archive rather than the manual's prose: `.pr or=l` /
         // `.pr or=p`. 18 of the 22 files that use `.pr` set landscape this way, and
         // every one was rendering portrait with no diagnostic. Register C18.
-        let a = trimmed(arg).map(asciiLower)
+        let a = trimmed(arg).map(ASCII.lower)
         if a.starts(with: Array("or=".utf8)), a.count > 3 {
             if a[3] == 0x6C { state.orientation = .landscape }      // 'l'
             else if a[3] == 0x70 { state.orientation = .portrait }  // 'p'
@@ -352,7 +346,7 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // takes its advance from the fonts on it (`fontLeadPt`). A NUMERIC `.lh`
         // switches the mode back off from where it sits. Seven archive files ask for
         // it; no other document in the corpus leads by its fonts at all.
-        if trimmed(arg).first.map({ asciiLower($0) == UInt8(ascii: "a") }) == true {
+        if trimmed(arg).first.map({ ASCII.lower($0) == UInt8(ascii: "a") }) == true {
             state.lhAuto = true
             return
         }
@@ -389,7 +383,7 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // archive writes both `.rm 65` and `.rm 6.5"`.
         guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
         var cols = resolveColsArg(value, unit)
-        let nameUpper = String(decoding: name.map(asciiUpper), as: UTF8.self)
+        let nameUpper = String(decoding: name.map(ASCII.upper), as: UTF8.self)
         let isLMOrPM = nameUpper == "LM" || nameUpper == "PM"
         if isLMOrPM, unit == nil || unit!.isEmpty {
             // `.lm 8` is a COLUMN NUMBER (1-based: text begins AT column 8 = 7 columns
@@ -398,15 +392,15 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
             // leftMargin means one thing -- offset columns -- to every consumer,
             // whichever way the file said it (found 2026-08-06 wiring Modern block
             // margins).
-            // `.pm` shares the SAME absolute column frame as `.lm`/`.po` (EmitRTF's
-            // `rtfPMFiTwips` doc comment) and is therefore ALSO 1-based -- missed when
-            // this gate was first written because nothing consumed paraMargin yet.
-            // Dormant until the b24 wave (PDFLayout's `printedPMFiPt`, EmitRTF's
-            // `rtfPMFiTwips`) started reading it; without this, a `.pm`-bearing block's
+            // `.pm` shares the SAME absolute column frame as `.lm`/`.po` (a column
+            // position, not a delta against `.lm`) and is therefore ALSO 1-based --
+            // missed when this gate was first written because nothing consumed
+            // paraMargin yet. Dormant until the b24 wave (PDFLayout's `printedPMFiPt`,
+            // which Printed RTF's `\fi` also reads) started reading it; without this, a `.pm`-bearing block's
             // first line sits one column right of the file's own bytes. Register (b26).
             cols = Swift.max(0.0, cols - 1.0)
         }
-        switch String(decoding: name.map(asciiUpper), as: UTF8.self) {
+        switch String(decoding: name.map(ASCII.upper), as: UTF8.self) {
         case "LM": state.leftMargin = cols
         case "RM": state.rightMargin = cols
         default: state.paraMargin = cols
@@ -448,7 +442,7 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // front matter often turns it off and the body turns it back on — and only the
         // AUTOMATIC number is affected. A `#` the author placed in a header or footer
         // prints either way; the spec names that as the explicit exemption.
-        state.autoPageNumbers = (String(decoding: name.map(asciiUpper), as: UTF8.self) == "PG")
+        state.autoPageNumbers = (String(decoding: name.map(ASCII.upper), as: UTF8.self) == "PG")
     case "PE":
         // `.pe` marks where endnotes should print instead of the document end.
         // Previously endnotes always went to the end regardless. Register C4.
@@ -737,7 +731,7 @@ public struct IndexEntry: Hashable, Sendable {
 func parseCollectDot(_ cmd: [UInt8], toc: inout [TOCEntry], index: inout [IndexEntry],
                      lineNumbering: inout Int?, blockIndex: Int) -> String? {
     guard cmd.count >= 3 else { return nil }
-    let c1 = asciiUpper(cmd[1]), c2 = asciiUpper(cmd[2])
+    let c1 = ASCII.upper(cmd[1]), c2 = ASCII.upper(cmd[2])
 
     if c1 == 0x54 && c2 == 0x43 {                                   // ".TC"
         var k = 3
@@ -748,7 +742,7 @@ func parseCollectDot(_ cmd: [UInt8], toc: inout [TOCEntry], index: inout [IndexE
         }
         if k < cmd.count, cmd[k] == 0x20 { k += 1 }                 // Python's `\s?`
         toc.append(TOCEntry(level: level,
-                            text: decodeCP437(rstripASCII(Array(cmd[k...]))),
+                            text: decodeCP437(ASCII.rstrip(Array(cmd[k...]), .blanksAndReturn)),
                             blockIndex: blockIndex))
         return nil
     }
@@ -774,7 +768,7 @@ func parseCollectDot(_ cmd: [UInt8], toc: inout [TOCEntry], index: inout [IndexE
     if c1 == 0x49 && c2 == 0x58 {                                   // ".IX"
         var k = 3
         if k < cmd.count, cmd[k] == 0x20 { k += 1 }
-        index.append(IndexEntry(text: decodeCP437(rstripASCII(Array(cmd[k...]))),
+        index.append(IndexEntry(text: decodeCP437(ASCII.rstrip(Array(cmd[k...]), .blanksAndReturn)),
                                 blockIndex: blockIndex))
         return nil
     }
@@ -785,12 +779,6 @@ func parseCollectDot(_ cmd: [UInt8], toc: inout [TOCEntry], index: inout [IndexE
         lineNumbering = Int(value) > 0 ? Int(value) : nil
     }
     return nil
-}
-
-private func rstripASCII(_ b: [UInt8]) -> [UInt8] {
-    var e = b.count
-    while e > 0, b[e - 1] == 0x20 || b[e - 1] == 0x09 || b[e - 1] == 0x0D { e -= 1 }
-    return Array(b[..<e])
 }
 
 /// Python's `bytes.split()` with no argument: split on runs of ASCII whitespace, dropping

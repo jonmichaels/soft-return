@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 
 /// The boundary this package exists for: nothing in `Sources/` may import AppKit or UIKit
 /// (or Cocoa, which is AppKit under another name). The iOS app's build would reject an
@@ -16,13 +17,7 @@ import Testing
         try! Regex(#"^\s*(@\w+(\([^)]*\))?\s+)*((public|package|internal|fileprivate|private)\s+)?import\s+((typealias|struct|class|enum|protocol|let|var|func)\s+)?(AppKit|UIKit|Cocoa)\b"#)
     }
 
-    static var sourcesDirectory: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SoftReturnSharedTests/
-            .deletingLastPathComponent()  // Tests/
-            .deletingLastPathComponent()  // Shared/
-            .appendingPathComponent("Sources")
-    }
+    static var sourcesDirectory: URL { RepoPaths.url("Shared/Sources") }
 
     static func swiftSources() throws -> [URL] {
         let enumerator = try #require(FileManager.default.enumerator(

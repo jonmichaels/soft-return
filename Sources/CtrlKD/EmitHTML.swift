@@ -364,7 +364,6 @@ private func htmlNoteListItem(_ entry: NoteListEntry, linkComments: Bool = false
 ///   which note kinds get an inline reference and a trailing `doc-endnotes` section — see
 ///   `htmlBodySpan`/`htmlNoteListItem`.
 @Sendable
-/// `text-align` for a block, or "" for WordStar's default.
 /// Two-decimal formatting without Foundation, matching Python's `'%.2f'`.
 func fixedTwoDecimals(_ v: Double) -> String {
     // `Int(_:)` truncates, so +0.5 rounds half away from zero. `.rounded()` would
@@ -373,15 +372,6 @@ func fixedTwoDecimals(_ v: Double) -> String {
     let whole = scaled / 100
     let frac = abs(scaled % 100)
     return "\(whole)." + (frac < 10 ? "0\(frac)" : "\(frac)")
-}
-
-func htmlAlignAttribute(_ align: Alignment) -> String {
-    switch align {
-    case .left: return ""
-    case .center: return #" style="text-align:center""#
-    case .right: return #" style="text-align:right""#
-    case .justify: return #" style="text-align:justify""#
-    }
 }
 
 private let htmlAlignCSS: [Alignment: String] = [
@@ -507,11 +497,11 @@ func sliceSpans(_ spans: [Span], start: Int, end: Int? = nil) -> [Span] {
 /// comment, so the absence of breaks reads as a decision rather than an omission.
 /// Port of `_print_css`.
 func printCSS(_ doc: Document, hasBreak: Bool, hasKeep: Bool, printed: Bool = true) -> String {
-    let wIn = doc.page?.pwIn ?? 8.5
-    let hIn = doc.page?.heightIn ?? 11.0
-    let topIn = (doc.page?.mtLines ?? 3.0) / 6.0          // 6 LPI
-    let botIn = (doc.page?.mbLines ?? 8.0) / 6.0
-    let sideIn = (doc.page?.poCols ?? 8.0) / 10.0         // 10 CPI
+    let wIn = doc.page?.pwIn ?? letterWidthIn
+    let hIn = doc.page?.heightIn ?? letterHeightIn
+    let topIn = (doc.page?.mtLines ?? defaultMtLines) / linesPerInch          // 6 LPI
+    let botIn = (doc.page?.mbLines ?? defaultMbLines) / linesPerInch
+    let sideIn = (doc.page?.poCols ?? defaultPoCols) / colsPerInch         // 10 CPI
     var rules: [String] = []
     rules.append("@page{size:\(cssInches(wIn))in \(cssInches(hIn))in;"
                  + "margin:\(cssInches(topIn))in \(cssInches(sideIn))in "
@@ -876,15 +866,16 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
         options.notes.remove(.comment)
     }
     // N9 (b33 field notes): mode-aware default, flag overrides either way.
-    let ssOn = resolveSentenceSpacing(options.sentenceSpacing, printed: printed)
-    let refNotes = inlineReferenceNotes(doc)
+    let ctx = RenderContext(doc, printed: printed, sentenceSpacing: options.sentenceSpacing)
+    let ssOn = ctx.sentenceSpacing
+    let refNotes = ctx.refNotes
     // HTML has no real pagination in EITHER mode -- a pagebreak is only ever a
     // decorative `<hr class="pb">`, never a page boundary that keeps two same-numbered
     // notes apart (unlike Printed/Modern PDF's real pages). So HTML takes the same
     // collision-triggered continuous renumbering as Modern TXT/MD, in printed mode too
     // (ruling 2026-08-24: "HTML needs it as well" -- measured and ruled without a mode
     // qualifier).
-    let labels = pagelessNoteLabels(doc)
+    let labels = ctx.noteLabels(.pageless)
     // `prefixed` reference labels (ruling 2026-08-06 M8) change the visible mark text
     // only; ids and sections are structural and stay put.
     let shownMap: [Int: String]? = (options.noteRefs == .prefixed && !printed)
@@ -917,27 +908,27 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
     let blockRows: [Int: [(line: Line, structure: RowStructure?)]] =
         printed ? [:] : classifyModernBlocks(doc)
     let builder = HTMLListBuilder()
-    let margin = docMargin(doc)
-    let (conventionIndent, headPosition) = paragraphLayoutContext(doc)
+    let margin = ctx.margin
+    let (conventionIndent, headPosition) = (ctx.conventionIndent, ctx.headPosition)
     // planning #252 (Jon's ruling 2026-09-09): resolved ONCE per document, same rule
     // as emitRTF's/modernFlow's own -- false whenever printed, so every call site
     // below can carry this unconditionally rather than branch on mode itself.
     // Ported from ctrl-kd emit.py's identical addition.
-    let nonpropFallback = !printed && !doc.fonts.isEmpty && doc.formatting.proportional == false
+    let nonpropFallback = ctx.nonpropFallback
     // b24 round 20b (slate item 13): screenplay-detected regions get verse-class
     // (line/indent-preserving) treatment -- see emitText's identical comment for the
     // doctrine. Not printed: a facsimile already preserves every line's own position.
-    let screenplayBlocks = printed ? [] : detectScreenplayBlocks(doc)
+    let screenplayBlocks = ctx.screenplayBlocks
 
     // Quote-block CONTINUITY (round 4): consecutive units in the same quote-classified
     // style are ONE quote block, not one <blockquote> per paragraph unit nor per WordStar
     // Block. `quoteBuffer` accumulates <p> strings across units AND across Blocks as long
     // as SOME quote style keeps matching and nothing else intervenes; `flushQuote` closes
-    // it into one <blockquote> the moment it doesn't. `quoteIndentCols` is the GROUP's own
+    // it into one <blockquote> the moment it doesn't. `quoteGroup` holds the GROUP's own
     // first-line indent, computed once from the group's first paragraph and reused for
     // every paragraph in it (the source's own typed indent is not reliable per paragraph).
     var quoteBuffer: [String] = []
-    var quoteIndentCols: Int?
+    var quoteGroup = QuoteIndentGroup()
 
     func flushQuote() {
         if !quoteBuffer.isEmpty {
@@ -955,7 +946,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             parts.append("<blockquote>" + quoteBuffer.joined() + "</blockquote>")
             quoteBuffer.removeAll()
         }
-        quoteIndentCols = nil
+        quoteGroup.reset()
     }
 
     // planning #264 item 4 (packet row A10, extended): see `trailingPASkipIndex`
@@ -1096,28 +1087,16 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
             func flushPlain() {
                 guard !plainRunLines.isEmpty else { return }
                 let unitConventionIndent = plainRunIsBlockStart ? conventionIndent : nil
-                let units = assembleParagraphUnits(plainRunLines, margin: margin,
-                                                   headPosition: headPosition[bi] ?? false,
-                                                   conventionIndent: unitConventionIndent,
-                                                   wrap: block.wrap)
-                for unit in units {
-                    // round 7 (Register C23): a wrap=off block's unit is ALWAYS treated as
-                    // verse here too -- assembleParagraphUnits already returns it as one
-                    // whole-block unit unconditionally, but this is where a NON-verse
-                    // multi-line unit gets flowed into one line; without the `!block.wrap`
-                    // guard that flow logic would still run on a hand-positioned block's
-                    // lines and destroy the layout via a different mechanism.
-                    let isVerse = unit.count > 1 && (!block.wrap || looksLikeVerse(unit, dominantStyles: dominant)
-                                                     || screenplayBlocks.contains(bi))
-                    let firstStripped = maybeStripAlign(block, unit[0].spans)
-                    var (indentCols, first) = splitLeadingIndent(firstStripped)
-                    if quote {
-                        // round 4: the quote GROUP's own first paragraph sets the indent
-                        // for every paragraph in the group, not each one's own raw column
-                        // count -- the source carries it inconsistently.
-                        if quoteIndentCols == nil { quoteIndentCols = indentCols }
-                        indentCols = quoteIndentCols!
-                    }
+                let units = modernParagraphUnits(plainRunLines, block: block, blockIndex: bi,
+                                                 margin: margin,
+                                                 headPosition: headPosition[bi] ?? false,
+                                                 conventionIndent: unitConventionIndent,
+                                                 dominant: dominant,
+                                                 screenplayBlocks: screenplayBlocks,
+                                                 quote: quote, quoteGroup: &quoteGroup)
+                for paragraph in units {
+                    let (unit, indentCols, first, isVerse) =
+                        (paragraph.lines, paragraph.indentCols, paragraph.first, paragraph.isVerse)
                     var rendered = [htmlLine(first, refNotes: refNotes, labels: labels, options: options,
                                              shownMap: shownMap, sentenceSpacing: ssOn,
                                              nonpropFallback: nonpropFallback)]
@@ -1198,7 +1177,7 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
                 guard let s = structure, let kind = s.kind else {
                     // Only the untagged, spaces-padded mechanism is new here (rule 3's
                     // second half) -- a real align=center/right/justify tag already
-                    // renders correctly via `htmlAlignAttribute` below and is left
+                    // renders correctly via the block's `text-align` property below and is left
                     // exactly as it was, so a document using only the tag stays
                     // byte-identical.
                     if let s = structure, s.centered, s.centerVia == .spaces {

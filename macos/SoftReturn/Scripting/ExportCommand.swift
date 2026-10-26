@@ -9,8 +9,8 @@ import Foundation
 ///
 /// Job 254 (`export-specifier`): this used to be an `NSScriptCommand` subclass bound via
 /// `<cocoa class="...">` with its own `performDefaultImplementation()`, decoding
-/// `directParameter as? WSDocument`. Job 252's field probe (`AppleEventSelfSendProbe
-/// .performExport`) proved that cast never succeeds against a real Apple Event — export's
+/// `directParameter as? WSDocument`. A field probe (since removed)
+/// proved that cast never succeeds against a real Apple Event — export's
 /// direct-parameter is an OBJECT (`type="document"`), and Cocoa never hands the resolved
 /// object (or even the unevaluated specifier — Candidate A, evaluating it by hand inside
 /// `performDefaultImplementation()`, did not fix it either) to a custom command class at
@@ -70,6 +70,15 @@ enum ExportCommand {
         /// ruling: no Settings item) — a plain literal default, same shape as `lineNumbers`/
         /// `styles` above.
         var sentenceSpacing: EmitOptions.SentenceSpacingMode = .auto
+        /// The quirks to run: the document's own, as its window shows them (R-126), unless the `quirks`, `enabling
+        /// quirks` or `disabling quirks` parameters say otherwise (R-127).
+        var quirks: QuirkChoices = .shipped
+
+        /// The six per-export choices as the one value the shared layer takes.
+        var choices: ExportChoices {
+            ExportChoices(headers: headers, toc: toc, inlineStyling: inlineStyling, pictures: pictures,
+                          pageNumbers: pageNumbers, sentenceSpacing: sentenceSpacing)
+        }
     }
 
     enum DecodeError: Error, LocalizedError, Equatable {
@@ -96,7 +105,8 @@ enum ExportCommand {
         arguments: [String: Any], documentStyle: ViewStyle,
         defaultHeaders: Bool = true, defaultTOC: Bool = false, defaultInlineStyling: Bool = true,
         defaultPictures: EmitOptions.PixMode = .embed,
-        defaultPageNumbers: EmitOptions.PageNumberMode = .auto
+        defaultPageNumbers: EmitOptions.PageNumberMode = .auto,
+        documentQuirks: QuirkChoices = .shipped
     ) throws -> Arguments {
         guard let destination = arguments["scriptingDestination"] else {
             throw DecodeError.missingDestination
@@ -166,7 +176,8 @@ enum ExportCommand {
             noteRefs: noteRefs, pageSettings: pageSettings,
             headers: headers, toc: toc, inlineStyling: inlineStyling, pictures: pictures,
             lineNumbers: lineNumbers, styles: styles, fontsTarget: fontsTarget,
-            pageNumbers: pageNumbers, sentenceSpacing: sentenceSpacing)
+            pageNumbers: pageNumbers, sentenceSpacing: sentenceSpacing,
+            quirks: try ScriptingEnumCoding.quirks(from: arguments, baseline: documentQuirks))
     }
 
     /// Job 504: `internal`, not `private` — `ConvertCommand.decode` reuses this exact
@@ -175,24 +186,5 @@ enum ExportCommand {
     static func setNote(_ kind: NoteKind, in notes: inout Set<NoteKind>, from flag: Bool?) {
         guard let flag else { return }
         if flag { notes.insert(kind) } else { notes.remove(kind) }
-    }
-
-    /// Job 504 (Jon's ruling, verbatim: "AppleScript overwrite should handle it like a Mac
-    /// would: add a ' 2' to the end of the filename (before extension)"): scripted `export`
-    /// never clobbers a pre-existing file at the requested destination — on collision this
-    /// reuses `DocumentOperations.uniqueFileName`'s Finder-style counter (the same rule
-    /// `convert`'s `to folder` path and a re-downloaded update already use) to find "NAME
-    /// 2.ext", then "NAME 3.ext", and so on. Pure and file-system-free (`exists` is
-    /// caller-supplied, exactly `uniqueFileName`'s own shape) so this is testable without
-    /// touching disk; `WSDocument.handleExportScriptCommand` supplies a real
-    /// `FileManager.fileExists` check.
-    static func uniqueDestination(for destination: URL, exists: (URL) -> Bool) -> URL {
-        let directory = destination.deletingLastPathComponent()
-        let basename = destination.deletingPathExtension().lastPathComponent
-        let ext = destination.pathExtension
-        let name = DocumentOperations.uniqueFileName(basename: basename, extension: ext) { candidate in
-            exists(directory.appendingPathComponent(candidate))
-        }
-        return directory.appendingPathComponent(name)
     }
 }

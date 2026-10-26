@@ -140,7 +140,7 @@ final class BottomBar: NSView {
     /// (<detected>)" item's own title is never the button's displayed text, but it is
     /// still an item in the menu, and the ruling says "widest possible item").
     private static let variantCandidates: [String] = {
-        let names = [Variant.ws4, .ws5plus, .printstream, .text].map { variantName($0) }
+        let names = [Variant.ws4, .ws5plus, .printstream, .text].map(\.shortName)
         var out: [String] = []
         for name in names {
             out += provenanceSuffixes.map { name + $0 }
@@ -195,6 +195,8 @@ final class BottomBar: NSView {
     /// `Job454ButtonWidthTests.noReachableTitleClipsItsButton` is the permanent guard: it fails
     /// the day any future title (a new variant, a new preset, a longer localization) eats into
     /// that padding.
+    ///
+    /// The probe that measured these figures is gone; the figures stand, and the guard test is what keeps them true.
     private static let buttonWidthReduction: CGFloat = 5
 
     private static let variantControlWidth = fixedWidth(candidates: variantCandidates) - buttonWidthReduction
@@ -326,6 +328,11 @@ final class BottomBar: NSView {
     /// items from the view's plain `frame`, per `NSMenuItem.h`), so it is measured and laid
     /// out by hand instead, the same way `fixedWidth(candidates:)` above already measures
     /// AppKit's own intrinsic sizing rather than guessing at it.
+    ///
+    /// Workaround, kept (reviewed 2026-10-26, macOS 26.7): a hand-built header replaces `NSMenuItem.sectionHeader(title:)` by
+    /// Jon's job-315 ruling (headers stand out; the system's draws grey). The insets were measured against AppKit's
+    /// own menu items on macOS 15; re-measure when a macOS release changes menu item padding, and drop the view for
+    /// `.sectionHeader` if a release ever draws it in the label colour, bold.
     private static let headerHorizontalInset: CGFloat = 14
     private static let headerVerticalInset: CGFloat = 3
 
@@ -353,7 +360,7 @@ final class BottomBar: NSView {
             // NO per-item target/action — see the note on `apply(menu:title:to:label:)`
             // below for why. This item's role is purely to carry a title, badge, and
             // `representedObject` for the popup's OWN action to read back.
-            let item = NSMenuItem(title: Self.variantName(variant), action: nil, keyEquivalent: "")
+            let item = NSMenuItem(title: variant.shortName, action: nil, keyEquivalent: "")
             item.representedObject = variant
             let isCurrent = variant == current.value
             Self.applyStateBadge(to: item,
@@ -366,7 +373,7 @@ final class BottomBar: NSView {
 
         // "Auto" is the way back to the detector's own answer — and it names what that
         // answer was, so choosing it is not a leap of faith.
-        let auto = NSMenuItem(title: "Auto (\(Self.variantName(state.detection.variant)))",
+        let auto = NSMenuItem(title: "Auto (\(state.detection.variant.shortName))",
                               action: nil, keyEquivalent: "")
         auto.representedObject = nil as Variant?
         Self.applyStateBadge(to: auto,
@@ -375,8 +382,8 @@ final class BottomBar: NSView {
         )
         menu.addItem(auto)
 
-        apply(menu: menu, title: Self.variantName(current.value), to: variantButton,
-              label: "File format: " + Self.variantName(current.value) + current.provenance.spokenSuffix)
+        apply(menu: menu, title: current.value.shortName, to: variantButton,
+              label: "File format: " + current.value.shortName + current.provenance.spokenSuffix)
     }
 
     private func buildStyleMenu(_ state: DocumentState) {
@@ -550,16 +557,6 @@ final class BottomBar: NSView {
         button.setAccessibilityIdentifier(identifier)
         button.translatesAutoresizingMaskIntoConstraints = false
         return button
-    }
-
-    private static func variantName(_ variant: Variant) -> String {
-        switch variant {
-        case .ws4:         return "WS4"
-        case .ws5plus:     return "WS5+"
-        case .printstream: return "Printstream"
-        case .text:        return "Text"
-        case .binary:      return "Binary"
-        }
     }
 
     // MARK: - Actions

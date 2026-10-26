@@ -255,18 +255,18 @@ private func numbers(_ doc: Document, pageNumbers: EmitOptions.PageNumberMode = 
     // its own used to answer a hard `false`, which is not a fallback but a different
     // rule — the number vanished even though nothing in the document ever asked for
     // `.op`, while real WS7 stamps one.
-    #expect(pgnumForBodilessPage([PgnumCheckpoint(blockIndex: 0, lineIndex: 0, on: true)],
+    #expect(pgnumForBodilessPage(Timeline(entries: [.init(blockIndex: 0, lineIndex: 0, value: true)]),
                                  fallbackBi: nil, bodilessDoc: true))
-    #expect(!pgnumForBodilessPage([PgnumCheckpoint(blockIndex: 0, lineIndex: 0, on: false)],
+    #expect(!pgnumForBodilessPage(Timeline(entries: [.init(blockIndex: 0, lineIndex: 0, value: false)]),
                                   fallbackBi: nil, bodilessDoc: true))
     // The other half, and the reason the test is a WHOLE-DOCUMENT one: a page that
     // merely came out empty inside a document that does have blocks keeps the old
     // answer — reading checkpoint 0 there would ignore every command since.
-    #expect(!pgnumForBodilessPage([PgnumCheckpoint(blockIndex: 0, lineIndex: 0, on: true)],
+    #expect(!pgnumForBodilessPage(Timeline(entries: [.init(blockIndex: 0, lineIndex: 0, value: true)]),
                                   fallbackBi: nil, bodilessDoc: false))
     // Planning #228 is untouched: `explicitBreakBI` wins wherever it exists.
-    let cps = [PgnumCheckpoint(blockIndex: 0, lineIndex: 0, on: true),
-               PgnumCheckpoint(blockIndex: 5, lineIndex: 0, on: false)]
+    let cps = Timeline<Bool>(entries: [.init(blockIndex: 0, lineIndex: 0, value: true),
+                                       .init(blockIndex: 5, lineIndex: 0, value: false)])
     #expect(!pgnumForBodilessPage(cps, fallbackBi: 5, bodilessDoc: false))
 }
 

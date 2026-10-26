@@ -47,7 +47,7 @@ final class AccessibilityAuditUITests: XCTestCase {
                       "fixture missing — the audit would run against an empty window")
 
         let app = XCUIApplication()
-        app.launchArguments = ["-SoftReturnOpenDocument", fixture.path]
+        app.launchArguments = ["-SoftReturnOpenDocument", fixture.path] + UITestLaunch.arguments
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20),
                       "no document window to audit")

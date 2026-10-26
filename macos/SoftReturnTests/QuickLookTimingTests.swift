@@ -3,6 +3,7 @@ import CtrlKD
 import Darwin
 import Foundation
 import PDFKit
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn

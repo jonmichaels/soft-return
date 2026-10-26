@@ -1,14 +1,15 @@
 import AppKit
 import CtrlKD
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
 
 /// RULING ASSERTIONS.
 ///
-/// `RenderProbeTests` captures; this file is what actually holds the five rulings to
-/// account. Round 1 shipped without anything like this file — geometry.json and a wall of
-/// PNGs, and no assertion anywhere that any of it was RIGHT — and was reverted for it.
+/// This file holds the five rulings to account. Round 1 shipped without anything like it — a
+/// geometry dump and a wall of PNGs, and no assertion anywhere that any of it was RIGHT — and
+/// was reverted for it.
 /// Verification is the harness, not vibes.
 @MainActor
 private func rulingState(_ fixture: String = "dropped-chapter.ws4") throws -> DocumentState {

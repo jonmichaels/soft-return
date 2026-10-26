@@ -1,7 +1,9 @@
 import AppKit
 import CtrlKD
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
+import TestSupport
 @testable import SoftReturn
 
 /// THE ORACLE.
@@ -126,7 +128,7 @@ enum Oracle {
         // uses ("never trust `detect()` alone" cuts both ways — corroborate structurally, but
         // don't skip the check either): a file `detect()` calls `.binary` is, by the engine's
         // own classification, not a document this oracle can measure, regardless of name.
-        if let extra = ProcessInfo.processInfo.environment["CTRLKD_PRIVATE_CORPUS"],
+        if let extra = Corpus.current.path(.privateCorpus),
            let enumerator = FileManager.default.enumerator(
                at: URL(fileURLWithPath: extra), includingPropertiesForKeys: [.isRegularFileKey]) {
             for case let fileURL as URL in enumerator {
@@ -591,7 +593,7 @@ enum Oracle {
     ///
     /// ## `CtrlKD.graphicChars`, and why NOT the app's set of the same name
     ///
-    /// There are TWO sets called `graphicChars`: `SoftReturn.graphicChars`
+    /// There are TWO sets called `graphicChars`: `SoftReturnRendering.graphicChars`
     /// (`Rendering/NativeVectorGraphics.swift`) is what the APP draws as vectors, and
     /// `CtrlKD.graphicChars` (`PDFDriverLJ6DTP.swift`, made public in sr 506b2e0) is what
     /// the ENGINE does. They are not the same question and this oracle needs the engine's:

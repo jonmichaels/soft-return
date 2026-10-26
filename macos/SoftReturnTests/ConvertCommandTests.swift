@@ -221,7 +221,7 @@ import Testing
     /// Job 504 (Jon's ruling, superseding job 261's hard-fail-on-collision): a pre-existing
     /// same-name sibling never gets clobbered AND never fails the batch — the write lands
     /// at the Finder-style uniqued name instead, exactly like `to folder`'s own
-    /// `uniqueFileName` path already behaves.
+    /// `ExportNaming.uniqueName` path already behaves.
     @Test func convertWritesTheFinderStyleUniquedNameBesideSourceWhenTheExactOutputNameAlreadyExists() throws {
         let sourceDir = Self.makeTempDir()
         defer { try? FileManager.default.removeItem(at: sourceDir) }
@@ -315,10 +315,7 @@ import Testing
     /// `DiagnoseAndImportPageSettingsCommandTests` gives — no live Apple Event needed to
     /// exercise this logic, and constructing a bare `NSScriptCommand` outside real dispatch has
     /// no `commandDescription` to hand it); this replicates its body exactly: decode → expand →
-    /// convert → guard/join, the same steps
-    /// `ConvertCommandReceiverDispatchTests.replyResultDescriptorForTheNativeFileListReturnValueAlsoRemainsAbsent`
-    /// drives through a real dispatch (and confirms the actual conversion side effect, since
-    /// the AE reply channel itself is unreachable in-process either way).
+    /// convert → guard/join.
     @Test func performDefaultImplementationBodyReturnsProducedPathsAsJoinedTextForAPartialSuccess() throws {
         let dir = Self.makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }

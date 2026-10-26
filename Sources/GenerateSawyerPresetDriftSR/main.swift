@@ -1,5 +1,6 @@
 import Foundation
 import CtrlKD
+import GeneratorSupport
 import SoftReturnCLI
 
 /// Regenerate `TestDocs/oracle/sawyer_preset_pdf_sr.json` — sr's OWN self-recorded oracle
@@ -43,80 +44,6 @@ import SoftReturnCLI
 /// Never run from inside `swift test` — a change to this file's output is a reviewed diff,
 /// exactly like every other regeneration script in this repo.
 
-struct GeneratorError: Error, CustomStringConvertible {
-    let message: String
-    var description: String { message }
-}
-
-let repoRoot = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-
-func gitInfo() throws -> (sha: String, date: String) {
-    func run(_ args: [String]) throws -> String {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["git", "-C", repoRoot.path] + args
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        try p.run()
-        p.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-    return (try run(["rev-parse", "HEAD"]), try run(["log", "-1", "--format=%cI", "HEAD"]))
-}
-
-struct SawyerDoc {
-    let name: String
-    let relativePath: String
-}
-
-/// Read ctrl-kd's own answer key purely as a (name, path) LIST — never for its cells — so
-/// this generator's corpus can never disagree with `AnswerKeyParityTests.swift`'s about
-/// what "the Sawyer convertible set" is.
-func loadSawyerConvertibleDocs(ctrlkdSrc: String) throws -> [SawyerDoc] {
-    let keyPath = URL(fileURLWithPath: ctrlkdSrc).deletingLastPathComponent()
-        .appendingPathComponent("tests/answer_key.json")
-    let data = try Data(contentsOf: keyPath)
-    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let groups = json["groups"] as? [String: Any],
-          let sawyer = groups["sawyer"] as? [String: Any],
-          let convertible = sawyer["convertible"] as? [String: Any]
-    else {
-        throw GeneratorError(message: "\(keyPath.path) did not parse in the expected shape")
-    }
-    var docs: [SawyerDoc] = []
-    for (name, raw) in convertible {
-        guard let dict = raw as? [String: Any], let path = dict["path"] as? String else { continue }
-        docs.append(SawyerDoc(name: name, relativePath: path))
-    }
-    return docs.sorted { $0.name < $1.name }
-}
-
-/// Real-filesystem `CLIEnvironment` — same shape `CorpusParityTests
-/// .realFilesystemEnvironment()` uses, duplicated (not shared) because that one lives in
-/// the `@testable`-only test target.
-func realFilesystemEnvironment() -> CLIEnvironment {
-    let fm = FileManager.default
-    return CLIEnvironment(
-        readFile: { path in
-            guard let data = fm.contents(atPath: path) else {
-                throw GeneratorError(message: "could not read \(path)")
-            }
-            return [UInt8](data)
-        },
-        writeFile: { _, _ in },
-        createDirectory: { _ in },
-        writeOut: { _ in },
-        writeErr: { _ in },
-        listDirectory: { path in try? fm.contentsOfDirectory(atPath: path) },
-        isFile: { path in
-            var isDir: ObjCBool = false
-            return fm.fileExists(atPath: path, isDirectory: &isDir) && !isDir.boolValue
-        }
-    )
-}
-
 func main() throws {
     let env = ProcessInfo.processInfo.environment
     guard let archive = env["CTRLKD_SAWYER_ARCHIVE"], !archive.isEmpty else {
@@ -130,24 +57,16 @@ func main() throws {
     }
     let archiveRoot = archive.hasSuffix("/") ? String(archive.dropLast()) : archive
     let docs = try loadSawyerConvertibleDocs(ctrlkdSrc: src)
-    guard let sawyerSettings = pagePresets["sawyer"] else {
-        throw GeneratorError(message: "pagePresets[\"sawyer\"] missing — Arguments.swift's " +
-            "preset table changed; update this generator to match")
-    }
+    let job = try sawyerPresetJob()
 
     var docsGrid: [String: [String: Any]] = [:]
     docsGrid.reserveCapacity(docs.count)
     for doc in docs {
         let fileURL = URL(fileURLWithPath: archiveRoot).appendingPathComponent(doc.relativePath)
         let sourceBytes = [UInt8](try Data(contentsOf: fileURL))
-        var parsed = try parse(sourceBytes, variant: nil)
-        if let page = parsed.page {
-            parsed.page = effectivePage(page, settings: sawyerSettings)
-        }
-        let pixResults = resolveDocumentPictures(parsed, docPath: fileURL.path,
-                                                  environment: realFilesystemEnvironment())
-        let pdf = emitPDF(parsed, mode: .printed, options: EmitOptions(pixResults: pixResults))
-        let pixList: [[String: Any]] = pixResults.map { r in
+        let converted = try job.convert(sourceBytes, path: fileURL.path, environment: .live)
+        let pdf = converted.outputs[0].bytes
+        let pixList: [[String: Any]] = converted.pixResults.map { r in
             ["tag": pixBasename(r.rawPath), "resolved": r.ok]
         }
         docsGrid[doc.name] = [

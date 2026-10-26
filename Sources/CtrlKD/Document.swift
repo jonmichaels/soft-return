@@ -75,12 +75,11 @@ public struct Note: Hashable, Sendable {
     public var lineCount: Int
     /// Conversion-flag high nybble: 0 symbols, 1 upper, 2 lower, 3 numeric. Meaningless
     /// for annotations (spec: "not used"), left 0 there rather than reporting noise.
-    /// PARSED but NOT honoured for display — `EmitNotes.swift`'s `formatNoteNumber`
-    /// (ruling 2026-08-24 item 5) briefly rendered footnote/endnote labels per this
-    /// field, but `DISPLAY.WS` printed through real WordStar 7 showed plain arabic for
-    /// both a numberFormat=2 footnote and a numberFormat=1 endnote — WordStar does not
-    /// use these bits for the printed label. The field stays parsed (preserve-what-
-    /// you-find governs the IR) but is simply not consulted for display any more.
+    /// PARSED but NOT honoured for display — `DISPLAY.WS` printed through real WordStar 7
+    /// shows plain arabic for both a numberFormat=2 footnote and a numberFormat=1
+    /// endnote, so WordStar does not use these bits for the printed label
+    /// (`noteLabel` in `EmitNotes.swift`). The field stays parsed (preserve-what-you-find
+    /// governs the IR) but is not consulted for display.
     public var numberFormat: Int
     /// Conversion-flag low nybble: 0 = none, else the target note type if converted.
     /// Same annotation caveat as `numberFormat`.
@@ -345,7 +344,7 @@ public enum HFParity: Hashable, Sendable {
 /// defines its head after page 1's title block gets no running head on page 1, which the
 /// final-state dicts alone cannot distinguish from "defined from the very start." The
 /// paginator replays these events instead — see `PDFLayout.swift`'s `Page`.
-/// Where inside a block a `.he`/`.fo` sits — see `Document.hfEventsWithin`.
+/// Where inside a block a `.he`/`.fo` sits — see `HFEvent.within`.
 public struct HFWithin: Hashable, Sendable {
     public var block: Int
     public var linesBefore: Int
@@ -365,12 +364,39 @@ public struct HFEvent: Hashable, Sendable {
     /// has content) or the next one to open. Mirrors the `blockIndex`/`pointsAt` convention
     /// `parseCollectDot` already uses for TOC/index entries.
     public var blockAnchor: Int
+    /// `nil` for a plain `.h1`/`.he`/`.f1`/`.fo` event, else `.even`/`.odd` for
+    /// `.h1e`/`.h1o`/`.f1e`/`.f1o` (planning #250). Ctrl-kd keeps this in a parallel
+    /// `hf_events_parity` list; the output is the same.
+    public var parity: HFParity?
+    /// This event's own 0x0F USER PRINT CONTROLS (the array `Document.headerPcl` holds
+    /// for the document's FINAL state; this is the per-EVENT value the Printed
+    /// paginator's replay needs, since `sawyer/LSRBOX/LSRBOX.WS` restates `.h1` three
+    /// times with a different control each time). Empty for every running head that
+    /// carries none. Ctrl-kd's `Document.hf_events_pcl`.
+    public var pcl: [HFPrintControl]
+    /// Where inside its block this event sits, for a mid-block one; `nil` in the common
+    /// case, where `blockAnchor` already says everything.
+    ///
+    /// `blockAnchor` alone is BLOCK-granular: it names the block the command points at,
+    /// which for a command read while a block is still open is the NEXT one. That is
+    /// right for a command between paragraphs and WRONG for one INSIDE a paragraph, and
+    /// WordStar writes those -- a running head redefined mid-paragraph is stored exactly
+    /// where the author typed it, between two of the paragraph's own physical lines.
+    /// `sawyer/MACROS/HOLYMAC/-HOLYMAC.WS` does it three times (pages 17, 177 and 184 of
+    /// its real WS7 print), and block granularity deferred each one past the rest of its
+    /// paragraph and onto the following page. Ctrl-kd's `Document.hf_events_within`
+    /// (triage Q9).
+    public var within: HFWithin?
 
-    public init(kind: HFKind, line: Int, text: String, blockAnchor: Int) {
+    public init(kind: HFKind, line: Int, text: String, blockAnchor: Int,
+                parity: HFParity? = nil, pcl: [HFPrintControl] = [], within: HFWithin? = nil) {
         self.kind = kind
         self.line = line
         self.text = text
         self.blockAnchor = blockAnchor
+        self.parity = parity
+        self.pcl = pcl
+        self.within = within
     }
 }
 
@@ -794,39 +820,6 @@ public struct Document: Hashable, Sendable {
     /// block it precedes — see `HFEvent`. `headers`/`footers` above are the FINAL state,
     /// a convenience view kept for callers that don't need per-page replay.
     public var hfEvents: [HFEvent]
-    /// `hfEvents`'s own parity, INDEX-ALIGNED with it (same length; `hfEventsParity[i]`
-    /// is `hfEvents[i]`'s own parity) rather than a field added onto `HFEvent` itself —
-    /// mirrors ctrl-kd's own `Document.hf_events_parity` (planning #250): a separate
-    /// array so `HFEvent`'s own shape, and every existing consumer of it, stays
-    /// unchanged for the 380+ real corpus documents that never use the family. `nil` for
-    /// a plain `.h1`/`.he`/`.f1`/`.fo` event, else `.even`/`.odd` for
-    /// `.h1e`/`.h1o`/`.f1e`/`.f1o`.
-    public var hfEventsParity: [HFParity?] = []
-    /// `hfEvents`'s own 0x0F USER PRINT CONTROLS, INDEX-ALIGNED with it exactly as
-    /// `hfEventsParity` is and for exactly the same reason — a SEPARATE array so
-    /// every existing `hfEvents` consumer stays byte-identical for the 388 corpus
-    /// documents whose running heads carry none. Each entry is that event's own
-    /// controls (the array `headerPcl` holds for the document's FINAL state; this is
-    /// the per-EVENT value the Printed paginator's replay needs, since
-    /// `sawyer/LSRBOX/LSRBOX.WS` restates `.h1` three times with a different control
-    /// each time). Port of Python's `Document.hf_events_pcl`.
-    public var hfEventsPcl: [[HFPrintControl]] = []
-    /// `hfEvents`'s own WITHIN-BLOCK position, INDEX-ALIGNED with it exactly as
-    /// `hfEventsParity`/`hfEventsPcl` are, and a separate array for the same reason —
-    /// `HFEvent`'s own shape, and every existing consumer of it, stay unchanged.
-    ///
-    /// `blockAnchor` alone is BLOCK-granular: it names the block the command points at,
-    /// which for a command read while a block is still open is the NEXT one. That is
-    /// right for a command between paragraphs and WRONG for one INSIDE a paragraph, and
-    /// WordStar writes those — a running head redefined mid-paragraph is stored exactly
-    /// where the author typed it, between two of the paragraph's own physical lines.
-    /// `sawyer/MACROS/HOLYMAC/-HOLYMAC.WS` does it three times (pages 17, 177 and 184 of
-    /// its real WS7 print), and block granularity deferred each one past the rest of its
-    /// paragraph and onto the following page. Each entry is `(block index, how many of
-    /// that block's lines came first)` for a mid-block event, or `nil` — the common
-    /// case, where `blockAnchor` already says everything. Port of Python's
-    /// `Document.hf_events_within` (triage Q9).
-    public var hfEventsWithin: [HFWithin?] = []
     /// Round-trip ledger — see `RoundtripLedger` (tasks #20/#21). `nil` for documents
     /// not built by `parseWS`.
     public var roundtrip: RoundtripLedger?

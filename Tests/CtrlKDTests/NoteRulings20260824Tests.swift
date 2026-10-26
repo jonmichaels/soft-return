@@ -88,39 +88,11 @@ import Testing
 
 // ====================== item 5: note format types ===========================
 
-@Test func symbolCycleMatchesClassicalSequenceAndDoublesPastSix() {
-    #expect((1...6).map(noteSymbol) == ["*", "\u{2020}", "\u{2021}", "\u{00A7}", "\u{2016}", "\u{00B6}"])
-    #expect(noteSymbol(7) == "**")
-    #expect(noteSymbol(13) == "***")
-}
-
-@Test func alphaLabelIsBijectiveBase26() {
-    #expect(alphaLabel(1, upper: false) == "a")
-    #expect(alphaLabel(26, upper: false) == "z")
-    #expect(alphaLabel(27, upper: false) == "aa")
-    #expect(alphaLabel(1, upper: true) == "A")
-}
-
-/// WordStar's format spec documents a conversion-flag high nybble (0 symbols / 1 upper /
-/// 2 lower / 3 numeric) and we briefly honoured it (ruling 2026-08-24 item 5).
-///
-/// REAL WORDSTAR 7 DISPROVED THAT. `DISPLAY.WS` -- WordStar's own tutorial file in the
-/// archive -- carries a footnote at numberFormat=2 and an endnote at numberFormat=1.
-/// Printed through real WS7 under DOSBox-X it puts `1.` and `(1)` on the page: plain
-/// arabic, exactly like every other document. Capture: `ws7-prints/ws7-captures/DISPLAY.pcl`.
-///
-/// So the label is ALWAYS arabic. The field stays parsed -- preserve-what-you-find
-/// governs the IR -- and is simply not consulted for display.
-@Test func numberFormatIsNotHonouredGroundTruthSaysArabic() {
-    for fmt in [0, 1, 2, 3, 9] {
-        #expect(formatNoteNumber(1, fmt) == "1")
-        #expect(formatNoteNumber(7, fmt) == "7")
-    }
-}
-
 @Test func aNonnumericFormatCodeStillRendersArabicEverywhere() {
-    // The same ground truth, end to end: a note carrying a non-numeric format code
-    // renders arabic in the actual output, not a symbol or a letter.
+    // WordStar's format spec documents a conversion-flag high nybble (symbols / upper /
+    // lower / numbers), but DISPLAY.WS (a footnote at numberFormat=2, an endnote at 1)
+    // printed through real WordStar 7 shows plain arabic. So a note carrying a
+    // non-numeric format code renders arabic in the actual output, not a symbol or a letter.
     let data = ws7Block(0x00) + bytes("ref")
         + ws7Note(bytes("Symbol note."), cmd: 0x03, number: 0, numberFormat: 0)
         + bytes(" end.") + HARD

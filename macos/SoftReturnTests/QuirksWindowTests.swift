@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -12,7 +13,6 @@ import Testing
 /// - Settings has a centred, unlabelled Quirks… button, a popup wide, under the popups; it opens the app-defaults
 ///   window, 560 × 500: Auto | All | Off | Custom over all six, and Done.
 /// - Quick Look reads the app's default quirks from the app group.
-/// Proofs: quirks-document-<light|dark>.png, quirks-defaults-<light|dark>.png, quirks-settings-light.png.
 @Suite("Quirks windows (batch 46)", .serialized)
 @MainActor
 struct QuirksWindowTests {
@@ -28,25 +28,6 @@ struct QuirksWindowTests {
         heading.styleAttrs.insert(.strike)
         document.blocks = [heading, Block(kind: .para, lines: [Line(spans: [Span(text: "The paragraph after it.")])])]
         return DocumentState(document: document, settings: settings)
-    }
-
-    static var proofs: URL {
-        RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
-    }
-
-    static func render(_ controller: NSWindowController, _ name: String, dark: Bool) throws {
-        let content = try #require(controller.window?.contentView)
-        let appearance = try #require(NSAppearance(named: dark ? .darkAqua : .aqua))
-        controller.window?.appearance = appearance
-        content.layoutSubtreeIfNeeded()
-        // Redraw everything under this appearance first.
-        for view in [content] + RenderProbeKit.descendants(content) { view.needsDisplay = true }
-        content.displayIfNeeded()
-        let png = proofs.appendingPathComponent("\(name)-\(dark ? "dark" : "light").png")
-        #expect(try RenderProbeKit.renderPNG(view: content, appearance: appearance, to: png) > 0)
-        print("PROOF: \(png.path)")
     }
 
     @Test func viewMenuHasQuirksOnOptionCommandK() throws {
@@ -103,7 +84,6 @@ struct QuirksWindowTests {
         #expect(state.document.blocks.first?.styleAttrs.contains(.strike) == false)
         #expect(settings.quirkDefaults == .shipped)
         #expect(quirks.overriddenLabels[QuirkName.sawyerStrikeout]?.isHidden == false)
-        try Self.render(quirks, "quirks-document", dark: dark)
 
         // The app's defaults move under it; the document's own choice stays.
         settings.quirkDefaults = .off
@@ -130,7 +110,6 @@ struct QuirksWindowTests {
         #expect(defaults.names == QuirkChoices.names)
         #expect((0..<4).map { defaults.presetControl.label(forSegment: $0) } == ["Auto", "All", "Off", "Custom"])
         #expect(defaults.presetControl.selectedSegment == 0)
-        try Self.render(defaults, "quirks-defaults", dark: dark)
 
         defaults.presetControl.selectedSegment = 1
         defaults.presetChosen(defaults.presetControl)
@@ -144,7 +123,6 @@ struct QuirksWindowTests {
         let custom = settings.quirkDefaults
         defaults.presetChosen(defaults.presetControl)
         #expect(settings.quirkDefaults == custom, "choosing Custom changed the switches")
-        if !dark { try Self.render(defaults, "quirks-defaults-custom", dark: false) }
     }
 
     @Test func settingsHasACentredQuirksButton() throws {
@@ -167,7 +145,6 @@ struct QuirksWindowTests {
         let labelsBeside = RenderProbeKit.descendants(content).compactMap { $0 as? NSTextField }
             .filter { abs($0.frame.midY - button.frame.midY) < 4 && $0.superview === content }
         #expect(labelsBeside.isEmpty)
-        try Self.render(controller, "quirks-settings", dark: false)
     }
 
     /// Jon's option 2: the document's own choice is kept by the app, keyed to the file — back when it opens again, and

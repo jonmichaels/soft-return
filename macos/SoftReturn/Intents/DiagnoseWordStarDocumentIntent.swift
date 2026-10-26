@@ -11,7 +11,7 @@ import Foundation
 struct DiagnoseWordStarDocumentIntent: AppIntent {
     static let title: LocalizedStringResource = "Diagnose WordStar Document"
     static let description = IntentDescription(
-        "Reports a WordStar-era document's detected variant, page count, dot commands, and unrecognized codes.")
+        "Reports a WordStar for DOS v4–v7 document's detected variant, page count, dot commands, and unrecognized codes.")
 
     // Job 342 (b23 floor drop): see `ConvertWordStarDocumentIntent`'s header comment —
     // `@Parameter(title:supportedContentTypes:)` needs macOS 15 for an `IntentFile`

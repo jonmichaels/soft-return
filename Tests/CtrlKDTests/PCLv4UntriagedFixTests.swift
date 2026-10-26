@@ -315,7 +315,7 @@ private func centredLineCols(_ text: [UInt8], absHMI: Int) -> Double? {
 
 /// A `.pn` restarts the numbering at the page it appears on, always.
 ///
-/// `pnCheckpoints` used to drop a checkpoint whose VALUE equalled the last one recorded
+/// `pnTimeline` used to drop a checkpoint whose VALUE equalled the last one recorded
 /// — a guard that compared against the previous checkpoint's number instead of against
 /// the number this page would otherwise have taken, so every restart to an already-used
 /// number was thrown away.
@@ -330,14 +330,15 @@ private func centredLineCols(_ text: [UInt8], absHMI: Int) -> Double? {
         src += bytes(piece) + HARD
     }
     let doc = parseWS(src)
-    let cps = pnCheckpoints(doc)
+    let timeline = doc.pnTimeline()
+    let cps = timeline.entries
     #expect(cps.count == 2, "\(cps)")
-    #expect(cps[0].blockIndex == 0 && cps[0].pn == 1, "\(cps)")
-    #expect(cps[1].pn == 1 && cps[1].blockIndex > 0, "\(cps)")
+    #expect(cps[0].blockIndex == 0 && cps[0].value == 1, "\(cps)")
+    #expect(cps[1].value == 1 && cps[1].blockIndex > 0, "\(cps)")
     let pages = docToPagelines(doc, printed: true)
     // the `.pn1` sits on the third page, which it re-anchors to 1
-    #expect(resolvePageNumbers(cps, pages) == [1, 2, 1, 2],
-            "\(resolvePageNumbers(cps, pages))")
+    #expect(resolvePageNumbers(timeline, pages) == [1, 2, 1, 2],
+            "\(resolvePageNumbers(timeline, pages))")
 }
 
 /// `^K` in a `.h#`/`.f#` line kills the blanks after it — even pages only.

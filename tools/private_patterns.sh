@@ -195,8 +195,8 @@ PAT_NEVER_CROSS_DIRS=(outbox evidence archive .claude ctrlkd-private-tests TestD
 # that is the point of listing them individually instead of pattern-
 # matching a job-number naming convention.
 # The four release-automation entries (planning #269, 2026-09-12) are here
-# for the same reason docs/RUNBOOK.md is: they drive the build account and
-# the release chain, so they name the gate, its verbs and its host alias.
+# for the same reason docs/RUNBOOK.md is: they drive the release chain and
+# describe how this project's releases are run.
 # tools/public-snapshot.py reads THIS array as its strip list, so listing a
 # private-ops file here is also what keeps it out of the public snapshot --
 # one edit, both effects, no second list to forget.
@@ -209,6 +209,7 @@ PAT_NEVER_CROSS_FILES=(
     docs/SANDBOX-ARCHIVE.md
     docs/ui-audit-b13.md
     docs/RELEASE-AUTOMATION.md
+    docs/NEXT.md
     tools/answer_key_private.py
     tools/public-snapshot.manifest
     tools/public-snapshot.py
@@ -220,32 +221,16 @@ PAT_NEVER_CROSS_FILES=(
     macos/SoftReturnTests/DocumentOpenTriggerExecutedPathTests.swift
     macos/SoftReturnTests/ExportPanelFixesTests.swift
     macos/SoftReturnTests/IntegrationGauntletTests.swift
-    macos/SoftReturnTests/InteractionProbeTests.swift
     macos/SoftReturnTests/InvisiblesModernLayoutTests.swift
-    macos/SoftReturnTests/InvisiblesStylingEvidenceTests.swift
-    macos/SoftReturnTests/Job267InvisiblesProbe.swift
-    macos/SoftReturnTests/Job269LJ6DTPProbe.swift
-    macos/SoftReturnTests/Job276DownloadProgressRenderTests.swift
-    macos/SoftReturnTests/Job294VerificationEvidenceTests.swift
-    macos/SoftReturnTests/Job306OldtimesFontProbe.swift
-    macos/SoftReturnTests/Job306ScreenshotProbe.swift
-    macos/SoftReturnTests/Job315ScreenshotTests.swift
-    macos/SoftReturnTests/Job428CompositeEvidenceTests.swift
-    macos/SoftReturnTests/Job446AcceptanceEvidenceTests.swift
-    macos/SoftReturnTests/Job491ChoerkerboardProbe.swift
-    macos/SoftReturnTests/Job502FootnotePlacementProbe.swift
-    macos/SoftReturnTests/Job503LJ6DTPNativeEvidence.swift
-    macos/SoftReturnTests/Job505HPPatternEvidence.swift
-    macos/SoftReturnTests/Job506PinVerification.swift
-    macos/SoftReturnTests/Job511BatchLayoutEvidenceTests.swift
-    macos/SoftReturnTests/Job512ModernBoxEvidence.swift
-    macos/SoftReturnTests/Job517BatchFootnoteRTFProbe.swift
-    macos/SoftReturnTests/Job522BatchPulldownSizeSweepEvidenceTests.swift
+    macos/SoftReturnTests/ShowInvisiblesEdgeTests.swift
+    macos/SoftReturnTests/ModernStructureRulesTests.swift
+    macos/SoftReturnTests/PCLOverlayPageOriginTests.swift
+    macos/SoftReturnTests/ModernBoxRightBorderTests.swift
+    macos/SoftReturnTests/BatchFootnoteRTFTests.swift
     macos/SoftReturnTests/LivePrintedFramingTests.swift
     macos/SoftReturnTests/MDImporterExecutedPathTests.swift
     macos/SoftReturnTests/ModernIndentLadderTests.swift
     macos/SoftReturnTests/MultipageMarginTests.swift
-    macos/SoftReturnTests/NativeFidelityEvidenceTests.swift
     macos/SoftReturnTests/NativeImagePlacementTests.swift
     macos/SoftReturnTests/NativeVsEngineGeometryTests.swift
     macos/SoftReturnTests/PixelOracleAppEngineTests.swift
@@ -254,14 +239,11 @@ PAT_NEVER_CROSS_FILES=(
     macos/SoftReturnTests/PixInViewsTests.swift
     macos/SoftReturnTests/PrintedViewFramingTests.swift
     macos/SoftReturnTests/QLCLIByteParityTests.swift
-    macos/SoftReturnTests/QuickLookPreviewPathProbeTests.swift
-    macos/SoftReturnTests/RenderProbeTests.swift
+    macos/SoftReturnTests/ShowInvisiblesToggleTests.swift
     macos/SoftReturnTests/UIRound4ARulingTests.swift
     macos/SoftReturnTests/UIRound4BRulingTests.swift
     macos/SoftReturnTests/ViewRestructureJob265Tests.swift
-    macos/SoftReturnUITests/Job276DownloadProgressScreenshotUITests.swift
-    macos/SoftReturnUITests/Job314MenuAndInspectorScreenshotUITests.swift
-    macos/scripts/round3-handshake.sh
+    macos/SoftReturnUITests/MenuAndInspectorUITests.swift
 )
 
 # Build a git pathspec array (":(exclude)path" entries) for

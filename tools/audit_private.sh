@@ -76,27 +76,11 @@ fi
 # tracked *.base64 file is decoded and the DECODED bytes are scanned with
 # the same pattern (binary bytes are printed by grep -a; that is fine, we
 # only care whether it matches, not that the output is pretty).
-# One narrow, named, hand-reviewed exemption: a recorded AppleEvent fixture
-# whose bytes are a flattened macOS descriptor. Its "/Users/<fakename>/..."
-# top-level shape is required realism (real macOS paths always start there;
-# see planning's private-leak fix, which scrubbed this file byte-length-
-# preservingly) -- PAT_SHAPE alone would flag that shape forever, on every
-# run, with nothing left to fix. It still gets scanned for this repo's
-# actual leaked names/hosts/nets (PAT_NAMES, PAT_HOSTS, PAT_NET): if a real
-# identifier ever reappears here, this does not hide it. Exempting the
-# pattern instead of the file would hide real leaks everywhere; this hides
-# only the generic shape, only in this one reviewed file.
-B64_SHAPE_EXEMPT='^macos/SoftReturnTests/Fixtures/real-convert-event-b9\.base64$'
 
 b64_hits=""
 while IFS= read -r -d '' f; do
     decoded="$(base64 -d "$f" 2>/dev/null)" || continue
-    if printf '%s' "$f" | grep -qE "$B64_SHAPE_EXEMPT"; then
-        pat_for_file="($PAT_NAMES|$PAT_HOSTS|$PAT_NET)"
-    else
-        pat_for_file="$PAT"
-    fi
-    hit=$(printf '%s' "$decoded" | grep -naE "$pat_for_file" | drop_safe_collocations)
+    hit=$(printf '%s' "$decoded" | grep -naE "$PAT" | drop_safe_collocations)
     if [ -n "$hit" ]; then
         b64_hits="$b64_hits
 $f (decoded):

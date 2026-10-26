@@ -10,6 +10,7 @@
 @testable import CtrlKD
 @testable import SoftReturnCLI   // `pagePresets["sawyer"]` — the real `--page-settings` preset
 import Testing
+import TestSupport
 import Foundation
 
 /// Every page's content stream, in order -- split on the RAW bytes, never on a decoded
@@ -79,9 +80,9 @@ private func expectDrawn(_ line: ModernHeadFootLine, on pageSpans: [ShownSpan],
 }
 
 private func archiveDoc(_ name: String) throws -> Document {
-    let path = sawyerArchivePath + "/" + name
+    let path = Corpus.sawyerArchivePath + "/" + name
     guard let d = FileManager.default.contents(atPath: path) else {
-        throw MissingSawyerFixture(path: path)
+        throw Corpus.missingSawyerFixture(path: path)
     }
     return parseWS([UInt8](d))
 }
@@ -100,7 +101,7 @@ private let furnitureDocs = ["REF/BOOKLET.WS", "VERSIONS.WS", "RTF-RJS/NOVEL.WS"
 /// empty check.
 private let noFurnitureExpected: Set<String> = ["MAILLIST/ENVELOPE.LST"]
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: furnitureDocs)
 func modernFurnitureMatchesWhatTheModernPDFDraws(_ name: String) throws {
     let doc = try archiveDoc(name)
@@ -140,7 +141,7 @@ func modernFurnitureMatchesWhatTheModernPDFDraws(_ name: String) throws {
     }
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: furnitureDocs)
 func modernFurnitureReportsTheSheetAndColumnsItComposedOn(_ name: String) throws {
     let doc = try archiveDoc(name)
@@ -170,7 +171,7 @@ func modernFurnitureReportsTheSheetAndColumnsItComposedOn(_ name: String) throws
     }
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func modernFurnitureNumbersTheSamePagesTheModernPDFNumbers() throws {
     // `--page-numbers off` removes the number from both the accessor and the PDF; `on`
     // forces it onto both. The accessor is not allowed to have its own opinion about a
@@ -214,7 +215,7 @@ private let presetFurnitureDocs = ["REF/BOOKLET.WS", "PRINT.TST", "VERSIONS.WS"]
 /// asserted BOTH ways below, so this stays a measurement rather than a belief.
 private let presetMovesTheFrame: Set<String> = ["VERSIONS.WS"]
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: presetFurnitureDocs)
 func modernFurnitureFollowsThePageSettingsPreset(_ name: String) throws {
     // The bug this exists to catch: the `pageNumbers:` spelling built its own
@@ -224,7 +225,7 @@ func modernFurnitureFollowsThePageSettingsPreset(_ name: String) throws {
     // drawn. So this compares the accessor to the drawn ops of the SAME export.
     let doc = try archiveDoc(name)
     let sawyer = try #require(pagePresets["sawyer"],
-                              "pagePresets[\"sawyer\"] missing — Arguments.swift changed?")
+                              "pagePresets[\"sawyer\"] missing — PageGeometry.swift changed?")
     var options = EmitOptions()
     options.pageSettings = sawyer
 
@@ -290,7 +291,7 @@ func modernFurnitureFollowsThePageSettingsPreset(_ name: String) throws {
         """)
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: furnitureDocs)
 func modernFurnitureOptionsOverloadMatchesThePageNumbersSpelling(_ name: String) throws {
     // The old signature is now a convenience spelling of the new one; under default
@@ -307,7 +308,7 @@ func modernFurnitureOptionsOverloadMatchesThePageNumbersSpelling(_ name: String)
 
 // MARK: - `HeadFootLine.styleAttrs` and the layout JSON's `style` (version 11)
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func printedHeadFootLinesCarryTheSelectedStylesOwnAttrs() throws {
     // A running head can be BOLD with no toggle byte anywhere in its text -- the weight
     // comes from the `.h#` argument's own 0x11 style select, which `resolveHeadFootLines`
@@ -454,7 +455,7 @@ private func utf16Tail(_ text: String, from offset: Int) -> String {
     return String(decoding: Array(units[offset...]), as: UTF16.self)
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func bookletFillsThreeTwoColumnPagesAndAbsorbsItsFourFormFeeds() throws {
     let doc = try archiveDoc("REF/BOOKLET.WS")
     let sem = modernSemanticFlow(doc)
@@ -492,7 +493,7 @@ func bookletFillsThreeTwoColumnPagesAndAbsorbsItsFourFormFeeds() throws {
     }
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func aMidItemSplitIsWhereTheColumnActuallyStartsDrawing() throws {
     // THE OFFSET CONVENTION, checked against the ops rather than asserted: a column that
     // opens in the middle of a paragraph reports the UTF-16 offset of the first character
@@ -534,7 +535,7 @@ func aMidItemSplitIsWhereTheColumnActuallyStartsDrawing() throws {
     #expect(checked == 5, "BOOKLET.WS has five mid-item splits; checked \(checked)")
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func versionsIsOneRangePerPageEndingOnOverflow() throws {
     // The ordinary one-column case: no `.co`, no `.cb`, no `.pa` -- every page ends
     // because the next line did not fit, and the ranges still partition the whole flow.
@@ -552,7 +553,7 @@ func versionsIsOneRangePerPageEndingOnOverflow() throws {
     expectContiguous(furniture, itemCount: sem.items.count, "VERSIONS.WS")
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func printTstReportsItsColumnBreakAndItsRegimeChangeApart() throws {
     // PRINT.TST is the real document carrying all three endings at once: `.pa` page
     // breaks, a `.cb` inside a live `.co 3` region, and the `.co` regime change that ends
@@ -677,12 +678,12 @@ private func expectFootnoteRowsMatchTheDrawnBlock(_ doc: Document, _ label: Stri
     expectFootnoteRowsMatchTheDrawnBlock(rangeDocument(body), "footnote fixture")
 }
 
-@Test(.enabled(if: ctrlkdPrivateCorpusArmed, ctrlkdPrivateCorpusSkipReason))
+@Test(.requiresPrivateCorpus)
 func lyingReportsItsOwnFootnoteRows() throws {
     // The real authored document behind the sup/sub and printed-notes rounds. Read from
     // the samples directory when that corpus is present; the synthetic fixture above is
     // the unarmed answer to the same question.
-    let path = ctrlkdPrivateCorpusRoot + "/pd-samples/authored/LYING.WS"
+    let path = Corpus.privateCorpusPath + "/pd-samples/authored/LYING.WS"
     guard let data = FileManager.default.contents(atPath: path) else {
         Issue.record("LYING.WS missing from the corpus at \(path)")
         return
@@ -690,7 +691,7 @@ func lyingReportsItsOwnFootnoteRows() throws {
     expectFootnoteRowsMatchTheDrawnBlock(parseWS([UInt8](data)), "LYING.WS")
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: furnitureDocs + ["PRINT.TST"])
 func everyDocumentsColumnRangesPartitionItsWholeFlow(_ name: String) throws {
     // The rule stated over the whole set rather than one document at a time: a screenplay

@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -14,7 +15,7 @@ import Testing
 /// - a rebuild removes a page's later-column text views, which stayed behind as ghosts;
 /// - the oversized-line overlay draws only the pages the dirty rect reaches.
 /// Measured: the gap between pages on screen at Fit (`PagedDocumentView.pageGap` × the zoom), and the time to draw
-/// each view of a scroll through -HOLYMAC.WS and LYING.WS; photographed at page boundaries in light and dark.
+/// each view of a scroll through -HOLYMAC.WS and LYING.WS; page boundaries checked in light and dark.
 ///
 /// What this cannot show: a draw here is `cacheDisplay`, which draws the view fresh. Whether AppKit's layer tiles on
 /// a real screen were stale is a matter for Jon's eyes; the tests check what would make them stale.
@@ -93,7 +94,7 @@ struct ContinuousScrollTests {
     }
 
     /// -HOLYMAC.WS (302 pages) opened the app's progressive way in Native Continuous Scroll, and LYING.WS: the gap on
-    /// screen at Fit, the draw time of each view through a scroll top to bottom, and page boundaries photographed in
+    /// screen at Fit, the draw time of each view through a scroll top to bottom, and page boundaries measured in
     /// light and dark with the pages' margins white and the gap the desk.
     @Test(arguments: ["LYING.WS", "-HOLYMAC.WS"])
     func scrollingThroughTheDocument(document: String) throws {
@@ -225,14 +226,6 @@ struct ContinuousScrollTests {
                 print("CONTINUOUS-BOUNDARY \(document) \(dark ? "dark" : "light") pages \(index + 1)–\(index + 2): margin samples \(marginRows), not white \(darkMarginRows); gap luminance \(String(format: "%.3f", gap)) (desk \(String(describing: desk)))")
                 #expect(darkMarginRows == 0, "\(document) \(dark ? "dark" : "light") pages \(index + 1)–\(index + 2): \(darkMarginRows) margin samples are not white")
                 #expect(gap < 0.97, "\(document): the gap between pages \(index + 1) and \(index + 2) is white")
-                if let png = rep.representation(using: .png, properties: [:]) {
-                    let proofs = RenderProbeKit.resolveOutputDirectory(
-                        preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-                        fallbackName: "soft-return-proofs")
-                    let file = proofs.appendingPathComponent("m10-\(document.replacingOccurrences(of: ".", with: "-"))-p\(index + 1)-\(dark ? "dark" : "light").png")
-                    try png.write(to: file)
-                    print("PROOF: \(file.path)")
-                }
             }
         }
     }

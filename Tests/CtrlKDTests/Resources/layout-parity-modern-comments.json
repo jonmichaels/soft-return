@@ -774,8 +774,12 @@
       "lead": null
      }
     ],
-    "headers": {},
-    "footers": {},
+    "headers": {
+     "1": "Byte Parity Gazette                                    page #"
+    },
+    "footers": {
+     "1": "- # -"
+    },
     "header_lines": [
      {
       "text": "Byte Parity Gazette                                    page 1",
@@ -809,8 +813,12 @@
       "lead": null
      }
     ],
-    "headers": {},
-    "footers": {},
+    "headers": {
+     "1": "Byte Parity Gazette                                    page #"
+    },
+    "footers": {
+     "1": "- # -"
+    },
     "header_lines": [
      {
       "text": "Byte Parity Gazette                                    page 2",
@@ -879,8 +887,12 @@
       "lead": null
      }
     ],
-    "headers": {},
-    "footers": {},
+    "headers": {
+     "1": "Byte Parity Gazette                                    page #"
+    },
+    "footers": {
+     "1": "- # -"
+    },
     "header_lines": [
      {
       "text": "Byte Parity Gazette                                    page 3",

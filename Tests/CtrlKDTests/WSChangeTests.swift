@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// wschange: the WSCHANGE .PAT interpreter, checked against the real Sawyer-archive
@@ -19,18 +20,6 @@ import Testing
 /// a named fixture missing from that copy of the archive: the test FAILS loud naming the path
 /// — a corpus that's present but incomplete is a real bug, not something to wave through.
 
-/// The ONE place the archive path lives (private-local; keep it a single constant for
-/// future scrubbing).
-let sawyerArchivePath = (ProcessInfo.processInfo.environment["CTRLKD_SAWYER_ARCHIVE"]
-    .map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }) ?? ""
-
-/// `true` exactly when `CTRLKD_SAWYER_ARCHIVE` is set — every `.PAT`/Sawyer-archive test in
-/// this file cites this via `.enabled(if:)` so an unset var is a recorded Skip, not a pass.
-let sawyerArchiveArmed = !sawyerArchivePath.isEmpty
-
-let sawyerArchiveSkipReason: Comment =
-    "sawyer-archive-gated: CTRLKD_SAWYER_ARCHIVE unset — see docs/TESTING.md"
-
 /// Planning #192 (2026-09-05): the vendored `soft-return-corpus` this repo's own
 /// `CTRLKD_SAWYER_ARCHIVE` is documented to point at (that repo's README) is DOCUMENTS ONLY
 /// by Jon's ruling ("CAN ONLY be documents. Nothing else.") — `.PAT` files (WSCHANGE's own
@@ -39,31 +28,22 @@ let sawyerArchiveSkipReason: Comment =
 /// this file needs is deliberately absent from that copy, permanently, not incompletely.
 /// Checked once via `PRISTINE.PAT`'s own presence (one probe settles it for the whole
 /// suite) rather than treating each individual missing `.PAT` as the "armed but broken"
-/// bug `MissingSawyerFixture` exists to catch — arming against a full, untrimmed Sawyer
+/// bug `Corpus.MissingFixture` exists to catch — arming against a full, untrimmed Sawyer
 /// download (which still carries `.PAT` files) runs this suite for real, exactly as
 /// before.
-let sawyerArchiveHasPATFixtures = sawyerArchiveArmed
-    && FileManager.default.fileExists(atPath: sawyerArchivePath + "/PRISTINE.PAT")
+let sawyerArchiveHasPATFixtures = Corpus.sawyerArchiveArmed
+    && FileManager.default.fileExists(atPath: Corpus.sawyerArchivePath + "/PRISTINE.PAT")
 
 let sawyerArchivePATSkipReason: Comment =
     "sawyer-archive .PAT fixtures unavailable: the vendored corpus is documents-only (planning #192, 2026-09-05 ruling) and does not carry .PAT files by design — arm CTRLKD_SAWYER_ARCHIVE against a full, untrimmed Sawyer download to run this suite"
 
-/// Thrown by `patFixture` when the archive is armed but the named file isn't in it — a hard
-/// failure (never a skip): an armed-but-incomplete corpus is a real bug.
-struct MissingSawyerFixture: Error, CustomStringConvertible {
-    let path: String
-    var description: String {
-        "CTRLKD_SAWYER_ARCHIVE=\(sawyerArchivePath) is set but \(path) is missing from that copy of the archive."
-    }
-}
-
 private func patFixture(_ name: String) throws -> [UInt8] {
-    var path = sawyerArchivePath
+    var path = Corpus.sawyerArchivePath
     path += "/"
     path += name
     path += ".PAT"
     guard let data = FileManager.default.contents(atPath: path) else {
-        throw MissingSawyerFixture(path: path)
+        throw Corpus.missingSawyerFixture(path: path)
     }
     return [UInt8](data)
 }

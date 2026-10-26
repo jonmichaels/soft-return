@@ -1,16 +1,11 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import SoftReturnShared
 
 /// Batch 46 (Jon's option 2): a document's own quirk choices kept by the app, keyed to the file — following a rename or
 /// a move on its volume, not carried by a copy, and never written into the document.
 @Suite @MainActor struct QuirkOverrideStoreTests {
-    static func scratch() throws -> URL {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("QuirkOverrideStoreTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return folder
-    }
-
     static func store() -> (QuirkOverrideStore, UserDefaults, String) {
         let suite = "QuirkOverrideStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -18,8 +13,9 @@ import Testing
     }
 
     @Test func choicesFollowTheFileThroughARenameAndAMoveButNotACopy() throws {
-        let folder = try Self.scratch()
-        defer { try? FileManager.default.removeItem(at: folder) }
+        let scratch = try TestScratch(prefix: "QuirkOverrideStoreTests")
+        defer { scratch.remove() }
+        let folder = scratch.url
         let (store, defaults, suite) = Self.store()
         defer { defaults.removePersistentDomain(forName: suite) }
         let original = folder.appendingPathComponent("LJ6DTP.WS")
@@ -54,7 +50,7 @@ import Testing
         #expect((defaults.dictionary(forKey: QuirkOverrideStore.storageKey) ?? [:]).isEmpty)
     }
 
-    @Test func noFileNoChoices() {
+    @Test func noFileNoChoices() throws {
         let (store, defaults, suite) = Self.store()
         defer { defaults.removePersistentDomain(forName: suite) }
         store.setOverrides(["driver-euro-sign": false], for: nil)
@@ -62,7 +58,9 @@ import Testing
         #expect(store.overrides(for: nil).isEmpty)
         #expect(defaults.dictionary(forKey: QuirkOverrideStore.storageKey) == nil)
         // A file that is not there has no identity to key by but its path; stale is tolerated, never an error.
-        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("missing-\(UUID().uuidString).WS")
+        let scratch = try TestScratch(prefix: "QuirkOverrideStoreTests")
+        defer { scratch.remove() }
+        let missing = scratch.url(for: "missing.WS")
         #expect(QuirkOverrideStore.key(for: missing)?.hasPrefix("path:") == true)
     }
 }

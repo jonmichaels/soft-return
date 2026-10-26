@@ -42,3 +42,7 @@ __pycache__/
 
 # per-machine Claude settings (the build host's sandbox fence lives here; never commit)
 .claude/settings.local.json
+
+# This Mac's own release settings (the 1Password secret reference for the
+# signing keychain). Read by macos/scripts/release-mac.sh; never committed.
+.release-local

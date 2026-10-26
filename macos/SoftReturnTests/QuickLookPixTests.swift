@@ -139,7 +139,7 @@ import Testing
 /// Batch 47 (M28a, Jon: Quick Look on a `.PIX` showed a zoomed-in part of the picture): the preview is the whole picture,
 /// fitted and centred, whatever size Quick Look makes the window — rendered at the picture's own size, at the old default
 /// 612 × 792, and in a wide window — and it never asks Auto Layout for the picture's pixel size. Also the size the
-/// pinned `NSImageView` it replaces asked for, which is what zoomed it. Renders: m28a-pix-<width>x<height>.png.
+/// pinned `NSImageView` it replaces asked for, which is what zoomed it.
 @Suite("Quick Look picture preview (M28a)", .serialized)
 @MainActor
 struct QuickLookPictureViewTests {
@@ -150,9 +150,6 @@ struct QuickLookPictureViewTests {
         let pixelImage = try #require(NSImage(data: try QuickLookPixRenderer.renderedPix(fromFileBytes: bytes).png))
         print("M28a: picture \(size) pt; decoded image \(pixelImage.size); a pinned NSImageView asks for \(NSImageView(image: pixelImage).intrinsicContentSize)")
         #expect(view.intrinsicContentSize == NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric))
-        let proofs = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
         for window in [size, CGSize(width: 612, height: 792), CGSize(width: 1400, height: 600)] {
             let container = NSView(frame: NSRect(origin: .zero, size: window))
             view.removeFromSuperview()
@@ -173,16 +170,14 @@ struct QuickLookPictureViewTests {
             #expect(abs(picture.width / picture.height - aspect) < 0.01)
             #expect(abs(picture.width - window.width) < 0.5 || abs(picture.height - window.height) < 0.5,
                     "picture \(picture) does not fill \(window) on either axis")
-            let png = proofs.appendingPathComponent("m28a-pix-\(Int(window.width))x\(Int(window.height)).png")
-            #expect(try RenderProbeKit.renderPNG(view: container, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
-            print("M28a: window \(window), picture drawn at \(picture); PROOF: \(png.path)")
+            print("M28a: window \(window), picture drawn at \(picture)")
         }
     }
 }
 
 /// Batch 47 (M28b): Soft Return claims the WordStar picture on the Mac — a Viewer document type, rank Owner, for the
 /// `.PIX` type the app exports, opened by `PixDocument` into a window showing the whole picture. And the WordStar
-/// document type's `ws-$$$` extension survives the build's `$$` escape. Render: m28b-pix-window.png.
+/// document type's `ws-$$$` extension survives the build's `$$` escape.
 @Suite("The Mac claims .PIX (M28b)", .serialized)
 @MainActor
 struct PixDocumentTests {
@@ -217,11 +212,5 @@ struct PixDocumentTests {
         #expect(abs(content.width / content.height - picture.size.width / picture.size.height) < 0.02)
         #expect(view.bounds.insetBy(dx: -0.5, dy: -0.5).contains(view.pictureRect))
         #expect(throws: (any Error).self) { try document.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("x.pix"), ofType: "me.beforeti.wordstar-pix") }
-        let proofs = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
-        let png = proofs.appendingPathComponent("m28b-pix-window.png")
-        #expect(try RenderProbeKit.renderPNG(view: view, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
-        print("PROOF: \(png.path)")
     }
 }

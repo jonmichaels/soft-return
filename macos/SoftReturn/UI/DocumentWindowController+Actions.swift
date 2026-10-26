@@ -107,19 +107,13 @@ extension DocumentWindowController: NSMenuItemValidation {
     /// reader cares about are 1-based, so the sheet speaks 1-based and this converts.
     @IBAction func goToPage(_ sender: Any?) {
         guard let window, pageTotal > 0 else { return }
-        let alert = NSAlert()
-        alert.messageText = "Go to Page"
-        alert.informativeText = "Page number, 1 to \(pageTotal)."
-        alert.addButton(withTitle: "Go")
-        alert.addButton(withTitle: "Cancel")
-
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 60, height: 24))
         field.alignment = .right
         field.stringValue = "\(currentPage + 1)"
         field.setAccessibilityIdentifier("go-to-page-field")
-        alert.accessoryView = field
 
-        alert.beginSheetModal(for: window) { [weak self] response in
+        Alert.show("Go to Page", informative: "Page number, 1 to \(pageTotal).", buttons: ["Go", "Cancel"],
+                   accessory: field, in: window) { [weak self] response in
             guard response == .alertFirstButtonReturn, let self else { return }
             // A page number out of range is a typo, not a command. Clamp rather than refuse:
             // nobody wants an error sheet because they typed 99 in a 12-page document.
@@ -129,19 +123,11 @@ extension DocumentWindowController: NSMenuItemValidation {
         }
     }
 
-    /// Which page the user is on, in either display mode. Printed (job 265) reads `pdfView`'s
-    /// own current page instead of `pagedView`'s — exactly one of the two ever has content.
-    var currentPage: Int {
-        guard documentState.style.value == .printed else { return pagedView.visiblePageIndex }
-        guard let document = pdfView.document, let page = pdfView.currentPage else { return 0 }
-        return document.index(for: page)
-    }
-    /// How many pages the document laid out.
-    var pageTotal: Int {
-        guard documentState.style.value != .printed else { return pdfView.document?.pageCount ?? 0 }
-        // #271 M7: while a progressive load is still rendering or laying out, the document's own page count.
-        return max(pagedView.pageCount, expectedPageTotal ?? 0)
-    }
+    /// Which page the user is on, in either display mode, in whichever view shows the pages.
+    var currentPage: Int { content.currentPage }
+    /// How many pages the document laid out — or, while a progressive load is still rendering or laying out, the
+    /// document's own page count (#271 M7).
+    var pageTotal: Int { max(content.pageCount, expectedPageTotal ?? 0) }
 
     /// Move to `index`, in whichever way the current display mode means it.
     ///
@@ -157,31 +143,13 @@ extension DocumentWindowController: NSMenuItemValidation {
         let changeToken = PerformanceSignposts.begin("page.change")
         defer { PerformanceSignposts.end(changeToken) }
         let clamped = max(0, min(index, pageTotal - 1))
-        if documentState.style.value == .printed {
-            guard let document = pdfView.document, let page = document.page(at: clamped) else { return }
-            pdfView.go(to: page)
-            // Job 454 (PART B): `pdfView`'s own `.PDFViewPageChanged` notification (observed in
-            // `DocumentWindowController.buildContent()`) already covers navigation PDFKit drives
-            // itself (arrow keys, trackpad swipe, scrolling) — called again here too so this
-            // command path never depends on notification delivery timing.
-            refreshPageIndicator()
-            return
-        }
         // #271 M7: a page not laid out yet, while a progressive load renders or lays out the rest, is gone
         // to once it is; until then the last page laid out shows.
-        if isLoadingContent, clamped >= pagedView.pageCount {
+        if isLoadingContent, clamped >= content.pageCount {
             pendingPageIndex = clamped
         }
         guard clamped != currentPage || documentState.display.value == .continuousScroll else { return }
-        switch documentState.display.value {
-        case .singlePage:
-            pagedView.showPage(clamped)
-        case .continuousScroll:
-            let rect = pagedView.rect(ofPage: clamped)
-            pagedView.scrollToVisible(CGRect(x: rect.origin.x, y: rect.origin.y,
-                                             width: rect.width,
-                                             height: pagedView.visibleRect.height))
-        }
+        content.go(toPage: clamped, display: documentState.display.value)
         // Job 450 (b6): the Go menu/AppleScript path changes the current page without
         // touching anything else `bottomBar.update(from:)` shows, so it needs its own call —
         // the scroll-gesture path (`pagedView.pageDidChange`) makes the same one.
@@ -358,7 +326,7 @@ extension DocumentWindowController: NSMenuItemValidation {
                     title: basename, docPath: self.document?.fileURL?.path ?? "",
                     headers: headers, toc: toc, inlineStyling: inlineStyling, pictures: pictures,
                     pageNumbers: pageNumbers, sentenceSpacing: sentenceSpacing)
-                try ExportEngine.write(products, to: directory, basename: basename)
+                try ExportNaming.write(products, to: directory, basename: basename)
             } catch {
                 NSApp.presentError(error)
             }
@@ -366,11 +334,8 @@ extension DocumentWindowController: NSMenuItemValidation {
     }
 
     private func presentNoFormatsChosen() {
-        let alert = NSAlert()
-        alert.messageText = "Choose at least one format."
-        alert.informativeText = "Nothing was exported because no format was selected."
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        Alert.show("Choose at least one format.",
+                   informative: "Nothing was exported because no format was selected.", in: nil)
     }
 
     // MARK: - Validation

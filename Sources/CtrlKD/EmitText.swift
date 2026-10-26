@@ -2,7 +2,7 @@
 /// (emit.py:58-76).
 
 /// Which rendering convention an emitter should use.
-public enum EmitMode: String, Hashable, Sendable {
+public enum EmitMode: String, Hashable, Sendable, CaseIterable {
     /// Reflow for modern reading: paragraphs separated by blank lines, WordStar's own
     /// pagination dropped.
     case modern
@@ -113,8 +113,9 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
     // planning #270 item 42: a non-paged format carries no page apparatus —
     // the MailMerge page-number variable is removed here, never shown as typed.
     let doc = mergePagenoDropped(driverSubstituted(doc))
-    let refNotes = inlineReferenceNotes(doc)
     let printed = mode == .printed || isPrinted(doc)
+    let ctx = RenderContext(doc, printed: printed, sentenceSpacing: options.sentenceSpacing)
+    let refNotes = ctx.refNotes
     var options = options
     if printed {
         // printed is always silent about comments (ruling 2026-08-06 M9): WordStar
@@ -125,9 +126,9 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
     // per-page footnote numbers stay unambiguous there, same as Printed/Modern PDF
     // (ruling 2026-08-24: "Printed... keep WS7's per-page numbering"). Only Modern TXT
     // is genuinely page-less.
-    let labels = printed ? annotatedNoteLabels(doc) : pagelessNoteLabels(doc)
+    let labels = ctx.noteLabels(printed ? .annotated : .pageless)
     // N9 (b33 field notes): mode-aware default, flag overrides either way.
-    let ssOn = resolveSentenceSpacing(options.sentenceSpacing, printed: printed)
+    let ssOn = ctx.sentenceSpacing
     func render(_ line: Line) -> String {
         var seg = line.spans.map { textSpan($0, refNotes: refNotes, labels: labels, options: options,
                                             printed: printed) }
@@ -135,13 +136,13 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
         return seg.joined()
     }
     var out: [String] = []
-    let margin = docMargin(doc)
-    let (conventionIndent, headPosition) = paragraphLayoutContext(doc)
+    let margin = ctx.margin
+    let (conventionIndent, headPosition) = (ctx.conventionIndent, ctx.headPosition)
     // b24 round 20b (slate item 13): screenplay-detected regions get the SAME
     // verse-class (line-structure-preserving) treatment as a verified verse/stanza
     // unit -- computed once per document, not printed (a facsimile already preserves
     // every line's own position; detection only changes REFLOW behavior).
-    let screenplayBlocks = printed ? [] : detectScreenplayBlocks(doc)
+    let screenplayBlocks = ctx.screenplayBlocks
     // planning #264 item 4 (packet row A10, extended): a bare trailing `.pa` marks
     // nothing -- see `trailingPASkipIndex` (EmitterRules.swift).
     let skipPA = trailingPASkipIndex(doc)

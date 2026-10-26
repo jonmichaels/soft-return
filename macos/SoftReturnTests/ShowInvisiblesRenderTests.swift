@@ -1,13 +1,14 @@
 import AppKit
 import CtrlKD
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
 
 /// Job 256 (Show Invisibles, part 2/4): `DocumentRenderer.renderWithInvisibles`/
 /// `renderNativeAnnotated` — the screen-only inline rendering of `CtrlKD.annotatedLayout`'s
-/// five invisible-ink classes. `RenderProbeTests.oldtimesInvisiblesOnOffPage1` is this job's
-/// visual evidence; this file is the byte/structural proof underneath it.
+/// five invisible-ink classes. `ShowInvisiblesToggleTests` checks the toggle changes what a window
+/// draws; this file is the byte/structural proof underneath it.
 @MainActor
 private func oldtimesState() throws -> DocumentState {
     let url = OracleByteParityTests.ws7Directory.appendingPathComponent("OLDTIMES.WS")
@@ -153,7 +154,7 @@ private func markAnnotations(in text: NSAttributedString) -> [(label: String, fa
 }
 
 /// Job 257 (Show Invisibles part 3/4, the reflow ruling), UPDATED by job 267 (field bug 2):
-/// an INDEPENDENT re-derivation of the SAME points budget `layoutPrintedPagesPlain`/
+/// an INDEPENDENT re-derivation of the SAME points budget `layoutPrintedPages`/
 /// `renderNativeAnnotated` walk — first unit on a page free, a unit right after a real
 /// overprint line free, everything else its own lead (a real line's `.lh`-aware lead, or the
 /// document default for a fabricated dot-command line) — built directly from
@@ -170,7 +171,7 @@ private func markAnnotations(in text: NSAttributedString) -> [(label: String, fa
 /// empty strings — `oldtimesCommentNotesAreTaggedEvenThoughTheyCarryNoText`'s own finding) and
 /// never wrap in practice, so every unit here costs exactly 1 row, same as job 257's original
 /// formula — this fixture cannot exercise that math, unlike POWERUSE.WS/FORMFEED.WS
-/// (`RenderProbeTests`' own screenshot evidence for those).
+/// (which the corpus tests below do exercise).
 @MainActor
 private func expectedAnnotatedPageCount(for doc: Document) -> Int {
     let metrics = printedMetrics(doc)
@@ -252,7 +253,7 @@ extension ShowInvisiblesRenderTests {
     /// Job 257 (part 3/4): LJ6DTP.WS's own `.overprint` chains and oversized banner (jobs
     /// 224/227/246's subjects) must still composite once Invisibles interleaves dot-command
     /// lines around them — the structural proof under
-    /// `RenderProbeTests.lj6dtpInvisiblesOnP1P6NoCompositingRegression`'s screenshots. Both
+    /// the compositing check on those two pages. Both
     /// counts must stay non-zero: a silent regression to job 256's "no `.overprint`/oversized
     /// handling in the annotated path at all" would zero these out without changing `pageCount`
     /// or crashing anything, which is exactly why this needs its own check.

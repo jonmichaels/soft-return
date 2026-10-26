@@ -5,6 +5,10 @@
 /// with the shortfall measured honestly (the round-trip census) rather than papered
 /// over.
 ///
+/// Reference code, kept on purpose: nothing in the apps or the command-line tool calls the
+/// writer. It stays in the library for anyone who wants to take this code and write a
+/// WordStar port.
+///
 /// THE CONTRACT
 /// ------------
 /// The body is serialized FROM THE IR — spans, style sets, physical lines — so an

@@ -259,8 +259,6 @@ extension ZoomSetting: Codable {
 extension ViewStyle: Codable {}
 extension PageDisplay: Codable {}
 extension NamedPageSize: Codable {}
-extension EmitOptions.PixMode: Codable {}
-extension EmitOptions.PageNumberMode: Codable {}
 
 private extension UserDefaults {
     /// JSON in a defaults key. Plain `set(_:forKey:)` handles strings and ints; anything

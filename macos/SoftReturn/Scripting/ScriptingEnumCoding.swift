@@ -163,6 +163,44 @@ enum ScriptingEnumCoding {
         sentenceSpacingModeCodes.first { ScriptingCodes.fourCharCode($0.value) == code }?.key
     }
 
+    // MARK: - quirks mode (QuirkMode)
+
+    /// The CLI's `--quirks {off,auto,all}` (R-74, planning #574).
+    static let quirksModeCodes: [QuirkMode: String] = [
+        .off: "SRq0", .auto: "SRqa", .all: "SRql",
+    ]
+
+    static func code(for quirksMode: QuirkMode) -> UInt32? {
+        quirksModeCodes[quirksMode].map(ScriptingCodes.fourCharCode)
+    }
+
+    static func quirksMode(forCode code: UInt32) -> QuirkMode? {
+        quirksModeCodes.first { ScriptingCodes.fourCharCode($0.value) == code }?.key
+    }
+
+    /// The `quirks`, `enabling quirks` and `disabling quirks` parameters of `export` and `convert` as the quirks to
+    /// run: `sr`'s `--quirks`, `--quirk` and `--no-quirk`. With no `quirks` mode, `baseline` stands under the named
+    /// ones. Throws for a name the engine does not know.
+    static func quirks(from arguments: [String: Any], baseline: QuirkChoices) throws -> QuirkChoices {
+        var mode: QuirkMode?
+        if let number = arguments["scriptingQuirksMode"] as? NSNumber {
+            mode = quirksMode(forCode: number.uint32Value)
+        }
+        return try QuirkChoices.requested(
+            mode: mode, enable: names(arguments["scriptingEnablingQuirks"]),
+            disable: names(arguments["scriptingDisablingQuirks"]), baseline: baseline)
+    }
+
+    /// A text list parameter, or a single text, as names.
+    private static func names(_ raw: Any?) -> [String] {
+        switch raw {
+        case let name as String: return [name]
+        case let names as [String]: return names
+        case let array as NSArray: return array.compactMap { $0 as? String }
+        default: return []
+        }
+    }
+
     // MARK: - zoom setting (the named half of ZoomSetting)
 
     static func code(forZoomNamed setting: ZoomSetting) -> UInt32? {

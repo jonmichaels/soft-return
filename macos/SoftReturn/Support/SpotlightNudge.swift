@@ -5,7 +5,7 @@ import os
 /// `SpotlightNudge`'s gating logic and a real subprocess launch, so unit tests can exercise
 /// "once per (version, importer path)" without ever spawning `mdimport` for real. See
 /// `SpotlightNudgeTests`.
-protocol MDImportRunning {
+protocol MDImportRunning: Sendable {
     func run(arguments: [String]) -> SpotlightNudge.RunResult
 }
 
@@ -21,7 +21,7 @@ protocol MDImportRunning {
 /// hatch for "I want to try again right now" is `runUnconditionally` below, not automatic
 /// retries.
 enum SpotlightNudge {
-    struct RunResult: Equatable {
+    struct RunResult: Equatable, Sendable {
         let exitCode: Int32
         let output: String
     }
@@ -67,7 +67,7 @@ enum SpotlightNudge {
     /// immediately with no timing dependency at all.
     static func runIfNeeded(bundle: Bundle = .main, defaults: UserDefaults = .standard,
                             runner: MDImportRunning = ProcessMDImportRunner(),
-                            perform: @escaping (@escaping () -> Void) -> Void =
+                            perform: @escaping (@escaping @Sendable () -> Void) -> Void =
                                 { DispatchQueue.global(qos: .utility).async(execute: $0) }) {
         let version = currentVersion(bundle: bundle)
         let path = importerPath(bundle: bundle)
@@ -75,6 +75,8 @@ enum SpotlightNudge {
             logger.info("skipping: already ran for this version and importer path")
             return
         }
+        // `UserDefaults` is thread-safe (Apple's documentation says so) but not marked `Sendable`.
+        nonisolated(unsafe) let defaults = defaults
         perform {
             runAndRecord(version: version, importerPath: path, defaults: defaults, runner: runner)
         }
@@ -140,8 +142,16 @@ enum SpotlightNudge {
 /// that failure is reported as `RunResult(exitCode: -1, ...)` rather than propagated, because
 /// every caller of `MDImportRunning` already has to handle a nonzero exit code and a second
 /// error path would only be more to test.
+///
+/// A test host never spawns it (planning #572): tests open thousands of corpus documents and their temporary copies,
+/// each an `mdimport <file>`, and every new build path's launch made the nudge's `mdimport -r`, which re-imports every
+/// WordStar file on the Mac. Spotlight's workers then loaded the machine the timing tests measure on. Tests of the
+/// triggers inject `FakeMDImportRunner`.
 struct ProcessMDImportRunner: MDImportRunning {
     func run(arguments: [String]) -> SpotlightNudge.RunResult {
+        guard !TestHost.isActive else {
+            return SpotlightNudge.RunResult(exitCode: -1, output: "not run: test host")
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/mdimport")
         process.arguments = arguments
@@ -160,4 +170,13 @@ struct ProcessMDImportRunner: MDImportRunning {
         return SpotlightNudge.RunResult(exitCode: process.terminationStatus,
                                         output: String(data: data, encoding: .utf8) ?? "")
     }
+}
+
+/// Whether this process is under test: a unit-test host (the app `xcodebuild test` launches to load the test bundle), or
+/// the app a UI test launched with `underTestArgument`. Neither may change what the real app does at its next launch or
+/// ask Spotlight for anything (planning #572, #581): they share the real app's preferences.
+enum TestHost {
+    static let underTestArgument = "-SoftReturnUnderTest"
+    static let isActive = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        || ProcessInfo.processInfo.arguments.contains(underTestArgument)
 }

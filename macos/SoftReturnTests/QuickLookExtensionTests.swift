@@ -76,7 +76,7 @@ import Testing
     /// shaped like an extension, nothing else in this file matters. `Bundle.main` is "Soft
     /// Return.app" itself here, the same reliance `everyDeclaredDocumentClassResolves` (this
     /// suite's Info.plist test) makes — these tests run HOSTED inside the real app bundle
-    /// (see `RenderProbeTests`'s own doc comment on why).
+    /// (the test target's `TEST_HOST` is that app).
     @Test func theAppexBundleIsEmbeddedWithTheRightShape() throws {
         let appexURL = Bundle.main.bundleURL
             .appendingPathComponent("Contents/PlugIns/SoftReturnQuickLook.appex")

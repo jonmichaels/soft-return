@@ -13,6 +13,7 @@ import SoftReturnShared
 /// Items with no explicit target go to the first responder, which is how a document window
 /// gets Copy and Select All for free from the text view, and how they correctly grey out
 /// when no document is open.
+@MainActor
 enum MainMenu {
     static func build() -> NSMenu {
         let main = NSMenu()

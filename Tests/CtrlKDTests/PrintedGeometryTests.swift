@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// `PrintedGeometry.swift` is a façade over the PDF emitter's internal metrics, added so
@@ -325,12 +326,12 @@ private func geoDoc(
 
 /// The real document the defect was measured on (planning #271 M2): sawyer/REF/BOOKLET.RJS
 /// declares `.pr or=l` and `.pl 8.5"`, and Printed resolves it to 792 x 612. Gated on
-/// `CTRLKD_SAWYER_ARCHIVE` like every other Tier-2 suite (`sawyerArchiveArmed`/
-/// `sawyerArchiveSkipReason`, declared in `WSChangeTests.swift`); armed but missing the file
+/// `CTRLKD_SAWYER_ARCHIVE` like every other Tier-2 suite (`Corpus.sawyerArchiveArmed`/
+/// `Corpus.sawyerArchiveSkipReason`, declared in `WSChangeTests.swift`); armed but missing the file
 /// FAILS LOUD rather than skipping.
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func printedMetricsMatchTheEmittersPageBoxForBookletRJS() throws {
-    let url = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent("REF/BOOKLET.RJS")
+    let url = URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent("REF/BOOKLET.RJS")
     let doc = parseWS([UInt8](try Data(contentsOf: url)))
 
     let m = printedMetrics(doc)

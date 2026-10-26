@@ -152,9 +152,9 @@ final class SettingsWindowController: NSWindowController {
         inlineStylingCheckbox.setAccessibilityIdentifier("default-inline-styling-checkbox")
         inlineStylingCheckbox.setAccessibilityLabel("Default: include the author's inline color and size styling")
 
-        picturesPopup = popup(["Off", "Embed", "Export"], "default-pictures-control",
+        picturesPopup = popup(EmitOptions.PixMode.choices.map(\.displayName), "default-pictures-control",
                               "Default pictures", #selector(picturesChanged(_:)))
-        pageNumbersPopup = popup(["Auto", "On", "Off"], "default-page-numbers-control",
+        pageNumbersPopup = popup(EmitOptions.PageNumberMode.choices.map(\.displayName), "default-page-numbers-control",
                                  "Default page numbering", #selector(pageNumbersChanged(_:)))
 
         // Job 397 (Jon F10, verbatim ruling): two grids around a separator + caption, not
@@ -451,18 +451,10 @@ final class SettingsWindowController: NSWindowController {
         headersCheckbox.state = settings.defaultHeaders ? .on : .off
         tocCheckbox.state = settings.defaultTOC ? .on : .off
         inlineStylingCheckbox.state = settings.defaultInlineStyling ? .on : .off
-        picturesPopup.selectItem(at: Self.picturesTitles.firstIndex { $0.0 == settings.defaultPictures } ?? 1)
+        picturesPopup.selectItem(at: EmitOptions.PixMode.choices.firstIndex(of: settings.defaultPictures) ?? 1)
         pageNumbersPopup.selectItem(
-            at: Self.pageNumbersTitles.firstIndex { $0.0 == settings.defaultPageNumbers } ?? 0)
+            at: EmitOptions.PageNumberMode.choices.firstIndex(of: settings.defaultPageNumbers) ?? 0)
     }
-
-    private static let picturesTitles: [(EmitOptions.PixMode, String)] = [
-        (.off, "Off"), (.embed, "Embed"), (.export, "Export"),
-    ]
-
-    private static let pageNumbersTitles: [(EmitOptions.PageNumberMode, String)] = [
-        (.auto, "Auto"), (.on, "On"), (.off, "Off"),
-    ]
 
     @objc private func startingViewChanged(_ sender: NSPopUpButton) {
         settings.startingView = StartingView.allCases
@@ -543,16 +535,10 @@ final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func picturesChanged(_ sender: NSPopUpButton) {
-        settings.defaultPictures = Self.picturesTitles[safe: sender.indexOfSelectedItem]?.0 ?? .embed
+        settings.defaultPictures = EmitOptions.PixMode.choices[safe: sender.indexOfSelectedItem] ?? .embed
     }
 
     @objc private func pageNumbersChanged(_ sender: NSPopUpButton) {
-        settings.defaultPageNumbers = Self.pageNumbersTitles[safe: sender.indexOfSelectedItem]?.0 ?? .auto
-    }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
+        settings.defaultPageNumbers = EmitOptions.PageNumberMode.choices[safe: sender.indexOfSelectedItem] ?? .auto
     }
 }

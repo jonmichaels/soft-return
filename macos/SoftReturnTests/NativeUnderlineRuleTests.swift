@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -112,7 +113,6 @@ struct NativeUnderlineRuleTests {
         let around: [CGFloat] = neighbours.map { pitches[$0] }
         print("UNDERLINE-PITCH -ATTRIB.TST: \(baselines.count) lines; the usual pitch \(common) pt; into and out of the underlined line (\(underlinedIndex + 1)): \(around)")
         #expect(around.allSatisfy { abs($0 - common) < 0.01 }, "the underlined line changes the pitch: \(around) against \(common)")
-        try NativeSupSubRiseTests.writeComparison(state: state, rendered: rendered, name: "m12-attrib-native-vs-printed.png")
     }
 
     /// Batch 40 (M20, Jon: "Fix it"): the rule starts at the run's first inked glyph and ends where its last inked glyph
@@ -219,7 +219,7 @@ struct NativeUnderlineRuleTests {
         NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance { view.cacheDisplay(in: band, to: nativeRep) }
         let native = try #require(nativeRep.cgImage)
 
-        let pdf = try emitPDF(state.document, mode: .printed, options: state.printedOptions)
+        let pdf = emitPDF(state.document, mode: .printed, options: state.printedOptions)
         let provider = try #require(CGDataProvider(data: Data(pdf) as CFData))
         let page = try #require(CGPDFDocument(provider)?.page(at: 1))
         let box = page.getBoxRect(.mediaBox)
@@ -240,24 +240,6 @@ struct NativeUnderlineRuleTests {
         print("M20-UNDERLINE -ATTRIB.TST at 8x: Native's rule \(nativeEnds.left)–\(nativeEnds.right) pt (row \(nativeRule.row)), Printed's \(printedEnds.left)–\(printedEnds.right) pt (row \(printedRule.row)); right ends differ by \(nativeEnds.right - printedEnds.right) pt, left by \(nativeEnds.left - printedEnds.left) pt")
         #expect(abs(nativeEnds.right - printedEnds.right) <= 0.25, "Native's rule ends at \(nativeEnds.right) pt, Printed's at \(printedEnds.right) pt")
         #expect(abs(nativeEnds.left - printedEnds.left) <= 0.25, "Native's rule starts at \(nativeEnds.left) pt, Printed's at \(printedEnds.left) pt")
-
-        // The two bands, Native above Printed, for the record.
-        let gap = 16
-        let out = try #require(CGContext(
-            data: nil, width: native.width, height: native.height + gap + printed.height, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        out.setFillColor(CGColor(gray: 0.85, alpha: 1))
-        out.fill(CGRect(x: 0, y: 0, width: out.width, height: out.height))
-        out.draw(printed, in: CGRect(x: 0, y: 0, width: printed.width, height: printed.height))
-        out.draw(native, in: CGRect(x: 0, y: printed.height + gap, width: native.width, height: native.height))
-        let composed = try #require(out.makeImage())
-        let png = try #require(NSBitmapImageRep(cgImage: composed).representation(using: .png, properties: [:]))
-        let proofs = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
-        let file = proofs.appendingPathComponent("m20-attrib-underline-8x.png")
-        try png.write(to: file)
-        print("PROOF: \(file.path)")
     }
 
     /// The row of `image` holding its longest horizontal run of dark pixels (gaps of one pixel bridged), and that run's

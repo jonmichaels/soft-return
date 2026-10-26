@@ -72,8 +72,8 @@ private func drawn(_ prefix: String, _ body: String) -> [[String]] {
 private func numbers(_ prefix: String, _ body: String) -> (nums: [Int], on: [Bool]) {
     let doc = parseWS(bytes(prefix + body))
     let pages = docToPagelines(doc, printed: true)
-    return (resolvePageNumbers(pnCheckpoints(doc), pages),
-            pgnumByPage(pgnumCheckpoints(doc), pages))
+    return (resolvePageNumbers(doc.pnTimeline(), pages),
+            pgnumByPage(doc.pgnumTimeline(), pages))
 }
 
 @Test func aPNOneLineShortOfTheBoundaryNumbersItsOwnPage() {
@@ -173,8 +173,8 @@ private func numbers(_ prefix: String, _ body: String) -> (nums: [Int], on: [Boo
     // all — and two `.pn` commands inside ONE block are now two checkpoints, not one,
     // because their positions differ.
     let doc = parseWS(bytes(smallGeometry + ".pn3\r\nA\r\nB\r\n.pn7\r\nC\r\n"))
-    let cps = pnCheckpoints(doc)
-    #expect(Array(cps.suffix(2).map(\.pn)) == [3, 7])
+    let cps = doc.pnTimeline().entries
+    #expect(Array(cps.suffix(2).map(\.value)) == [3, 7])
     #expect(cps[cps.count - 1].lineIndex > cps[cps.count - 2].lineIndex)
 }
 
@@ -243,7 +243,7 @@ private func footDigits(_ data: [UInt8]) -> [[String]] {
     let doc = parseWS(data)
     #expect(!doc.notes.isEmpty)          // LYING is the fixture BECAUSE it has a footnote
     let pages = docToPagelines(doc, printed: true)
-    #expect(pgnumByPage(pgnumCheckpoints(doc), pages) == [false, false, false])
+    #expect(pgnumByPage(doc.pgnumTimeline(), pages) == [false, false, false])
     #expect(footDigits(data) == [[], [], []])
 }
 

@@ -900,7 +900,10 @@ func euroText(_ text: String, _ patched: Bool) -> String {
 /// their own measure. Port of `layout.modern_flow`.
 public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = EmitOptions.defaultNotes,
                                noteRefs: NoteRefs = .word) -> SemanticFlow {
-    let refNotes = inlineReferenceNotes(doc)
+    // Modern is never printed. No options reach this function, so `ctx.sentenceSpacing`
+    // (the Modern default) is not read here.
+    let ctx = RenderContext(doc, printed: false)
+    let refNotes = ctx.refNotes
     let shownByIndex = shownLabels(refNotes, doc: doc, noteRefs: noteRefs)
 
     // every kept note, in document order, with its indices stable for the
@@ -931,9 +934,9 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
     // "printed", so `screenplayBlocks` is unconditional (matches those emitters' own
     // `printed ? [] : detectScreenplayBlocks(doc)` since this flow's `printed` is always
     // false).
-    let modernMargin = docMargin(doc)
-    let (conventionIndent, headPosition) = paragraphLayoutContext(doc)
-    let screenplayBlocks = detectScreenplayBlocks(doc)
+    let modernMargin = ctx.margin
+    let (conventionIndent, headPosition) = (ctx.conventionIndent, ctx.headPosition)
+    let screenplayBlocks = ctx.screenplayBlocks
     var hfByBlock: [Int: [(kind: HFKind, line: Int, text: String)]] = [:]
     for event in doc.hfEvents {
         hfByBlock[event.blockAnchor, default: []].append((event.kind, event.line, event.text))
@@ -1760,10 +1763,6 @@ func printedSegmentText(_ span: Span) -> String {
 @Sendable
 public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                        options: EmitOptions = EmitOptions()) -> String {
-    // Python's notes-aware printed paginator returns PLAIN page lists (no Page object),
-    // so `getattr(page, 'headers', {})` yields {} for every page on that path — the
-    // Swift Page's doc-final headers exist for the PDF driver, not for this JSON.
-    let notesPath = hasPlaceableNotes(doc)
     // First-set order of header/footer line slots, for Python's dict insertion order.
     var headerOrder: [Int] = []
     var footerOrder: [Int] = []
@@ -1868,15 +1867,13 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         // returns a bare Python list with no `.headers` attribute at all, so
         // `emit_layout`'s `getattr(page, 'headers', {})` yields `{}` for that page —
         // the exact same duck-typing gap the PDF fix worked around, just unpatched on
-        // ctrl-kd's JSON path. `layoutPrintedPagesPlain`'s only page-append site
-        // (`closePage`) is gated on `!page.isEmpty`, so a REAL paginated page can never
-        // reach here with zero lines — a zero-line page on this branch is therefore
-        // always the isEmpty-fallback synthetic one, never a genuine paginated page,
-        // and blanking it here (matching notesPath's existing precedent for the same
-        // duck-typing gap on ITS branch) keeps this JSON contract byte-comparable to
-        // ctrl-kd's, while the PDF driver keeps using the real fallback headers/footers
-        // untouched.
-        let blankHF = notesPath || page.isEmpty
+        // ctrl-kd's JSON path. The model is made byte-comparable to ctrl-kd's by blanking
+        // that page here, while the PDF driver keeps using the real fallback
+        // headers/footers untouched. A REAL paginated page that happens to carry no lines
+        // (a column page `applyColumns` merged from all-blank sub-pages) is not that page:
+        // `isSynthesizedFallback` is data, not a shape test (see `Page.isSynthesizedFallback`),
+        // and its raw dict is the paginator's answer like any other page's.
+        let blankHF = page.isSynthesizedFallback
         var pageFields: [(String, LayoutJSONValue)] = [
             ("lines", .array(lines)),
             ("headers", blankHF ? .object([]) : jsonHFDict(page.headers,
@@ -1893,19 +1890,13 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         // sake, which `resolveHeadFootLines` would otherwise turn into real
         // entries here too, while ctrl-kd's own equivalent fallback is a bare
         // list with no `.headers` attribute at all and resolves nothing) --
-        // deliberately NOT gated on `notesPath` the way the raw `headers`/
-        // `footers` dict just above is: `resolved.headers`/`footers` are
-        // already empty arrays on a genuine notes-path page (its own real
-        // `page.headers`/`footers` ARE `{}`, replayed straight through, same
-        // as the raw dict), so `headerLines`/`footerLines` naturally stay
-        // `nil` there with no extra gate needed -- but `autoPageno` does NOT
-        // depend on headers/footers being non-empty (WSFORMAT.WS's own
-        // "active only when the footers are not in use" reads FALSE exactly
-        // when footers is `{}`), so a notes-path page can legitimately carry
-        // a real automatic page number with no real header/footer at all
-        // (DISPLAY.WS/REF/NOTES.TST's own `.pa`-terminated endnote-appendix
-        // page, #228) -- gating it on `notesPath` too silently dropped it,
-        // found via `AnswerKeyParityTests`.
+        // deliberately NOT gated on the raw `headers`/`footers` dict being non-empty:
+        // `autoPageno` does NOT depend on headers/footers being non-empty
+        // (WSFORMAT.WS's own "active only when the footers are not in use" reads
+        // FALSE exactly when footers is `{}`), so a page can legitimately carry a
+        // real automatic page number with no real header/footer at all
+        // (DISPLAY.WS/REF/NOTES.TST's own `.pa`-terminated endnote-appendix page,
+        // #228), found via `AnswerKeyParityTests`.
         // `page.isEmpty && !page.explicitBreak`, not `page.isEmpty` alone: a page
         // with real content (some ordinary line, real endnote text) is never gated by
         // either half. A genuinely empty page comes in two shapes that must be told
@@ -1922,9 +1913,7 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         // carry no lines -- `sawyer/REF/CODES` is all dot commands and running heads,
         // and planning #274 gives it a real automatic page number, which the proxy
         // dropped here while ctrl-kd kept it. See `Page.isSynthesizedFallback` for why
-        // this is data rather than a shape test. The `blankHF` gate above still reads
-        // `page.isEmpty`: it blanks the RAW headers/footers dict, is green across the
-        // whole corpus as it stands, and is left alone deliberately.
+        // this is data rather than a shape test.
         // NO `isSynthesizedFallback` GATE ANY MORE (planning #274 follow-up,
         // 2026-09-15). It mirrored ctrl-kd, where `pages or [[]]` sat on
         // `docToPagelines`' own `return` so the synthesized page did not exist when
@@ -1932,8 +1921,8 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         // BEFORE that pass now (ed6d0658), so this page carries a real running head
         // and a real automatic page number in both engines -- `REF/ADVANCE.DOT` and
         // `REF/GALLEYS.DOT`, the content-free `.DOT` templates, whose Printed PDF
-        // has always drawn both. The `blankHF` gate above (the RAW headers/footers
-        // dict) still reads `page.isEmpty` and is left alone.
+        // has always drawn both. The `blankHF` gate above blanks the RAW headers/footers
+        // dict only.
         if let headerLines = page.headerLines {
             pageFields.append(("header_lines", .array(headerLines.map(jsonHeadFootLine))))
         }
@@ -1972,7 +1961,7 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
         if let pageOr = page.orientation, let docPage = doc.page {
             let sheet = pageGeometryFor(docPage, orientation: pageOr)
             pageFields.append(("size", .object([
-                ("width_pt", .int(roundHalfToEven(sheet.pwIn * 72.0))),
+                ("width_pt", .int(roundHalfToEven(inchesToPoints(sheet.pwIn)))),
                 ("height_pt", .int(printedPageHeightPt(sheet))),
                 ("orientation", .string(pageOr.rawValue)),
             ])))
@@ -2011,7 +2000,7 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
     // `{width_pt, height_pt, orientation}` -- because the sheet stopped being one answer
     // for the whole document. `.pr or=l`/`.pr or=p` used to be read as a single
     // document-wide last-write-wins flag; it is resolved per page now, at the position
-    // each page OPENS at (`orCheckpoints`, whose doc comment carries the measured WS7
+    // each page OPENS at (`orTimeline`, whose doc comment carries the measured WS7
     // timing rule). `size` follows the same omit-unless-it-differs convention as every
     // other per-page field here, so a document that never changes orientation mid-file
     // emits byte-identical JSON to version 12 apart from the version number. A page

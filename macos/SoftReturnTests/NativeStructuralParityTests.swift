@@ -1,12 +1,13 @@
 import AppKit
 import CtrlKD
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Foundation
 import Testing
 @testable import SoftReturn
 
 /// NOTE (2026-09-07): `graphicChars` must now be QUALIFIED in any test file that imports
-/// both modules. There are two sets with that name — `SoftReturn.graphicChars`
+/// both modules. There are two sets with that name — `SoftReturnRendering.graphicChars`
 /// (`Rendering/NativeVectorGraphics.swift`, the characters the APP draws as vectors) and
 /// `CtrlKD.graphicChars` (`PDFDriverLJ6DTP.swift`, the ones the ENGINE draws as vectors) —
 /// and the engine's became public in sr 506b2e0, so a bare name that used to resolve to the
@@ -612,7 +613,7 @@ enum EngineTruth {
             // number either, so both sides were missing the same row.
             //
             // The ON/OFF decision reuses `DocumentRenderer.nativeAutoPageNumberOn` rather
-            // than restating it — one port of `pgnumCheckpoints`/`pgnumAt`, exercised by both
+            // than restating it — one port of `pgnumTimeline`/`Timeline.at`, exercised by both
             // the thing under test and the truth it is measured against. That is safe HERE,
             // where the quantity is "which WordStar dot commands are in force", and is the
             // same reasoning this harness already uses to reach `printedMetrics` instead of
@@ -786,7 +787,7 @@ enum EngineTruth {
                 // performs for every other still-unconsumed group. `LAYOUT.WS`/every other
                 // fixture's ordinary prose lines are untouched (their own text always contains
                 // a real character).
-                let ownsRealText = text.contains { !$0.isWhitespace && !SoftReturn.graphicChars.contains($0) }
+                let ownsRealText = text.contains { !$0.isWhitespace && !SoftReturnRendering.graphicChars.contains($0) }
 
                 if ownsRealText, groupIdx < groups.count, abs(groups[groupIdx].y - y) < 0.15 {
                     let group = groups[groupIdx]
@@ -1055,7 +1056,7 @@ enum AppOutput {
                     // size when the base's own text has none of its own (the same "ask the
                     // real render path" discipline the `selfInk` branch below already uses) —
                     // otherwise the base's own measured text/size (already correct) stays.
-                    let baseOwnsRealText = line.text.contains { !$0.isWhitespace && !SoftReturn.graphicChars.contains($0) }
+                    let baseOwnsRealText = line.text.contains { !$0.isWhitespace && !SoftReturnRendering.graphicChars.contains($0) }
                     if !baseOwnsRealText {
                         line.text = chainInk.text.trimmingCharacters(in: .whitespacesAndNewlines)
                         line.size = chainInk.size
@@ -1183,7 +1184,7 @@ enum AppOutput {
     /// So the comparison skips them, exactly as it already skips cp437 blocks. Keyed on the
     /// SUBSTITUTED forms because that substitution runs before anything measures the line.
     static let charactersTheEngineStrokesRatherThanSets: Set<Character> =
-        SoftReturn.graphicChars.union(nativeLJ6DTPCharSubstUnivers.values)
+        SoftReturnRendering.graphicChars.union(nativeLJ6DTPCharSubstUnivers.values)
 
     /// Width of the literal leading spaces a running line still carries in its own text —
     /// the indent a fixed-pitch line draws for itself. Zero for a line with no leading space,

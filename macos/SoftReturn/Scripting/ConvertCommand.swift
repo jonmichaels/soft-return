@@ -55,6 +55,15 @@ final class ConvertCommand: NSScriptCommand {
         /// .Arguments`'s own field for why this is a plain literal default, not
         /// Settings-backed (Jon's ruling: no Settings item for this one).
         var sentenceSpacing: EmitOptions.SentenceSpacingMode = .auto
+        /// The quirks to run: `sr`'s default, the shipped auto quirks, unless the `quirks`, `enabling quirks` or
+        /// `disabling quirks` parameters say otherwise (R-127).
+        var quirks: QuirkChoices = .shipped
+
+        /// The six per-export choices as the one value the shared layer takes.
+        var choices: ExportChoices {
+            ExportChoices(headers: headers, toc: toc, inlineStyling: inlineStyling, pictures: pictures,
+                          pageNumbers: pageNumbers, sentenceSpacing: sentenceSpacing)
+        }
     }
 
     /// Job 216 (b12 leg A, ae-result-shape): `produced` replaces the old `converted` count —
@@ -99,75 +108,6 @@ final class ConvertCommand: NSScriptCommand {
         }
     }
 
-    /// Job 216 (b12 leg A): a per-instance tag, present in every breadcrumb this class
-    /// records, so a field read-back can tell "why twice" apart: field breadcrumbs since
-    /// job 199 show `convert` dispatching cleanly TWICE per single `osascript` invocation,
-    /// but the ring buffer alone never said whether that was Cocoa constructing two
-    /// `ConvertCommand` instances (e.g. a probe + the real dispatch) or one instance whose
-    /// dispatch genuinely ran twice. Two "constructed" entries with the SAME tag would be
-    /// the latter (impossible given `constructed` only fires from `init`, but cheap to keep
-    /// as a sanity check); two entries with DIFFERENT tags confirms the former.
-    ///
-    /// Job 219: every `AppleEventLifecycleBreadcrumbs.record` call below is unconditional in
-    /// source but a no-op by default in EVERY build, including this Release one — `record`
-    /// itself checks `SRDiagnosticsGate` (see that type's header). Nothing here needs an
-    /// `#if DEBUG`; a field machine that needs this evidence trail turns it on with
-    /// `defaults write me.beforeti.softreturn SRDiagnostics -bool YES`, no rebuild required.
-    private let instanceTag = UUID().uuidString.prefix(8)
-
-    /// Job 237 (ae-timeline, continuing 235/236): job 235 proved `ConvertCommand` gets
-    /// constructed 2-3x per single self-addressed `AESendMessage`, and job 236 disproved the
-    /// leading hypothesis (a redundant `loadSuites` call) without explaining the remaining
-    /// constructions. This exists to let a report reader classify each one from the OUTSIDE,
-    /// without more guessing:
-    ///   - `hasCurrentAppleEvent`: `NSAppleEventManager.shared().currentAppleEvent` is non-nil
-    ///     ONLY while Cocoa is actively dispatching a real Apple Event on the calling thread
-    ///     (`NSAppleEventManager.h`) — true here means THIS construction is happening inside a
-    ///     genuine AE dispatch, not a lookalike programmatic call.
-    ///   - `returnID`: that event's `keyReturnIDAttr` attribute, when present — ties a
-    ///     construction back to a specific sender's send/reply pair, so two constructions from
-    ///     two DIFFERENT real dispatches (vs. one dispatch producing two constructions) are
-    ///     distinguishable even when `hasCurrentAppleEvent` is true for both.
-    ///   - `stack`: the first 8 `Thread.callStackSymbols` frames, kept VERBATIM rather than
-    ///     trimmed to a guessed "real caller" index — the same "an instrument that has only ever
-    ///     returned one answer is untested" discipline job 236's `SuiteRegistrationProbe` already
-    ///     established for this exact ambiguity (Swift/ObjC thunk frames vary by call site, and a
-    ///     wrong guess is indistinguishable from a right one without independently knowing the
-    ///     true caller).
-    ///   - `mono`: `ProcessInfo.processInfo.systemUptime`, the same monotonic clock
-    ///     `AppleEventSelfSendProbe`'s send/return timestamps use, so a report can merge both
-    ///     sides into one ordered timeline with real deltas instead of comparing wall-clock
-    ///     `Date`s across threads.
-    private static func dispatchTimelineDetail(instanceTag: Substring) -> String {
-        let monotonic = ProcessInfo.processInfo.systemUptime
-        let currentEvent = NSAppleEventManager.shared().currentAppleEvent
-        let returnID = currentEvent?.attributeDescriptor(forKeyword: AEKeyword(keyReturnIDAttr))?.int32Value
-        let stack = Thread.callStackSymbols.prefix(8).joined(separator: " <- ")
-        return "instance=\(instanceTag) mono=\(monotonic) hasCurrentAppleEvent=\(currentEvent != nil) " +
-            "returnID=\(returnID.map(String.init) ?? "nil") stack=\(stack)"
-    }
-
-    /// Job 222 (finding F, scriptcommand-exemplar-shape): jobs 199-216 also overrode
-    /// `execute()`, `receiversSpecifier`, and `suspendExecution()`/`resumeExecution(withResult:)`
-    /// to breadcrumb them, and those overrides SHIPPED IN RELEASE. Audited against real working
-    /// scriptable apps (`docs/reference/apple/scriptcommand-exemplars-packet.md`, from
-    /// NetNewsWire's actual source): every one of them overrides ONLY
-    /// `performDefaultImplementation()` — never `execute()`, `receiversSpecifier`, or
-    /// `suspendExecution()`. `NSScriptCommand.h`'s own doc comment on `-executeCommand` says
-    /// it "invokes [`-performDefaultImplementation`], and it is not meant to be invoked from
-    /// anywhere else" and "You should not have to override this method" — `execute()` is the
-    /// method that packages a command's result into the reply, so intercepting it (even to run
-    /// `super.execute()` and return its value unchanged) is a live candidate for the empty-reply
-    /// -1708. Those overrides are removed; `constructed`/`pdi-entered` below stay, since reading
-    /// this init and the one sanctioned override point is not the same as intercepting them.
-    /// Effect on the real field -1708 is UNVERIFIED until a real cross-process `osascript` run —
-    /// this change matches the exemplar shape, it does not by itself prove a fix.
-    override init(commandDescription: NSScriptCommandDescription) {
-        super.init(commandDescription: commandDescription)
-        AppleEventLifecycleBreadcrumbs.record(
-            stage: "constructed", detail: Self.dispatchTimelineDetail(instanceTag: instanceTag))
-    }
-
     /// `SoftReturn.sdef`'s `convert` command declares `<result type="text">` (job 241, was
     /// `<result type="file" list="yes">` returning a plain `[NSURL]` — see that sdef comment
     /// for the full A/B matrix). Job 235-239b proved the real field -1708 is Cocoa's own
@@ -190,11 +130,8 @@ final class ConvertCommand: NSScriptCommand {
     /// the caller has positive information (what it can now open/see); the `failed` file
     /// list this command's reply used to carry is gone, not reintroduced.
     override func performDefaultImplementation() -> Any? {
-        AppleEventLifecycleBreadcrumbs.record(
-            stage: "pdi-entered", detail: Self.dispatchTimelineDetail(instanceTag: instanceTag))
         do {
-            // AppleEvent dispatch is guaranteed to run on the main thread (this class's own
-            // extensive -1708 investigation history establishes that repeatedly) but
+            // AppleEvent dispatch is guaranteed to run on the main thread, but
             // `NSScriptCommand` itself carries no static `@MainActor` isolation — `assumeIsolated`
             // states that guarantee to the compiler rather than threading `SettingsStore.shared`
             // through as yet another decode parameter this class alone would need.
@@ -272,20 +209,19 @@ final class ConvertCommand: NSScriptCommand {
             // RTF fonttbl defaults to the mac mapping, never the library's `.office`
             // default) but is no longer pinned there — job 504's `fonts` parameter lets a
             // script override it via `args.fontsTarget`.
-            let options = DocumentOperations.ConversionOptions(
+            var options = DocumentOperations.ConversionOptions(
                 formats: args.formats, mode: args.mode, variant: args.forcingVariant,
                 title: file.deletingPathExtension().lastPathComponent,
                 notes: args.notes, styles: args.styles, fontsTarget: args.fontsTarget,
                 pageSettings: args.pageSettings, docPath: file.path,
-                headers: args.headers, toc: args.toc, inlineStyling: args.inlineStyling,
-                pictures: args.pictures, lineNumbers: args.lineNumbers,
-                pageNumbers: args.pageNumbers, sentenceSpacing: args.sentenceSpacing)
+                choices: args.choices, lineNumbers: args.lineNumbers)
+            options.quirks = args.quirks
             do {
                 let products = try DocumentOperations.convert(data: [UInt8](data), options: options)
                 let basename = file.deletingPathExtension().lastPathComponent
                 if let directory = args.destinationFolder {
                     for product in products {
-                        let name = DocumentOperations.uniqueFileName(
+                        let name = ExportNaming.uniqueName(
                             basename: basename, extension: product.fileExtension
                         ) { candidate in
                             FileManager.default.fileExists(atPath: directory.appendingPathComponent(candidate).path)
@@ -304,7 +240,7 @@ final class ConvertCommand: NSScriptCommand {
             } catch let error as DocumentOperations.OperationError {
                 switch error {
                 case .notConvertible: result.skipped += 1
-                case .unknownFormat: result.failed.append(file)
+                case .unknownFormat, .unknownQuirk: result.failed.append(file)
                 }
             } catch let error as BesideSourceWriter.WriteError {
                 if besideSourceFailure == nil {
@@ -438,7 +374,8 @@ final class ConvertCommand: NSScriptCommand {
             pageSettings: pageSettings, notes: notes,
             headers: headers, toc: toc, inlineStyling: inlineStyling, pictures: pictures,
             lineNumbers: lineNumbers, styles: styles, fontsTarget: fontsTarget,
-            pageNumbers: pageNumbers, sentenceSpacing: sentenceSpacing)
+            pageNumbers: pageNumbers, sentenceSpacing: sentenceSpacing,
+            quirks: try ScriptingEnumCoding.quirks(from: arguments, baseline: .shipped))
     }
 
     private static func decodeFormats(_ raw: Any?) -> [String] {

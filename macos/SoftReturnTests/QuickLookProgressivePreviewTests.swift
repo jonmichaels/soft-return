@@ -220,11 +220,10 @@ struct QuickLookProgressivePreviewTests {
         let run = Run(bytes: source.bytes, docPath: source.path)
         defer { run.preview.cancel() }
         let preview = run.preview
-        let slug = document == "-HOLYMAC.WS" ? "holymac" : "long"
         let monitor = HolymacTimingTests.BlockMonitor()
         try #require(monitor.wait("first paint", limit: 60) { run.firstPaint.done })
 
-        let first = try Self.render(preview, name: "m24-ql-\(slug)-first-paint")
+        let first = try Self.render(preview)
         let pageOneRect = preview.view.convert(preview.pageViews[0].bounds, from: preview.pageViews[0])
         let pageInk = Self.count(in: first, of: preview.view, rect: pageOneRect) { $0 < 0.35 }
         let thumbnail = preview.thumbnailViews[0].imageView
@@ -235,7 +234,7 @@ struct QuickLookProgressivePreviewTests {
         let eight = monitor.wait("eight pages", limit: HolymacTimingTests.waitLimit) { preview.pageViews.count >= 8 || preview.isComplete }
         try #require(eight)
         let midPages = preview.pageViews.count
-        let mid = try Self.render(preview, name: "m24-ql-\(slug)-mid-load")
+        let mid = try Self.render(preview)
         let lastVisible = min(midPages, 7) - 1
         let later = preview.thumbnailViews[lastVisible].imageView
         let laterRect = preview.view.convert(later.bounds, from: later)
@@ -336,8 +335,8 @@ struct QuickLookProgressivePreviewTests {
     }
 
     /// `preview.view` drawn from its layers — the page and thumbnail images are layer contents, which
-    /// `cacheDisplay(in:to:)` does not draw — to a 2x PNG in the proofs directory.
-    static func render(_ preview: QuickLookProgressivePreview, name: String) throws -> NSBitmapImageRep {
+    /// `cacheDisplay(in:to:)` does not draw — into a 2x bitmap.
+    static func render(_ preview: QuickLookProgressivePreview) throws -> NSBitmapImageRep {
         preview.view.window?.contentView?.layoutSubtreeIfNeeded()
         preview.view.window?.displayIfNeeded()
         let bounds = preview.view.bounds
@@ -349,14 +348,6 @@ struct QuickLookProgressivePreviewTests {
         let layer = try #require(preview.view.layer)
         context.cgContext.scaleBy(x: 2, y: 2)
         layer.render(in: context.cgContext)
-        let proofs = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
-        try FileManager.default.createDirectory(at: proofs, withIntermediateDirectories: true)
-        let png = proofs.appendingPathComponent("\(name).png")
-        let data = try #require(rep.representation(using: .png, properties: [:]))
-        try data.write(to: png)
-        print("PROOF: \(png.path)")
         return rep
     }
 
@@ -432,8 +423,7 @@ struct QuickLookProgressivePreviewTests {
 /// Batch 47 (M29, Jon: Quick Look opens on page 1 and a sliver of page 2): the preview opens on exactly one page. Its
 /// view starts at, and asks for, a page beside the thumbnail column — US Letter's 744 × 792 before page 1 is made — and
 /// a page is fitted to the column's width or its height, whichever is tighter, so in a window of the size it asks for,
-/// in one scaled down, and in one shorter for its width, page 1 is wholly in view and page 2 is not. Render per window:
-/// m29-one-page-<width>x<height>.png.
+/// in one scaled down, and in one shorter for its width, page 1 is wholly in view and page 2 is not.
 @Suite("Quick Look opens on one page (M29)", .serialized)
 @MainActor
 struct QuickLookOnePageTests {
@@ -479,7 +469,7 @@ struct QuickLookOnePageTests {
                     print("M29 \(document) scaled window: \(max(0, visible.maxY - two.minY)) pt of page 2 in view")
                 }
             }
-            let rep = try QuickLookProgressivePreviewTests.render(preview, name: "m29-one-page-\(Int(window.width))x\(Int(window.height))")
+            let rep = try QuickLookProgressivePreviewTests.render(preview)
             _ = rep
         }
     }

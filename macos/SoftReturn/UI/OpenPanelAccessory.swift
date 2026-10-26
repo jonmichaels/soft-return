@@ -15,14 +15,6 @@ final class OpenPanelAccessory: NSView, NSOpenSavePanelDelegate {
 
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
 
-    /// Extensions WordStar itself wrote, plus the two plain-text shapes. A file with NO
-    /// extension is the common case on a 1987 floppy and is always allowed through — the
-    /// detector, not the filename, decides what it really is.
-    private static let convertibleExtensions: Set<String> = [
-        "ws", "ws1", "ws2", "ws3", "ws4", "ws5", "ws6", "ws7", "ws8", "ws9",
-        "txt", "doc", "asc", "prn",
-    ]
-
     init() {
         super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 44))
         setAccessibilityIdentifier("open-panel-accessory")
@@ -79,10 +71,8 @@ final class OpenPanelAccessory: NSView, NSOpenSavePanelDelegate {
         // Directories stay navigable whatever the filter says.
         if isDirectory.boolValue { return true }
 
-        let ext = url.pathExtension.lowercased()
-        let plausible = ext.isEmpty || Self.convertibleExtensions.contains(ext)
-        guard plausible else { return false }
-
+        // Auto: every file is selectable. Old WordStar files carry whatever extension their author
+        // typed, or none, so the detector decides when the file is opened, not its name.
         // With a specific variant chosen, the bytes have to agree — this is the only
         // honest way to filter, since names and extensions lie about these files and the
         // detector is the library's whole first chapter.

@@ -76,3 +76,46 @@ enum ConversionPictures: String, AppEnum, CaseIterable, Sendable {
         }
     }
 }
+
+/// The CLI's `--quirks {off,auto,all}` (R-127): which quirks run before the named ones are turned on or off.
+enum ConversionQuirksMode: String, AppEnum, CaseIterable, Sendable {
+    case off
+    case auto
+    case all
+
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Quirks"
+    static let caseDisplayRepresentations: [ConversionQuirksMode: DisplayRepresentation] = [
+        .off: "Off",
+        .auto: "Auto",
+        .all: "All",
+    ]
+
+    var quirkMode: QuirkMode {
+        switch self {
+        case .off:  return .off
+        case .auto: return .auto
+        case .all:  return .all
+        }
+    }
+}
+
+/// One quirk, by the engine's name (`QuirkName`) under the title the app's Quirks screens use — the CLI's `--quirk`
+/// and `--no-quirk` names as a Shortcuts picker (R-127).
+enum ConversionQuirk: String, AppEnum, CaseIterable, Sendable {
+    case euroSwap = "euro-swap"
+    case smartPunctuation = "smart-punctuation"
+    case boxCorners = "box-corners"
+    case colorsAsGray = "colors-as-gray"
+    case fillPatterns = "fill-patterns"
+    case sawyerStrikeout = "sawyer-strikeout"
+
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Quirk"
+    static let caseDisplayRepresentations: [ConversionQuirk: DisplayRepresentation] = [
+        .euroSwap: "Euro swap",
+        .smartPunctuation: "Smart punctuation",
+        .boxCorners: "Box corners",
+        .colorsAsGray: "Colors as gray",
+        .fillPatterns: "Fill patterns",
+        .sawyerStrikeout: "Sawyer strikeout",
+    ]
+}

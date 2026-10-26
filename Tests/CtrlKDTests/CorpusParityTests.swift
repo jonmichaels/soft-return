@@ -1,5 +1,7 @@
 import Foundation
+import GeneratorSupport
 import Testing
+import TestSupport
 @testable import CtrlKD
 @testable import SoftReturnCLI
 
@@ -54,7 +56,7 @@ import Testing
 /// diff is the correct response to an intentional change, never hand-editing a cell.
 ///
 /// ## Gating
-/// `CTRLKD_SAWYER_ARCHIVE` (`sawyerArchivePath`/`sawyerArchiveArmed`/`sawyerArchiveSkipReason`
+/// `CTRLKD_SAWYER_ARCHIVE` (`Corpus.sawyerArchivePath`/`Corpus.sawyerArchiveArmed`/`Corpus.sawyerArchiveSkipReason`
 /// — declared once in `WSChangeTests.swift`, reused verbatim here): the recorded file is
 /// committed in-repo (no `CTRLKD_SRC` needed to find it — same shape as the private answer
 /// key overlay) but its cells are only checked against real rendered bytes once the archive
@@ -81,11 +83,7 @@ enum SawyerPresetDriftFixture {
         let cell: Cell
     }
 
-    /// `Tests/CtrlKDTests/CorpusParityTests.swift` -> repo root is three levels up — same
-    /// arithmetic every other `#filePath`-relative lookup in this repo uses.
-    static let url: URL = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("TestDocs/oracle/sawyer_preset_pdf_sr.json")
+    static let url: URL = RepoPaths.url("TestDocs/oracle/sawyer_preset_pdf_sr.json")
 
     private static func pixList(_ raw: Any?) -> [PixEntry] {
         guard let entries = raw as? [[String: Any]] else { return [] }
@@ -135,50 +133,15 @@ enum SawyerPresetDriftFixture {
 
 @Suite struct CorpusParityTests {
 
-    // MARK: - Real-filesystem CLIEnvironment
-
-    /// `resolveDocumentPictures` (`SoftReturnCLI/PixResolve.swift`) needs real directory
-    /// listing to walk the archive tree the same way the CLI/app do — this is that
-    /// environment, backed by `FileManager` directly rather than the in-memory
-    /// dictionaries the rest of this test target prefers (`SRCLITests.swift`'s own
-    /// `noFSEnvironment`-style helpers): those exist to test the CONVERSION LOOP without
-    /// real disk I/O, but this suite's whole point is comparing against the real archive.
-    private struct RealFileReadError: Error, CustomStringConvertible {
-        let path: String
-        var description: String { "could not read \(path)" }
-    }
-
-    static func realFilesystemEnvironment() -> CLIEnvironment {
-        let fm = FileManager.default
-        return CLIEnvironment(
-            readFile: { path in
-                guard let data = fm.contents(atPath: path) else { throw RealFileReadError(path: path) }
-                return [UInt8](data)
-            },
-            writeFile: { _, _ in },
-            createDirectory: { _ in },
-            writeOut: { _ in },
-            writeErr: { _ in },
-            listDirectory: { path in try? fm.contentsOfDirectory(atPath: path) },
-            isFile: { path in
-                var isDir: ObjCBool = false
-                return fm.fileExists(atPath: path, isDirectory: &isDir) && !isDir.boolValue
-            }
-        )
-    }
-
     // MARK: - Rendering the one geometry this suite still checks
 
+    /// The same job the generator records with (`sawyerPresetJob`), against the real
+    /// archive tree (`CLIEnvironment.live` walks it the way the CLI/app do): this suite's
+    /// whole point is comparing against the real archive, not an in-memory one.
     static func renderedSawyerPresetPDF(fileURL: URL) throws -> (pdf: [UInt8], pixResults: [PixResult]) {
         let bytes = [UInt8](try Data(contentsOf: fileURL))
-        var doc = try parse(bytes, variant: nil)
-        if let page = doc.page, let sawyerSettings = pagePresets["sawyer"] {
-            doc.page = effectivePage(page, settings: sawyerSettings)
-        }
-        let pixResults = resolveDocumentPictures(doc, docPath: fileURL.path,
-                                                  environment: realFilesystemEnvironment())
-        let pdf = emitPDF(doc, mode: .printed, options: EmitOptions(pixResults: pixResults))
-        return (pdf, pixResults)
+        let converted = try sawyerPresetJob().convert(bytes, path: fileURL.path, environment: .live)
+        return (converted.outputs[0].bytes, converted.pixResults)
     }
 
     /// Same "resolution STATE, not just the byte hash" check the retired manifest-driven
@@ -213,7 +176,7 @@ enum SawyerPresetDriftFixture {
 
     // MARK: - Gate sentinel — the ONE named skip when unarmed
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func corpusParityGateIsArmed() {
         let failureMessage = SawyerPresetDriftFixture.loadFailure ??
             "expected sawyer_preset_pdf_sr.json to parse with real entries once armed"
@@ -226,14 +189,14 @@ enum SawyerPresetDriftFixture {
     // MARK: - Full-corpus byte parity against the self-recorded drift file
 
     static var docNames: [String] {
-        guard sawyerArchiveArmed, let docs = SawyerPresetDriftFixture.loaded else { return [] }
+        guard Corpus.sawyerArchiveArmed, let docs = SawyerPresetDriftFixture.loaded else { return [] }
         return docs.keys.sorted()
     }
 
     @Test(arguments: docNames) func corpusSawyerPresetPDFMatchesSelfRecorded(docName: String) throws {
         let entry = try #require(SawyerPresetDriftFixture.loaded?[docName],
                                   "no recorded entry for \(docName) — stale doc list?")
-        let fileURL = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent(entry.path)
+        let fileURL = URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent(entry.path)
         let sourceBytes = [UInt8](try Data(contentsOf: fileURL))
         #expect(sha256Hex(sourceBytes) == entry.sourceSHA256, """
             \(docName): source bytes at \(entry.path) do not match the recording's \

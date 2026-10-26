@@ -3,6 +3,7 @@ import CtrlKD
 import SoftReturnShared
 import Foundation
 import Testing
+import TestSupport
 @testable import SoftReturn
 
 /// JOB 2(a): ONE ANSWER KEY.
@@ -69,9 +70,9 @@ import Testing
             """
         }
         return """
-        ctrl-kd's answer key is present, but the private corpus is not: set \
-        CTRLKD_PRIVATE_CORPUS to a soft-return-corpus clone (see docs/TESTING.md). NOT a \
-        pass: these cells were not checked.
+        ctrl-kd's answer key is present, but the private corpus is not (\
+        \(Corpus.privateCorpusSkipReason)): set CTRLKD_PRIVATE_CORPUS to a soft-return-corpus \
+        clone. NOT a pass: these cells were not checked.
         """
     }
 

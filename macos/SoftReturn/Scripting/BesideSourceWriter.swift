@@ -42,7 +42,7 @@ enum BesideSourceWriter {
 
     /// Writes `data` beside `source`, preferring the exact related-item name
     /// (`relatedItemURL(besideSource:extension:)`); job 504: on collision, reuses
-    /// `DocumentOperations.uniqueFileName`'s Finder-style " 2"/" 3"/... counter instead of
+    /// `ExportNaming.uniqueName`'s Finder-style " 2"/" 3"/... counter instead of
     /// failing (see the type's own doc comment for the ruling this supersedes). Throws
     /// `.writeFailed` when the disk write itself fails (out of space, a permissions error,
     /// a parent directory that doesn't exist).
@@ -53,7 +53,7 @@ enum BesideSourceWriter {
         if FileManager.default.fileExists(atPath: related.path) {
             let directory = related.deletingLastPathComponent()
             let basename = related.deletingPathExtension().lastPathComponent
-            let name = DocumentOperations.uniqueFileName(basename: basename, extension: ext) { candidate in
+            let name = ExportNaming.uniqueName(basename: basename, extension: ext) { candidate in
                 FileManager.default.fileExists(atPath: directory.appendingPathComponent(candidate).path)
             }
             destination = directory.appendingPathComponent(name)

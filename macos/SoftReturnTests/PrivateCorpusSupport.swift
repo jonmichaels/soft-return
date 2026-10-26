@@ -3,6 +3,7 @@ import CtrlKD
 import Foundation
 import PDFKit
 import Testing
+import TestSupport
 @testable import SoftReturn
 
 /// THE PRIVATE-CORPUS GATE. Jon's own real multipage literary papers (WS4) and Sawyer's real
@@ -25,7 +26,8 @@ import Testing
 /// ## Materialize, don't read in place
 /// Jon's rule for this migration: tests copy fixtures into a temp directory and read them
 /// there — never operate on the corpus checkout in place. This file does that once per
-/// process: `ws4Directory`/`ws7Directory` are lazily-built temp directories, shaped exactly
+/// process, in a `TestScratch.processWide` directory that goes when the process exits:
+/// `ws4Directory`/`ws7Directory` are lazily-built directories, shaped exactly
 /// like the old committed `TestDocs/ws4`/`TestDocs/ws7` (same flat basenames — dozens of call
 /// sites across this tree already depend on that flat shape, e.g. listing `contentsOfDirectory`
 /// or hardcoding a basename), but populated by COPYING each fixture from its real, documented
@@ -58,44 +60,36 @@ import Testing
 enum PrivateCorpusSupport {
     /// Tier 3: the private corpus clone root (`soft-return-corpus`'s own README is the shape
     /// contract) — `jon-floppies/`, `ws7-private/`, `sawyer/`, `fixtures-ws5/`, `pd-samples/`.
+    /// `Corpus` reads the variable (as `CTRLKD_PRIVATE_CORPUS` or the `TEST_RUNNER_` form
+    /// `xcodebuild test` forwards; empty is unset). A value that names no directory is
+    /// armed-but-incomplete, not unarmed: `materialized` records it as missing and the
+    /// vacuity guards below fail.
     static var privateCorpusRoot: URL? {
-        guard let env = ProcessInfo.processInfo.environment["CTRLKD_PRIVATE_CORPUS"], !env.isEmpty
-        else { return nil }
-        let url = URL(fileURLWithPath: env)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-              isDirectory.boolValue
-        else { return nil }
-        return url
+        Corpus.current.path(.privateCorpus).map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 
     /// Tier 2/3 shared: the Sawyer archive top dir (holds `CONVERT.WS`, `ARTICLES/`, `INSET/`
-    /// directly). `CTRLKD_SAWYER_ARCHIVE` if set (same var `OutputParityTests.corpusRoot` and
-    /// the package-level `Tests/CtrlKDTests/CorpusParityTests.swift` use for the full
-    /// archive — `OracleByteParityTests.corpusRoot` retired 2026-09-05, planning #193), else
+    /// directly). `CTRLKD_SAWYER_ARCHIVE` if set (same var the package-level
+    /// `Tests/CtrlKDTests/CorpusParityTests.swift` uses for the full archive), else
     /// `<privateCorpusRoot>/sawyer` — the corpus's own vendored copy — so arming the ONE var
     /// (`CTRLKD_PRIVATE_CORPUS`) is enough to run this file's curated Sawyer subset without
-    /// also naming the archive separately.
+    /// also naming the archive separately. `Corpus.sawyerArchiveRoot` holds that rule.
     static var sawyerArchiveRoot: URL? {
-        if let env = ProcessInfo.processInfo.environment["CTRLKD_SAWYER_ARCHIVE"], !env.isEmpty {
-            return URL(fileURLWithPath: env)
-        }
-        return privateCorpusRoot?.appendingPathComponent("sawyer")
+        Corpus.current.sawyerArchiveRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 
-    /// `true` exactly when `CTRLKD_PRIVATE_CORPUS` names a real directory — every test gated
+    /// `true` exactly when `CTRLKD_PRIVATE_CORPUS` is set — every test gated
     /// by this file checks this (directly via `.enabled(if:)`, or indirectly by a fixture list
     /// that goes empty when this is `false`) before treating a missing document as anything
     /// other than an expected, documented Skip. No in-repo fallback anymore: the documents
     /// this gate serves do not live in this repo at all after planning #192.
-    static var isArmed: Bool { privateCorpusRoot != nil }
+    static var isArmed: Bool { Corpus.privateCorpusArmed }
 
     /// The skip reason every `.enabled(if: PrivateCorpusSupport.isArmed)` trait in this tree
-    /// should cite — one value (typed `Comment`, what `.enabled(if:_:)` actually takes — a
-    /// plain `String` does not implicitly convert), so `grep`ing for why a run shows a batch
-    /// of Skips always lands on the same explanation.
-    static let skipReason: Comment =
-        "private-corpus-gated: CTRLKD_PRIVATE_CORPUS unset — see docs/TESTING.md"
+    /// should cite — `Corpus`'s one message shape, naming the variable (typed `Comment`, what
+    /// `.enabled(if:_:)` actually takes), so `grep`ing for why a run shows a batch of Skips
+    /// always lands on the same explanation.
+    static let skipReason = Comment(rawValue: Corpus.privateCorpusSkipReason)
 
     /// ctrl-kd's CHECKOUT ROOT — the directory holding `tools/`, `tests/`, `src/`.
     ///
@@ -106,15 +100,10 @@ enum PrivateCorpusSupport {
     /// suites read the same variable as if it were the ROOT and so looked for the answer key
     /// at `<root>/src/tests/answer_key.json`, which does not exist — the whole
     /// `AppAnswerKeyParityTests` grid reported a named Skip on an armed machine that had the
-    /// key sitting right there. Normalizing here, once, the same way the Python side does,
-    /// so both readings resolve and neither suite carries its own copy of the rule.
+    /// key sitting right there. `Corpus.ctrlkdCheckoutRoot` normalizes it once, the same way
+    /// the Python side does, so both readings resolve and no suite carries its own copy.
     static func ctrlkdCheckoutRoot(default fallback: URL) -> URL {
-        let env = ProcessInfo.processInfo.environment
-        guard let raw = env["CTRLKD_SRC"] ?? env["TEST_RUNNER_CTRLKD_SRC"], !raw.isEmpty
-        else { return fallback }
-        let url = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath, isDirectory: true)
-            .standardizedFileURL
-        return url.lastPathComponent == "src" ? url.deletingLastPathComponent() : url
+        Corpus.current.ctrlkdCheckoutRoot.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? fallback
     }
 
     /// Recorded oracle ANSWERS (sha256 manifests), not documents — these stay committed in
@@ -261,9 +250,20 @@ enum PrivateCorpusSupport {
     private static let materialized: (root: URL, ws4: URL, ws7: URL, missing: [String])? = {
         guard let corpus = privateCorpusRoot else { return nil }
         var missing: [String] = []
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PrivateCorpusSupport-\(ProcessInfo.processInfo.globallyUniqueString)",
-                                     isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if !FileManager.default.fileExists(atPath: corpus.path, isDirectory: &isDirectory) || !isDirectory.boolValue {
+            missing.append("CTRLKD_PRIVATE_CORPUS=\(corpus.path) is not a directory")
+        }
+        let root: URL
+        do {
+            root = try TestScratch.processWide(prefix: "PrivateCorpusSupport").url
+        } catch {
+            // Armed but unable to materialize: point at a path nothing has, so every read fails
+            // loudly, and say why in the vacuity guard's list.
+            let nowhere = URL(fileURLWithPath: "/private-corpus-materialization-failed", isDirectory: true)
+            return (nowhere, nowhere.appendingPathComponent("ws4"), nowhere.appendingPathComponent("ws7"),
+                    missing + ["(could not create the materialization directory: \(error))"])
+        }
         let ws4 = root.appendingPathComponent("ws4", isDirectory: true)
         let ws7 = root.appendingPathComponent("ws7", isDirectory: true)
         try? FileManager.default.createDirectory(at: ws4, withIntermediateDirectories: true)

@@ -135,7 +135,7 @@ public struct StyleEntry: Hashable, Sendable {
 /// (MS Subhead, Section Heading Font). Everything else is a non-heading style: the block
 /// still carries `styleName` for consumers with better taxonomy.
 public func styleHeadingLevel(_ name: String) -> Int {
-    let n = asciiLowercased(name.trimmed())
+    let n = ASCII.lowercased(name.trimmed())
     if n == "h1" { return 1 }
     if n == "h2" { return 2 }
     if n == "h3" { return 3 }
@@ -177,20 +177,6 @@ func asciiContains(_ s: String, _ needle: String) -> Bool {
         if k == n.count { return true }
     }
     return false
-}
-
-/// Python's `str.lower()` restricted to ASCII — the style names this compares against are
-/// ASCII, and a full Unicode case fold is Foundation's job, not this library's.
-func asciiLowercased(_ s: String) -> String {
-    var view = String.UnicodeScalarView()
-    for scalar in s.unicodeScalars {
-        if scalar.value >= 0x41 && scalar.value <= 0x5A {
-            view.append(Unicode.Scalar(scalar.value + 0x20)!)
-        } else {
-            view.append(scalar)
-        }
-    }
-    return String(view)
 }
 
 /// Parse the paragraph style library at file-absolute offset `base`.

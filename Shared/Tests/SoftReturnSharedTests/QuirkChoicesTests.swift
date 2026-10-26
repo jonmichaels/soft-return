@@ -4,6 +4,15 @@ import Testing
 @testable import SoftReturnShared
 
 /// Batch 46 (Jon's quirks rulings, 2026-09-16): the switches both apps store and apply.
+/// Counts notifications for a `NotificationCenter` observer block, which is `@Sendable` and
+/// so cannot mutate a captured `var`. Every access goes through `lock`.
+private final class PostCount: @unchecked Sendable {
+    private var value = 0
+    private let lock = NSLock()
+    func increment() { lock.lock(); value += 1; lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+}
+
 @Suite @MainActor struct QuirkChoicesTests {
     /// A document whose own header names LJ6DTP, with a paragraph style that strikes and no cross-out typed: it trips
     /// all six quirks (LJ6DTP is one of the euro-patched drivers too).
@@ -14,6 +23,35 @@ import Testing
         block.styleAttrs.insert(.strike)
         document.blocks = [block]
         return document
+    }
+
+    /// R-127: a script's or a shortcut's quirk choices decide exactly what `sr --quirks MODE --quirk A --no-quirk B`
+    /// decides, on a document that trips all six.
+    @Test(arguments: [QuirkMode?.none, .off, .auto, .all])
+    func requestedChoicesDecideWhatTheCLIDecides(mode: QuirkMode?) throws {
+        let doc = Self.document()
+        let lists: [(enable: [String], disable: [String])] = [
+            ([], []),
+            ([QuirkName.sawyerStrikeout], []),
+            ([], [QuirkName.smartPunctuation]),
+            ([QuirkName.sawyerStrikeout, QuirkName.euroSwap], [QuirkName.boxCorners]),
+        ]
+        for (enable, disable) in lists {
+            let choices = try QuirkChoices.requested(mode: mode, enable: enable, disable: disable)
+            let cli = try QuirkRegistry.standard.applyQuirks(to: doc, enable: enable, disable: disable, mode: mode ?? .auto)
+            #expect(choices.apply(to: doc).quirks?.applied == cli.quirks?.applied,
+                    "mode \(String(describing: mode)), on \(enable), off \(disable)")
+        }
+    }
+
+    @Test func requestedChoicesStartFromTheBaselineWithNoModeAndRefuseAnUnknownName() throws {
+        let baseline = QuirkChoices(enabled: [QuirkName.sawyerStrikeout])
+        #expect(try QuirkChoices.requested(mode: nil, baseline: baseline) == baseline)
+        #expect(try QuirkChoices.requested(mode: .off, baseline: baseline) == .off)
+        #expect(try QuirkChoices.requested(mode: nil, disable: [QuirkName.sawyerStrikeout], baseline: baseline) == .off)
+        #expect(throws: DocumentOperations.OperationError.self) {
+            try QuirkChoices.requested(mode: .auto, enable: ["no-such-quirk"])
+        }
     }
 
     @Test func autoIsWhatShippedAndThePresetsReadBack() {
@@ -117,12 +155,12 @@ import Testing
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
         #expect(settings.quirkDefaults == .shipped)
-        var posted = 0
+        let posted = PostCount()
         let token = NotificationCenter.default.addObserver(forName: SettingsStore.quirkDefaultsDidChange,
-                                                           object: settings, queue: nil) { _ in posted += 1 }
+                                                           object: settings, queue: nil) { _ in posted.increment() }
         defer { NotificationCenter.default.removeObserver(token) }
         settings.quirkDefaults = .all
-        #expect(posted == 1)
+        #expect(posted.count == 1)
         #expect(SettingsStore(defaults: defaults).quirkDefaults == .all)
     }
 

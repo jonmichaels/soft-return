@@ -51,23 +51,17 @@ enum InterfaceNoteSender {
             return
         }
 
-        let alert = NSAlert()
-        alert.messageText = "Send an interface note"
-        alert.informativeText = "A screenshot of “\(window.title)” goes with it."
-        alert.addButton(withTitle: "Send")
-        alert.addButton(withTitle: "Cancel")
-
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         field.placeholderString = "What’s wrong, in one line"
         field.setAccessibilityIdentifier("debug-note-field")
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
 
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-
-        send(note: text, window: window, to: endpoint)
+        Alert.show("Send an interface note", informative: "A screenshot of “\(window.title)” goes with it.",
+                   buttons: ["Send", "Cancel"], accessory: field, in: nil) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            send(note: text, window: window, to: endpoint)
+        }
     }
 
     private static func send(note: String, window: NSWindow, to endpoint: URL) {
@@ -144,12 +138,7 @@ enum InterfaceNoteSender {
 
     private static func present(message: String, informative: String = "",
                                 style: NSAlert.Style) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = informative
-        alert.alertStyle = style
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        Alert.show(message, informative: informative, style: style, in: nil)
     }
 }
 #endif

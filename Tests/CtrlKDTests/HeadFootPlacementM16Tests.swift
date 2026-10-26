@@ -39,6 +39,7 @@
 /// Port of ctrl-kd's `tests/test_head_foot_placement_m16.py`.
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// The two fields these helpers read, on an otherwise empty document.
@@ -106,36 +107,36 @@ private func drawnRows(_ pdf: [UInt8]) -> [String: String] {
     return out
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func bookletHeadsLandWhereRealWS7PutsThem() throws {
     // Probe B0, reproduced. Both head lines on ONE row at 0.57in, "Header Even 1" at
     // 0.20in and "Header Odd 1" at 9.21in — the same numbers the `ws7-prints/v4` capture
     // carries, to the hundredth of an inch.
     let data = try Data(contentsOf: URL(fileURLWithPath:
-        sawyerArchivePath + "/REF/BOOKLET.WS"))
+        Corpus.sawyerArchivePath + "/REF/BOOKLET.WS"))
     let rows = drawnRows(emitPDF(parseWS([UInt8](data)), mode: .printed))
     #expect(rows["0.57,0.20"] == "Header Even 1")
     #expect(rows["0.57,9.21"] == "Header Odd 1")
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func bookletsOwnStyleAndLineHeightAreWhatTheEngineReads() throws {
     // The two IR fields the placement rests on, read off the real file so a parser
     // change that silently drops either is caught here rather than in a coordinate that
     // happens to still look right.
     let data = try Data(contentsOf: URL(fileURLWithPath:
-        sawyerArchivePath + "/REF/BOOKLET.WS"))
+        Corpus.sawyerArchivePath + "/REF/BOOKLET.WS"))
     let doc = parseWS([UInt8](data))
     #expect(doc.headerStyleRM == [1: 100.0])          // 18000 HMI / 180
     #expect(doc.headerLeads == [1: 0.0, 2: 0.0])      // its own `.lh 0`
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func aDefaultTwoLineHeadIsUntouched() throws {
     // The corpus's other multi-line heads declare no `.lh` and no style right margin, so
     // they keep the rows and the left edge they had.
     let data = try Data(contentsOf: URL(fileURLWithPath:
-        sawyerArchivePath + "/MAILLIST/PROOF.LST"))
+        Corpus.sawyerArchivePath + "/MAILLIST/PROOF.LST"))
     let doc = parseWS([UInt8](data))
     #expect(doc.headerLeads.isEmpty)
     #expect(doc.headerStyleRM.isEmpty)

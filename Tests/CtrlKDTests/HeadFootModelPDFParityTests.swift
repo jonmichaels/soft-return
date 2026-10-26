@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// planning #251 part d (found by the app coder, job 348 follow-up: sawyer/-SCREEN.WS
@@ -27,7 +28,7 @@ import Testing
 ///
 /// ## Gating
 /// Same `CTRLKD_SAWYER_ARCHIVE` knob every sibling corpus suite in this file uses
-/// (`sawyerArchivePath`/`sawyerArchiveArmed`/`sawyerArchiveSkipReason`, declared once in
+/// (`Corpus.sawyerArchivePath`/`Corpus.sawyerArchiveArmed`/`Corpus.sawyerArchiveSkipReason`, declared once in
 /// `WSChangeTests.swift`) -- unarmed, `headFootModelParityGateIsArmed` is the one named
 /// Skip and the parameterized test collapses to zero cases.
 @Suite struct HeadFootModelPDFParityTests {
@@ -275,19 +276,19 @@ import Testing
 
     // MARK: - Corpus-wide
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func headFootModelParityGateIsArmed() {
         #expect(SawyerPresetDriftFixture.loaded != nil)
     }
 
     static var docNames: [String] {
-        guard sawyerArchiveArmed, let docs = SawyerPresetDriftFixture.loaded else { return [] }
+        guard Corpus.sawyerArchiveArmed, let docs = SawyerPresetDriftFixture.loaded else { return [] }
         return docs.keys.sorted()
     }
 
     @Test(arguments: docNames) func headFootModelMatchesPDFCorpusWide(docName: String) throws {
         let entry = try #require(SawyerPresetDriftFixture.loaded?[docName])
-        let fileURL = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent(entry.path)
+        let fileURL = URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent(entry.path)
         let bytes = [UInt8](try Data(contentsOf: fileURL))
         let doc = try parse(bytes, variant: nil)
         let found = try Self.mismatches(doc)

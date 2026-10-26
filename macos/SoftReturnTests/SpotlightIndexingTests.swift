@@ -9,7 +9,7 @@ import Testing
 /// values. It used to also back a `com.apple.spotlight.import` appex
 /// (`SoftReturnSpotlightImporter/ImportProvider.swift`) — removed in job 181 Part 2, since
 /// Apple DTS confirms that extension point is registered but never invoked by the OS (see
-/// `.claude/skills/macos-document-app/references/09-spotlight-importers.md`); the classic
+/// the macos-document-app skill's Spotlight-importers reference); the classic
 /// `SoftReturnImporter` `.mdimporter` (untouched by that job) is the mechanism that actually
 /// works and carries its own copy of this same logic (`ImporterCore.swift`, which cannot
 /// import this app-target module either — see that file's doc comment).

@@ -261,8 +261,8 @@ import Testing
 }
 
 @Test func pmColumnNormalizationMatchesLmFlushLeft() throws {
-    // b26: `.pm` lives in the SAME absolute column frame as `.lm`/`.po` (EmitRTF's
-    // `rtfPMFiTwips` doc comment) and is 1-based like `.lm`, so `.pm 1` -- column 1, the
+    // b26: `.pm` lives in the SAME absolute column frame as `.lm`/`.po` (a column
+    // position, not a delta against `.lm`) and is 1-based like `.lm`, so `.pm 1` -- column 1, the
     // left edge itself -- must normalize to a ZERO first-line indent, landing the first
     // line flush on the `.po`-derived left margin, not one column right of it.
     let data = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
@@ -883,7 +883,7 @@ private let diagnoseProse: [UInt8] = {
 // MARK: - register b31, E3 item 2 (2026-08-25, ctrl-kd 6f30157): --page-numbers
 // WordStar's own AUTOMATIC page number -- the one `.pc` positions, a completely separate
 // mechanism from a `#` the author placed inside a real `.he`/`.fo`. Ground truth: real
-// WS7 under dosbox-x, probes named in `PDFLayout.swift`'s own `pgnumCheckpoints`/
+// WS7 under dosbox-x, probes named in `PDFLayout.swift`'s own `pgnumTimeline`/
 // `autoPageNumberXPt` doc comments. Default mode is `.auto`: the document's own `.pn`/
 // `.pg`/`.op` decide, exactly as measured. `x`/`y` values below are this engine's own
 // measured defaults for a document that declares no page geometry of its own (poCols

@@ -2,7 +2,7 @@ import Foundation
 
 /// Job 537 (rulings 20-21): which Sparkle 2 channels this build is allowed to see updates in,
 /// derived from the one user-facing preference (`SettingsStore.includeBetaVersions`) — kept as
-/// a pure function, same reasoning `UpdateChecker`'s own decision points already follow, so the
+/// a pure function, so the
 /// mapping is testable without a real `SPUUpdater`/`AppDelegate` launch.
 ///
 /// Sparkle's own contract (`SPUUpdaterDelegate.allowedChannelsForUpdater(_:)`): an empty set

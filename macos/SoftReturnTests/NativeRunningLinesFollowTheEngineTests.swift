@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -135,8 +136,6 @@ struct NativeRunningLinesFollowTheEngineTests {
         let result = Self.compare(engine, app)
         #expect(result.missing.isEmpty && result.extra.isEmpty && result.moved.isEmpty,
                 "BOOKLET.WS: missing \(result.missing), extra \(result.extra), moved \(result.moved)")
-        try NativeSupSubRiseTests.writeComparison(state: state, rendered: rendered,
-                                                  name: "b41-d-booklet-heads-native-vs-printed.png")
     }
 
     /// Every Sawyer-archive document that carries a running head or foot: each head, foot and automatic page number the

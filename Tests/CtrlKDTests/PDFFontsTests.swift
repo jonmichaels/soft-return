@@ -5,6 +5,7 @@
 /// built-ins -- no embedding, no dependencies. Modern mode stays Courier-only typewriter
 /// setting. WS4 files and print streams carry no font blocks and are therefore Courier
 /// automatically.
+import GeneratorSupport
 import Testing
 @testable import CtrlKD
 
@@ -48,7 +49,7 @@ import Testing
     //
     // Re-pinned a THIRD time 2026-09-07 (PRINTED hashes only, again -- modern still
     // untouched: page numbering is a Printed-only feature; ported from ctrl-kd b6d5d03):
-    // none of these fixtures touch `.pn`/`.pg`/`.op`/`.pc`, so `pgnumCheckpoints`'s
+    // none of these fixtures touch `.pn`/`.pg`/`.op`/`.pc`, so `pgnumTimeline`'s
     // corrected default (ws7-prints/v3 finding #2, seeded ON to match stock WS7 instead of
     // Robert J. Sawyer's WSCHANGE-customized install) now adds a stock automatic page
     // number to each of them -- a real, evidenced, deliberate content change, not
@@ -166,8 +167,8 @@ import Testing
     // ZapfDingbats are in the base-14 set -- so the transliteration is undone and the original
     // codes go back on the page: 'a' with /Symbol selected IS alpha, in any viewer, with
     // nothing embedded.
-    let symbolN = typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("symbol") }
-    let dingbatN = typestyleNames.firstIndex { asciiContains(asciiLowercased($0), "dingbat") }
+    let symbolN = typestyleNames.firstIndex { ASCII.lowercased($0).hasPrefix("symbol") }
+    let dingbatN = typestyleNames.firstIndex { asciiContains(ASCII.lowercased($0), "dingbat") }
     let sym = try! #require(symbolN)
     let ding = try! #require(dingbatN)
     // staged: 6.2.4's type-checker times out on the one-expression form
@@ -216,7 +217,7 @@ import Testing
     // (fontsTargetSelectsPrimariesAndGenericCoverage's mono-lint gate and the PDF NLQ
     // fixed-pitch tests).
     func entry(_ name: String, _ generic: Int) -> FontChange {
-        let number = typestyleNames.firstIndex { asciiLowercased($0).hasPrefix(asciiLowercased(name)) }!
+        let number = typestyleNames.firstIndex { ASCII.lowercased($0).hasPrefix(ASCII.lowercased(name)) }!
         return FontChange(offset: 0, width1800: 180, height1440: 240,
                           typestyle: number | (generic << 10) | 0x8000)
     }

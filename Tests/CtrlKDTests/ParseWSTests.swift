@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// Ports of the Python `parse_ws` unit tests, plus two cases covering behavior the
@@ -301,7 +302,7 @@ let italicOn: [UInt8] = [0x19]
     #expect(trailingPaHasContentAfter(bytes("...pa\r\n") + pad) == false)
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+@Test(.requiresSawyerArchive)
 func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // Mirrors test_trailing_pa_opens_page_only_with_saved_blank_paragraph
     // (ctrl-kd tests/test_ctrlkd.py). Planning #228. Only
@@ -312,7 +313,7 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // fix, precisely because the rule was over-generalised to "any
     // document ending in a pagebreak").
     let pagesizeData = try Data(contentsOf: URL(fileURLWithPath:
-        sawyerArchivePath + "/REF/PAGESIZE.WS"))
+        Corpus.sawyerArchivePath + "/REF/PAGESIZE.WS"))
     let pagesize = parseWS(Array(pagesizeData))
     #expect(pagesize.paEofBlankAfter == true)
     let pages = docToPagelines(pagesize, printed: true)
@@ -321,7 +322,7 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     #expect(pages.last?.explicitBreak == true)
 
     let strengthData = try Data(contentsOf: URL(fileURLWithPath:
-        sawyerArchivePath + "/STRENGTH.WS"))
+        Corpus.sawyerArchivePath + "/STRENGTH.WS"))
     let strength = parseWS(Array(strengthData))
     #expect(strength.paEofBlankAfter == false)
     let strengthPages = docToPagelines(strength, printed: true)
@@ -1161,8 +1162,8 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // alpha; '!' in Dingbats IS U+2701 (Unicode's 2700 block is ITC Zapf Dingbats by
     // name and order). Transliterated at decode time, the output needs no font at all.
     // The typestyle numbers come from the spec's own table, never a guess.
-    let symbolN = typestyleNames.firstIndex { asciiLowercased($0).hasPrefix("symbol") }
-    let dingbatN = typestyleNames.firstIndex { asciiContains(asciiLowercased($0), "dingbat") }
+    let symbolN = typestyleNames.firstIndex { ASCII.lowercased($0).hasPrefix("symbol") }
+    let dingbatN = typestyleNames.firstIndex { asciiContains(ASCII.lowercased($0), "dingbat") }
     let sym = try! #require(symbolN)
     let ding = try! #require(dingbatN)
     func fontBlock(_ n: Int) -> [UInt8] {

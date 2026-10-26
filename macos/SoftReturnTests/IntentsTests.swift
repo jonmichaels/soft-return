@@ -18,7 +18,7 @@ import Testing
             .appendingPathComponent("SoftReturnIntentTests-\(ProcessInfo.processInfo.globallyUniqueString)")
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        var intent = ConvertWordStarDocumentIntent()
+        let intent = ConvertWordStarDocumentIntent()
         intent.files = [IntentFile(data: data, filename: "dropped-chapter.ws4")]
         intent.formats = [.text, .markdown]
         intent.style = .modern
@@ -51,7 +51,7 @@ import Testing
         let source = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
         let data = try Data(contentsOf: source)
 
-        var intent = ConvertWordStarDocumentIntent()
+        let intent = ConvertWordStarDocumentIntent()
         intent.files = [IntentFile(data: data, filename: "dropped-chapter.ws4")]
         intent.formats = [.rtf]
         intent.style = .printed
@@ -69,7 +69,7 @@ import Testing
     }
 
     @Test func convertRejectsAnEmptyFormatList() async {
-        var intent = ConvertWordStarDocumentIntent()
+        let intent = ConvertWordStarDocumentIntent()
         let source = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
         intent.files = [IntentFile(fileURL: source)]
         intent.formats = []
@@ -80,7 +80,7 @@ import Testing
     }
 
     @Test func convertReportsAFriendlyErrorForAnUnconvertibleFile() async {
-        var intent = ConvertWordStarDocumentIntent()
+        let intent = ConvertWordStarDocumentIntent()
         let bytes: [UInt8] = (0..<64).map { _ in 0x00 }
         intent.files = [IntentFile(data: Data(bytes), filename: "noise.ws4")]
         intent.formats = [.text]
@@ -98,7 +98,7 @@ import Testing
         let url = Oracle.fixturesDirectory.appendingPathComponent("narrow.ws4")
         let data = try Data(contentsOf: url)
 
-        var intent = DiagnoseWordStarDocumentIntent()
+        let intent = DiagnoseWordStarDocumentIntent()
         intent.file = IntentFile(data: data, filename: "narrow.ws4")
 
         let result = try await intent.perform()
@@ -113,7 +113,7 @@ import Testing
         let url = Oracle.fixturesDirectory.appendingPathComponent("no-dot-commands.ws4")
         let data = try Data(contentsOf: url)
 
-        var intent = DiagnoseWordStarDocumentIntent()
+        let intent = DiagnoseWordStarDocumentIntent()
         intent.file = IntentFile(data: data, filename: "no-dot-commands.ws4")
 
         let result = try await intent.perform()
@@ -127,7 +127,7 @@ import Testing
     /// `documentInfo` gives `sr --diagnose`.
     @Test func diagnoseNeverThrowsEvenForUnconvertibleBytes() async throws {
         let bytes: [UInt8] = (0..<64).map { _ in 0x00 }
-        var intent = DiagnoseWordStarDocumentIntent()
+        let intent = DiagnoseWordStarDocumentIntent()
         intent.file = IntentFile(data: Data(bytes), filename: "noise.ws4")
 
         let result = try await intent.perform()

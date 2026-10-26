@@ -139,6 +139,27 @@ private func chooseByTitle(_ title: String, in popup: NSPopUpButton) throws {
                 "a real click on the page settings popup did not reach BottomBarDelegate")
     }
 
+    /// The whole chain in a real document window: the style popup's own action path reaches
+    /// the document state, not just the bar's delegate (a popup wired to nothing once shipped
+    /// with a green suite).
+    @Test @MainActor func choosingAStyleInTheDocumentWindowChangesTheDocumentStyle() throws {
+        let url = Oracle.fixturesDirectory.appendingPathComponent("dropped-chapter.ws4")
+        let state = try Oracle.state(for: url)
+        let controller = DocumentWindowController(state: state)
+        controller.showWindow(nil)
+        defer { controller.close() }
+        let content = try #require(controller.window?.contentView)
+        content.layoutSubtreeIfNeeded()
+        let bar = try #require(RenderProbeKit.descendants(content).compactMap { $0 as? BottomBar }.first,
+                               "no BottomBar in the document window")
+
+        let styleButton = try popup("style-control", in: bar)
+        try chooseByTitle(ViewStyle.modern.displayName, in: styleButton)
+
+        #expect(state.style.value == .modern,
+                "the style popup's real click path did not change the document state")
+    }
+
     /// Job 315 (b19 item 10): "Use as Default for Quick Look" is gone from this popup — its
     /// function moved to Settings' own "Quick Look Margins" pulldown. Regression guard: the
     /// item must not be findable in the real menu at all, not merely unreachable by click.

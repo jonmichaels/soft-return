@@ -69,6 +69,9 @@ enum DocumentRestorationStore {
     static func persistOpenDocuments(excluding: NSDocument? = nil, settings: SettingsStore,
                                      defaults: UserDefaults = .standard,
                                      documentController: any DocumentOpening = NSDocumentController.shared) {
+        // A test host's documents are fixtures: written to the real app's own list, they opened at its next launch
+        // (planning #581). A test of this store passes its own suite and is not stopped.
+        guard !TestHost.isActive || defaults !== UserDefaults.standard else { return }
         let urls = documentController.documents
             .filter { $0 !== excluding }
             .compactMap(\.fileURL)

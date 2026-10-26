@@ -371,7 +371,7 @@ func rtfFonts(_ family: String, generic: GenericStyle? = nil,
         let courier = targetFonts[target]?["courier"] ?? targetFonts[.office]?["courier"]
         return (courier?.primary, courier?.falt)
     }
-    let key = asciiLowercased(family)
+    let key = ASCII.lowercased(family)
     if let pair = targetFonts[target]?[key] {
         return pair
     }
@@ -447,7 +447,7 @@ public func resolveFont(family: String, generic: GenericStyle? = nil,
                         proportional: Bool? = nil) -> ResolvedFont {
     var seen: [String] = family.isEmpty ? [] : [family]
     var alternates: [String] = []
-    for alt in fontAlternates[asciiLowercased(family)] ?? [] where !seen.contains(alt) {
+    for alt in fontAlternates[ASCII.lowercased(family)] ?? [] where !seen.contains(alt) {
         alternates.append(alt)
         seen.append(alt)
     }
@@ -486,17 +486,12 @@ func fontStack(_ family: String, generic: GenericStyle? = nil, proportional: Boo
     return stack
 }
 
-/// The single best alternate for RTF's `{\*\falt ...}`, or `nil`.
-func rtfAlternate(_ family: String) -> String? {
-    fontAlternates[asciiLowercased(family)]?.first
-}
-
 extension String {
     /// Python's `str.islower()`: at least one cased character, and every cased character
     /// lowercase. Used to tell a bare CSS generic (`sans-serif`) from a family name
     /// (`Courier New`), which is exactly the distinction the stack's quoting turns on.
     /// Lives here because that is its only caller. ASCII-only for the same reason
-    /// `asciiLowercased` is: every name either side of this test is ASCII, and a full
+    /// `ASCII.lowercased` is: every name either side of this test is ASCII, and a full
     /// Unicode case fold is Foundation's job, not this library's.
     var isLowercaseCased: Bool {
         var sawCased = false

@@ -12,14 +12,6 @@ func basename(_ path: String) -> String {
     return String(path[path.index(after: slash)...])
 }
 
-/// Everything before the last `/`, with the root case kept. `os.path.dirname`:
-/// `"a/b.WS"` -> `"a"`, `"b.WS"` -> `""`, `"/b.WS"` -> `"/"`.
-func dirname(_ path: String) -> String {
-    guard let slash = path.lastIndex(of: "/") else { return "" }
-    let head = String(path[..<slash])
-    return head.isEmpty ? "/" : head
-}
-
 /// The basename without its extension. `os.path.splitext(os.path.basename(p))[0]`.
 ///
 /// A dot only starts an extension if something precedes it in the basename, so `.bashrc`

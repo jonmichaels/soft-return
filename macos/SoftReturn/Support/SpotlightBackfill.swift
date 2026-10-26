@@ -1,5 +1,6 @@
 import Foundation
 import os
+import SoftReturnShared
 
 /// Job 152 Part C: Help ▸ "Index All WordStar Documents…" — an aggressive backfill for files
 /// that predate the app's install (or simply were never opened, thumbnailed, or QuickLooked)
@@ -14,14 +15,10 @@ import os
 /// used by `SpotlightFileIndexer`/`SpotlightNudge`) stands in for the spawn.
 enum SpotlightBackfill {
 
-    /// Jon's Tier-1 ruling (2026-08-08), copied verbatim from `Info.plist`'s
-    /// `UTExportedTypeDeclarations` — that plist entry is the single source of truth for this
-    /// list; this array exists only because the query predicate needs it as Swift values, and
-    /// must be kept byte-for-byte identical to the plist, never edited independently of it.
-    static let tier1Extensions: [String] = [
-        "ws", "ws0", "ws1", "ws2", "ws3", "ws4", "ws5", "ws6", "ws7", "ws8", "ws9",
-        "wsd", "wsm", "ws-bak", "ws-$$$",
-    ]
+    /// The claimed document extensions, as the query predicate needs them (sorted, so the query is
+    /// the same every run). `WordStarFileTypes` holds the list; a Shared test keeps it equal to
+    /// the Info.plist declarations.
+    static let tier1Extensions: [String] = WordStarFileTypes.documentExtensions.sorted()
 
     /// What the progress sheet shows: "found N, requested M, done".
     struct Snapshot: Equatable, Sendable {
@@ -128,29 +125,45 @@ final class NSMetadataQueryCandidateFinder: MetadataQuerying, @unchecked Sendabl
     func candidates(extensions: [String]) async -> [URL] {
         await withCheckedContinuation { (continuation: CheckedContinuation<[URL], Never>) in
             DispatchQueue.main.async {
-                let query = NSMetadataQuery()
-                query.searchScopes = [NSMetadataQueryLocalComputerScope]
-                query.predicate = Self.predicate(forExtensions: extensions)
-                query.operationQueue = OperationQueue()
+                let run = Gathering()
+                run.query.searchScopes = [NSMetadataQueryLocalComputerScope]
+                run.query.predicate = Self.predicate(forExtensions: extensions)
+                run.query.operationQueue = run.queue
 
-                var observer: NSObjectProtocol?
-                observer = NotificationCenter.default.addObserver(
-                    forName: .NSMetadataQueryDidFinishGathering, object: query,
-                    queue: query.operationQueue
+                run.observer = NotificationCenter.default.addObserver(
+                    forName: .NSMetadataQueryDidFinishGathering, object: run.query, queue: run.queue
                 ) { _ in
-                    query.disableUpdates()
-                    query.stop()
-                    let urls: [URL] = (0..<query.resultCount).compactMap { index in
-                        guard let item = query.result(at: index) as? NSMetadataItem,
-                              let path = item.value(forAttribute: NSMetadataItemPathKey) as? String
-                        else { return nil }
-                        return URL(fileURLWithPath: path)
-                    }
-                    if let observer { NotificationCenter.default.removeObserver(observer) }
-                    continuation.resume(returning: urls)
+                    continuation.resume(returning: run.finish())
                 }
-                query.start()
+                run.query.start()
             }
+        }
+    }
+
+    /// One query's run. It is set up on the main queue, then touched only on `queue`, the serial queue the query
+    /// delivers its notifications on; that hand-over is what the `@unchecked Sendable` stands for.
+    private final class Gathering: @unchecked Sendable {
+        let query = NSMetadataQuery()
+        let queue: OperationQueue = {
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1
+            return queue
+        }()
+        var observer: NSObjectProtocol?
+
+        /// Stops the query and reads its results back. Runs on `queue`, once gathering has finished.
+        func finish() -> [URL] {
+            query.disableUpdates()
+            query.stop()
+            let urls: [URL] = (0..<query.resultCount).compactMap { index in
+                guard let item = query.result(at: index) as? NSMetadataItem,
+                      let path = item.value(forAttribute: NSMetadataItemPathKey) as? String
+                else { return nil }
+                return URL(fileURLWithPath: path)
+            }
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+            return urls
         }
     }
 }

@@ -143,7 +143,7 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // occurrence .mt/.mb (7/6 here) to every page, capping capacity at pl - 7 - 6 = 53
     // lines regardless, splitting a 60-line tiny-margin section across two pages.
     // Fixed: a fresh page picks up whatever .mt/.mb was in force at its own first block
-    // (mtMbCheckpoints, mirroring how .lh already tracks per-line state) -- pl - 1 - 0 =
+    // (mtMbTimeline, mirroring how .lh already tracks per-line state) -- pl - 1 - 0 =
     // 65 lines of room, so the same 60 lines fit on one page.
     var data = bytes(".mt7")
     data += HARD
@@ -160,10 +160,10 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     let doc = parseWS(data)
     #expect(doc.page?.mtLines == 7.0)      // global: the FIRST occurrence
     #expect(doc.page?.mbLines == 6.0)
-    let checkpoints = mtMbCheckpoints(doc)
-    #expect(checkpoints[0].blockIndex == 0 && checkpoints[0].mt == 7.0 && checkpoints[0].mb == 6.0)
+    let checkpoints = doc.mtMbTimeline().entries
+    #expect(checkpoints[0].blockIndex == 0 && checkpoints[0].value.mt == 7.0 && checkpoints[0].value.mb == 6.0)
     let last = checkpoints[checkpoints.count - 1]
-    #expect(last.mt == 1.0 && last.mb == 0.0)      // the figure's own override
+    #expect(last.value.mt == 1.0 && last.value.mb == 0.0)      // the figure's own override
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.count == 2)                      // NOT 3 -- see comment above
     #expect(pages[0].count == 20 && pages[1].count == 60)
@@ -194,9 +194,9 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     data += HARD
     for i in 1...39 { data += bytes("Tight line \(i).") + HARD }
     let doc = parseWS(data)
-    let checkpoints = mtMbCheckpoints(doc)
+    let checkpoints = doc.mtMbTimeline().entries
     let last = checkpoints[checkpoints.count - 1]
-    #expect(last.mt == 3.0 && last.mb == 50.0)     // the tighter local override
+    #expect(last.value.mt == 3.0 && last.value.mb == 50.0)     // the tighter local override
     let globalCap = printedCap(doc)
     #expect(printedCapFor(doc, mtLines: 3.0, mbLines: 50.0) == globalCap)   // clamped, not 13
     let pages = docToPagelines(doc, printed: true)
@@ -242,7 +242,7 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
 @Test func printedSingleGeometryDocumentNeverTouchesMtMbCheckpoints() {
     // A document that never repeats .mt/.mb after its own opening geometry (every
     // document this project has ever rendered, before SCRIPT.WS's figures) gets exactly
-    // ONE checkpoint -- `mtMbAt` returns the SAME pair for every block, so
+    // ONE checkpoint -- `Timeline.at` returns the SAME pair for every block, so
     // `Page.mtLines`/`mbLines` stay at their nil default and no page ever triggers the
     // `doc.page` swap in `emitPDF`. Byte-identity for real documents is verified
     // separately (LYING.WS sha256 parity); this pins the mechanism directly.
@@ -252,7 +252,7 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     data += HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
     let doc = parseWS(data)
-    let checkpoints = mtMbCheckpoints(doc)
+    let checkpoints = doc.mtMbTimeline().entries
     #expect(checkpoints.count == 1)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.allSatisfy { $0.mtLines == nil && $0.mbLines == nil })
@@ -266,7 +266,7 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // `.pl 20`/`.mt 1`/`.mb 1` (cap 18) and 38 on the page after a mid-document `.pl 40`
     // (cap 38) -- the SECOND value, not the document's first-occurrence one, governs the
     // page it appears on. This reproduces it after an explicit `.pa`, the same structural
-    // shape as the sibling `mtMbCheckpoints` tests above.
+    // shape as the sibling `mtMbTimeline` tests above.
     var data = bytes(".pl20")
     data += HARD
     data += bytes(".mt1")
@@ -281,14 +281,14 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     for i in 1...60 { data += bytes("Bpage line \(i).") + HARD }
     let doc = parseWS(data)
     #expect(doc.page?.plLines == 20.0)        // global: first occurrence
-    let checkpoints = plCheckpoints(doc)
+    let checkpoints = doc.plTimeline()
     // checkpoints[0] itself is WordStar's own hardcoded default (66) -- the SEED for
     // "before any real .pl occurrence" -- immediately superseded by another bi=0 entry
-    // once `.pl20` (this document's own opening geometry) is walked; `plAt(checkpoints, 0)`
+    // once `.pl20` (this document's own opening geometry) is walked; `checkpoints.at(0)`
     // resolves the one that actually governs block 0, exactly as the render loop does.
-    #expect(checkpoints[0].pl == 66.0)
-    #expect(plAt(checkpoints, 0) == 20.0)
-    #expect(checkpoints[checkpoints.count - 1].pl == 40.0)
+    #expect(checkpoints.entries[0].value == 66.0)
+    #expect(checkpoints.at(0) == 20.0)
+    #expect(checkpoints.entries[checkpoints.entries.count - 1].value == 40.0)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.count == 3)
     #expect(pages.map(\.count) == [18, 38, 22])   // 60 Bpage lines at cap 38
@@ -299,7 +299,7 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
 @Test func printedMidDocumentPlWithNoForcedBreakStillGetsItsOwnCapacity() {
     // The organic-break case -- NO `.pa`, the content simply overflows the page -- which
     // is exactly PL_PROBE's own shape (real WS7 was never asked for a forced break) and
-    // which `mtMbCheckpoints`'s two real oracles never happened to exercise: both of
+    // which `mtMbTimeline`'s two real oracles never happened to exercise: both of
     // THEIR mid-document changes sit right after a `.pa`, so the pagination loop's
     // fresh-page recompute (gated on `page.isEmpty`, true only once the page has actually
     // emptied) fired correctly by construction. Without a `.pa`, the line that overflows
@@ -331,8 +331,8 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
 @Test func printedSingleGeometryDocumentNeverTouchesPlCheckpoints() {
     // Mirrors `printedSingleGeometryDocumentNeverTouchesMtMbCheckpoints` in EFFECT, not
     // in raw checkpoint-list shape: `.pl50` here sits at the document's own true start
-    // (block 0), so `plCheckpoints` resolves it to a SECOND entry superseding the
-    // hardcoded-default seed at that same block (`plCheckpoints`'s doc comment) -- but the
+    // (block 0), so `plTimeline` resolves it to a SECOND entry superseding the
+    // hardcoded-default seed at that same block (`plTimeline`'s doc comment) -- but the
     // render loop compares against `doc.page?.plLines` (also 50.0, `ParseWS.swift`'s own
     // first-occurrence reading), so no page ever gets its own `plLines` override:
     // byte-identical to before this fix for every document that declares its geometry
@@ -340,9 +340,9 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     var data = bytes(".pl50") + HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
     let doc = parseWS(data)
-    let checkpoints = plCheckpoints(doc)
-    #expect(plAt(checkpoints, 0) == 50.0)
-    #expect(plAt(checkpoints, 0) == doc.page?.plLines)
+    let checkpoints = doc.plTimeline()
+    #expect(checkpoints.at(0) == 50.0)
+    #expect(checkpoints.at(0) == doc.page?.plLines)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.allSatisfy { $0.plLines == nil })
 }
@@ -376,13 +376,13 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // this fixture can still demonstrate. The CHECKPOINT machinery this test exists to
     // pin (per-page hm/fm state, independent of `.mt`) is unaffected and still fully
     // exercised below -- via the footer's own real movement and via
-    // `pages[].hmLines`/`hmFmCheckpoints` directly.
+    // `pages[].hmLines`/`hmFmTimeline` directly.
     //
     // Register b31, E3 open items 2+3 (2026-08-25, ctrl-kd 5f3a102): `.hm6`/`.fm6` here
     // sit AFTER 60 lines of real body text, so `parsePageDot` (pre-text-last-wins) no
     // longer lets this mid-document occurrence become the document's own global
     // reading -- `doc.page?.hmLines`/`fmLines` now correctly stay at WordStar's
-    // hardcoded default (2.0/2.0), matching what `hmFmCheckpoints`'s own
+    // hardcoded default (2.0/2.0), matching what `hmFmTimeline`'s own
     // hardcoded-default seed already gave block 0. That RETIRES the degenerate case this
     // test used to pin (the parser's global reading disagreeing with the checkpoint
     // global on the PRE-change pages): pages 1-2 no longer need their own override at
@@ -408,9 +408,9 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     #expect(doc.page?.mtSource == .default)       // .mt NEVER appears
     #expect(doc.page?.hmLines == 2.0 && doc.page?.fmLines == 2.0)
     #expect(doc.page?.hmSource == .default && doc.page?.fmSource == .default)
-    let checkpoints = hmFmCheckpoints(doc)
+    let checkpoints = doc.hmFmTimeline().entries
     let last = checkpoints[checkpoints.count - 1]
-    #expect(last.hm == 6.0 && last.fm == 6.0)
+    #expect(last.value.hm == 6.0 && last.value.fm == 6.0)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages[0].hmLines == nil && pages[0].fmLines == nil)   // agrees with the
     #expect(pages[1].hmLines == nil && pages[1].fmLines == nil)   // now-correct document
@@ -436,8 +436,8 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     data += HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
     let doc = parseWS(data)
-    let checkpoints = hmFmCheckpoints(doc)
-    let (hm, fm) = hmFmAt(checkpoints, 0)
+    let checkpoints = doc.hmFmTimeline()
+    let (hm, fm) = (checkpoints.at(0).hm, checkpoints.at(0).fm)
     #expect(hm == 5.0 && fm == 5.0)
     #expect(hm == doc.page?.hmLines && fm == doc.page?.fmLines)
     let pages = docToPagelines(doc, printed: true)
@@ -451,14 +451,14 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     // above (mechanism O, ctrl-kd 55d2b52 -- corrects the SCRIPT-divergence triage's false
     // "LQ-850 driver" claim). Real WS7 (SCRIPT.WS, sawyer archive): its own worked-example
     // figures reset `.po` to `.5"` (5 columns) alongside the `.mt`/`.hm` changes
-    // `mtMbCheckpoints`/`hmFmCheckpoints` already track for the SAME figures, and the
+    // `mtMbTimeline`/`hmFmTimeline` already track for the SAME figures, and the
     // figure pages' own running head ("PROFILES MONTH '88 SCRIPT.001...") moves LEFT with
     // it in WS7's real capture -- this engine used to leave it at the document's global
     // `.po` (57.6pt, the WS7-manual `.8"` factory default) regardless, a fixed 21.6pt
     // (3-column) residual on every word of the header line, both figure pages.
     //
     // Body text already carried a mid-document `.po` change correctly (`Line.poCols`,
-    // applied per line in `resolvePlainBody`/`resolvePrintedBody`) -- this pins the
+    // applied per line in `resolvePrintedBody`) -- this pins the
     // `runningOps` (header/footer) side of the fix directly: a document whose SECOND page
     // moves `.po` to 5 columns AND resets `.mt` must render that page's own running head
     // 21.6pt to the LEFT of the first page's, matching WS7, not at the document's
@@ -494,9 +494,9 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     #expect(doc.page?.poCols == 8.0)      // global: unaffected (pre-text-last-wins), same
                                            // as .hm/.fm/.pl's own sibling tests -- `.po5`
                                            // sits after 20 real body lines
-    let checkpoints = poCheckpoints(doc)
-    #expect(poAt(checkpoints, 0) == 8.0)
-    #expect(checkpoints[checkpoints.count - 1].po == 5.0)   // the figure's own override
+    let checkpoints = doc.poTimeline()
+    #expect(checkpoints.at(0) == 8.0)
+    #expect(checkpoints.entries[checkpoints.entries.count - 1].value == 5.0)   // the figure's own override
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.count == 2)
     #expect(pages[0].poCols == nil)       // untouched: "use the doc global"
@@ -515,9 +515,9 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     var data = bytes(".po5") + HARD
     for i in 1...20 { data += bytes("Body line \(i).") + HARD }
     let doc = parseWS(data)
-    let checkpoints = poCheckpoints(doc)
-    #expect(poAt(checkpoints, 0) == 5.0)
-    #expect(poAt(checkpoints, 0) == doc.page?.poCols)
+    let checkpoints = doc.poTimeline()
+    #expect(checkpoints.at(0) == 5.0)
+    #expect(checkpoints.at(0) == doc.page?.poCols)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.allSatisfy { $0.poCols == nil })
 }
@@ -547,8 +547,8 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     for i in 111...220 { data += bytes("Numline \(i).") + HARD }
     let doc = parseWS(data)
     #expect(doc.page?.pnStart == 10)              // global: first occurrence
-    let checkpoints = pnCheckpoints(doc)
-    #expect(checkpoints[checkpoints.count - 1].pn == 500)
+    let checkpoints = doc.pnTimeline()
+    #expect(checkpoints.entries[checkpoints.entries.count - 1].value == 500)
     let pdf = emitPDF(doc, mode: .printed)
     let nums = contentSpans(pdf).filter { $0.text.hasPrefix("PAGENO ") }
         .compactMap { Int($0.text.dropFirst("PAGENO ".count)) }
@@ -564,7 +564,7 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
     data += HARD
     for i in 1...110 { data += bytes("Body line \(i).") + HARD }
     let doc = parseWS(data)
-    let checkpoints = pnCheckpoints(doc)
+    let checkpoints = doc.pnTimeline()
     let pages = docToPagelines(doc, printed: true)
     let nums = resolvePageNumbers(checkpoints, pages)
     #expect(nums == [7, 8])                       // matches the WS4 finding
@@ -1133,7 +1133,7 @@ private func pageTexts(_ page: Page) -> [String] {
     // A manuscript that defines its `.h1` after page 1's title block (OLDTIMES's own
     // shape) therefore has NO running head on page 1 -- the final-state `doc.headers`
     // dict cannot express that distinction; only replaying `doc.hfEvents` through
-    // pagination can (`Page.headers`, `layoutPrintedPagesPlain`).
+    // pagination can (`Page.headers`, `layoutPrintedPages`).
     let data = bytes("Title paragraph text on page one.\r\n\r\n")
         + bytes(".h1 Running Head\r\n")
         + bytes(".pa\r\n")

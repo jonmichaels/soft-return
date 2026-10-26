@@ -12,6 +12,9 @@ import AppKit
 /// Releases button, and no Parity row — the bundled `LICENSE` file itself is the only MIT
 /// surface now.
 final class AboutWindowController: NSWindowController {
+    /// What the GitHub button opens: the public repo's page.
+    static let repoPageURL = URL(string: "https://github.com/jonmichaels/soft-return/")!
+
     private static let contentWidth: CGFloat = 340
 
     private let engineProbe: EngineVersionProbing
@@ -262,7 +265,7 @@ final class AboutWindowController: NSWindowController {
     // MARK: - Actions
 
     @objc private func openGitHub(_ sender: Any?) {
-        urlOpener.open(GitHubUpdateFeed.repoPageURL)
+        urlOpener.open(Self.repoPageURL)
     }
 
     @objc private func openCommit(_ sender: Any?) {

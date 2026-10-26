@@ -3,6 +3,7 @@ import AppKit
 import Foundation
 import Testing
 @testable import SoftReturn
+import SoftReturnShared
 
 /// #271 M11, batch 31 item 5 (Jon, via Athena): "Exports are Modes. Looking at something is a View." Everywhere a person
 /// reads an export's Native/Printed/Modern choice, it is the Mode. A relabel only: the values, the identifiers and the

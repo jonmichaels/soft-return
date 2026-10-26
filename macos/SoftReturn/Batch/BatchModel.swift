@@ -122,12 +122,17 @@ final class BatchModel: ObservableObject {
     @Published private(set) var convertedCount = 0
     @Published private(set) var failedCount = 0
 
-    /// Extensions worth trying. A file with NO extension is always worth trying — that is
-    /// the normal shape of a 1987 floppy's contents.
-    private static let convertibleExtensions: Set<String> = [
-        "ws", "ws1", "ws2", "ws3", "ws4", "ws5", "ws6", "ws7", "ws8", "ws9",
-        "txt", "doc", "asc", "prn",
-    ]
+    /// Whether a file is worth converting, by its bytes, not its name: old WordStar files carry
+    /// whatever extension their author typed, or none. The detector reads a prefix — its counts
+    /// and ratios need no more — and only what it calls binary is skipped. Hidden files are not
+    /// documents.
+    static func isConvertible(_ url: URL) -> Bool {
+        guard !url.lastPathComponent.hasPrefix(".") else { return false }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let prefix = try? handle.read(upToCount: 64 * 1024) else { return false }
+        return detect([UInt8](prefix)).variant != .binary
+    }
 
     var selectedItem: BatchItem? {
         items.first { $0.id == selectedItemID }
@@ -222,8 +227,7 @@ final class BatchModel: ObservableObject {
     /// double every row.
     private func appendFile(_ url: URL) -> Bool {
         guard !items.contains(where: { $0.url == url }) else { return false }
-        let ext = url.pathExtension.lowercased()
-        let convertible = ext.isEmpty || Self.convertibleExtensions.contains(ext)
+        let convertible = Self.isConvertible(url)
         var item = BatchItem(url: url, isConvertible: convertible)
         if !convertible { item.status = .skipped(reason: "Not convertible") }
         items.append(item)
@@ -314,13 +318,13 @@ final class BatchModel: ObservableObject {
 
         // An explicit destination (the Choose… panel) always wins, exactly as before.
         if let destination {
-            try ExportEngine.write(products, to: destination, basename: basename)
+            try ExportNaming.write(products, to: destination, basename: basename)
             return
         }
 
         // Same as Source: a plain write beside `item.url`.
         let directory = item.url.deletingLastPathComponent()
-        try ExportEngine.write(products, to: directory, basename: basename)
+        try ExportNaming.write(products, to: directory, basename: basename)
     }
 
     /// A status cell has room for a phrase, not a stack trace.

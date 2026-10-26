@@ -245,8 +245,7 @@ final class DocumentInfoWindowController: NSWindowController {
     @MainActor
     private static func fileInfoRows(for controller: DocumentWindowController) -> [(String, String)] {
         guard let url = (controller.document as? NSDocument)?.fileURL else {
-            return ["File Name", "Kind", "Size", "Where", "Created", "Modified", "Page Size", "Pages"]
-                .map { ($0, "—") }
+            return DocumentInfo.emptyFileRows().map { ($0.label, $0.value) }
         }
         let style = controller.documentState.style.value.renderStyle
         return PagePreviewRenderer.info(for: url, state: controller.documentState, style: style)
@@ -254,65 +253,11 @@ final class DocumentInfoWindowController: NSWindowController {
 
     /// Job 324's four new fields — word/character counts, declared fonts, note counts, and
     /// resolved margins — all read from `CtrlKD.Document`/`DocumentState`, none of it a new
-    /// engine call.
+    /// engine call. The rows are `DocumentInfo.documentRows`, shared with the iPhone's screen.
     @MainActor
     private static func summaryRows(for state: DocumentState) -> [NSView] {
-        [
-            InspectorRows.row(label: "Word Count", value: "\(wordCount(for: state))", labelWidth: documentLabelWidth),
-            InspectorRows.row(label: "Character Count", value: "\(characterCount(for: state))", labelWidth: documentLabelWidth),
-            InspectorRows.row(label: "Fonts", value: declaredFonts(for: state), labelWidth: documentLabelWidth),
-            InspectorRows.row(label: "Notes", value: noteCounts(for: state), labelWidth: documentLabelWidth),
-            InspectorRows.row(label: "Margins", value: margins(for: state), labelWidth: documentLabelWidth),
-        ]
-    }
-
-    /// The same text Copy (`PagedDocumentView.copy(_:)`) and Export both show: `emitText`
-    /// under the document's own current `RenderStyle`, the exact call `ExportEngine.render`
-    /// makes for a plain-text export of this document right now.
-    @MainActor
-    private static func documentText(for state: DocumentState) -> String {
-        emitText(state.document, mode: state.style.value.renderStyle.emitMode)
-    }
-
-    @MainActor
-    private static func wordCount(for state: DocumentState) -> Int {
-        documentText(for: state).split(whereSeparator: \.isWhitespace).count
-    }
-
-    @MainActor
-    private static func characterCount(for state: DocumentState) -> Int {
-        documentText(for: state).count
-    }
-
-    /// The document's own font table (`FontChange.family`, WordStar's 245-entry typestyle
-    /// name trimmed to its renderable family, e.g. "Helv"), deduplicated and sorted. Empty
-    /// for WS4 files and print streams, which carry no font table — reported honestly as
-    /// "—" rather than a made-up default.
-    @MainActor
-    private static func declaredFonts(for state: DocumentState) -> String {
-        let names = Set(state.document.fonts.map { font -> String in
-            font.family.isEmpty ? (font.typestyleName ?? "Unnamed") : font.family
-        })
-        return names.isEmpty ? "—" : names.sorted().joined(separator: ", ")
-    }
-
-    /// The four note kinds, zero included — the same `doc.notes` array
-    /// `DocumentOperations.diagnose`'s own `notes` field counts, read directly rather than
-    /// re-derived from its `InfoValue` tree.
-    @MainActor
-    private static func noteCounts(for state: DocumentState) -> String {
-        let notes = state.document.notes
-        func count(_ kind: NoteKind) -> Int { notes.filter { $0.kind == kind }.count }
-        return "Footnotes \(count(.footnote)) · Endnotes \(count(.endnote)) · "
-            + "Annotations \(count(.annotation)) · Comments \(count(.comment))"
-    }
-
-    /// Top/left from `printedMetrics` with the document's `printedOptions` — the SAME options
-    /// `DocumentRenderer.renderNative` (screen) and the Printed-mode PDF export lay the page out
-    /// with, the Margins choice and a `.pr or=l` rotation included (#271 M9) — so this can never
-    /// disagree with what the page actually shows. Shared with the iPhone's Document Info.
-    @MainActor
-    private static func margins(for state: DocumentState) -> String {
-        state.marginsDescription
+        DocumentInfo.documentRows(state: state, style: state.style.value.renderStyle).map {
+            InspectorRows.row(label: $0.label, value: $0.value, labelWidth: documentLabelWidth)
+        }
     }
 }

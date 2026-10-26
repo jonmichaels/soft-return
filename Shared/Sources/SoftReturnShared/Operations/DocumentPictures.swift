@@ -105,9 +105,9 @@ public enum DocumentPictures {
         // because an absolute path's dirname is never empty. Python's `pathlib` was never
         // affected: `Path("DOC.WS").parent` is already `Path(".")`.
         //
-        // The fix is this substitution, NOT a change to `dirname()` itself — its other
+        // The fix is this substitution, NOT a change to `pathDirname()` itself — its other
         // callers want the `os.path` answer it faithfully mirrors.
-        let rawDocDir = (docExists && !isDir.boolValue) ? dirname(docPath) : docPath
+        let rawDocDir = (docExists && !isDir.boolValue) ? pathDirname(docPath) : docPath
         let docDir = rawDocDir.isEmpty ? "." : rawDocDir
         let ancs = ancestors(docDir, maxUp: maxAncestors)
 
@@ -154,7 +154,7 @@ public enum DocumentPictures {
             // (`subdir/DOC.WS`) otherwise stops one level short and silently skips the
             // process's own working directory as a probe location. Ported from sr's
             // `ancestors`, which walks `pathlib.Path.parent`'s contract, not `os.path`'s.
-            let raw = dirname(cur)
+            let raw = pathDirname(cur)
             let parent = raw.isEmpty ? "." : raw
             if parent == cur { break }
             out.append(parent)
@@ -182,12 +182,6 @@ public enum DocumentPictures {
     // MARK: - Tiny path helpers (port of SoftReturnCLI/Paths.swift — `os.path`, not `NSString`,
     // semantics: `NSString.deletingLastPathComponent`/`.appendingPathComponent` normalize and
     // treat a dot-leading name as an extension in ways `os.path` does not).
-
-    private static func dirname(_ path: String) -> String {
-        guard let slash = path.lastIndex(of: "/") else { return "" }
-        let head = String(path[..<slash])
-        return head.isEmpty ? "/" : head
-    }
 
     private static func joinPath(_ directory: String, _ name: String) -> String {
         if directory.isEmpty { return name }

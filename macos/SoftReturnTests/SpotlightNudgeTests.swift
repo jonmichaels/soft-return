@@ -10,16 +10,6 @@ private func throwawayDefaults() -> UserDefaults {
     UserDefaults(suiteName: "SpotlightNudgeTests.\(UUID().uuidString)")!
 }
 
-private final class FakeMDImportRunner: MDImportRunning {
-    private(set) var calls: [[String]] = []
-    var result = SpotlightNudge.RunResult(exitCode: 0, output: "")
-
-    func run(arguments: [String]) -> SpotlightNudge.RunResult {
-        calls.append(arguments)
-        return result
-    }
-}
-
 // MARK: - Pure gating decision
 
 @Suite struct SpotlightNudgeTests {

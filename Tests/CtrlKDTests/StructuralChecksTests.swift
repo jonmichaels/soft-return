@@ -32,6 +32,7 @@ import Foundation
 import FoundationXML
 #endif
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 private let curatedStructuralDocs = [
@@ -418,11 +419,11 @@ func syntheticExportsAgreeAboutTheWords(mode: EmitMode) {
 }
 
 private func structuralArchiveDocument(_ name: String) throws -> Document {
-    let url = URL(fileURLWithPath: sawyerArchivePath).appendingPathComponent(name)
+    let url = URL(fileURLWithPath: Corpus.sawyerArchivePath).appendingPathComponent(name)
     return try parse([UInt8](try Data(contentsOf: url)))
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: curatedStructuralDocs, [EmitMode.printed, .modern])
 func curatedRTFIsStructurallySound(name: String, mode: EmitMode) throws {
     let doc = try structuralArchiveDocument(name)
@@ -434,14 +435,14 @@ func curatedRTFIsStructurallySound(name: String, mode: EmitMode) throws {
             "\(name)")
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: curatedStructuralDocs, [EmitMode.printed, .modern])
 func curatedHTMLParsesStrictly(name: String, mode: EmitMode) throws {
     #expect(htmlBodyXMLErrors(emitHTML(try structuralArchiveDocument(name), mode: mode))
             == [], "\(name)")
 }
 
-@Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason),
+@Test(.requiresSawyerArchive,
       arguments: curatedStructuralDocs, [EmitMode.printed, .modern])
 func curatedExportsAgreeAboutTheWords(name: String, mode: EmitMode) throws {
     // THE ROUND TRIP. Two exports of one document that disagree about the WORDS have a

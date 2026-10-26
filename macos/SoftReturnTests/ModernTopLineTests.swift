@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -73,17 +74,5 @@ struct ModernTopLineTests {
         print("M30: \(checked) Modern pages with a first line checked; ink above the content top on \(over.count)")
         #expect(checked > 100)
         #expect(over.isEmpty, "ink above the content top: \(over.prefix(10))")
-
-        // The top of page 3 as drawn.
-        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
-        view.layoutSubtreeIfNeeded()
-        let page3 = view.pageViews[2].frame
-        let proofs = RenderProbeKit.resolveOutputDirectory(
-            preferred: FileManager.default.temporaryDirectory.appendingPathComponent("soft-return-proofs", isDirectory: true),
-            fallbackName: "soft-return-proofs")
-        let png = proofs.appendingPathComponent("m30-holymac-modern-page3-top.png")
-        let rect = NSRect(x: 0, y: page3.minY - 40, width: view.bounds.width, height: 120)
-        #expect(try RenderProbeKit.renderPNG(view: view, rect: rect, appearance: NSAppearance(named: .aqua)!, to: png) > 0)
-        print("PROOF: \(png.path)")
     }
 }

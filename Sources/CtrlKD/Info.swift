@@ -27,34 +27,6 @@ private func infoHexByte(_ v: Int) -> String {
     return String([digits[(v >> 4) & 0xF], digits[v & 0xF]])
 }
 
-/// What IS this file — variant detection, page geometry with provenance, note counts by
-/// kind, unknown blocks, producer signals, print-time damage. `path` is echoed back as
-/// `"file"` when given (the CLI passes it; an app passing bytes may not have one). Port
-/// of `info.document_info`.
-///
-/// The report has the same three shapes Python's dict has:
-///
-/// 1. **Empty, or `^Z` at byte 0** — `variant` and `reason` only (`detect()` returns
-///    before it counts anything, so there is no evidence to report).
-/// 2. **Detected, not WordStar** — plus the six evidence counts.
-/// 3. **`ws4` / `ws5+`** — plus what `parseWS` learned: margin estimate, dot commands,
-///    unknown codes, columnar, paragraph count, per-kind note counts (comments cover
-///    BOTH origins since M9 — `^ON` blocks and `..`/`.ig` dot lines), unknown blocks,
-///    resolved page geometry with provenance, and `producer` when WordTsar's own dot
-///    commands were seen.
-///
-/// A fourth case rides alongside shape 2: a `printstream` file additionally gets
-/// `comment_bug` when WordStar's own COMMENT.BUG print-time damage signature is present
-/// — framed as period damage, not a parse failure.
-/// Everything before the last `/`, or `""` for a bare filename with none — this
-/// module's own tiny mirror of `SoftReturnCLI/Paths.swift`'s `dirname` (a different
-/// target this Foundation-free engine module cannot import).
-private func dirnameOf(_ path: String) -> String {
-    guard let slash = path.lastIndex(of: "/") else { return "" }
-    let head = String(path[..<slash])
-    return head.isEmpty ? "/" : head
-}
-
 /// POSIX-style relative path from `base` (a directory) to `target` (a file or
 /// directory), both absolute — Python's `os.path.relpath`, string math only (no
 /// filesystem access, matching this module's own Foundation-free discipline). Returns
@@ -77,6 +49,25 @@ func relativePath(from base: String, to target: String) -> String {
     return parts.isEmpty ? "." : parts.joined(separator: "/")
 }
 
+/// What IS this file — variant detection, page geometry with provenance, note counts by
+/// kind, unknown blocks, producer signals, print-time damage. `path` is echoed back as
+/// `"file"` when given (the CLI passes it; an app passing bytes may not have one). Port
+/// of `info.document_info`.
+///
+/// The report has the same three shapes Python's dict has:
+///
+/// 1. **Empty, or `^Z` at byte 0** — `variant` and `reason` only (`detect()` returns
+///    before it counts anything, so there is no evidence to report).
+/// 2. **Detected, not WordStar** — plus the six evidence counts.
+/// 3. **`ws4` / `ws5+`** — plus what `parseWS` learned: margin estimate, dot commands,
+///    unknown codes, columnar, paragraph count, per-kind note counts (comments cover
+///    BOTH origins since M9 — `^ON` blocks and `..`/`.ig` dot lines), unknown blocks,
+///    resolved page geometry with provenance, and `producer` when WordTsar's own dot
+///    commands were seen.
+///
+/// A fourth case rides alongside shape 2: a `printstream` file additionally gets
+/// `comment_bug` when WordStar's own COMMENT.BUG print-time damage signature is present
+/// — framed as period damage, not a parse failure.
 /// - Parameter pixResults: pre-resolved `Document.graphics` entries (round 19,
 ///   RULINGS-LEDGER PIX row) — the caller's own `resolveDocumentPictures` output
 ///   (SoftReturnCLI, which has real filesystem access; this Foundation-free engine
@@ -312,7 +303,7 @@ public func documentInfo(_ data: [UInt8], path: String? = nil,
             let results = pixResults ?? doc.graphics.enumerated().map { i, rawPath in
                 PixResult(index: i, rawPath: rawPath, error: .unresolved)
             }
-            let docDir = path.map(dirnameOf)
+            let docDir = path.map(pathDirname)
             let entries: [InfoValue] = results.map { r in
                 let name = pixBasename(r.rawPath)
                 if r.ok {

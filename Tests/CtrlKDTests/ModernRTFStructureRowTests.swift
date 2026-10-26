@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import CtrlKD
 
 /// planning #264 item 5 (packet rows C3+C4): Modern RTF catches up with the app.
@@ -166,14 +167,14 @@ import Testing
 
     // MARK: the real corpus
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func theStrengthsDocumentCentresItsTitleBylineAndEmail() throws {
         // The packet's worked example: "three rows that have never sat where their author
         // put them". Before, the title carried `\fi3456` and the byline `\fi3312` with a
         // literal 23-space run before the email address.
-        let path = sawyerArchivePath + "/STRENGTH.WS"
+        let path = Corpus.sawyerArchivePath + "/STRENGTH.WS"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let out = emitRTF(try parse([UInt8](data)), mode: .modern)
         #expect(out.contains(#"\qc "#))
@@ -181,11 +182,11 @@ import Testing
         #expect(!out.contains("{                       }"))
     }
 
-    @Test(.enabled(if: sawyerArchiveArmed, sawyerArchiveSkipReason))
+    @Test(.requiresSawyerArchive)
     func theArchiveReadMesDefinitionRowsHang() throws {
-        let path = sawyerArchivePath + "/-README.WS"
+        let path = Corpus.sawyerArchivePath + "/-README.WS"
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw MissingSawyerFixture(path: path)
+            throw Corpus.missingSawyerFixture(path: path)
         }
         let out = emitRTF(try parse([UInt8](data)), mode: .modern)
         #expect(out.contains(#"\fi-1440 "#) && out.contains(#"\li1440 "#))

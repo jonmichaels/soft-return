@@ -411,7 +411,7 @@ import Testing
 @Test func printedPDFOfAContentFreeDocumentStillHonoursItsOwnMarginsAndHeader() {
     // REF/ADVANCE.DOT / REF/GALLEYS.DOT (Sawyer WS7 archive): two WordStar "pseudogalley"
     // template documents that declare page geometry and a running header/footer but
-    // contain NO body text at all. `layoutPrintedPagesPlain` never appends a single
+    // contain NO body text at all. `layoutPrintedPages` never appends a single
     // PageLine for either (there is nothing to append), so its trailing
     // `if !page.isEmpty { closePage() }` never fires, and `docToPagelines` falls through
     // to `finalizePages`'s `pages.isEmpty` branch -- Python's own `pages or [[]]`.

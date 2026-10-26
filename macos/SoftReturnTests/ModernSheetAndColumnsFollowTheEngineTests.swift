@@ -1,6 +1,7 @@
 import AppKit
 import CtrlKD
 import Foundation
+@testable import SoftReturnRendering
 import SoftReturnShared
 import Testing
 @testable import SoftReturn
@@ -79,8 +80,6 @@ struct ModernSheetAndColumnsFollowTheEngineTests {
         #expect(abs(Double(rendered.textFrame.minX) - engine.marginLeft) < 0.01, "\(document): text frame x \(rendered.textFrame.minX)")
         #expect(abs(Double(rendered.textFrame.minY) - engine.marginTop) < 0.01, "\(document): text frame y \(rendered.textFrame.minY)")
         #expect(abs(Double(rendered.textFrame.width) - engine.textWidth) < 0.01, "\(document): text frame width \(rendered.textFrame.width)")
-        let stem = document.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        try InvisiblesDesignPassTests.photograph(rendered: rendered, page: 0, name: "b41-a-\(stem)-modern-p1.png")
     }
 
     /// Each column's container ends where the engine's range ends. The view's own containers are read directly
@@ -331,6 +330,5 @@ struct ModernSheetAndColumnsFollowTheEngineTests {
         #expect(abs(Double(rendered.textFrame.width) - engine.textWidth) < 0.01, "VERSIONS.WS Sawyer: text frame width \(rendered.textFrame.width), the engine \(engine.textWidth)")
         let wantHeight = Double(rendered.pageSize.height) - engine.marginTop - engine.marginBottom
         #expect(abs(Double(rendered.textFrame.height) - wantHeight) < 0.01, "VERSIONS.WS Sawyer: text frame height \(rendered.textFrame.height), the engine's \(wantHeight)")
-        try InvisiblesDesignPassTests.photograph(rendered: rendered, page: 0, name: "b41-a-presets-VERSIONS-WS-sawyer-modern-p1.png")
     }
 }

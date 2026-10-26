@@ -151,19 +151,4 @@ import Testing
         #expect(DocumentOperations.PageSettingsPreset.modern.settings
                 == PageSettings(mtLines: 6.0, mbLines: 6.0, poCols: 10.0))
     }
-
-    // MARK: - Naming
-
-    @Test func uniqueFileNameFollowsFindersOwnCollisionRule() {
-        var taken: Set<String> = ["Paper.md"]
-        let first = DocumentOperations.uniqueFileName(basename: "Paper", extension: "md") {
-            taken.contains($0)
-        }
-        #expect(first == "Paper 2.md")
-        taken.insert(first)
-        let second = DocumentOperations.uniqueFileName(basename: "Paper", extension: "md") {
-            taken.contains($0)
-        }
-        #expect(second == "Paper 3.md")
-    }
 }

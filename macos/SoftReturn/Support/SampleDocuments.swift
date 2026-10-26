@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SoftReturnShared
 
 /// Job 374 (b24, SAMPLES IN-APP): Help ▸ Open Sample Document ▸ — bundled, pristine copies of
 /// a handful of authored public-domain WordStar documents, so a person can see the app do
@@ -36,26 +37,19 @@ enum SampleDocuments {
                         url: directory.appendingPathComponent($0)) }
     }
 
-    /// The literal extension list `Info.plist`'s `UTExportedTypeDeclarations` claims for
-    /// `me.beforeti.wordstar-document`, copied rather than read from the plist at runtime —
-    /// this only needs to filter README/asset noise (a `.md`, a `.DS_Store`) out of a bundled
-    /// resource folder, not resolve real file identity the way document opening itself does.
-    private static let wordStarExtensions: Set<String> = [
-        "ws", "ws0", "ws1", "ws2", "ws3", "ws4", "ws5", "ws6", "ws7", "ws8", "ws9",
-        "wsd", "wsm", "ws-bak", "ws-$$$",
-    ]
-
+    /// The bundled samples carry the claimed extensions; this filters README/asset noise (a `.md`,
+    /// a `.DS_Store`) out of the resource folder, not real file identity, which document opening
+    /// decides by content.
     private static func isWordStarFamily(_ filename: String) -> Bool {
-        wordStarExtensions.contains((filename as NSString).pathExtension.lowercased())
+        WordStarFileTypes.isDocument(name: filename)
     }
 
     /// `Help ▸ Open Sample Document ▸`, or `nil` when the bundle carries no samples (a build
     /// made before the vault copy lands — see the resource folder's README). Trivially
     /// movable: this is the ONLY call site a caller needs — `MainMenu.helpMenu()` adds the
     /// returned item wherever it likes, or not at all. Deliberately NOT `@MainActor`: plain
-    /// `NSMenuItem`/`NSMenu` construction needs no actor hop (same unisolated posture the rest
-    /// of `MainMenu.swift` already takes), and `helpMenu()` itself is a nonisolated context —
-    /// see `open()` below for where this DOES need one (`NSDocumentController`).
+    /// `NSMenuItem`/`NSMenu` construction needs no actor hop — see `open()` below for where
+    /// this DOES need one (`NSDocumentController`).
     static func buildMenuItem(bundle: Bundle = .main) -> NSMenuItem? {
         let entries = items(bundle: bundle)
         guard !entries.isEmpty else { return nil }

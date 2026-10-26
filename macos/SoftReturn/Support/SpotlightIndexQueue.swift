@@ -1,5 +1,6 @@
 import Foundation
 import os
+import SoftReturnShared
 
 /// Job 178 (b8): the view-extension index triggers (`SoftReturnQuickLook`/`SoftReturnThumbnail`)
 /// proved on the b7 console that their hooks FIRE but the spawn dies — `rc=-1 launch failed:
@@ -27,16 +28,8 @@ enum SpotlightIndexQueue {
 
     static let subsystem = "me.beforeti.softreturn"
 
-    /// Team-ID-prefixed per the job brief. Doc-citation gap, reported loudly rather than
-    /// invented: the SDK header (`NSFileManager.h`,
-    /// `containerURLForSecurityApplicationGroupIdentifier:`) confirms the API and mechanism,
-    /// but the naming CONVENTION for the identifier string itself (team-ID prefix required by
-    /// the App Groups provisioning capability) lives in Apple's App Groups capability /
-    /// Entitlement Key Reference pages, which this worker has no network path to fetch (see
-    /// `.claude/skills/macos-document-app/references/apple-docs-access.md` — WebFetch to
-    /// sosumi.ai was denied by this session's own permission model, confirming the "worker has
-    /// no network" description empirically, not just by that doc's say-so). See the job report.
-    static let groupIdentifier = "RC448RH3EN.softreturn"
+    /// The app group the app shares with its extensions.
+    static let groupIdentifier = AppGroup.identifier
 
     /// Cap chosen by the brief, not derived — matches `SpotlightTriggerBreadcrumbs`' capacity
     /// being a similarly-fixed round number for the same reason: bounded growth of a
@@ -66,7 +59,7 @@ enum SpotlightIndexQueue {
                         containerURL: URL? = SpotlightIndexQueue.containerURL(),
                         defaults: UserDefaults = .standard,
                         now: Date = Date(),
-                        perform: @escaping (@escaping () -> Void) -> Void =
+                        perform: @escaping (@escaping @Sendable () -> Void) -> Void =
                             { DispatchQueue.global(qos: .utility).async(execute: $0) }) {
         SpotlightTriggerBreadcrumbs.record(category: category, path: path, stage: "enqueue-called",
                                            detail: "pathWasNil=\(path == nil)", defaults: defaults)
@@ -78,6 +71,8 @@ enum SpotlightIndexQueue {
                                                detail: "no app-group container", defaults: defaults)
             return
         }
+        // `UserDefaults` is thread-safe (Apple's documentation says so) but not marked `Sendable`.
+        nonisolated(unsafe) let defaults = defaults
         perform {
             let fileURL = fileURL(in: containerURL)
             let coordinator = NSFileCoordinator(filePresenter: nil)
@@ -153,8 +148,10 @@ enum SpotlightIndexQueue {
                          runner: MDImportRunning = ProcessMDImportRunner(),
                          dedupe: SpotlightFileIndexer.DedupeWindow = .shared,
                          defaults: UserDefaults = .standard,
-                         perform: @escaping (@escaping () -> Void) -> Void =
+                         perform: @escaping (@escaping @Sendable () -> Void) -> Void =
                              { DispatchQueue.global(qos: .utility).async(execute: $0) }) {
+        // `UserDefaults` is thread-safe (Apple's documentation says so) but not marked `Sendable`.
+        nonisolated(unsafe) let defaults = defaults
         perform {
             for entry in peekAll(containerURL: containerURL) {
                 SpotlightFileIndexer.requestIndex(for: URL(fileURLWithPath: entry.path),
