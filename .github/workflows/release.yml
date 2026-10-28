@@ -100,6 +100,8 @@ jobs:
   asset-gate:
     needs: guard
     runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.gate.outputs.prerelease }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
@@ -107,6 +109,7 @@ jobs:
       VERSION: ${{ needs.guard.outputs.version }}
     steps:
       - name: Verify required release assets are present and byte-consistent
+        id: gate
         run: |
           python3 - <<'PY'
           import sys, os, json, subprocess, urllib.request, hashlib, pathlib, tempfile
@@ -125,11 +128,18 @@ jobs:
           release = gh_api(f"repos/{REPO}/releases/tags/{TAG}")
           assets = {a["name"]: a for a in release.get("assets", [])}
 
+          # A beta (a GitHub prerelease) is Mac only: no Windows zips, and the
+          # tap job below leaves Homebrew's sr on the last release.
+          prerelease = bool(release.get("prerelease"))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"prerelease={'true' if prerelease else 'false'}\n")
+
           versioned_dmg = f"Soft-Return-{VERSION}.dmg"
           windows_versioned = f"sr-{VERSION}-windows-x86_64.zip"
           windows_stable = "sr-windows-x86_64.zip"
-          required = [versioned_dmg, "Soft-Return-CLI.pkg", "Soft-Return.dmg",
-                      windows_versioned, windows_stable]
+          required = [versioned_dmg, "Soft-Return-CLI.pkg", "Soft-Return.dmg"]
+          if not prerelease:
+              required += [windows_versioned, windows_stable]
 
           missing = [n for n in required if n not in assets]
           if missing:
@@ -160,20 +170,22 @@ jobs:
           if sha256(p_ver_dmg) != sha256(p_stable_dmg):
               failures.append(f"{versioned_dmg} and Soft-Return.dmg are not byte-identical")
 
-          p_ver_win = download(windows_versioned)
-          p_stable_win = download(windows_stable)
-          if sha256(p_ver_win) != sha256(p_stable_win):
-              failures.append(f"{windows_versioned} and {windows_stable} are not byte-identical")
+          if not prerelease:
+              p_ver_win = download(windows_versioned)
+              p_stable_win = download(windows_stable)
+              if sha256(p_ver_win) != sha256(p_stable_win):
+                  failures.append(f"{windows_versioned} and {windows_stable} are not byte-identical")
 
           if failures:
               print("::error::" + "; ".join(failures))
               sys.exit(1)
 
-          print(f"asset-gate: PASS -- all 5 required assets present, non-empty, and byte-consistent for {TAG}")
+          print(f"asset-gate: PASS -- all {len(required)} required assets present, non-empty, and byte-consistent for {TAG}")
           PY
 
   tap:
     needs: [guard, asset-gate]
+    if: needs.asset-gate.outputs.prerelease != 'true'
     runs-on: ubuntu-latest
     env:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
