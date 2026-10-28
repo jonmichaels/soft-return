@@ -153,6 +153,11 @@ private func evalIfCondition(_ arg: [UInt8]) -> Bool? {
 /// change flushes the current span and swaps the active font, so every following span
 /// carries its font until the next change. `activeFont` persists across lines exactly as
 /// `active` does — in Python both live in the one `active` set.
+///
+/// `hibitOut`, when given (WS4: `stripHibit`), receives the offset (Unicode scalars) in the
+/// line's decoded text of every byte stored with bit 7: a letter, WS4's word-end flag; a
+/// blank, an editor soft space (A0h); a control toggle, the flag of the word it closes,
+/// recorded on the character before it. Port of `_decode_spans`' `hibit_out`.
 private func decodeSpans(
     _ raw: [UInt8],
     stripHibit: Bool,
@@ -168,10 +173,12 @@ private func decodeSpans(
     pctlAt: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = [],
     pixAt: [(offset: Int, index: Int, byteLen: Int)] = [],
     ixAt: [(offset: Int, byteLen: Int)] = [],
-    tabTargetAt: [(offset: Int, absHMI: Int, leader: UInt8, cols: Int)] = []
+    tabTargetAt: [(offset: Int, absHMI: Int, leader: UInt8, cols: Int)] = [],
+    hibitOut: inout [Int]?
 ) -> [Span] {
     var spans: [Span] = []
     var buf: [UInt8] = []
+    var softAt: [Int] = []            // offsets in `buf` of the WS5+ soft spaces (0xA0)
     // `flush` needs to read the font/colour, but both are `inout` and a nested function
     // may not capture an `inout` parameter that outlives the call. Local mirrors,
     // written back before returning, are the idiom the rest of this file would use.
@@ -185,14 +192,18 @@ private func decodeSpans(
     func flush() {
         if !buf.isEmpty {
             var text = decodeCP437(buf)
+            var soft = text.unicodeScalars.count == buf.count ? softAt : []
+            softAt.removeAll()
             // A byte set in Symbol/ZapfDingbats is a GLYPH INDEX, not styled text:
             // transliterate through the font's own encoding into real Unicode
             // (`SymbolTranslit.swift`), after which no font is required at all.
             if let index = font, index < fonts.count,
                let kind = fontTranslitKind(fonts[index]) {
                 text = transliterate(text, kind)
+                soft = []
             }
-            spans.append(Span(text: text, styles: active, font: font, colour: colour))
+            spans.append(Span(text: text, styles: active, font: font, colour: colour,
+                              soft: soft))
             buf.removeAll()
         }
     }
@@ -222,6 +233,19 @@ private func decodeSpans(
     // plain one without re-deriving it from the (already-expanded) text.
     var pendingTab = tabTargetAt.sorted { $0.offset < $1.offset }
     var i = 0
+    var hibAt: Int? = nil              // decoded position before a bit-7 byte
+    var hibits = hibitOut              // local mirror of the `inout`, as `font` is above
+
+    // Where the last bit-7 byte landed: on the character it produced, or, when it produced
+    // none (a toggle), on the character before it.
+    func settleHibit() {
+        if let at = hibAt {
+            let now = spans.reduce(0) { $0 + $1.text.unicodeScalars.count } + buf.count
+            hibits?.append(now > at ? at : Swift.max(at - 1, 0))
+            hibAt = nil
+        }
+    }
+
     while i < raw.count || !pending.isEmpty || !pendingFonts.isEmpty || !pendingColours.isEmpty {
         // Drain EVERY mark-consuming queue at the CURRENT `i`, re-checking pctl again
         // after tab/pix/fonts/colours fire (and so on) until none apply any more -- not
@@ -336,6 +360,12 @@ private func decodeSpans(
         // byte instead leaks the toggle into the text and the style never closes —
         // that's the bug that turned whole paragraphs italic in production.
         let b: UInt8 = (stripHibit && raw[i] >= 0x80) ? (raw[i] & 0x7F) : raw[i]
+        if hibits != nil {
+            settleHibit()
+            if stripHibit && raw[i] >= 0x80 {
+                hibAt = spans.reduce(0) { $0 + $1.text.unicodeScalars.count } + buf.count
+            }
+        }
 
         // core.py:186-187 — extended-character escape. Note it takes `raw[i + 1]`, the
         // UNMASKED byte: the escape exists precisely to smuggle a high byte past the
@@ -391,6 +421,9 @@ private func decodeSpans(
             // wrapped triple <1B A0 1C>, which the escape branch above already decodes
             // through cp437. WS4 needs nothing: its soft spaces are 0x20|0x80 and the
             // bit-7 mask (applied above, before `b` is computed) already restored them.
+            // The span remembers which blanks they were (`Span.soft`): print-time
+            // justification ignores them.
+            softAt.append(buf.count)
             buf.append(0x20)
         } else if b < 0x20 || b == 0x7F {
             // core.py:204-206 — everything else in control range is either known-noise
@@ -404,18 +437,40 @@ private func decodeSpans(
         i += 1
     }
     flush()
+    if hibits != nil { settleHibit() }
+    hibitOut = hibits
     activeFont = font
     activeColour = colour
     return spans
 }
 
 /// Parse a WordStar document (WS4 or WS5+) into the IR. core.py:255-325.
-public func parseWS(_ data: [UInt8]) -> Document {
-    let detection = detect(data)
+/// A WordStar document. `variant` (`.ws4` or `.ws5plus`), when given, is what the caller
+/// knows the file to be (`parse(_:variant:)`, `sr --variant`): it chooses the era — bit 7 as
+/// word-end flags or not, symmetric records or not — instead of detection's guess. Port of
+/// `core.parse_ws`'s `variant`.
+public func parseWS(_ data: [UInt8], variant: Variant? = nil,
+                    printedBy: PrintedBy = .own) -> Document {
+    let detected = detect(data)
+    let detection: Detection
+    if let variant, variant != detected.variant {
+        detection = Detection(variant: variant, reason: detected.reason,
+                              softReturns: detected.softReturns,
+                              hardReturns: detected.hardReturns,
+                              highBitBytes: detected.highBitBytes, textPct: detected.textPct,
+                              symmetricBlocks1D: detected.symmetricBlocks1D,
+                              size: detected.size, kind: detected.kind,
+                              mergeRecords: detected.mergeRecords,
+                              mergeFields: detected.mergeFields)
+    } else {
+        detection = detected
+    }
     // Behaviour comes from the era table, never from a `variant ==` test — see
     // `Era.swift`. An unknown variant resolves to the WS5+ entry, which does not
     // strip high bits: the least destructive guess.
     let era = eraFor(detection.variant)
+    let printVariant: Variant = printedBy == .ws7 ? .ws5plus : detection.variant
+    let printEra = eraFor(printVariant)
     let stripHibit = era.highBitWordwrap
     let ws5 = era.symmetricBlocks
 
@@ -555,6 +610,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
     var spaceAfterLines: Double? = nil
     var footnoteNumberStart: Int? = nil
     var endnoteNumberStart: Int? = nil
+    var footnoteNumberFormat: NoteNumberStyle? = nil
+    var endnoteNumberFormat: NoteNumberStyle? = nil
     var headers: [Int: String] = [:]
     var footers: [Int: String] = [:]
     // The `Document.fonts` index in force at each running head's/foot's own definition —
@@ -1174,9 +1231,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // never decoded as content) -- see the check at the top of
             // this loop. Port of Python's `parse_ws` `consume_next_as_
             // ruler` fix.
+            //
+            // WS4 has no such form (WS4 report, evidence/pass3/exe-static.md P17, P19B): a
+            // bare `.RR` has LM = RM and is REJECTED -- the ruler goes back to the
+            // document-start ruler and the next line is ordinary text (runs p17-rr,
+            // p19b-rr).
             if head2 == [0x52, 0x52],   // "RR"
                cmd.dropFirst(3).allSatisfy({ $0 == 0x20 || $0 == 0x09 }) {
-                consumeNextAsRuler = true
+                if ws5 { consumeNextAsRuler = true }
             }
             // The block this event applies to: the one still open (if it has content)
             // or the next one to open. Same convention as `pointsAt` just below --
@@ -1318,7 +1380,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             // lines after it are centred and the ones before it are not, and a single
             // block cannot hold both.
             let beforeFmt = fmt.blockFormat
-            applyFormatDot(cmd, &fmt)
+            applyFormatDot(cmd, &fmt, barePoZero: printEra.barePoZero,
+                           badPoZero: printEra.badPoZero)
             // `.lh` and a paragraph STYLE's own `lineHeightVMI` are the SAME WordStar
             // setting — a line height — reached two ways, so the one that comes LATER
             // in the file wins. `styleLeadPt` gives the style's value precedence over
@@ -1363,6 +1426,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 let trimmedBody = rulerBody.drop { $0 == 0x20 || $0 == 0x09 }
                 if let first = trimmedBody.first, !(first >= 0x30 && first <= 0x39) {
                     applyRulerMargins(rulerBody, &fmt)
+                } else if trimmedBody.isEmpty && !ws5 {
+                    applyRulerMargins([], &fmt)      // WS4 rejects it: the start ruler
                 }
             }
             if fmt.blockFormat != beforeFmt {
@@ -1376,7 +1441,10 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 spaceAfterLines: &spaceAfterLines,
                 footnoteNumberStart: &footnoteNumberStart,
                 endnoteNumberStart: &endnoteNumberStart,
-                hasText: bodySeen || !curLine.spans.isEmpty
+                footnoteNumberFormat: &footnoteNumberFormat,
+                endnoteNumberFormat: &endnoteNumberFormat,
+                hasText: bodySeen || !curLine.spans.isEmpty,
+                barePoZero: printEra.barePoZero, badPoZero: printEra.badPoZero
             )
             // LJ6DTP parity C1: a dot-command line is CONSUMED here — it never reaches
             // `decodeSpans`, so any mark that landed on it dies with it. That silently
@@ -1537,6 +1605,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
                     // mark reaches one segment and only one. A line with a single segment
                     // (the wrapped-0x0C case) gets all of them, unshifted.
                     let lo = segStart, hi = segStart + segment.count
+                    var noHibit: [Int]? = nil    // Python records bit 7 on the body call only
                     let spans = decodeSpans(segment, stripHibit: stripHibit,
                                             active: &active, activeFont: &activeFont,
                                             unknown: &unknown,
@@ -1560,12 +1629,14 @@ public func parseWS(_ data: [UInt8]) -> Document {
                                             tabTargetAt: tabTargetAt.filter { $0.offset >= lo && $0.offset <= hi }
                                                                     .map { (offset: $0.offset - lo,
                                                                             absHMI: $0.absHMI,
-                                                                            leader: $0.leader, cols: $0.cols) })
+                                                                            leader: $0.leader, cols: $0.cols) },
+                                            hibitOut: &noHibit)
                     if !pendingMarks.isEmpty, !spans.isEmpty {
                         curLine.spans += pendingMarks
                         pendingMarks = []
                     }
                     curLine.spans += spans
+                    curLine.fontOut = activeFont ?? -1
                     segment = []
                 }
             }
@@ -1629,6 +1700,7 @@ public func parseWS(_ data: [UInt8]) -> Document {
             }
         }
 
+        var hibitHere: [Int]? = stripHibit ? [] : nil
         let spans = decodeSpans(
             raw,
             stripHibit: stripHibit,
@@ -1644,7 +1716,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
             pctlAt: pctlAt,
             pixAt: pixAt,
             ixAt: ixAt,
-            tabTargetAt: tabTargetAt
+            tabTargetAt: tabTargetAt,
+            hibitOut: &hibitHere
         )
         if !pendingMarks.isEmpty, !spans.isEmpty {
             // a content line arrived: deferred dot-comment marks land at its head, the
@@ -1652,7 +1725,13 @@ public func parseWS(_ data: [UInt8]) -> Document {
             curLine.spans.append(contentsOf: pendingMarks)
             pendingMarks = []
         }
+        // WS4's bit-7 characters, against the line's text so far (`Line.hibit`).
+        if let hibitHere, !hibitHere.isEmpty {
+            let base = curLine.spans.reduce(0) { $0 + $1.text.unicodeScalars.count }
+            curLine.hibit += hibitHere.map { base + $0 }
+        }
         curLine.spans.append(contentsOf: spans)
+        curLine.fontOut = activeFont ?? -1
 
         switch physical.separator {
         case .wrap:
@@ -1675,6 +1754,18 @@ public func parseWS(_ data: [UInt8]) -> Document {
                                                               // line, as the old merge did
             }
         case .line:
+            if !curLine.spans.isEmpty, let brk = rtBrk, let first = brk.first,
+               first == 0x8D || first == 0x8A {
+                // A stored soft return that Modern reflow keeps as a break (`linesPass`:
+                // the next word would have fit, or the next line starts with a typed
+                // indent). WordStar keeps it a soft return: it justifies the line,
+                // re-wraps it under `.pf on`, and shows and stores it as 8D 0A (WS4 report
+                // 2.7, 6.1, 7.7). `soft` is the stored terminator; `keepBreak` is reflow's
+                // own decision to keep the break anyway.
+                curLine.soft = true
+                curLine.keepBreak = true
+                if wrapRaw.last == 0x1F { curLine.softHyphen = true }
+            }
             closeLine()
         case .over:
             // A bare-CR overprint separator: the NEXT line prints at THIS line's own
@@ -1749,6 +1840,15 @@ public func parseWS(_ data: [UInt8]) -> Document {
                 rtLastC = blankRef                 // a non-empty line
             }
         case .para, .eof:
+            if physical.separator == .para, !curLine.spans.isEmpty,
+               let brk = rtBrk, let first = brk.first, first == 0x8D || first == 0x8A {
+                // The paragraph ends here for reflow, but the line was stored with a
+                // SOFT return and WordStar keeps it soft: Enter under `.ls n` stores
+                // `8D 0A`, n-2 empty soft lines and an empty hard line (WS7 report 15.10,
+                // runs w16-ls2, w16-ls3). The flag is the stored terminator's, whatever
+                // follows it.
+                curLine.soft = true
+            }
             closeBlock()
         }
         // Stamp this entry's raw separator on the Line that closed it (tasks #20/#21).
@@ -1965,6 +2065,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
         spaceAfterLines: spaceAfterLines,
         footnoteNumberStart: footnoteNumberStart,
         endnoteNumberStart: endnoteNumberStart,
+        footnoteNumberFormat: footnoteNumberFormat,
+        endnoteNumberFormat: endnoteNumberFormat,
         era: era.name,
         headers: headers,
         footers: footers,
@@ -2019,6 +2121,8 @@ public func parseWS(_ data: [UInt8]) -> Document {
     if doc.blocks.last?.kind == .pagebreak {
         doc.paEofBlankAfter = trailingPaHasContentAfter(data)
     }
+    doc.printingVariant = printVariant
+    doc.eofBlankLines = pass.eofBlankLines
     return doc
 }
 
@@ -2879,7 +2983,10 @@ private func parsePageDot(
     spaceAfterLines: inout Double?,
     footnoteNumberStart: inout Int?,
     endnoteNumberStart: inout Int?,
-    hasText: Bool = false
+    footnoteNumberFormat: inout NoteNumberStyle?,
+    endnoteNumberFormat: inout NoteNumberStyle?,
+    hasText: Bool = false,
+    barePoZero: Bool = false, badPoZero: Bool = false
 ) {
     if cmd.count >= 3 {
         let head = String(decoding: [ASCII.upper(cmd[1]), ASCII.upper(cmd[2])], as: UTF8.self)
@@ -2891,6 +2998,23 @@ private func parsePageDot(
                     footnoteNumberStart = Int(value)
                 } else {
                     endnoteNumberStart = Int(value)
+                }
+            }
+            // The label FORMAT: WS7's `.f#` parser takes a digit (decimal), an upper-case
+            // letter (upper) or a lower-case letter (lower); `d` and `p` are the
+            // continuous / per-page modes, not formats (WS7 report 15.1, 15.10). The
+            // format in force at print time is what prints, whatever the note records
+            // store, so the first `.f#` / `.e#` that names one is kept.
+            let rest = Array(cmd[3...]).drop(while: { $0 == 0x20 || $0 == 0x09 })
+            let word = String(decoding: rest.prefix(6), as: UTF8.self).lowercased()
+            if !word.hasPrefix("page"), !word.hasPrefix("cont"), !word.hasPrefix("consec"),
+               let first = rest.first, (0x41...0x5A).contains(first) || (0x61...0x7A).contains(first),
+               first | 0x20 != UInt8(ascii: "d"), first | 0x20 != UInt8(ascii: "p") {
+                let style: NoteNumberStyle = first <= 0x5A ? .upper : .lower
+                if isFootnote {
+                    if footnoteNumberFormat == nil { footnoteNumberFormat = style }
+                } else if endnoteNumberFormat == nil {
+                    endnoteNumberFormat = style
                 }
             }
             return
@@ -2930,7 +3054,10 @@ private func parsePageDot(
         page.mbLines = resolveLinesArg(value, unit)
     case "PO":
         if hasText { return }
-        guard let (value, unit) = parseDotNumber(arg) else { return }
+        guard let (value, unit) = parseDotNumber(arg) else {
+            if isBlankDotArg(arg) ? barePoZero : badPoZero { page.poCols = 0.0 }   // Era.barePoZero / badPoZero
+            return
+        }
         page.poCols = resolveColsArg(value, unit)
     case "HM":
         if hasText { return }

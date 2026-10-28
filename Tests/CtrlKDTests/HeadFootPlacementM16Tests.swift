@@ -98,7 +98,9 @@ private func drawnRows(_ pdf: [UInt8]) -> [String: String] {
         guard let tsRange = line.range(of: "Ts "),
               let tdRange = line.range(of: " Td ("),
               let close = line.range(of: ") Tj") else { continue }
-        let coords = line[tsRange.upperBound..<tdRange.lowerBound].split(separator: " ")
+        var coords = line[tsRange.upperBound..<tdRange.lowerBound].split(separator: " ")
+        // WS7's LASERJET places a proportional head's words one op each, each with its own Tz
+        if coords.count == 4, coords[1] == "Tz" { coords.removeFirst(2) }
         guard coords.count == 2, let x = Double(coords[0]),
               let y = Double(coords[1]) else { continue }
         let key = String(format: "%.2f,%.2f", (height - y) / 72.0, x / 72.0)
@@ -115,8 +117,13 @@ func bookletHeadsLandWhereRealWS7PutsThem() throws {
     let data = try Data(contentsOf: URL(fileURLWithPath:
         Corpus.sawyerArchivePath + "/REF/BOOKLET.WS"))
     let rows = drawnRows(emitPDF(parseWS([UInt8](data)), mode: .printed))
-    #expect(rows["0.57,0.20"] == "Header Even 1")
-    #expect(rows["0.57,9.21"] == "Header Odd 1")
+    // WS7's LASERJET places each word of a proportional head on its own
+    let row = rows.filter { $0.key.hasPrefix("0.57,") }
+        .sorted { (Double($0.key.dropFirst(5)) ?? 0) < (Double($1.key.dropFirst(5)) ?? 0) }
+        .map(\.value)
+    #expect(row == ["Header", "Even", "1", "Header", "Odd", "1"])
+    #expect(rows["0.57,0.20"] == "Header")
+    #expect(rows["0.57,9.21"] == "Header")
 }
 
 @Test(.requiresSawyerArchive)

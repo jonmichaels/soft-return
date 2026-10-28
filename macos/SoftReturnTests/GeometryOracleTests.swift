@@ -275,6 +275,9 @@ enum Oracle {
         /// the face this character is actually set in.
         static func sameMark(_ app: Character, _ library: Character) -> Bool {
             if app == library { return true }
+            // LJ6DTP's © is written from Symbol, copyrightsans (E3) or copyrightserif (D3),
+            // which this reader decodes as WinAnsi ã and Ó.
+            if app == "©", library == "ã" || library == "Ó" { return true }
             if (sameLetter[app] ?? app) == library { return true }
             if degraded(app) == library { return true }
             // `?` IS THE ENGINE SAYING IT COULD NOT WRITE THE MARK, and `degraded` only
@@ -365,7 +368,11 @@ enum Oracle {
                     // Quartz writes glyph ids. The app IS painting something there; what it
                     // is cannot be read out of the bytes, and a name this reader invented is
                     // not evidence about pagination.
-                    if CtrlKD.graphicChars.contains(a[i]) || a[i] == "\u{FFFD}" {
+                    // A solid or shaded block is a vector fill in the engine's PDF, never text
+                    // (the app's own block glyphs sit under its vector cells, `graphicCells`),
+                    // so it may vanish; it still pairs with a running head's `?` stand-in.
+                    if CtrlKD.graphicChars.contains(a[i]) || "█▓▒░".contains(a[i])
+                        || a[i] == "\u{FFFD}" {
                         reachable[i + 1][j] = true
                     }
                     if j < b.count, sameMark(a[i], b[j]) { reachable[i + 1][j + 1] = true }
@@ -640,6 +647,8 @@ enum Oracle {
             // Line terminators included: a newline is not ink, and treating it as ink is
             // exactly the bug described above.
             if unit == 0x20 || unit == 0x09 || unit == 0x0A || unit == 0x0D { return true }
+            // U+FFFC is a print control's or an empty tab's invisible spacer, no ink.
+            if unit == 0xFFFC { return true }
             guard let scalar = Unicode.Scalar(UInt32(unit)) else { return false }
             return CtrlKD.graphicChars.contains(Character(scalar))
         }
@@ -852,7 +861,12 @@ enum Oracle {
         // than reused from `rendered` (`RenderedDocument` does not expose the raw per-page
         // `PageLine.lead` this needs).
         let docPages = Oracle.pagelines(of: state)
-        let firstBaseline = CGFloat(metrics.top + (docPages.first?.first?.lead ?? metrics.lead))
+        // WS4's HPLJET (a WS4 file printed by WS4) puts line 1 its vbias below the top margin
+        // whatever its lead, and steps each later line by the lead of the line ABOVE it
+        // (`pageStream`'s `prevLead`).
+        let hpljet = printingEra(state.document).hpljetDriver
+        let firstBaseline = CGFloat(metrics.top + (hpljet ? PDFMetrics.hpljetVbiasPt
+            : (docPages.first?.first?.lead ?? metrics.lead)))
         let gridTop = firstBaseline - (lines[0].baseline - lines[0].top)
 
         // `.lh` IS STATEFUL, so "line n belongs at top + n * lead" is only true of a document
@@ -896,7 +910,8 @@ enum Oracle {
         var offsetFromFirst: [CGFloat] = [0]
         if lines.count > 1 {
             for index in 1..<lines.count {
-                offsetFromFirst.append(offsetFromFirst[index - 1] + CGFloat(lead(at: index)))
+                offsetFromFirst.append(offsetFromFirst[index - 1]
+                    + CGFloat(lead(at: hpljet ? index - 1 : index)))
             }
         }
         func offset(forLineIndex index: Int) -> CGFloat {
@@ -1129,8 +1144,13 @@ enum Oracle {
             let measured = isOversized ? (appInk[key] ?? Double(line.left)) : Double(line.left)
             // A LICENSED row records itself and moves on — but only while it measures what
             // it was licensed at. Drift fails.
+            // The licence records the printer's own frame (the numbers the row was licensed at);
+            // both sides now read on the paper, where the page's logical page (1/4" in on
+            // Letter) sits `logicalX` further right.
+            let logicalX = Double(rendered.logicalPageX(atPage: 0))
             if let licence = licensedLeftMarginRows[url.lastPathComponent]?[line.index],
-               abs(measured - licence.app) <= 0.5, abs(wanted - licence.engine) <= 0.5 {
+               abs(measured - (licence.app + logicalX)) <= 0.5,
+               abs(wanted - (licence.engine + logicalX)) <= 0.5 {
                 print("LEFTMARGIN licensed \(url.lastPathComponent) line \(line.index): "
                       + "app \(measured), engine \(wanted) — \(licence.reason)")
                 continue
@@ -1515,9 +1535,15 @@ let noTextInkDocuments: [String: String] = [
         // for line POSITIONS, applied here to the page's total height. NOVEL.WS's page 1 is
         // 31 lines totalling 612pt where `capacity * lead` says 55 x 12 = 660.
         let engineLines = Oracle.pagelines(of: state).first?.lines ?? []
+        // WS4's HPLJET puts line 1 its vbias below the top margin and steps each later line by
+        // the lead of the line above, so its last baseline is the vbias plus every lead but
+        // the last line's.
+        let leads = engineLines.map { $0.lead ?? metrics.lead }
         let budget = engineLines.isEmpty
             ? CGFloat(Double(metrics.capacity) * metrics.lead)
-            : CGFloat(engineLines.reduce(0.0) { $0 + ($1.lead ?? metrics.lead) })
+            : printingEra(state.document).hpljetDriver
+                ? CGFloat(PDFMetrics.hpljetVbiasPt + leads.dropLast().reduce(0, +))
+                : CGFloat(leads.reduce(0, +))
         // `usedRect` IS A BOUNDING BOX, and this renderer pins baselines rather than
         // stacking fragments, so wherever two consecutive lines have different ascents their
         // fragments are not contiguous and the bounding box swallows the gap. Measured on
@@ -1829,8 +1855,8 @@ let noTextInkDocuments: [String: String] = [
                                     state.document, docPath: url.path)))
         let appPDF = try Oracle.appNativePDF(for: url, state: state)
         // A RAISED MARK IS READ ONTO THE LINE IT WAS RAISED FROM, AT THE ROLL IT IS DRAWN AT
-        // (#271 M1). Native draws a superscript or subscript by Printed's own `.sr` roll — a whole
-        // point, `roundHalfToEven(roll48 × 1.5)` — and the app's PDF bakes that into the text
+        // (#271 M1). Native draws a superscript or subscript by Printed's own `.sr` roll —
+        // `roll48 × 1.5` exactly, 4.5pt at the default — and the app's PDF bakes that into the text
         // matrix, where the engine's `y` never carries it. The reader's 6pt `riseWindow` covers
         // the default 4pt; a private test document that sets `.sr 6` draws its "2" 9pt up, and
         // read at 6pt that mark came back as a line of its own (page 2 at 33 lines against 32),
@@ -1839,7 +1865,7 @@ let noTextInkDocuments: [String: String] = [
         // side, with no rise in `y`, keeps the plain rule.
         let rolls48 = [state.document.formatting.subSuperRoll48 ?? 3.0]
             + state.document.blocks.flatMap { $0.lines.compactMap(\.roll48) }
-        let rises = Set(rolls48.map { ($0 * 1.5).rounded(.toNearestOrEven) }).sorted()
+        let rises = Set(rolls48.map { $0 * 1.5 }).sorted()
         // E11: the rows the engine flags off the sheet are drawn below the page's foot and by no view — counted out.
         let engineLines = try AppModernFidelityTests.lines(
             of: enginePDF, offSheet: Oracle.offSheetRows(state.document, options: state.printedOptions))

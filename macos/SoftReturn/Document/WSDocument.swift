@@ -161,10 +161,13 @@ final class WSDocument: NSDocument {
         let bytes = state.data
         let docPath = state.docPath
         let quirks = state.quirkChoices
+        let printedBy = state.printedBy
         let fileName = fileURL?.lastPathComponent
         let start = DispatchTime.now().uptimeNanoseconds
         deferredParse = Task.detached(priority: .userInitiated) { [weak self] in
-            let result = Result { try DocumentState.parsed(from: bytes, docPath: docPath, quirks: quirks) }
+            let result = Result {
+                try DocumentState.parsed(from: bytes, docPath: docPath, quirks: quirks, printedBy: printedBy)
+            }
             MainRunLoop.perform { [weak self] in
                 self?.completeDeferredParse(result, startedAt: start, fileName: fileName)
             }
@@ -198,7 +201,8 @@ final class WSDocument: NSDocument {
             let bytes = state.data
             let docPath = state.docPath
             let parsed = try PerformanceSignposts.measure("open.parse") {
-                try DocumentState.parsed(from: bytes, docPath: docPath, quirks: state.quirkChoices)
+                try DocumentState.parsed(from: bytes, docPath: docPath, quirks: state.quirkChoices,
+                                         printedBy: state.printedBy)
             }
             state.adopt(parsed)
             settleDeferredParse(nil)

@@ -210,3 +210,16 @@ private func chanceNoiseBinary(size: Int = 1 << 18, seed: UInt64 = 4931) -> [UIn
     #expect(real.symmetricBlocks1D == 1)
     #expect(real.variant == .ws5plus)
 }
+
+/// `parse(_:variant:)` (`sr --variant`) chooses the era, not just the parser. Port of
+/// ctrl-kd's `test_forced_variant_chooses_the_era`: a WS4 file whose bytes detection calls
+/// binary (a WS5-style header kept as text) reads with WS4's era when told it is WS4.
+@Test func forcedVariantChoosesTheEra() throws {
+    var data: [UInt8] = [0x1D, 0x7D, 0x00, 0x00, 0x80]
+    data += [UInt8](repeating: 0, count: 123)
+    data += Array("Body line one.\r\n".utf8)
+    let doc = try parse(data, variant: .ws4)
+    #expect(doc.detection?.variant == .ws4)
+    let text = doc.blocks.flatMap { $0.lines }.map { $0.text() }.joined()
+    #expect(!text.contains("Ç") && text.contains("Body line one."))
+}

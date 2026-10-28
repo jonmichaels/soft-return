@@ -107,19 +107,19 @@ struct OverprintCompositingTests {
     @Test func oversizedSelfPassesMatchLineExceedsFragment() throws {
         let doc = try Self.lj6dtpDoc
         let metrics = printedMetrics(doc)
-        let fallback = NSFont(name: "Courier", size: CGFloat(metrics.size))
-            ?? NSFont.monospacedSystemFont(ofSize: CGFloat(metrics.size), weight: .regular)
+        // `renderNative`'s own fallback: a span with no font of its own is Courier Prime.
+        let fallback = DocumentRenderer.courierPrime(size: CGFloat(metrics.size))
         let enginePages = docToPagelines(doc, printed: true)
         let state = try Oracle.state(for: OracleByteParityTests.ws7Directory
             .appendingPathComponent("LJ6DTP.WS"))
         let rendered = DocumentRenderer.render(state)
 
-        // `DocumentRenderer.renderNative`'s own `nearZeroLead`/`advanceLead` — a line's
-        // fragment height is the gap BEFORE THE NEXT GROUP, not its own lead.
+        // `DocumentRenderer.renderNative`'s own `nearZeroLead`/`advanceLead` — since job 245 a
+        // group's fragment height is the gap BEFORE the group, from its base line's own lead.
         let nearZeroLead = 0.01
-        func advanceLead(_ page: Page, after i: Int) -> Double {
-            guard i < page.count - 1 else { return metrics.lead }
-            return page[i].overprint ? nearZeroLead : (page[i + 1].lead ?? metrics.lead)
+        func advanceLead(_ page: Page, at i: Int) -> Double {
+            guard i > 0 else { return metrics.lead }
+            return page[i - 1].overprint ? nearZeroLead : (page[i].lead ?? metrics.lead)
         }
 
         var sawAnOversizedBase = false
@@ -131,8 +131,9 @@ struct OverprintCompositingTests {
                 var j = i
                 while page[j].overprint, j + 1 < page.count { j += 1 }
                 let oversized = DocumentRenderer.lineExceedsFragment(
-                    page[i], assignedLead: advanceLead(page, after: j),
-                    fallback: fallback, fonts: doc.fonts, defaultSize: metrics.size)
+                    page[i], assignedLead: advanceLead(page, at: i),
+                    fallback: fallback, fonts: doc.fonts, defaultSize: metrics.size,
+                    useCourierPrime: true)
                 if oversized { sawAnOversizedBase = true }
                 #expect((selfPasses[fragmentIndex] != nil) == oversized, Comment(rawValue:
                         "page \(pageIndex + 1) fragment \(fragmentIndex): self-pass present=" +

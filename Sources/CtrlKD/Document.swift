@@ -568,6 +568,11 @@ public struct RoundtripLedger: Hashable, Sendable {
 /// little state." Once every field parse_ws actually writes is known (core.py:255-325),
 /// that heterogeneity buys nothing in Swift — it only costs every reader a downcast.
 /// So `meta` is gone; each field below is what it actually held, typed.
+/// A footnote / endnote label format `.f#` / `.e#` can ask for: letters, lower or upper case.
+public enum NoteNumberStyle: String, Hashable, Sendable {
+    case lower, upper
+}
+
 public struct Document: Hashable, Sendable {
     public var blocks: [Block]
     /// Numbered 1..n; referenced from the text via `Style.fnref` spans.
@@ -575,6 +580,9 @@ public struct Document: Hashable, Sendable {
     /// The `detect()` result this document was parsed as. `nil` only for documents
     /// built by hand (tests, fixtures) rather than through `parseWS`/`parsePrintstream`.
     public var detection: Detection?
+    /// The release whose printing rules apply (`printingEra`): `.ws5plus` for a WS4 file
+    /// printed by WS7 (`PrintedBy.ws7`), else the file's own. `nil` for a hand-built document.
+    public var printingVariant: Variant?
     /// 90th-percentile wrap margin `linesPass` computed (core.py:267). `nil` for
     /// `parsePrintstream`, which never runs the wrap test — every line there is kept
     /// verbatim (core.py:339).
@@ -624,6 +632,16 @@ public struct Document: Hashable, Sendable {
     public var footnoteNumberStart: Int?
     /// `.E#`'s numeric argument, when present.
     public var endnoteNumberStart: Int?
+    /// The label format `.F#` / `.E#` asked for with a letter argument (`.f# a`, `.f# A`);
+    /// `nil` for a digit or no argument (arabic). Printed output labels the notes in it
+    /// (WS7 report 15.10); Modern keeps its own labels.
+    public var footnoteNumberFormat: NoteNumberStyle?
+    public var endnoteNumberFormat: NoteNumberStyle?
+    /// WS7's "footnote run" setting (default 8, `footnoteRunFactory`): a note that does not
+    /// fit under its reference moves to the next page with its line when fewer than this
+    /// many note lines of room are left, and runs on otherwise. A WSCHANGE setting of the
+    /// program, not of the document, so only a caller sets it (`nil` = factory).
+    public var footnoteRunLines: Int?
     /// Set only by `parsePrintstream`, when the COMMENT.BUG signature (a line ending in
     /// a bare `0x0A` instead of `0x0D 0x0A`) is present.
     public var commentBug: CommentBug?
@@ -835,6 +853,12 @@ public struct Document: Hashable, Sendable {
     /// construction like `pclPrograms`/`headerFonts` above; `false` for every document
     /// not built by `parseWS`. Mirrors Python's `doc.meta['pa_eof_blank_after']`.
     public var paEofBlankAfter: Bool = false
+    /// How many blank lines the document ends with (each ended in a return). The IR keeps
+    /// none of them, but to WS7 each is a text line: it takes its room, and one that no
+    /// longer fits makes a page that carries only its number (WS7 report 14.3, runs pg55b
+    /// and pa3). Read by the Printed paginator. Set by `parseWS`; mirrors Python's
+    /// `doc.meta['eof_blank_lines']`.
+    public var eofBlankLines: Int = 0
 
     public init(
         blocks: [Block] = [],
@@ -853,6 +877,9 @@ public struct Document: Hashable, Sendable {
         spaceAfterLines: Double? = nil,
         footnoteNumberStart: Int? = nil,
         endnoteNumberStart: Int? = nil,
+        footnoteNumberFormat: NoteNumberStyle? = nil,
+        endnoteNumberFormat: NoteNumberStyle? = nil,
+        footnoteRunLines: Int? = nil,
         commentBug: CommentBug? = nil,
         era: String? = nil,
         headers: [Int: String] = [:],
@@ -888,6 +915,9 @@ public struct Document: Hashable, Sendable {
         self.spaceAfterLines = spaceAfterLines
         self.footnoteNumberStart = footnoteNumberStart
         self.endnoteNumberStart = endnoteNumberStart
+        self.footnoteNumberFormat = footnoteNumberFormat
+        self.endnoteNumberFormat = endnoteNumberFormat
+        self.footnoteRunLines = footnoteRunLines
         self.commentBug = commentBug
         self.era = era
         self.headers = headers

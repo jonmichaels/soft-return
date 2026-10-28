@@ -75,9 +75,10 @@ import TestSupport
 
         let doc = parseWS(data)
         let out = emitPDF(doc, mode: .printed)
-        // cp1252 0xa9 == Latin-1 == (c), U+00A9. "(\xa9) Tj"
-        let needle: [UInt8] = [0x28, 0xa9, 0x29, 0x20, 0x54, 0x6a]
-        #expect(contains(out, needle), "expected (\\xa9) Tj in the printed PDF content stream")
+        // Drawn from Symbol at the capture's own code: E3, copyrightsans, for Univers. "(\xe3) Tj"
+        let needle: [UInt8] = [0x28, 0xe3, 0x29, 0x20, 0x54, 0x6a]
+        #expect(contains(out, needle), "expected (\\xe3) Tj in the printed PDF content stream")
+        #expect(contains(out, Array("/BaseFont /Symbol".utf8)), "expected the Symbol font")
     }
 
     @Test(.requiresSawyerArchive)
@@ -96,10 +97,45 @@ import TestSupport
         // .WS side.
         let doc = parseWS(data)
         let out = emitPDF(doc, mode: .printed)
-        // cp1252 0x92 == U+2019 RIGHT SINGLE QUOTATION MARK. "(WordStar\x92s)"
+        // cp1252 0x92 == U+2019 RIGHT SINGLE QUOTATION MARK; LJ6DTP's own W-o pair prints
+        // the word as 'W' + 'ordStar’s'.
         var needle: [UInt8] = [0x28]
-        needle += Array("WordStar".utf8)
+        needle += Array("ordStar".utf8)
         needle += [0x92, 0x73, 0x29]
         #expect(contains(out, needle))
+    }
+
+    /// The `.kr off` / `.kr on` demo lines of LJ6DTP.WS. Port of ctrl-kd's
+    /// `test_lj6dtp_document_kerning_lines_render_differently`'s PDF half.
+    @Test(.requiresSawyerArchive)
+    func kerningOnTucksTheQuotePairAsTwoPieces() throws {
+        let path = Corpus.sawyerArchivePath + "/LJ6DTP.WS"
+        guard let d = FileManager.default.contents(atPath: path) else {
+            throw Corpus.missingSawyerFixture(path: path)
+        }
+        let out = emitPDF(parseWS([UInt8](d)), mode: .printed)
+        // cp1252 single open quotes 0x91. Loose, `.kr off`: the pair prints whole, two
+        // glyphs in one piece. Tight, `.kr on`: the driver's own 60 60 pair (WS7 teardown
+        // 17.4) moves the second quote in, so it starts a piece of its own, tucked against
+        // the first.
+        #expect(contains(out, [0x28, 0x91, 0x91] + Array("These) Tj".utf8)))
+        var latin1 = String.UnicodeScalarView()
+        for b in out { latin1.append(Unicode.Scalar(b)) }
+        let text = String(latin1)
+        let shown = try Self.shownPieces(text)
+        let at = try #require(shown.firstIndex { $0.text == "\u{91}But" })
+        #expect(at > 0 && shown[at - 1].text == "\u{91}", "the tight pair is not two pieces")
+        let gap = shown[at].x - shown[at - 1].x
+        #expect(gap > 0 && gap < 3.0, "the tight pair is not tucked")
+    }
+
+    /// Every `x y Td (text) Tj` of the content, in order.
+    private static func shownPieces(_ text: String) throws -> [(x: Double, text: String)] {
+        let re = try NSRegularExpression(
+            pattern: #"([\d.]+) [\d.]+ Td \(((?:[^()\\]|\\.)*)\) Tj"#)
+        let ns = text as NSString
+        return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).map {
+            (Double(ns.substring(with: $0.range(at: 1)))!, ns.substring(with: $0.range(at: 2)))
+        }
     }
 }

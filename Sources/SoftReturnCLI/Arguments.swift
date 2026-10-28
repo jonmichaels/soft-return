@@ -10,7 +10,8 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 4.6.1 is the v4.6.1 patch: sr runs on macOS 10.15 again (built with Xcode 26.6) and
+/// CLI's user-visible contract. 5.0.0b1 is the first 5.0.0 beta (Mac only): WS7 documents print
+/// through the LaserJet drivers' own widths, kerning and fixed pitch. 4.6.1 is the v4.6.1 patch: sr runs on macOS 10.15 again (built with Xcode 26.6) and
 /// Homebrew builds it on Swift 5.10. 4.6.0 is the v4.6.0 minor release: sr carries ctrl-kd 4.10.1's
 /// one Printed paginator for documents with and without notes, and `-t markdown --pictures
 /// embed` exports the pictures as `-t md` does. 4.3.0 is the v4.3.0 minor release: sr carries ctrl-kd
@@ -144,6 +145,8 @@ public struct Options: Equatable, Sendable {
     /// run that never asked for modern in the first place.
     public var modeExplicit = false
     public var variant: Variant?
+    /// `--printed-by`: which WordStar prints a WS4 file in Printed (`PrintedBy`).
+    public var printedBy: PrintedBy = .own
     public var diagnose = false
     /// Which note kinds an emitter should render — both the inline reference marker and
     /// the trailing note-list entry. Resolved from `--no-notes`/`--comments` at the end of
@@ -166,8 +169,9 @@ public struct Options: Equatable, Sendable {
     /// parsed into `PageSettings`. `nil` when the flag was never given.
     public var pageSettings: PageSettings?
     /// `--note-refs word|prefixed` (ctrl-kd's `--note-refs`, ruling 2026-08-06 M8):
-    /// note reference-mark display in Modern output. See `NoteRefs`.
-    public var noteRefs: NoteRefs = .word
+    /// note reference-mark display in Modern output. See `NoteRefs`. `nil` when the flag was
+    /// never given: Modern then follows the document's `.f#`/`.e#`.
+    public var noteRefs: NoteRefs? = nil
     /// Whether `--comments` itself was given (Python's `a.comments`) — read by the
     /// `--comments` + printed contradiction notice, which keys on the FLAG, not on the
     /// resolved note set (`--no-notes` wins the set but the notice still explains).
@@ -565,6 +569,16 @@ public func parseArguments(
                         + "(choose from \(quotedList(variantChoices)))")
             }
             options.variant = variant
+        case "--printed-by":
+            guard let value = takeValue(flag, attached: attached) else {
+                return .usageError("argument \(flag): expected one argument")
+            }
+            guard let printedBy = PrintedBy(rawValue: value) else {
+                return .usageError(
+                    "argument \(flag): invalid choice: '\(value)' "
+                        + "(choose from \(quotedList(PrintedBy.allCases.map(\.rawValue))))")
+            }
+            options.printedBy = printedBy
         case "--diagnose":
             // A flag takes no value, so `--diagnose=x` is a mistake worth naming rather than
             // silently ignoring.
@@ -699,7 +713,8 @@ public func helpText(registry: EmitterRegistry = .standard) -> String {
 func helpBody(registry: EmitterRegistry = .standard) -> String {
     """
     usage: sr [-h] [--version] [-t FORMAT] [-o FILE] [-d DIR] [--mode MODE]
-              [--variant VARIANT] [--fonts TARGET] [--encoding cp437]
+              [--variant VARIANT] [--printed-by {own,ws7}] [--fonts TARGET]
+              [--encoding cp437]
               [--page-settings PRESET|mt=..,mb=..,po=..] [--force]
               [--headers {on,off}] [--line-numbers {on,off}] [--toc {on,off}]
               [--inline-styling {on,off}] [--pictures {off,embed,export}]
@@ -732,18 +747,27 @@ func helpBody(registry: EmitterRegistry = .standard) -> String {
                             printed (a notice is printed if you asked for modern)
       --variant VARIANT     override detection
                             choices: \(variantChoices.joined(separator: ", "))
+      --printed-by {own,ws7}
+                            which WordStar prints a WS4 file in printed mode:
+                            own (WordStar 4: page number at column 28, its own
+                            page breaks; the default) or ws7 (as WordStar 7
+                            prints the same file). A WS5+ file is always
+                            printed as WordStar 7 prints it
       --fonts TARGET        RTF font-name target: mac (Cocoa-native, the
                             DEFAULT -- sr is the Mac tool; note ctrl-kd
                             defaults to office instead), office (Word/Docs),
                             google (Docs catalog), linux (URW base-35)
       --note-refs SCHEME    note reference-mark display in Modern output.
-                            "word" (default): the Word standard -- arabic
-                            footnotes, lowercase-roman endnotes, WordStar
-                            tags for annotations. "prefixed": footnotes 1 2
-                            3, endnotes e1 e2, annotations a1 a2 -- the same
+                            "word": the Word standard -- arabic footnotes,
+                            lowercase-roman endnotes, WordStar tags for
+                            annotations. "prefixed": footnotes 1 2 3,
+                            endnotes e1 e2, annotations a1 a2 -- the same
                             labels the markdown output always uses, matched
-                            across formats. Printed output is a facsimile
-                            and ignores this.
+                            across formats. Either one overrides the
+                            document's own .f#/.e# letter format. Without
+                            this flag, Modern follows the document's .f#/.e#
+                            and is otherwise "word". Printed output is a
+                            facsimile and ignores this.
       --page-settings P     page geometry for everything the document does not
                             declare itself (its own dot commands always win).
                             Presets: "default" (WordStar factory: mt 0.5in,

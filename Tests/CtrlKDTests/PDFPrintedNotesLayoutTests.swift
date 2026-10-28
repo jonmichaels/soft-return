@@ -197,18 +197,16 @@ private func manyWords(_ n: Int) -> String {
     #expect(texts.count == 2, "expected 2 pages, got \(texts.count)")
     guard texts.count == 2 else { return }
 
-    // Page 1: the area grown to the terminal ceiling (54), but its header only draws 2 of
-    // its 3 budgeted lines -- 1 body line + 53 rendered area lines = 54 physical lines,
-    // ONE short of the ceiling itself (was 55, the ceiling exactly, before mechanism U).
-    #expect(texts[0].count == 54, "page 1 holds \(texts[0].count) lines, expected 54")
+    // Page 1: the note runs (WS7 report 14.15): the room after the reference line is 54,
+    // the first part is that less four -- 50 note lines -- and the area, 2 drawn header
+    // lines plus those 50, sits under the one body line: 53 physical lines.
+    #expect(texts[0].count == 53, "page 1 holds \(texts[0].count) lines, expected 53")
 
-    // Page 2, the trailing top-of-page area: the SAME 2-line header as everywhere else
-    // (20-dash rule / blank), then the continuation marker and the rest.
+    // Page 2, the trailing top-of-page area: separator, the continuation marker directly
+    // under it, then a blank and the rest (WS7 report 14.15).
     let dashes = String(repeating: "-", count: 20)
-    #expect(Array(texts[1].prefix(2)) == [dashes, ""],
-            "trailing area header must be rule/blank, got \(Array(texts[1].prefix(2)))")
-    #expect(texts[1].count > 2 && texts[1][2] == "...Continued...",
-            "the resumed note leads with its continuation marker")
+    #expect(Array(texts[1].prefix(3)) == [dashes, "...Continued...", ""],
+            "trailing area header must be rule/Continued/blank, got \(Array(texts[1].prefix(3)))")
 
     // No text lost across the split.
     let all = texts.flatMap { $0 }.joined(separator: " ")
@@ -235,7 +233,11 @@ private func manyWords(_ n: Int) -> String {
 // defers WHOLE to page 2's area. The old projected check computed 24+1+32 = 57 > 55 and
 // broke the page first — page 1 ended at 50 lines with the reference line overleaf.
 @Test func referenceLineIsAdmittedWhileItsNotesSplitAcrossThePageBoundary() {
+    // The footnote-run setting is 5 here: the 5 lines of room left under the divergent line
+    // are enough to run its notes. At the factory 8 the line moves with them
+    // (`aReferenceLineWithTooLittleRoomMovesWithItsNotes`).
     var doc = Document()
+    doc.footnoteRunLines = 5
     doc.notes = (1...15).map {
         Note(kind: .annotation, text: "note \($0)", tag: "T\($0)", offset: $0 * 100)
     }
@@ -283,6 +285,32 @@ private func manyWords(_ n: Int) -> String {
     #expect(texts[1].first == "After")
     #expect(texts[1].contains("T15  note 15"), "the deferred note lands in page 2's area")
     #expect(texts[1].count == 4, "page 2 is 1 body line + the 3-line rendered area, got \(texts[1].count)")
+}
+
+/// The same document at the factory `fnrun` of 8: five lines of room is under it, so the
+/// reference line and its three notes move to page 2 together (WS7 report 14.8, 14.15).
+@Test func aReferenceLineWithTooLittleRoomMovesWithItsNotes() {
+    var doc = Document()
+    doc.notes = (1...15).map {
+        Note(kind: .annotation, text: "note \($0)", tag: "T\($0)", offset: $0 * 100)
+    }
+    var lines: [Line] = []
+    lines.append(Line(spans: [Span(text: "Line 1")]
+        + (1...12).map { Span(text: "\($0)", styles: [.sup, .fnref]) }))
+    for k in 2...24 {
+        lines.append(Line(spans: [Span(text: "Line \(k)")]))
+    }
+    lines.append(Line(spans: [Span(text: "Tail")]
+        + (13...15).map { Span(text: "\($0)", styles: [.sup, .fnref]) }))
+    lines.append(Line(spans: [Span(text: "After")]))
+    doc.blocks = [Block(kind: .para, lines: lines)]
+
+    let texts = docToPagelines(doc, printed: true).map { $0.map { $0.map(\.text).joined() } }
+    #expect(texts.count == 2)
+    guard texts.count == 2 else { return }
+    #expect(!texts[0].contains { $0.hasPrefix("Tail") }, "the reference line leaves page 1")
+    #expect(texts[1].first?.hasPrefix("Tail") == true, "...and opens page 2")
+    #expect(texts[1].contains("T15  note 15"), "with its notes")
 }
 
 /// Printed layout must use the SAME label rule as the flat emitters. It once had its own

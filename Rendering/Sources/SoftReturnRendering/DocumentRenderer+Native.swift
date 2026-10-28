@@ -248,7 +248,9 @@ extension DocumentRenderer {
         let nearZeroLead: Double = 0.01
         func advanceLead(_ page: Page, at i: Int) -> Double {
             guard i > 0 else { return metrics.lead }   // first line on page: cosmetic
-            return page[i - 1].overprint ? nearZeroLead : (page[i].lead ?? metrics.lead)
+            if page[i - 1].overprint { return nearZeroLead }
+            // HPLJET steps by the lead in force on the line ABOVE (`pageStream`'s `prevLead`).
+            return hpljet ? (page[i - 1].lead ?? metrics.lead) : (page[i].lead ?? metrics.lead)
         }
         /// This line's OWN height, as against `advanceLead`'s gap from the line before it.
         ///
@@ -302,6 +304,10 @@ extension DocumentRenderer {
         // #271 M1: the `.sr` roll Printed moves a superscript or subscript by when a line carries
         // none of its own — the engine's `printedRollPt`, `(subSuperRoll48 ?? 3) × 1.5` points.
         let documentRoll = (doc.formatting.subSuperRoll48 ?? 3.0) * 1.5
+        // WS4's HPLJET (`Era.hpljetDriver`, a WS4 file printed by WS4): line 1 its vbias
+        // below the top margin, each line a step of the lead of the line above, scripts in
+        // the line's own font and cell (WS4 teardown 4 §15.2, the engine's `pageStream`).
+        let hpljet = printingEra(doc).hpljetDriver
         func lineAndTerminator(_ line: PageLine, lead: Double) -> NSAttributedString {
             let extraLeftPt = (line.left ?? metrics.left) - printedLeftAnchor
             let paragraph = paragraphStyle(lead: lead, extraLeftPt: extraLeftPt)
@@ -318,21 +324,24 @@ extension DocumentRenderer {
                     state.pixResults, index: image.pixIndex,
                     widthPt: image.widthPt, heightPt: image.heightPt, paragraph: paragraph,
                     descentClearancePt: Self.nativePixDescentPt(metrics.size)))
-                piece.append(lineTerminator(font: courier(size: CGFloat(metrics.size)),
+                piece.append(lineTerminator(font: courierPrime(size: CGFloat(metrics.size)),
                                             paragraph: paragraph))
                 return piece
             }
+            let linePieces = nativeLinePieces(line, fonts: doc.fonts)
             let piece = NSMutableAttributedString(attributedString: nativePinJustifiedWords(
                 nativePinGraphicCells(
                     attributedLine(
-                        coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
+                        coalesce(line).spans, font: courierPrime(size: CGFloat(metrics.size)),
                         paragraph: paragraph, fonts: doc.fonts, defaultSize: metrics.size,
                         colourMap: colourMap, disableKerning: true, useCourierPrime: true,
-                        nativeSupSub: true, nativeRoll: line.roll ?? documentRoll,
-                        nativePMActive: line.pmActive, nativeKerning: line.kerning),
-                    placements: line.graphicCells ?? []),
-                pieces: line.justifyWordX ?? []))
-            piece.append(lineTerminator(font: courier(size: CGFloat(metrics.size)),
+                        nativeSupSub: true, nativeFullScripts: hpljet,
+                        nativeRoll: line.roll ?? documentRoll,
+                        nativePMActive: line.pmActive, nativeKerning: nativeQuoteKerning(line),
+                        nativeFace: line.face),
+                    placements: nativeLineGraphicCells(line).cells),
+                pieces: linePieces.pieces, scaleBeyond: linePieces.scaleBeyond))
+            piece.append(lineTerminator(font: courierPrime(size: CGFloat(metrics.size)),
                                         paragraph: paragraph))
             return piece
         }
@@ -387,10 +396,10 @@ extension DocumentRenderer {
         // Job 427: hoisted from below `pages.enumerated()` (was computed once, after the
         // loop, from `metrics` alone) — needed INSIDE the loop now to build
         // `perPageTextTop` per page. Safe to move: every input (`metrics.size`/`.lead`/
-        // `.pageWidth`/`.left`, `courier(size:)`, `paragraphStyle(lead:)`) is document-
+        // `.pageWidth`/`.left`, `courierPrime(size:)`, `paragraphStyle(lead:)`) is document-
         // global, none of them a function of any one page's own content or margin.
         let normalBaselineOffset = firstBaselineOffset(
-            font: courier(size: CGFloat(metrics.size)),
+            font: courierPrime(size: CGFloat(metrics.size)),
             paragraph: paragraphStyle(lead: metrics.lead),
             width: max(1, metrics.pageWidth - metrics.left))
         // Job 427: also hoisted (was computed once, after the loop, alongside
@@ -463,12 +472,20 @@ extension DocumentRenderer {
         // correct, see its own job 246 doc comment) alignment chasing a wrong number.
         // `naturalPass` below already establishes the fix for a chain's BASE line; this
         // is the identical fix for every OTHER member of the chain.
+        // Pinned like a base line (`lineAndTerminator`): its cells and words at the engine's
+        // own x, so a flush-right half of a bar meets the other half instead of running on.
         func overprintPass(_ line: PageLine) -> NSAttributedString {
-            attributedLine(coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
-                           paragraph: naturalParagraphStyle(), fonts: doc.fonts,
-                           defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
-                           useCourierPrime: true, nativeSupSub: true, nativeRoll: line.roll ?? documentRoll,
-                           nativePMActive: line.pmActive, nativeKerning: line.kerning)
+            let linePieces = nativeLinePieces(line, fonts: doc.fonts)
+            return nativePinJustifiedWords(nativePinGraphicCells(
+                attributedLine(coalesce(line).spans, font: courierPrime(size: CGFloat(metrics.size)),
+                               paragraph: naturalParagraphStyle(), fonts: doc.fonts,
+                               defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
+                               useCourierPrime: true, nativeSupSub: true, nativeFullScripts: hpljet,
+                               nativeRoll: line.roll ?? documentRoll,
+                               nativePMActive: line.pmActive, nativeKerning: nativeQuoteKerning(line),
+                               nativeFace: line.face),
+                placements: nativeLineGraphicCells(line).cells),
+                pieces: linePieces.pieces, scaleBeyond: linePieces.scaleBeyond)
         }
         // Job 227: LJ6DTP.WS's 72pt "LJ6DTP" banner title, immediately followed by its own
         // `.lh .05"` (3.6pt) shadow copy — the reference archive document `PDFWriter
@@ -518,11 +535,13 @@ extension DocumentRenderer {
                     paragraph: naturalParagraphStyle(), reservedLeadPt: reservedLead,
                     descentClearancePt: Self.nativePixDescentPt(metrics.size))
             }
-            return attributedLine(coalesce(line).spans, font: courier(size: CGFloat(metrics.size)),
+            return attributedLine(coalesce(line).spans, font: courierPrime(size: CGFloat(metrics.size)),
                            paragraph: naturalParagraphStyle(), fonts: doc.fonts,
                            defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
-                           useCourierPrime: true, nativeSupSub: true, nativeRoll: line.roll ?? documentRoll,
-                           nativePMActive: line.pmActive, nativeKerning: line.kerning)
+                           useCourierPrime: true, nativeSupSub: true, nativeFullScripts: hpljet,
+                           nativeRoll: line.roll ?? documentRoll,
+                           nativePMActive: line.pmActive, nativeKerning: nativeQuoteKerning(line),
+                           nativeFace: line.face)
         }
         // Job 225: this function no longer tries to make each page's own block of lines
         // RENDER to any particular height — it emits page N's own real lines and nothing
@@ -565,7 +584,8 @@ extension DocumentRenderer {
             // above. `page.first?.lead` (not `pages[index].first?.lead` re-derived) since
             // `page` IS `pages[index]`, the loop's own element. `pageTop`, not `metrics.top`
             // (job 427) — see this loop's own citation just above.
-            let pageFirstBaseline = pageTop + (page.first?.lead ?? metrics.lead)
+            let pageFirstBaseline = pageTop
+                + (hpljet ? PDFMetrics.hpljetVbiasPt : (page.first?.lead ?? metrics.lead))
             perPageFirstBaselines.append(pageFirstBaseline)
             // Job 427: `textTop` (the document-global anchor, unchanged) PLUS the delta a
             // genuine per-page `.mt`/`.mb` override introduces (`pageTop - metrics.top`,
@@ -646,7 +666,10 @@ extension DocumentRenderer {
                 // runs through any title and blank the sheet opened with. Every later column
                 // starts where the `.co` region starts on this sheet, `columnTopOffsetPt` below
                 // the top (layout version 8), which is where real WS7 puts it.
-                let columnFirstLead = flowPage.first?.lead ?? metrics.lead
+                // HPLJET puts line 1 its vbias below the top margin whatever its lead (the
+                // engine's `pageStream`); WS4 has no `.co`, so column 0 is the only column.
+                let columnFirstLead = hpljet ? PDFMetrics.hpljetVbiasPt
+                    : (flowPage.first?.lead ?? metrics.lead)
                 let columnStart = column > 0 ? (page.columnTopOffsetPt ?? 0) : 0
                 let columnFirstBaseline = pageTop + columnStart + columnFirstLead
                 // COUNTED HERE, not off the model. `pageColumnFragmentCounts` slices this
@@ -681,7 +704,7 @@ extension DocumentRenderer {
                     // The fragment still costs the SAME `lead` either way, so pagination and
                     // every line after it are unaffected; only what's drawn here changes.
                     let oversized = Self.lineExceedsFragment(
-                        base, assignedLead: lead, fallback: courier(size: CGFloat(metrics.size)),
+                        base, assignedLead: lead, fallback: courierPrime(size: CGFloat(metrics.size)),
                         fonts: doc.fonts, defaultSize: metrics.size, useCourierPrime: true)
                     let content = oversized ? PageLine([], soft: base.soft) : base
                     // Job 269 (title-stack spacing): an oversized SELF-PASS fragment never
@@ -740,7 +763,7 @@ extension DocumentRenderer {
                     // fragment's own TRUE grid position, which every LATER line's own
                     // accumulation and `pinnedPageBottoms` both still need untouched).
                     let compensation = Self.firstGlyphRaiseCompensation(
-                        content, fallback: courier(size: CGFloat(metrics.size)), fonts: doc.fonts,
+                        content, fallback: courierPrime(size: CGFloat(metrics.size)), fonts: doc.fonts,
                         defaultSize: metrics.size, useCourierPrime: true)
                     pinnedBaselines[pageStartOffset + pageChunk.length] = PinnedBaseline(
                         page: index, column: column, y: engineY + compensation, k: k,
@@ -762,19 +785,40 @@ extension DocumentRenderer {
                     selfPasses.append(oversized
                         ? naturalPass(base, reservedLead: base.lead ?? (base.image?.heightPt ?? metrics.lead))
                         : nil)
-                    graphicRows.append(base.graphicCells ?? [])
+                    let (rowCells, rowBars) = nativeLineGraphicCells(base)
+                    graphicRows.append(rowCells)
                     if let label = base.lineNo {
                         // Plain Courier at the document's own size — the engine's gutter is
                         // its own fallback face, never a `.f#` font block, and `x` arrives
                         // already right-aligned to `PDFMetrics.lineNoRightPt`.
                         numberPasses.append(ColumnPass(
                             text: NSAttributedString(string: label.text, attributes: [
-                                .font: courier(size: CGFloat(metrics.size)),
+                                .font: courierPrime(size: CGFloat(metrics.size)),
                                 .foregroundColor: NSColor.black,
                                 .kern: nativeNoKerning,
                                 .ligature: nativeNoLigatures,
                             ]),
-                            xPt: label.x, baselineY: engineY))
+                            xPt: label.x, baselineY: engineY,
+                            bars: rowBars.map {
+                                graphicCell($0.char, x0: $0.x, baselineY: engineY,
+                                            pt: Double(metrics.size), pitch: $0.width,
+                                            color: 0, patternIndex: nil)
+                            }))
+                    }
+                    // WS4's HPLJET prints a COMPOS pair's second character over the first
+                    // (`PageLine.overstrike`, the engine's `pageStream`), in the line's face.
+                    for over in base.overstrike {
+                        let overFont = base.face.flatMap {
+                            nativeFaceMacFont($0, bold: $0.bold, italic: false)
+                        } ?? courierPrime(size: CGFloat(metrics.size))
+                        numberPasses.append(ColumnPass(
+                            text: NSAttributedString(string: over.char, attributes: [
+                                .font: overFont,
+                                .foregroundColor: NSColor.black,
+                                .kern: nativeNoKerning,
+                                .ligature: nativeNoLigatures,
+                            ]),
+                            xPt: over.x, baselineY: engineY))
                     }
                     i = j + 1
                 }
@@ -909,8 +953,15 @@ extension DocumentRenderer {
                 pageTextTops[index] = max(0, pageTextTops[index] + flowTopAdjustment)
             }
         }
+        // The engine lays a Printed page out in the LaserJet's own frame and places it on the
+        // sheet at the logical page, 1/4" in on Letter (`logicalPageX`); the text frame
+        // carries the document's own placement, so every engine x lands where Printed's does.
+        // The width is left as it was: a line runs past the sheet's edge exactly as far as the
+        // PDF's does.
+        let documentLogicalX = logicalPageX(doc, orientation: printedPageOrientation(doc, nil),
+                                            sheetWidth: Int(metrics.pageWidth.rounded()))
         let textFrame = CGRect(
-            x: printedLeftAnchor,
+            x: printedLeftAnchor + documentLogicalX,
             y: max(0, textTop + flowTopAdjustment),
             width: max(1, metrics.pageWidth - printedLeftAnchor),
             height: CGFloat(capacity) * metrics.lead - flowTopAdjustment
@@ -957,6 +1008,12 @@ extension DocumentRenderer {
         // A hand-picked Page Size is the paper for every page; a page the engine turned keeps its turn on that paper.
         let documentLandscape = metrics.pageWidth > metrics.pageHeight
         let manualPaper = state.pageSize.provenance == .manual && state.pageSize.value != nil
+        rendered.documentLogicalPageX = documentLogicalX
+        rendered.perPageLogicalX = pages.prefix(max(1, renderedPageCount)).enumerated().map { index, page in
+            let sheetWidth = work.sheets.indices.contains(index) ? work.sheets[index].width : metrics.pageWidth
+            return logicalPageX(doc, orientation: printedPageOrientation(doc, page),
+                                sheetWidth: Int(sheetWidth.rounded()))
+        }
         rendered.perPageSize = work.sheets.prefix(max(1, renderedPageCount)).map { sheet in
             guard manualPaper else { return sheet }
             guard (sheet.width > sheet.height) != documentLandscape else { return pageSize }

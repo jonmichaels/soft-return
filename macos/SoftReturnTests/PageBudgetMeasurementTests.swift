@@ -53,9 +53,16 @@ private func measurePageBudget(_ url: URL) throws -> (
     // And the BUDGET is the sum of those lines' own leads, for the same reason. A flat
     // `capacity * lead` is only the right number for a document whose lines all sit at the
     // document default.
+    //
+    // Under WS4's HPLJET line 1 sits its vbias below the top margin and each later line steps
+    // by the lead of the line above, so the last baseline is the vbias plus every lead but the
+    // last line's (the same rule `onePagesTextFitsTheLibrarysPageBudget` keeps).
+    let leads = enginePageOne.map { $0.lead ?? metrics.lead }
     let budget = enginePageOne.isEmpty
         ? CGFloat(metrics.capacity) * CGFloat(metrics.lead)
-        : CGFloat(enginePageOne.reduce(0.0) { $0 + ($1.lead ?? metrics.lead) })
+        : printingEra(state.document).hpljetDriver
+            ? CGFloat(PDFMetrics.hpljetVbiasPt + leads.dropLast().reduce(0, +))
+            : CGFloat(leads.reduce(0, +))
 
     // MEASURE THE PAGE THE APP ACTUALLY DRAWS, not a re-layout of a text slice.
     //

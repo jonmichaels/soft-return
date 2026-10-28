@@ -47,8 +47,10 @@ public enum PCLOp: Hashable, Sendable {
 }
 
 /// HP LaserJet's own logical-page registration — port of `CtrlKD`'s identically-named,
-/// identically-valued constants (`PDFDriverLJ6DTP.swift`, both `internal` there).
-private let pclAbsXOffsetUnits = 75
+/// identically-valued constants (`PDFDriverLJ6DTP.swift`, both `internal` there). The 75 units
+/// it once held are the logical-page offset every page now carries whole, so raw PCL and the
+/// text share one frame.
+private let pclAbsXOffsetUnits = 0
 private let pclAbsYOffsetUnits = 0
 /// PCL unit (1/300in) -> point, exact.
 private let pclUnitPt = 72.0 / 300.0

@@ -199,7 +199,18 @@ public struct GraphicRect {
     /// caller to have set one first — job-489 centralised this here so every one of this
     /// file's several draw call sites (`PagedDocumentView.swift`) automatically gets pattern
     /// support with no per-call-site branching.
-    public func fill() {
+    public func fill() { fill(patternAnchor: nil) }
+
+    /// `patternAnchor`: the page's bottom-left corner in the coordinates being drawn in. An HP
+    /// pattern is a PDF tiling pattern, tiled from the page's own origin, so its hatch lines
+    /// sit at the same places on the sheet whichever line draws it; `NSColor(patternImage:)`
+    /// tiles from the window instead, and LJ6DTP p5's HP5 grid came out a line out of step.
+    /// With an anchor the hatch is stroked from it; without one it falls back to the tile.
+    public func fill(patternAnchor: CGPoint?) {
+        if let pattern, let patternAnchor, case .rect(let rect) = shape {
+            LJ6DTPPattern.stroke(pattern, in: rect, anchor: patternAnchor)
+            return
+        }
         if let pattern {
             NSColor(patternImage: LJ6DTPPattern.tileImage(for: pattern)).setFill()
         } else {
@@ -251,6 +262,42 @@ public enum LJ6DTPPattern: Sendable {
                                           (CGPoint(x: 0, y: 4), CGPoint(x: 4, y: 0), 0.7)]),             // HP6 dense X
     ]
     nonisolated(unsafe) private static var cache: [Int: NSImage] = [:]
+
+    /// Pattern `index` over `rect`, its tiles counted from `anchor` (the page's bottom-left,
+    /// pattern space's origin) up and to the right, in a flipped view: each tile's strokes,
+    /// clipped to the rect, on whatever is beneath, as the engine's pattern paints no ground.
+    public static func stroke(_ index: Int, in rect: CGRect, anchor: CGPoint) {
+        guard let spec = specs[index], rect.width > 0, rect.height > 0 else { return }
+        #if canImport(AppKit)
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        #else
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        #endif
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.clip(to: rect)
+        NSColor.black.setStroke()
+        // Tile (i, j) sits at x = anchor.x + i*w, and its pattern-space y runs up from
+        // anchor.y - j*h; a stroke a little past a tile's edge is caught by the clip.
+        let firstI = Int(floor((rect.minX - anchor.x) / spec.w)) - 1
+        let lastI = Int(ceil((rect.maxX - anchor.x) / spec.w)) + 1
+        let firstJ = Int(floor((anchor.y - rect.maxY) / spec.h)) - 1
+        let lastJ = Int(ceil((anchor.y - rect.minY) / spec.h)) + 1
+        guard lastI - firstI < 4000, lastJ - firstJ < 4000 else { return }
+        for line in spec.lines {
+            let path = NSBezierPath()
+            path.lineWidth = line.width
+            for i in firstI...lastI {
+                for j in firstJ...lastJ {
+                    let x0 = anchor.x + CGFloat(i) * spec.w
+                    let y0 = anchor.y - CGFloat(j) * spec.h
+                    path.move(to: CGPoint(x: x0 + line.from.x, y: y0 - line.from.y))
+                    path.line(to: CGPoint(x: x0 + line.to.x, y: y0 - line.to.y))
+                }
+            }
+            path.stroke()
+        }
+    }
 
     public static func tileImage(for index: Int) -> NSImage {
         if let cached = cache[index] { return cached }
@@ -539,9 +586,11 @@ public func graphicCell(
         }
         for shape in shapes { addSymbolShape(shape, gray: color, pattern: colorPattern) }
     } else if ch == fullBlockChar {
-        addRect(x0, cellTop, pitch, cellHeight, gray: color, pattern: colorPattern)
+        // Half a point past each side: the next cell's erase lands on this one's edge, and a
+        // run of blocks would otherwise show a hairline seam at every cell boundary.
+        addRect(x0 - 0.5, cellTop, pitch + 1, cellHeight, gray: color, pattern: colorPattern)
     } else if let gray = shadeGray[ch] {
-        addRect(x0, cellTop, pitch, cellHeight, gray: gray)
+        addRect(x0 - 0.5, cellTop, pitch + 1, cellHeight, gray: gray)
     } else if let frac = partBlocks[ch] {
         if squarePartBlocks.contains(ch) {
             // Same cell-center-relative, single-scale mapping as the `symbolShapes` rect
@@ -684,6 +733,11 @@ public func graphicCells(
     var placementIndex = 0
     let text = storage.string as NSString
     let lineEnd = glyphRange.location + glyphRange.length
+    // The cell before, for a run's last glyph, which has no next glyph to measure to.
+    var previous: (glyph: Int, pitch: Double)?
+    // The block run the last cell belongs to, for joining the next cell to it.
+    var openRun: (glyph: Int, char: Character, pt: Double, baselineY: CGFloat, color: Double,
+                  pattern: Int?, endX: Double)?
     var g = glyphRange.location
     while g < lineEnd {
         defer { g += 1 }
@@ -702,9 +756,21 @@ public func graphicCells(
         let pt = Double(font.pointSize)
         let loc = manager.location(forGlyphAt: g)
         let fragmentX0 = fragment.origin.x + loc.x
-        let baselineY = fragment.origin.y + loc.y
+        // A superscript or subscript rolls the carriage for a block as for a letter: the cell
+        // moves with its run's drawing rise, as its glyph does (`drawTextGlyphs`).
+        let rise = (attrs[.nativeScriptRise] as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0
+        let baselineY = fragment.origin.y + loc.y - rise
         var pitch = Double(graphicAdvance(manager: manager, glyphIndex: g, lineEnd: lineEnd,
-                                          fallback: font.maximumAdvancement.width))
+                                          fallback: -1))
+        if pitch < 0 {
+            if let previous, previous.glyph == g - 1 {
+                pitch = previous.pitch
+            } else {
+                pitch = Double(font.maximumAdvancement.width)
+            }
+        }
+        previous = (g, pitch)
+        let glyphPitch = pitch
         var x0 = fragmentX0
         // THE MODEL RECORDS A GRAPHIC RUN'S INTERIOR SPACES AS CELLS; this walk paints only
         // the graphic characters. Matching the two lists position for position therefore goes
@@ -746,8 +812,31 @@ public func graphicCells(
         let color = patternIndex != nil ? 0.5 : ((attrs[.foregroundColor] as? NSColor)?
             .usingColorSpace(.deviceGray)?.whiteComponent ?? 0)
 
-        cells.append(graphicCell(ch, x0: x0, baselineY: baselineY, pt: pt, pitch: pitch,
-                                 color: color, patternIndex: patternIndex))
+        var cell = graphicCell(ch, x0: x0, baselineY: baselineY, pt: pt, pitch: pitch,
+                               color: color, patternIndex: patternIndex)
+        // The glyph underneath is erased where it was laid out too: a cell placed at the
+        // engine's x away from its own glyph would otherwise leave the glyph showing beside it.
+        if abs(x0 - fragmentX0) > 0.01 {
+            let glyphFrame = CGRect(x: fragmentX0, y: cell.eraseFrame.minY, width: glyphPitch,
+                                    height: cell.eraseFrame.height)
+            cell = GraphicCell(eraseFrame: cell.eraseFrame.union(glyphFrame), fills: cell.fills)
+        }
+        // A run of the same block is one rectangle, as the engine draws it (`graphicOps`): the
+        // cell joins the one before when it is the same block, in the same size and colour, at
+        // the next pitch.
+        let joins = ch == fullBlockChar || shadeGray[ch] != nil
+        if joins, let open = openRun, open.glyph == g - 1, open.char == ch, open.pt == pt,
+           open.baselineY == baselineY, open.color == color, open.pattern == patternIndex,
+           abs(open.endX - x0) < 0.5, let last = cells.last, last.fills.count == 1, cell.fills.count == 1 {
+            let fill = last.fills[0]
+            let joined = GraphicRect(shape: .rect(fill.frame.union(cell.fills[0].frame)),
+                                     gray: fill.gray, pattern: fill.pattern)
+            cells[cells.count - 1] = GraphicCell(eraseFrame: last.eraseFrame.union(cell.eraseFrame), fills: [joined])
+        } else {
+            cells.append(cell)
+        }
+        openRun = joins ? (glyph: g, char: ch, pt: pt, baselineY: baselineY, color: Double(color),
+                           pattern: patternIndex, endX: x0 + pitch) : nil
     }
     return cells
 }
@@ -872,8 +961,17 @@ public final class ScriptRiseLayoutManager: NSLayoutManager {
         // relative to its line fragment's origin, and so is the baseline.
         let lastGlyph = NSMaxRange(inked) - 1
         let left = lineFragmentRect(forGlyphAt: inked.location, effectiveRange: nil).minX + location(forGlyphAt: inked.location).x
-        let right = lineFragmentRect(forGlyphAt: lastGlyph, effectiveRange: nil).minX + location(forGlyphAt: lastGlyph).x
+        var right = lineFragmentRect(forGlyphAt: lastGlyph, effectiveRange: nil).minX + location(forGlyphAt: lastGlyph).x
             + ownAdvance(ofGlyph: lastGlyph)
+        // A word the driver placed in pieces is several attribute runs, each underlined alone; the kern after a
+        // run's last glyph belongs to neither, and a link's rule broke at every split (LJ6DTP p8's "s|fwriter").
+        // When the next glyph on the line is underlined too, the rule runs on to where it is set.
+        let next = NSMaxRange(glyphRange)
+        if lastGlyph == next - 1, next < NSMaxRange(lineGlyphRange),
+           let storage = textStorage, characterIndexForGlyph(at: next) < storage.length,
+           ((storage.attribute(.underlineStyle, at: characterIndexForGlyph(at: next), effectiveRange: nil) as? Int) ?? 0) != 0 {
+            right = max(right, lineFragmentRect(forGlyphAt: next, effectiveRange: nil).minX + location(forGlyphAt: next).x)
+        }
         let extent = CGRect(x: left, y: 0, width: max(0, right - left), height: 0)
         let baseline = lineRect.minY + location(forGlyphAt: inked.location).y
         let characterIndex = characterIndexForGlyph(at: inked.location)
@@ -983,8 +1081,37 @@ public final class ScriptRiseLayoutManager: NSLayoutManager {
         }
     }
 
-    /// The glyphs as laid out, a script rise moving a run's drawing.
+    /// Whether a character Native draws as a vector cell (`graphicCells`) also draws its glyph.
+    /// Native's views turn it off: the cell is the character, and the glyph under it only
+    /// leaves ink the cell does not cover (Courier Prime's █ reaches a point below the cell,
+    /// a gray edge under every bar). Modern keeps its glyphs.
+    public var drawsGraphicGlyphs = true
+
+    /// The glyphs as laid out, less the vector-drawn ones when `drawsGraphicGlyphs` is off.
     private func drawTextGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+        guard glyphsToShow.length > 0, let storage = textStorage else { return }
+        guard !drawsGraphicGlyphs else {
+            drawRisenGlyphs(forGlyphRange: glyphsToShow, at: origin)
+            return
+        }
+        let text = storage.string as NSString
+        var start = glyphsToShow.location
+        for glyph in glyphsToShow.location..<NSMaxRange(glyphsToShow) {
+            let character = characterIndexForGlyph(at: glyph)
+            guard character < text.length, let scalar = Unicode.Scalar(text.character(at: character)),
+                  nativeGeometryChars.contains(Character(scalar)) else { continue }
+            if glyph > start {
+                drawRisenGlyphs(forGlyphRange: NSRange(location: start, length: glyph - start), at: origin)
+            }
+            start = glyph + 1
+        }
+        if start < NSMaxRange(glyphsToShow) {
+            drawRisenGlyphs(forGlyphRange: NSRange(location: start, length: NSMaxRange(glyphsToShow) - start), at: origin)
+        }
+    }
+
+    /// The glyphs as laid out, a script rise moving a run's drawing.
+    private func drawRisenGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
         guard glyphsToShow.length > 0, let storage = textStorage else { return }
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         var risen = false

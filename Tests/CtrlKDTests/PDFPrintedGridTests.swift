@@ -5,6 +5,7 @@
 /// printed PDF must honour the file's own layout arithmetic — `.lh` as running state
 /// (vertical), the font blocks' HMI advances (horizontal), and `Tz` width-matching so a
 /// proportional face lands on that horizontal grid.
+import Foundation
 import Testing
 @testable import CtrlKD
 
@@ -168,13 +169,12 @@ import Testing
     #expect(b.x == tenth(left + 2 * 72.0))        // 2 chars x 1800 HMI
 }
 
-@Test func tzMatchesAProportionalSpanToTheHMIGrid() {
-    // A genuinely proportional font block (ctrl-kd round 9: proportional=true is what
-    // puts a span on this path at all -- see `pdfFamily`) is scaled by a FACE-CONSTANT
-    // Tz: one percentage per (face, pitch, size), chosen so the face's AVERAGE lowercase
-    // character lands on the document's own HMI grid (`faceTz`) -- not a per-span exact
-    // match, which would crush a short, wide-glyphed span. The percentage is computed,
-    // never tabulated here.
+@Test func aLaserJetWordIsDrawnToTheWidthItHadOnPaper() {
+    // WS7's LASERJET driver places a proportional font's words (LaserJet.swift); the
+    // base-14 stand-in is then scaled (Tz) so each word occupies exactly the width the
+    // driver gave it, neither running into the next word nor leaving it a wider gap. A
+    // document last printed through LJ6DTP is placed by that driver's own tables the same
+    // way. Port of ctrl-kd's `test_a_laserjet_word_is_drawn_to_the_width_it_had_on_paper`.
     let helv = helvTypestyle()
     // staged: 6.2.4's type-checker times out on the one-expression form
     // 0x8000: the proportional bit -- a real 'Helv' record IS proportional, and that
@@ -183,30 +183,21 @@ import Testing
     data += bytes("Prose padding so the detector reads this as a document, plainly.") + HARD
     data += fontBlock(helv, points: 12.0, styleBits: 0x8000, width: 180) + bytes("AAAA") + HARD
     data += bytes("A closing line of ordinary prose keeps the byte ratio honest.") + HARD
-    let doc = parseWS(data)
-    let spans = contentSpans(emitPDF(doc, mode: .printed))
-    let span = try! #require(spans.first { $0.text == "AAAA" })
-    // FIX (planning #199, Test-Truth-Audit-2026-09-05 section 2(i)): the original version's
-    // "expected" was `faceTz("Helvetica", 180.0/25.0, 12)` -- the EXACT function
-    // `PDFWriter.swift:1051` calls to produce `span.tz` -- so a bug in `faceTz`'s own
-    // formula would move both sides together. Independent here: `stringWidthPt` (a
-    // metrics-table READER over the standard base-14 AFM data, already trusted elsewhere
-    // in this file -- see `tzClampFallsBackToTheNaturalAdvance`'s `natural`) gives the
-    // average glyph width; `faceTz`'s own doc comment states its formula plainly enough to
-    // re-derive by hand: `round(pitch/avg*100, 2)` clamped to `[tzMin, tzMax]`. What THIS
-    // test still verifies independently of `faceTz` itself is the WIRING: that `emitPDF`
-    // correctly resolved this record to the "Helvetica" face and a 7.2pt (180 HMI) pitch
-    // before scaling anything.
-    let tzReference = "abcdefghijklmnopqrstuvwxyz "
-    let avg = stringWidthPt(tzReference, "Helvetica", 12) / Double(tzReference.count)
-    let raw = (180.0 / 25.0) / avg * 100.0
-    let expected = min(tzMax, max(tzMin, Double(hundredths(raw)) / 100.0))
-    #expect(span.tz == expected)
-    // Helvetica's AVERAGE lowercase glyph is NARROWER than WordStar's 10-CPI cell, so
-    // the constant STRETCHES it to the grid, not squeezes it (contrast a single "AAAA"
-    // span's own wide caps, irrelevant here -- the scale is the face's, not the span's).
-    let tz = try! #require(span.tz)
-    #expect(tz > 100.0 && tz < 250.0)
+    var doc = parseWS(data)
+    let span = try! #require(contentSpans(emitPDF(doc, mode: .printed)).first { $0.text == "AAAA" })
+    var entry = doc.fonts[0]
+    entry.laserjet = .laserjet
+    let paper = try! #require(ljPieces("AAAA", entry, [], 12, kerning: true))[0].width
+    #expect(abs(stringWidthPt("AAAA", "Helvetica", 12) * (span.tz ?? 100.0) / 100.0 - paper) < 0.05)
+
+    // A document last printed through LJ6DTP is placed by that driver's own tables (WS7
+    // teardown 17), the same way.
+    doc.printerDriver = "LJ6DTP"
+    let lj6 = try! #require(contentSpans(emitPDF(doc, mode: .printed)).first { $0.text == "AAAA" })
+    var lj6Entry = doc.fonts[0]
+    lj6Entry.laserjet = .lj6dtp
+    let lj6Paper = try! #require(ljPieces("AAAA", lj6Entry, [], 12, kerning: true))[0].width
+    #expect(abs(stringWidthPt("AAAA", "Helvetica", 12) * (lj6.tz ?? 100.0) / 100.0 - lj6Paper) < 0.05)
 }
 
 @Test func tzIs100ForCourierByArithmeticNotBySpecialCase() {
@@ -351,27 +342,55 @@ import Testing
     let x = try! #require(contentSpans(emitPDF(doc, mode: .printed))
         .first { $0.text == "X" }?.x)
     // The tab's own absolute HMI target -- not 14 x the 72pt font's 42.6pt, and not a
-    // column-rounded approximation of the target either.
-    #expect(x == tenth(left + 2502.0 / hmiPerPoint))
+    // column-rounded approximation of the target either -- moved to the whole decipoint
+    // below it, as WS7's LASERJET driver moves every piece (`&a#H`).
+    #expect(x == ((left + 2502.0 / hmiPerPoint) * 10).rounded(.down) / 10)
 }
 
-@Test func proportionalFontKeepsItsOwnHMIGridViaTz() {
-    // Every font run is width-matched onto ITS OWN font block's HMI grid with Tz --
-    // proportional faces included. PS.TST's faces declare distinct per-character HMIs
-    // (Helv Narrow 4.80pt, Univ. Roman 10.08pt): the grid is what preserves each face's
-    // true measure and keeps text registered with tabs, rules and vector graphics (Jon's
-    // review, 2026-08-05, after a natural-width detour flattened them all to the
-    // substitute's uniform average). Words are placed ONE OP EACH (word-anchored
-    // natural widths, face-scaled Tz), so the text appears word by word, never as a
-    // single phrase.
+@Test func proportionalWordsArePlacedOneOpEachByTheDriver() {
+    // A proportional face WS7's LASERJET driver carries is placed by it (LaserJet.swift):
+    // each word, or each part of a word a kerning pair splits, is its own op at the
+    // driver's x, drawn with Tz to its width on paper -- here Univers's e-period pair puts
+    // the period in alone. Port of ctrl-kd's
+    // `test_proportional_words_are_placed_one_op_each_by_the_driver`.
     let univers = ws7Block(0x02, payload: le16(155) + le16(240) + le16(49710)
         + [UInt8](repeating: 0, count: 6))
     let body = ws7Block(0x00) + univers
         + bytes("iiii mmmm a proportional line of prose.") + HARD
     let pdf = emitPDF(parseWS(body), mode: .printed)
-    #expect(contains(pdf, bytes(" Tz ")))               // scaled onto the face's grid
+    #expect(contains(pdf, bytes(" Tz ")))
     #expect(contains(pdf, bytes("(proportional)")))
-    #expect(contains(pdf, bytes("(prose.)")))
+    #expect(contains(pdf, bytes("(prose)")))
+    #expect(contains(pdf, bytes("(.)")))
+}
+
+@Test func aDriverPlacedLineRecordsItsPiecesForNative() throws {
+    // `driver_pieces` (layout JSON): the pieces the writer places, tiling the line's text,
+    // each landing where the PDF draws it. Port of ctrl-kd's
+    // `test_a_driver_placed_line_records_its_pieces_for_native`.
+    var payload = le16(155)
+    payload += le16(240)
+    payload += le16(49710)
+    payload += [UInt8](repeating: 0, count: 6)
+    let univers = ws7Block(0x02, payload: payload)
+    var body = ws7Block(0x00)
+    body += univers
+    body += bytes("A proportional line of prose.")
+    body += HARD
+    let doc = parseWS(body)
+    let json = try #require(JSONSerialization.jsonObject(
+        with: Data(Array(emitLayout(doc, mode: .printed).utf8))) as? [String: Any])
+    let pages = try #require((json["printed"] as? [String: Any])?["pages"] as? [[String: Any]])
+    let lines = try #require(pages[0]["lines"] as? [[String: Any]])
+    let pieces = try #require(lines[0]["driver_pieces"] as? [[String: Any]])
+    #expect(pieces.compactMap { $0["text"] as? String }.joined() == "A proportional line of prose.")
+    for (a, b) in zip(pieces, pieces.dropFirst()) {
+        let ax = a["x"] as! Double, aw = a["width"] as! Double
+        #expect(((ax + aw) * 10).rounded() / 10 == (b["x"] as! Double))
+    }
+    let proseX = try #require(pieces.first { $0["text"] as? String == "prose" }?["x"] as? Double)
+    let pdf = emitPDF(doc, mode: .printed)
+    #expect(contains(pdf, bytes(" \(proseX) 744.0 Td (prose)")))
 }
 
 @Test func printControlDisplayStringIsScreenOnlyInPrintedPDF() {

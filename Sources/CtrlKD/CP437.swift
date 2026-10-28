@@ -85,3 +85,16 @@ public func decodeCP437(_ bytes: [UInt8]) -> String {
     }
     return String(scalars)
 }
+
+/// The CP437 byte for a Unicode scalar, as Python's `str.encode('cp437')` gives it: the
+/// inverse of `cp437Table` (C0 controls for 00h-1Fh, never the `cp437Graphics` glyphs), or
+/// nil for a scalar the code page does not hold.
+func encodeCP437(_ scalar: Unicode.Scalar) -> UInt8? {
+    scalar.value <= 0xFFFF ? cp437Inverse[UInt16(scalar.value)] : nil
+}
+
+private let cp437Inverse: [UInt16: UInt8] = {
+    var out: [UInt16: UInt8] = [:]
+    for (byte, value) in cp437Table.enumerated() { out[value] = UInt8(byte) }
+    return out
+}()

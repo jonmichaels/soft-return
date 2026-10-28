@@ -177,10 +177,9 @@ extension DocumentRenderer {
         // (`nativeEscDegrade`) is gone — MAC VIEWING RULING, see that removal's own doc
         // comment above. `nativeStripControlChars` stays: that is a genuine control-byte
         // display fix (job 226), unrelated to font-encoding floors.
-        // `∙` IS A BULLET HERE TOO — the PRINTED twin of the Modern substitution. The
-        // engine's `runningOps` does it unconditionally on a running head's own text
-        // ("`∙` (U+2219 BULLET OPERATOR) -> `•` (U+2022 BULLET), because cp1252 carries a real
-        // BULLET"), and this path applied `nativeStripControlChars` alone. Measured on
+        // `∙` IS A MIDDLE DOT HERE TOO. The engine's `runningOps` maps it unconditionally on a
+        // running head's own text (`∙` U+2219 BULLET OPERATOR -> `·` U+00B7 MIDDLE DOT, the
+        // small dot the LaserJet prints for 0xF9), and this path once drew it as is. Measured on
         // LJ6DTP.WS, whose `.h1` carries the extended character 0xF9: the app drew the
         // narrower BULLET OPERATOR, so everything after it in the head sat left of the
         // engine's — a region-diff row on the head band of all eight pages, and the page
@@ -188,7 +187,7 @@ extension DocumentRenderer {
         func rendered(_ text: String) -> String {
             nativeStripControlChars(text)
         }
-        let font = courier(size: CGFloat(metrics.size))
+        let font = courierPrime(size: CGFloat(metrics.size))
         // Job 228: the AppKit-measured distance from a `draw(at:)` origin to that call's
         // actual first baseline, for exactly the font and (absent — see `line` below)
         // paragraph style a running line is built with. `RunningLine.drawOriginOffset`'s own
@@ -252,7 +251,7 @@ extension DocumentRenderer {
                                            defaultSize: metrics.size, useCourierPrime: true)
                 result.append(NSAttributedString(string: text, attributes: [
                     .font: runFont, .foregroundColor: NSColor.black,
-                    .kern: nativeNoKerning,
+                    .kern: nativeCourierPitchKern(runFont),
                     .ligature: nativeNoLigatures,
                 ]))
             }
@@ -339,14 +338,18 @@ extension DocumentRenderer {
                     result.append(NSAttributedString(string: runText, attributes: [
                         .font: runFont,
                         .foregroundColor: NSColor.black,
-                        .kern: nativeNoKerning,
+                        .kern: nativeCourierPitchKern(runFont),
                         .ligature: nativeNoLigatures,
                     ]))
                 }
                 if result.length > 0 {
+                    // Measured on the line itself: an italic or bold Courier Prime sets its
+                    // first baseline lower in a `draw(at:)` than the roman face does, and the
+                    // roman measure put -README's italic head 2 pt below the engine's.
                     return RunningLine(text: result, baselineFromTop: baseline,
-                                       drawOriginOffset: drawOriginOffset, kind: kind,
-                                       pageLeftOffset: pageLeftOffset)
+                                       drawOriginOffset: Self.isolatedFragmentK(
+                                           result, width: max(1, metrics.pageWidth - metrics.left)),
+                                       kind: kind, pageLeftOffset: pageLeftOffset)
                 }
                 // Nothing left once the toggles are consumed (LJ6DTP.WS's own footer is two
                 // rule-drawing control bytes and no visible text at all) — a running line
@@ -364,12 +367,13 @@ extension DocumentRenderer {
             let attributed = NSAttributedString(string: degraded, attributes: [
                 .font: lineStyle.isEmpty ? font : Self.styled(font, with: lineStyle),
                 .foregroundColor: NSColor.black,
-                .kern: nativeNoKerning,
+                .kern: nativeCourierPitchKern(lineStyle.isEmpty ? font : Self.styled(font, with: lineStyle)),
                 .ligature: nativeNoLigatures,
             ])
             return RunningLine(text: attributed, baselineFromTop: baseline,
-                               drawOriginOffset: drawOriginOffset, kind: kind,
-                               pageLeftOffset: pageLeftOffset)
+                               drawOriginOffset: lineStyle.isEmpty ? drawOriginOffset : Self.isolatedFragmentK(
+                                   attributed, width: max(1, metrics.pageWidth - metrics.left)),
+                               kind: kind, pageLeftOffset: pageLeftOffset)
         }
 
         var out: [RunningLine] = []
@@ -391,7 +395,7 @@ extension DocumentRenderer {
                 let attributed = NSAttributedString(string: auto.text, attributes: [
                     .font: font,
                     .foregroundColor: NSColor.black,
-                    .kern: nativeNoKerning,
+                    .kern: nativeCourierPitchKern(font),
                     .ligature: nativeNoLigatures,
                 ])
                 out.append(RunningLine(
@@ -553,17 +557,15 @@ extension DocumentRenderer {
         let drawOriginOffset = Double(firstBaselineOffset(
             font: font, paragraph: NSParagraphStyle(), width: 500))
 
-        // `∙` IS A BULLET IN MODERN. The library's writer substitutes it outright —
-        // `esc(txt.replacingAll("\u{2219}", with: "\u{2022}"))` (`PDFWriter.swift`, Register
-        // C9: "'•' (U+2022 BULLET — WordStar's own cp437 0x07 list marker)"), "because cp1252
-        // carries a real BULLET" where it has no BULLET OPERATOR at all. Measured on
-        // LJ6DTP.WS, whose `.h1` carries the extended character 0xF9: the library's running
-        // head reads "LJ6DTP Desktop-Publishing PDF • 9" and the app's read "… · 9", on all
-        // eleven pages.
+        // `∙` IS A MIDDLE DOT IN A RUNNING HEAD. The library's writer substitutes it outright —
+        // `esc(txt.replacingAll("\u{2219}", with: "\u{00B7}"))` (`PDFWriter.swift`): cp1252 has no
+        // BULLET OPERATOR, and the middle dot is the small dot the printer prints for the
+        // document's F9 (LJ6DTP.WS's `.h1`, on the LaserJet scan and in WS7's capture), so the
+        // app's head reads as the library's does on every page.
         func rendered(_ text: String) -> String {
             nativeStripControlChars(
                 text.replacingOccurrences(of: "#", with: String(pageNo))
-                    .replacingOccurrences(of: "\u{2219}", with: "\u{2022}"))
+                    .replacingOccurrences(of: "\u{2219}", with: "\u{00B7}"))
         }
         func line(_ text: String, baselineFromTop: Double, kind: RunningLine.Kind) -> RunningLine? {
             let degraded = rendered(text)

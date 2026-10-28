@@ -112,13 +112,15 @@ private func notePosition(_ note: Note, doc: Document, index: Int) -> Int {
 }
 
 /// The 1-based, per-kind display label (task item 2). Footnotes and endnotes number
-/// independently (WordStar's separate `.f#`/`.e#`), each against its own start value
-/// (defaulting to 1 when the file never set one) plus `Note.number` — the file's own 0-based
-/// index, left unmutated — OR, when the file never resolved a real number for this specific
-/// note (`number == nil`; WordStar's tag-word high bit marks that case, `SymmetricBlocks.swift`
-/// leaves `number` `nil` rather than inventing one), this note's own 0-based rank among its
-/// kind. Direct port of `_display_number` (emit.py ~122-145): `index = note.number if
-/// note.number is not None else position`, `position` there being this same 0-based rank.
+/// independently (WordStar's separate `.f#`/`.e#`). The shown number is `Note.number` — the
+/// file's own 0-based index, left unmutated — plus one: WS7 folds the `.f#`/`.e#` start value
+/// and the per-page restart into the numbers it stores when it paginates and saves (WS7 report
+/// 15.1, run fnnum5: a bare `.f# 5` stores 4, 5 on page 1 and 0, 1 on page 2, which print
+/// 5., 6. / 1., 2.), so adding the start again numbered them 9., 10. / 5., 6. When the file
+/// never resolved a real number for this specific note (`number == nil`; WordStar's tag-word
+/// high bit marks that case, `SymmetricBlocks.swift` leaves `number` `nil` rather than
+/// inventing one), it is this note's own 0-based rank among its kind plus the recorded start
+/// (default 1). Port of `_display_number`.
 ///
 /// A footnote/endnote carrying a user-supplied TAG (ruling 2026-08-24 item 4 — WSFORMAT.TXT's
 /// high-bit-on-high-bit nested case, `SymmetricBlocks.swift`'s `parseNote`) displays that mark
@@ -129,7 +131,10 @@ private func notePosition(_ note: Note, doc: Document, index: Int) -> Int {
 /// documents a conversion-flag high nybble (symbols / upper / lower / numbers), but
 /// `DISPLAY.WS` — a footnote at numberFormat=2 and an endnote at numberFormat=1 — printed
 /// through real WordStar 7 shows plain `1.` and `(1)`. The field stays parsed (preserve what
-/// you find) and is not consulted for display.
+/// you find) and is not consulted for display. What WS7 DOES follow is the `.f#`/`.e#` letter
+/// argument at print time (`.f# a` prints a, b, c; `.f# A` prints A, B, C; WS7 report 15.10):
+/// Printed always follows that format; Modern follows it only when no `--note-refs` scheme
+/// was given (`noteRefs` nil), since a scheme the caller names wins over the document.
 ///
 /// Annotations carry no number at all in the format; their tag stands in for a label
 /// instead — but WordStar's tag field is itself nullable/empty, and Python falls back to the
@@ -137,23 +142,67 @@ private func notePosition(_ note: Note, doc: Document, index: Int) -> Int {
 /// blank label. Comments carry neither a number nor a tag and are never referenced inline, so
 /// `resolveReference` never reaches that case in practice, but the running counter is still
 /// the label a comment gets in its own trailing list (emit.py's uniform `else: str(counter)`).
-func noteLabel(_ note: Note, doc: Document, index: Int) -> String {
+func noteLabel(_ note: Note, doc: Document, index: Int, printed: Bool = false,
+               noteRefs: NoteRefs? = nil) -> String {
     switch note.kind {
     case .footnote:
         if let tag = note.tag { return tag }
-        let n = note.number ?? (notePosition(note, doc: doc, index: index) - 1)
-        return String(n + (doc.footnoteNumberStart ?? 1))
+        let shown = note.number.map { $0 + 1 }
+            ?? (notePosition(note, doc: doc, index: index) - 1 + (doc.footnoteNumberStart ?? 1))
+        return formatNoteNumber(
+            shown, style: noteNumberStyle(doc, note.kind, printed: printed, noteRefs: noteRefs))
     case .endnote:
         if let tag = note.tag { return tag }
-        let n = note.number ?? (notePosition(note, doc: doc, index: index) - 1)
-        return String(n + (doc.endnoteNumberStart ?? 1))
+        let shown = note.number.map { $0 + 1 }
+            ?? (notePosition(note, doc: doc, index: index) - 1 + (doc.endnoteNumberStart ?? 1))
+        return formatNoteNumber(
+            shown, style: noteNumberStyle(doc, note.kind, printed: printed, noteRefs: noteRefs))
     case .annotation:
         if let tag = note.tag, !tag.isEmpty {
             return tag
         }
-        return String(notePosition(note, doc: doc, index: index))
+        // Untagged, WS7 prints no mark at all, in the text or before the note (the capture of
+        // run ann52, WS7 report 15.1); the other outputs fall back to a running count.
+        return printed ? "" : String(notePosition(note, doc: doc, index: index))
     case .comment:
         return String(notePosition(note, doc: doc, index: index))
+    }
+}
+
+/// 1 -> a, 2 -> b, ..., 26 -> z, 27 -> aa, ... -- bijective base 26, the standard way to keep
+/// counting past one alphabet's worth of labels. Port of `_alpha_label`.
+func alphaLabel(_ n: Int, upper: Bool) -> String {
+    var n = n
+    var out: [Character] = []
+    let letters = Array(upper ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "abcdefghijklmnopqrstuvwxyz")
+    while n > 0 {
+        let r = (n - 1) % 26
+        out.insert(letters[r], at: 0)
+        n = (n - 1) / 26
+    }
+    return String(out)
+}
+
+/// A footnote / endnote's display index: arabic, or letters when the document's `.f#`/`.e#`
+/// asked for them and the output is Printed. `n` arrives 1-based. Port of
+/// `_format_note_number`.
+func formatNoteNumber(_ n: Int, style: NoteNumberStyle?) -> String {
+    switch style {
+    case .lower: return alphaLabel(n, upper: false)
+    case .upper: return alphaLabel(n, upper: true)
+    case nil: return String(n)
+    }
+}
+
+/// The label format the document's `.f#`/`.e#` asked for. Printed always follows it; Modern
+/// only when no `--note-refs` scheme was given (`noteRefs` nil). Port of `_note_style`.
+func noteNumberStyle(_ doc: Document, _ kind: NoteKind, printed: Bool,
+                     noteRefs: NoteRefs? = nil) -> NoteNumberStyle? {
+    guard printed || noteRefs == nil else { return nil }
+    switch kind {
+    case .footnote: return doc.footnoteNumberFormat
+    case .endnote: return doc.endnoteNumberFormat
+    default: return nil
     }
 }
 
@@ -162,8 +211,11 @@ func noteLabel(_ note: Note, doc: Document, index: Int) -> String {
 /// 2026-08-24 item 1). The label half of Python's `_annotated_notes`; the pairing
 /// itself stays implicit here since every caller already has `doc.notes`/`refNotes` in
 /// this same order.
-func annotatedNoteLabels(_ doc: Document) -> [String] {
-    doc.notes.enumerated().map { i, note in noteLabel(note, doc: doc, index: i) }
+func annotatedNoteLabels(_ doc: Document, printed: Bool = false,
+                         noteRefs: NoteRefs? = nil) -> [String] {
+    doc.notes.enumerated().map { i, note in
+        noteLabel(note, doc: doc, index: i, printed: printed, noteRefs: noteRefs)
+    }
 }
 
 /// `annotatedNoteLabels(doc)`, with a kind's UNTAGGED footnote/endnote labels renumbered
@@ -183,14 +235,16 @@ func annotatedNoteLabels(_ doc: Document) -> [String] {
 /// Printed, Modern PDF, and RTF must call `annotatedNoteLabels` directly and NEVER this
 /// function — they have real pages (or, for RTF, `\chftn` auto-numbering) and must keep
 /// WordStar's own numbers exactly as stored. Port of `_pageless_notes`.
-func pagelessNoteLabels(_ doc: Document) -> [String] {
-    var labels = annotatedNoteLabels(doc)
+func pagelessNoteLabels(_ doc: Document, printed: Bool = false,
+                        noteRefs: NoteRefs? = nil) -> [String] {
+    var labels = annotatedNoteLabels(doc, printed: printed, noteRefs: noteRefs)
     for kind in [NoteKind.footnote, .endnote] {
         let members = doc.notes.enumerated().filter { $0.element.kind == kind && $0.element.tag == nil }
         let memberLabels = members.map { labels[$0.offset] }
         guard Set(memberLabels).count != memberLabels.count else { continue }   // no collision
         for (rank, m) in members.enumerated() {
-            labels[m.offset] = String(rank + 1)
+            labels[m.offset] = formatNoteNumber(
+                rank + 1, style: noteNumberStyle(doc, kind, printed: printed, noteRefs: noteRefs))
         }
     }
     return labels

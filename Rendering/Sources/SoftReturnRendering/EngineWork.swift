@@ -22,11 +22,33 @@ public struct NativeEngineWork: Sendable {
         // Job 371 item 1 (PIX IN VIEWS): the pictures resolved when the document was opened ride in
         // `options`; with `.embed` `docToPagelines` substitutes a resolved `.PIX` tag's own `PageLine`,
         // sized exactly as `emitPDF`'s Printed PDF sizes it.
-        let doc = printedDocument(document, options: options)
-        let pages = docToPagelines(doc, printed: true, pixResults: pictures ? options.pixResults : [], pictures: .embed)
+        var doc = printedDocument(document, options: options)
+        var pages = docToPagelines(doc, printed: true, pixResults: pictures ? options.pixResults : [], pictures: .embed)
+        doc.fonts = laserjetFixedPitches(doc.fonts, driver: doc.printerDriver)
+        nativeResolveAlternateFont(&doc, &pages)
         return NativeEngineWork(doc: doc, metrics: printedMetrics(document, options: options), pages: pages,
                                 sheets: nativeSheets(document, pages: pages, options: options))
     }
+}
+
+/// A ^PA span with no font run of its own prints in the printer's alternate font
+/// (`printerAlternateFont`: Gothic PC 10 pt at 14.29 cpi on a WS7 LASERJET document), which is
+/// not one of the document's own fonts. It joins Native's copy of the font list and those
+/// spans point at it, so every Native path resolves it the way it resolves any font block.
+nonisolated func nativeResolveAlternateFont(_ doc: inout Document, _ pages: inout [Page]) {
+    guard let alt = printerAlternateFont(doc) else { return }
+    let index = doc.fonts.count
+    var used = false
+    for p in pages.indices {
+        for l in pages[p].lines.indices {
+            for s in pages[p].lines[l].spans.indices
+            where pages[p].lines[l].spans[s].styles.contains(.altFont) && pages[p].lines[l].spans[s].font == nil {
+                pages[p].lines[l].spans[s].font = index
+                used = true
+            }
+        }
+    }
+    if used { doc.fonts.append(alt) }
 }
 
 /// Batch 47 (M31-app): every page's own sheet, as `emitPDF` writes each page's MediaBox — `printedMetrics(_:page:options:)`
@@ -49,8 +71,10 @@ public struct NativeAnnotatedEngineWork: Sendable {
     public var sheets: [CGSize] = []
 
     public nonisolated static func make(document: Document, options: EmitOptions) -> NativeAnnotatedEngineWork {
-        let doc = printedDocument(document, options: options)
-        let pages = docToPagelines(doc, printed: true)
+        var doc = printedDocument(document, options: options)
+        var pages = docToPagelines(doc, printed: true)
+        doc.fonts = laserjetFixedPitches(doc.fonts, driver: doc.printerDriver)
+        nativeResolveAlternateFont(&doc, &pages)
         return NativeAnnotatedEngineWork(doc: doc, metrics: printedMetrics(document, options: options),
                                          annotated: annotatedLayout(doc), pages: pages,
                                          sheets: nativeSheets(document, pages: pages, options: options))

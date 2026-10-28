@@ -51,6 +51,7 @@ func applyColumns(_ doc: Document, _ pages: [Page]) -> [Page] {
         merged.poCols = pg.poCols
         merged.poParity = pg.poParity
         merged.autoPagenoPo = pg.autoPagenoPo
+        merged.endedByFormFeed = pg.endedByFormFeed
         merged.explicitBreak = pg.explicitBreak
         merged.explicitBreakBI = pg.explicitBreakBI
         // planning #227 follow-up (2026-09-09): this page's own column geometry,

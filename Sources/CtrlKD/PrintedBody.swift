@@ -1,7 +1,10 @@
 /// One body item of the printed paginator: an explicit break, a conditional page break, a
 /// verbatim line, or a running head/foot occurrence.
 enum PrintedBodyItem {
-    case pageBreak
+    /// `formFeed`: the break is a bare form feed in the text (`origin == .ff`), not a
+    /// `.pa`/`.cb` -- WS7 ejects the sheet there without running its page-end routine, so
+    /// the page it ends prints no foot (WS7 report 14.3, run ff2; WS4 report 3.2).
+    case pageBreak(formFeed: Bool = false)
     /// `.cp n` / `.cc n` — resolved by the paginator, the only thing that knows how full
     /// the page is.
     case condPage(Int)
@@ -40,8 +43,9 @@ private struct PrintedBodyRules {
         // harmless everywhere else: `-README`/`VERSIONS` (both `ws5+`) picked up real
         // cross-page drift the first time this shipped scoped only by pattern, and "a rule
         // that un-matches exact documents to fix others is not WS7's real rule" (Jon).
-        // Widening this gate past `ws4` needs its own oracle evidence.
-        if doc.detection?.variant == .ws4 {
+        // Widening this gate past `ws4` needs its own oracle evidence. The forgiveness is
+        // WS7's (`Era.forgivesSpacingBlank`): a WS4 file printed by WS4 has none.
+        if doc.detection?.variant == .ws4, printingEra(doc).forgivesSpacingBlank {
             // Prefer the file's OWN `.LS` dot-state when it exists (WS7 manual, "Line
             // Spacing"): neither WS4 source measured sets `.LS` at all (WS4 predates the
             // dot command), so the structural fallback carries the detection, but a future
@@ -120,7 +124,10 @@ func resolvePrintedBody(
     // Register b31: a line's own `.po` override needs the printed type size for the same
     // edge-of-page clamp `printedLeft` already applies (`resolveLeftPt`).
     let sizeForLeft = printedSize(doc)
+    let renderFonts = RenderFonts(doc)
     var leading = LineLeading(doc)
+    // WS7's paginator (WS7 report 14.3, 14.5, 15.1, 15.10); see `Era`.
+    let era = printingEra(doc)
     var items: [PrintedBodyItem] = []
     // Planning #227 (columns-rule research §7, corrected): only LEAVING a `.co n>1` region
     // forces a page break — confirmed against sawyer/DEFAULT/PRINT.TST's own `.co` off
@@ -149,13 +156,21 @@ func resolvePrintedBody(
             // (research §4); only `.cb` forces an early break inside one.
             continue
         }
+        if block.kind == .pagebreak, block.origin != .ff, era.paIgnoredOnEmptyPage,
+           pageHoldsNothing(items) {
+            // WS7 report 15.1 (runs patop, paful): the paginator's `.pa` handler reads the
+            // line end before the dot line, and when that already ends a page (or is a form
+            // feed) the `.pa` is ignored -- so a `.pa` as the first line, or right after
+            // another break, adds no empty page.
+            continue
+        }
         // An explicit `.pa` is honored verbatim in a facsimile. WordStar's own 0x0B
         // end-of-page marks are NOT breaks -- see `Line.softpage`.
         if block.kind == .pagebreak || block.kind == .colbreak {
             // Inside an active `.co n>1` region, the column-grouping post-pass
             // (`applyColumns`) turns every Nth forced break into a real page break and the
             // others into a column advance — exactly what a column break means.
-            items.append(.pageBreak)
+            items.append(.pageBreak(formFeed: block.origin == .ff))
             continue
         }
         if block.kind == .condpage || block.kind == .condcolumn {
@@ -167,7 +182,7 @@ func resolvePrintedBody(
             var lastIsBreak = false
             if case .pageBreak? = items.last { lastIsBreak = true }
             if prevCols > 1, curCols != prevCols, !items.isEmpty, !lastIsBreak {
-                items.append(.pageBreak)
+                items.append(.pageBreak())
             }
             prevCols = curCols
         }
@@ -261,6 +276,7 @@ func resolvePrintedBody(
             var ownLead = leading.lead(of: line, in: block, isBlank: isBlank,
                                        isFirstLine: enteringLinePending,
                                        prevParaBlock: prevParaBlock)
+            let fontRise = leading.fontRise
             if !isBlank { enteringLinePending = false }
             // Finding 1: this blank IS the block's own double-spacing — it still becomes its
             // own literal PageLine at its own natural (unextended) lead; only its
@@ -316,7 +332,8 @@ func resolvePrintedBody(
             // Planning #251 (2026-09-09): model-build-time bare-tab expansion, the same point
             // ctrl-kd's own `_doc_to_pagelines` applies it (right before the PageLine is
             // built) — see `expandBareTabsForPrintedLayout` (`EmitterRules.swift`).
-            spans = expandBareTabsForPrintedLayout(spans)
+            spans = expandBareTabsByDistance(spans, fonts: renderFonts, size: sizeForLeft)
+                ?? expandBareTabsForPrintedLayout(spans)
             // A `.oc on` line's own centring tab is the EDITOR's arithmetic; the printer
             // re-centres on the ink alone (see recentredCentreTabSpans).
             spans = recentredCentreTabSpans(spans, block: block, doc: doc)
@@ -334,16 +351,56 @@ func resolvePrintedBody(
             // `printed` guard here — ctrl-kd's own equivalent gate is `printed and
             // b.align == 'justify' and ...`.
             //
-            // planning #270 item 37: under `.pf on` the PARAGRAPH is the unit, and WordStar
-            // never justifies a paragraph's LAST line — which is exactly what `line.soft`
-            // says after the re-wrap. Without `.pf` the block remains the unit.
+            // WS7 justifies a line only when it ends in a soft return; a hard return (the
+            // paragraph's last line, or a line the author ended by hand) is left ragged
+            // (WS7 report 11.7.1, fixture w16-ljls: a hard-returned line inside the same
+            // `.oj on` block stays at its natural widths). `line.soft` is exactly that in
+            // every era: the STORED terminator, whatever Modern reflow makes of the break
+            // (`keepBreak`). WS4 stores a justified line's blanks at wrap time and ends
+            // only a wrapped line in a soft return (WS4 report 2.7, 7.7), so a
+            // hard-returned line there stays ragged too. After a `.pf on` re-wrap
+            // (planning #270 item 37) it is true of every produced line but the
+            // paragraph's last.
             var justifyRightX: Double? = nil
-            let lastInUnit = block.printReformat == "on"
-                ? !line.soft : lineIdx >= blkLines.count - 1
+            var softBlanks: PageLine.SoftBlanks? = nil
+            let lastInUnit = !line.soft
             if block.align == .justify, !lastInUnit {
                 let poOriginPt = ownLeft ?? printedLeft(doc, size: sizeForLeft)
                 let rmCols = block.rightMargin ?? 65.0
                 justifyRightX = poOriginPt + rmCols * pdfPtPerCol
+                // The WS5+ soft spaces on this line, by offset (WS7 report 14.6: the
+                // driver ignores the stored ones).
+                let kept = line.spans.filter {
+                    keepSpanOnPageline($0, refNotes: refNotes, printed: true)
+                }
+                let baseText = kept.map(\.text).joined()
+                if kept.contains(where: { !$0.soft.isEmpty }),
+                   spans.map(\.text).joined() == baseText {
+                    var offs: [Int] = []
+                    var base = 0
+                    for sp in kept {
+                        offs.append(contentsOf: sp.soft.map { base + $0 })
+                        base += sp.text.unicodeScalars.count
+                    }
+                    softBlanks = PageLine.SoftBlanks(text: baseText, offsets: offs)
+                }
+            }
+            // WS4's bit-7 characters, against the line's text as built here, while that is
+            // still the text they were read from (`PageLine.hibit`).
+            var hibit: PageLine.Hibit? = nil
+            if !line.hibit.isEmpty {
+                let baseText = line.spans.filter {
+                    keepSpanOnPageline($0, refNotes: refNotes, printed: true)
+                }.map(\.text).joined()
+                if spans.map(\.text).joined() == baseText {
+                    hibit = PageLine.Hibit(text: baseText, offsets: line.hibit)
+                }
+            }
+            // WS4's HPLJET prints every character through COMPOS (`hpljetComposSpans`).
+            var overstrike: [PageLine.Overstrike] = []
+            if era.hpljetDriver {
+                (spans, overstrike) = hpljetComposSpans(spans)
+                if hibit != nil { hibit?.text = spans.map(\.text).joined() }
             }
             // A PageLine, not a bare list of spans, so the line's own `.lh` survives the
             // paginator whether or not the document has notes.
@@ -355,7 +412,10 @@ func resolvePrintedBody(
                                         kerning: line.kerning, left: ownLeft, roll: ownRoll,
                                         justifyRightX: justifyRightX,
                                         parityLeft: ownParityLeft,
-                                        poCols: line.poCols), due: due))
+                                        poCols: line.poCols, fontRise: fontRise,
+                                        softBlanks: softBlanks, hibit: hibit,
+                                        softHyphen: line.softHyphen, li: lineIdx,
+                                        overstrike: overstrike), due: due))
             firstLineOfBlock = false
         }
         // triage Q9: events recorded at or past this block's own line count.
@@ -367,7 +427,33 @@ func resolvePrintedBody(
             pendingSa = sa
         }
     }
+    // The blank lines a document ends with. The parser drops the trailing run from the IR
+    // (it is not content), but to WS7 each is a text line: it takes its room, and one that
+    // no longer fits makes a page that carries only its number (WS7 report 14.3, runs
+    // pg55b and pa3). They go in as plain blank lines after everything else; the
+    // paginator's clean-up tells a page made of them (`PrintedBodyItem.eofBlank`) from a
+    // page of machine padding. A document with no block at all (a template of dot
+    // commands) has no body for them to follow and keeps its one fallback page.
+    if era.blankLinesMakePages, !doc.blocks.isEmpty {
+        for _ in 0..<doc.eofBlankLines {
+            items.append(.line(PageLine([], bi: doc.blocks.count - 1), due: []))
+        }
+    }
     return items
+}
+
+/// Whether the page the next entry of `items` would land on has had nothing placed on it:
+/// no entries yet, or the last real one is a forced break. Header/footer events and `.cp`
+/// sentinels place nothing. Port of `pdf._page_holds_nothing`.
+private func pageHoldsNothing(_ items: [PrintedBodyItem]) -> Bool {
+    for item in items.reversed() {
+        switch item {
+        case .hf, .condPage: continue
+        case .pageBreak: return true
+        case .line: return false
+        }
+    }
+    return true
 }
 
 /// An embedded pix image's `(widthPt, heightPt)` — the ONE sizing rule every PDF path

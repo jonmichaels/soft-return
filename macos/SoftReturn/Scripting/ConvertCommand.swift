@@ -135,11 +135,11 @@ final class ConvertCommand: NSScriptCommand {
             // `NSScriptCommand` itself carries no static `@MainActor` isolation — `assumeIsolated`
             // states that guarantee to the compiler rather than threading `SettingsStore.shared`
             // through as yet another decode parameter this class alone would need.
-            let (defaultHeaders, defaultTOC, defaultInlineStyling, defaultPictures, defaultPageNumbers) =
+            let (defaultHeaders, defaultTOC, defaultInlineStyling, defaultPictures, defaultPageNumbers, printedBy) =
                 MainActor.assumeIsolated {
                     let settings = SettingsStore.shared
                     return (settings.defaultHeaders, settings.defaultTOC, settings.defaultInlineStyling,
-                           settings.defaultPictures, settings.defaultPageNumbers)
+                           settings.defaultPictures, settings.defaultPageNumbers, settings.printedBy)
                 }
             let args = try Self.decode(
                 direct: directParameter, arguments: evaluatedArguments ?? [:],
@@ -147,7 +147,7 @@ final class ConvertCommand: NSScriptCommand {
                 defaultInlineStyling: defaultInlineStyling, defaultPictures: defaultPictures,
                 defaultPageNumbers: defaultPageNumbers)
             let files = Self.expand(args.inputs, searchingSubfolders: args.searchingSubfolders)
-            let result = Self.convert(files: files, args: args)
+            let result = Self.convert(files: files, args: args, printedBy: printedBy)
             if let destinationAccessError = result.destinationAccessError {
                 throw DecodeError.destinationNotWritable(destinationAccessError)
             }
@@ -175,7 +175,8 @@ final class ConvertCommand: NSScriptCommand {
     /// invisible next to the source the user actually opened). Un-sandboxed (job 392), the
     /// container that ruling reacted to no longer exists, but the discipline stands: a write
     /// that genuinely fails gets a named, honest error — never a silent write anywhere else.
-    static func convert(files: [URL], args: Arguments) -> Result {
+    /// `printedBy`: which WordStar prints a WS4 file (Settings), WordStar 4 unless told.
+    static func convert(files: [URL], args: Arguments, printedBy: PrintedBy = .own) -> Result {
         var result = Result()
         var besideSourceFailure: (source: URL, reason: String)?
 
@@ -216,6 +217,7 @@ final class ConvertCommand: NSScriptCommand {
                 pageSettings: args.pageSettings, docPath: file.path,
                 choices: args.choices, lineNumbers: args.lineNumbers)
             options.quirks = args.quirks
+            options.printedBy = printedBy
             do {
                 let products = try DocumentOperations.convert(data: [UInt8](data), options: options)
                 let basename = file.deletingPathExtension().lastPathComponent

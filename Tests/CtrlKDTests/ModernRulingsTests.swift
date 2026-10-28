@@ -359,12 +359,13 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
 @Test func runningHeadToggleBytesBecomeStylesNotGlyphs() throws {
     // Round 3 (2026-08-06, M10): LJ6DTP's `.h1` carries raw ^B bold toggles and a U+2219
     // dot; measuring toggles as glyphs made header letters overlap. hfRuns interprets
-    // them as styles, maps the dot to the cp1252 bullet, and a control-bytes-only head
+    // them as styles, maps the dot to the cp1252 middle dot (the small dot the printer prints
+    // for F9, on the LaserJet scan of LJ6DTP's heads), and a control-bytes-only head
     // (LJ6DTP's `.f1` = two 0x0F bytes) empties out entirely.
     let runs = hfRuns("  \u{02}\u{02}Title \u{2219} #\u{02} tail")
     #expect(runs.first?.text == "  " && runs.first?.styles == [])   // baked spaces survive
     let texts = runs.map(\.text).joined()
-    #expect(!texts.contains("\u{02}") && !texts.contains("\u{2219}") && texts.contains("\u{2022}"))
+    #expect(!texts.contains("\u{02}") && !texts.contains("\u{2219}") && texts.contains("\u{00B7}"))
     #expect(runs.contains { $0.styles.contains(.bold) })            // bold recognized
     #expect(hfRuns("\u{0F}\u{0F}").isEmpty)                         // junk head -> nothing
     // end-to-end: a doc with a toggle-carrying head renders overlap-free (words strictly
@@ -446,7 +447,7 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     let emitter = try #require(EmitterRegistry.standard.getEmitter("layout"))
     let out = try #require(emitter.emit(doc, .modern, EmitOptions()).asText)
     #expect(out.contains("\"format\": \"ctrl-kd-layout\""))
-    #expect(out.contains("\"version\": 13"))
+    #expect(out.contains("\"version\": 15"))
     #expect(out.contains("\"encoding\": \"cp437\""))
     #expect(out.contains("\"size_name\": \"Letter\""))
     #expect(out.contains("\"kind\": \"para\""))                 // semantic flow present

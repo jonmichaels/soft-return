@@ -46,13 +46,10 @@ private enum Sample {
             doc += Array(dot.utf8) + hard
         }
         doc += highBitWords("THE SOFT RETURN") + hard + hard
-        // Several soft-wrapped physical lines, which is what Printed reproduces verbatim —
-        // and, since ctrl-kd's WS4 wrap heuristic (`linesPass`, `softIsWrap: false`)
-        // reclassifies a soft-terminated line as DELIBERATE (`.line`, not `.wrap`) whenever
-        // it plus the next word would have fit inside the margin, each line here is padded
-        // past 65 columns so `L + 1 + W` clears the margin regardless of the next word's
-        // length — a shorter "realistic" line silently drops out of Show Invisibles'
-        // soft-line count, which is what caught this the first time.
+        // Several soft-wrapped physical lines, which is what Printed reproduces verbatim. Each
+        // stays a stored soft return whatever its length (`Line.soft`); the long lines also
+        // keep the wrap heuristic's Modern reflow reading (`Line.keepBreak` false), which is
+        // the case this test was written for.
         for line in ["This is a synthetic WordStar document, written out to exercise this",
                      "viewer completely from end to end, because each of these lines wraps",
                      "with a genuine soft return, exactly as WordStar itself stored the wrap."] {
@@ -302,7 +299,9 @@ extension WiringTests {
         // 57.599999999999994 != 57.599999999999994, i.e. values whose printed forms are
         // identical, which is the tell that the comparison and the display disagree.
         #expect(Double(rendered.pageSize.height) == metrics.pageHeight)
-        #expect(Double(rendered.textFrame.origin.x) == metrics.left)
+        // The engine's left margin is in the printer's frame; Native draws on the paper, so its
+        // text frame sits the page's logical page (1/4" in on Letter) further right.
+        #expect(Double(rendered.textFrame.origin.x) == metrics.left + rendered.documentLogicalPageX)
     }
 
     /// The actual defect: a view with no frame draws nothing, and a scroll view's document

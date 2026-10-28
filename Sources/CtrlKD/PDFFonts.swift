@@ -185,6 +185,38 @@ func spanFontEntry(_ index: Int?, _ fonts: [FontChange]) -> FontChange? {
     return fonts[index]
 }
 
+/// ^PA / 01h selects the printer's ALTERNATE font and ^PN / 0Eh the normal one (WS7
+/// teardown, `wordstar-dos/reference/drivera-map.txt`). A document does not carry either
+/// face: they are the installation's (nrmfid / altfid), and WordStar asks the driver for
+/// the closest match to the installed width 150, height 200, typestyle 0 -- on LASERJET
+/// that is Gothic PC (the driver's `^[(10U^[(sp%Pv%2phsb4102T` block), sent as 10 point at
+/// 14.29 cpi, i.e. 126/1800 inch = 21 dots a character (run raw01-lj, in `wordstar-dos/reference/drivera-map.txt`; the normal font
+/// prints Courier 12 point, 10 cpi). The Gothic face is drawn in Courier here, as every
+/// fixed-pitch face is. Sawyer's installation chose LinePrinter 16.7 cpi instead; a
+/// document cannot tell the two apart, so the factory one is used. Port of Python's
+/// `_LASERJET_ALTERNATE_FONT`.
+let laserjetAlternateFont = FontChange(offset: -1, width1800: 126, height1440: 200,
+                                       typestyle: 0x4006)
+
+/// `Document.fonts` plus the face a ^PA span with no font run of its own is printed in
+/// (`nil` when the driver's is not known). Port of Python's `_RenderFonts`/`_render_fonts`.
+struct RenderFonts {
+    let fonts: [FontChange]
+    let alt: FontChange?
+    init(_ doc: Document) {
+        fonts = laserjetFonts(doc.fonts, driver: doc.printerDriver)
+        let driver = (doc.printerDriver ?? "").trimmed().uppercased()
+        let ws5 = doc.detection.map { eraFor($0.variant).symmetricBlocks } ?? true
+        alt = (driver == "LASERJET" && ws5) ? laserjetAlternateFont : nil
+    }
+}
+
+/// The face a ^PA span with no font run of its own prints in (`RenderFonts.alt`), for a view
+/// that resolves fonts itself (Native): `nil` when the driver's is not known.
+public func printerAlternateFont(_ doc: Document) -> FontChange? {
+    RenderFonts(doc).alt
+}
+
 /// `(text-as-written, family, size, font-entry)` for one span. Port of `pdf._span_render`.
 ///
 /// Symbol/ZapfDingbats runs were transliterated to real Unicode at parse time
@@ -205,10 +237,12 @@ func spanFontEntry(_ index: Int?, _ fonts: [FontChange]) -> FontChange? {
 /// fills every other family already draws them as. `graphicChars` members keep their true
 /// Unicode code points here so `splitGraphics` finds them downstream unchanged; everything
 /// else in the run still makes the real Symbol/Dingbats round trip.
-func spanRender(_ text: String, font: Int?, fonts: [FontChange], size: Int)
+func spanRender(_ text: String, font: Int?, fonts: [FontChange], size: Int,
+                altFont: Bool = false, alt: FontChange? = nil)
     -> (text: String, family: PDFFamily, size: Int, entry: FontChange?)
 {
-    let entry = spanFontEntry(font, fonts)
+    var entry = spanFontEntry(font, fonts)
+    if entry == nil, altFont { entry = alt }      // ^PA: the printer's alternate font
     let family = pdfFamily(entry)
     var written = text
     if family == .symbol || family == .zapfDingbats, let entry {

@@ -575,13 +575,16 @@ func pgnumByPage(_ timeline: Timeline<Bool>, _ pages: [Page]) -> [Bool] {
 /// `.po` values (7.0 exactly, 20.0 exactly) with zero decipoint residual either way --
 /// not a guess, and not (yet) traced to a WSCHANGE factory constant, so it may be THIS
 /// install's own customisation the same way its `.po` 7.0 (vs the manual's 8.0) is;
-/// flagged, not hidden. Port of ctrl-kd's `_AUTO_PAGENO_DEFAULT_COL`.
-let autoPagenoDefaultCol = 33.5
+/// flagged, not hidden.
+///
+/// THE DEFAULT IS AN ERA FIELD (`Era.pcDefault`): 33.5 above is WS7's, and WS4's
+/// automatic number line is `(PC - 1)` spaces then `#` with the factory `.PC` 28, counted
+/// from `.po` (WS4 teardown, `wordstar4-dos/4-formatting-printing.md` 3.2; runs x41-*,
+/// p12-hepk, dt1), so a WS4 document's number starts at column 28.
 
 /// Left edge (points) of the automatic page number's text, from `.po`/`.pc` -- see
-/// `autoPagenoDefaultCol`'s doc comment for the formula's own measurement. `pcCol` 0 or
-/// unset (both measured identical) uses the fixed default; an explicit non-zero `.pc N`
-/// overrides it.
+/// the comment above for the formula's own measurement. `pcCol` 0 or unset (both measured
+/// identical) uses the era's `pcDefault`; an explicit non-zero `.pc N` overrides it.
 ///
 /// `poCols` IS THIS PAGE'S OWN PRINT OFFSET, and the document's default is only the
 /// fallback for a caller with no page in hand. The number rides the running foot's own
@@ -611,7 +614,8 @@ let autoPagenoDefaultCol = 33.5
 func autoPageNumberXPt(_ doc: Document, poCols: Double? = nil) -> Double {
     let po = poCols ?? doc.page?.poCols ?? defaultPoCols
     let pcRaw = doc.page?.pcCol
-    let pc = (pcRaw != nil && pcRaw != 0) ? Double(pcRaw!) : autoPagenoDefaultCol
+    let pc = (pcRaw != nil && pcRaw != 0) ? Double(pcRaw!)
+        : printingEra(doc).pcDefault
     return (po + pc - 1) * pdfPtPerCol
 }
 
@@ -912,4 +916,43 @@ func printedLeft(_ doc: Document, size: Int) -> Double {
 func resolveLeftPt(_ poCols: Double, size: Int) -> Double {
     let left = poCols * pdfPtPerCol
     return max(0.0, min(left, Double(PDFMetrics.pageWidth) - Double(size) * 0.6))
+}
+
+/// The LaserJet's logical page, in 300-dpi dots from the paper's side edge (HP PCL 5
+/// Technical Reference, tables 2-1 and 2-2): every PCL x WordStar sends is measured from
+/// it, not from the paper (WS7 report 7.4). A4 and the metric sizes sit a little closer to
+/// the edge than Letter, Legal and Executive; landscape closer still. Port of Python's
+/// `_PCL_LOGICAL_PAGE_DOTS`.
+private func pclLogicalPageDots(_ orientation: Orientation, a4: Bool) -> Int {
+    switch orientation {
+    case .portrait: return a4 ? 71 : 75
+    case .landscape: return a4 ? 59 : 60
+    }
+}
+
+/// Where a Printed page's x = 0 sits on the paper, in points: Printed lays a page out in
+/// the printer's own frame, the PCL logical page, and the page is placed on the sheet this
+/// far in from its left edge. Every x the page model carries (`PageLine.left`, the running
+/// lines, the automatic page number) is in that frame; a view drawing on the sheet adds
+/// this. `orientation` is the page's own (`printedPageOrientation`): a `.pl` shorter than
+/// the sheet is wide is still portrait paper. A print stream carries its own offset
+/// in-band, so it is placed at the edge (0). Port of Python's `logical_page_x`.
+public func logicalPageX(_ doc: Document, orientation: Orientation, sheetWidth: Int) -> Double {
+    if doc.detection?.variant == .printstream { return 0.0 }
+    let a4 = sheetWidth == 595 || sheetWidth == 842       // A4 portrait, A4 landscape
+    return Double(pclLogicalPageDots(orientation, a4: a4)) * 72.0 / 300.0
+}
+
+/// The orientation a Printed page was opened in: its own `.pr or=`, else the
+/// document's. Port of Python's `_page_orientation`.
+public func printedPageOrientation(_ doc: Document, _ page: Page?) -> Orientation {
+    page?.orientation ?? doc.formatting.orientation ?? .portrait
+}
+
+/// A page's content stream moved `x` points right on the sheet. Port of Python's
+/// `_place_on_sheet`.
+func placeOnSheet(_ stream: [UInt8], x: Double) -> [UInt8] {
+    if x == 0 { return stream }
+    let x2 = Double(hundredths(x)) / 100.0
+    return Array("q 1 0 0 1 \(tfSize(x2)) 0 cm\n".utf8) + stream + Array("\nQ".utf8)
 }

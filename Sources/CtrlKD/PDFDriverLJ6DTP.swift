@@ -82,6 +82,24 @@ private let ljSubstUnivers: [Character: Character] = [
     "\u{2660}": "\u{256F}",   // ♠ -> ╯
 ]
 
+/// The document character each of the substitutions above stands for (`ljSubst`,
+/// `ljSubstUnivers`): the driver measures and kerns the document character; only the glyph sent
+/// changes (WS7 teardown 17.5, T1). Port of `_LJ_UNSUBST`.
+private let ljUnsubst: [Unicode.Scalar: Unicode.Scalar] = {
+    var out: [Unicode.Scalar: Unicode.Scalar] = [:]
+    for table in [ljSubst, ljSubstUnivers] {
+        for (k, v) in table { out[v.unicodeScalars.first!] = k.unicodeScalars.first! }
+    }
+    return out
+}()
+
+/// `text` with every display substitution undone, one scalar for one.
+func ljUnsubstituted(_ text: String) -> String {
+    var out = String.UnicodeScalarView()
+    for s in text.unicodeScalars { out.append(ljUnsubst[s] ?? s) }
+    return String(out)
+}
+
 /// The SEMANTIC flow's Univers corners. Port of `layout.LJ_SUBST_UNIVERS`, which is
 /// deliberately NOT `pdf._LJ_SUBST_UNIVERS`: the arc glyphs above exist so the PDF vector
 /// path can draw a quarter-circle JOIN that no font is asked to supply. A layout/RTF/HTML
@@ -157,7 +175,9 @@ func ljSubstitute(_ segs: [LineSegment], kerning: Bool = true,
         var text = seg.text
         if typography {
             text = String(text.map { ljSubst[$0] ?? $0 })
-            if kerning {
+            // Placed by the driver, the pair is tucked by its own kerning pairs (60 60,
+            // 27 27: WS7 teardown 17.4), not drawn as one glyph.
+            if kerning && entry.laserjet == nil {
                 text = collapsingDoubled(text, "\u{2018}", to: "\u{201C}")
                 text = collapsingDoubled(text, "\u{2019}", to: "\u{201D}")
             }
@@ -566,11 +586,17 @@ public func graphicCellOps(_ char: Character) -> [GraphicCellOp] {
 /// `_graphic_ops`.
 func graphicOps(_ text: String, x: Double, y: Double, pitch: Double, pt: Int,
                 leadFactor: Double = 1.1) -> [[UInt8]] {
+    graphicOps(text, x: x, y: y, pitch: pitch, pt: Double(pt), leadFactor: leadFactor)
+}
+
+/// The same at a fractional size (a Printed sub/superscript).
+func graphicOps(_ text: String, x: Double, y: Double, pitch: Double, pt: Double,
+                leadFactor: Double = 1.1) -> [[UInt8]] {
     var ops: [[UInt8]] = []
-    let yb = y - 0.25 * Double(pt)
-    let h = leadFactor * Double(pt)
+    let yb = y - 0.25 * pt
+    let h = leadFactor * pt
     let my = yb + h / 2.0
-    let t = max(0.5, Double(pt) / 12.0)          // line weight
+    let t = max(0.5, pt / 12.0)          // line weight
     // Register C12: a double-weight box-drawing rule (═, ║, and the table junction
     // characters built from them) is two hairlines with a hairline GAP between them, not
     // two hairlines a whole extra stroke-width apart. `d` used to be an unmeasured guess
@@ -634,16 +660,30 @@ func graphicOps(_ text: String, x: Double, y: Double, pitch: Double, pt: Int,
             rect(cx + (fx - 0.5) * sq, cy + (fy - 0.5) * sq, fw * sq, fh * sq)
         }
     }
-    for (n, ch) in text.enumerated() {
+    let chars = Array(text)
+    var skip = 0
+    for (n, ch) in chars.enumerated() {
+        if skip > 0 {
+            skip -= 1
+            continue
+        }
         let x0 = x + Double(n) * pitch
         if ch == " " { continue }
+        // A run of the same block is one rectangle: cells drawn side by side leave a hairline
+        // seam at every cell edge in a viewer, where the printer's bar is solid (LJ6DTP p5, on
+        // the LaserJet scan).
+        var run = 1
+        if ch == fullBlock || shadeGray[ch] != nil {
+            while n + run < chars.count, chars[n + run] == ch { run += 1 }
+            skip = run - 1
+        }
         if let shapes = symbolShapes[ch] {
             for shape in shapes { symbolShape(shape, x0) }
         } else if ch == fullBlock {
-            rect(x0, yb, pitch, h)
+            rect(x0, yb, pitch * Double(run), h)
         } else if let gray = shadeGray[ch] {
             ops.append(Array("q \(fixedTwoDecimals(gray)) g".utf8))
-            rect(x0, yb, pitch, h)
+            rect(x0, yb, pitch * Double(run), h)
             ops.append(Array("Q".utf8))
         } else if let frac = partBlocks[ch] {
             if squarePartBlocks.contains(ch) {
@@ -874,6 +914,11 @@ func splitSymbolFallback(_ segs: [LineSegment]) -> [LineSegment] {
 private let tzReference = "abcdefghijklmnopqrstuvwxyz "
 
 func faceTz(_ basefont: String, _ pitch: Double, _ pt: Int) -> Double {
+    faceTz(basefont, pitch, Double(pt))
+}
+
+/// The same at a fractional size (a Printed sub/superscript).
+func faceTz(_ basefont: String, _ pitch: Double, _ pt: Double) -> Double {
     let avg = stringWidthPt(tzReference, basefont, pt) / Double(tzReference.count)
     guard avg > 0 else { return tzDefault }
     // `round(x, 2)`, round-half-to-even, via the same hundredths-as-integer technique
@@ -927,7 +972,10 @@ enum PCLOp: Hashable, Sendable {
 /// pixel row 85 exactly, and y=3202 at row 3202. This is the printer's own
 /// unprintable-area registration, not a WordStar margin — raw PCL bypasses WordStar's own
 /// cursor/margin machinery and addresses the physical page directly.
-let pclAbsXOffsetUnits = 75
+/// That 75 units is the LaserJet's logical-page offset, which every Printed page now carries
+/// whole (`placeOnSheet`); raw PCL and the text share one frame, so the program adds nothing
+/// of its own (box left edge 18.5pt, as gpcl6 draws WS7's).
+let pclAbsXOffsetUnits = 0
 let pclAbsYOffsetUnits = 0
 /// PCL unit (1/300in) -> point, exact.
 let pclUnitPt = 72.0 / 300.0

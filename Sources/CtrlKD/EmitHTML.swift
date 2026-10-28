@@ -866,7 +866,8 @@ public func emitHTML(_ doc: Document, mode: EmitMode = .modern,
         options.notes.remove(.comment)
     }
     // N9 (b33 field notes): mode-aware default, flag overrides either way.
-    let ctx = RenderContext(doc, printed: printed, sentenceSpacing: options.sentenceSpacing)
+    let ctx = RenderContext(doc, printed: printed, sentenceSpacing: options.sentenceSpacing,
+                            noteRefs: options.noteRefs)
     let ssOn = ctx.sentenceSpacing
     let refNotes = ctx.refNotes
     // HTML has no real pagination in EITHER mode -- a pagebreak is only ever a

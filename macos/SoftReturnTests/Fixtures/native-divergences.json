@@ -5,18 +5,6 @@
   "scope_fields": "document/page/line each accept \"*\" for \"every one\". A row with document \"*\" is a CLASS ruling and needs its class field set; a row naming a real document, page and line is a specific accepted defect and should carry the issue that tracks it. A row may also carry `gate_reasons` and `count_ceiling`: the reason vocabulary ctrl-kd's PCL gate uses, and the most rows of those reasons this document may produce before the divergence stops being the licensed one and becomes a regression.",
   "divergences": [
     {
-      "id": "native-cocoa-sup-sub",
-      "class": "font-class",
-      "document": "*",
-      "page": "*",
-      "line": "*",
-      "applies_to": "native",
-      "reason": "Native sets a superscript/subscript run with Cocoa's own arithmetic - two thirds of the base font's size, with the baseline offset measured from that smaller font's own ascender/descender - where the Printed view now uses WordStar's measured per-family x-height ratio (Courier 9.25/12, banker's-rounded to a whole point size) and WordStar's own narrowed fixed-pitch cell (5.5/7.2, applied as kerning). See DocumentRenderer.scriptMetrics's `ratio` parameter and the `nativeSupSub` flag threaded to it.",
-      "why_permanent": "Mechanism G's ratio is measured off Courier's x-height from real WS7 PCL. Native substitutes the user's own chosen face for WordStar's, so there is no Courier x-height for that ratio to be true about - applying it there would be extrapolating a Courier measurement onto an arbitrary font. This is exactly the 'Native diverges from Printed only by fonts' rule, so it is permanent by ruling rather than pending a fix.",
-      "ruled": "2026-09-07, JOB 1 mechanism-G port",
-      "engine_commit": "f79ff29"
-    },
-    {
       "id": "native-proportional-font-placement",
       "class": "font-class",
       "document": "*",

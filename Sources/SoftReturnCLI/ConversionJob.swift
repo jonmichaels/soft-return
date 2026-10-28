@@ -38,7 +38,7 @@ public struct ConversionJob {
     public func parseDocument(_ data: [UInt8]) throws -> Document {
         let parsed: Document
         do {
-            parsed = try parse(data, variant: options.variant)
+            parsed = try parse(data, variant: options.variant, printedBy: options.printedBy)
         } catch {
             throw Failure.parse(error)
         }

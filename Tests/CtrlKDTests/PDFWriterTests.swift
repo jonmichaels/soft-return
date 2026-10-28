@@ -316,10 +316,10 @@ import Testing
     // Python's nested conditional resolves the contradiction toward `sup`; a span carrying
     // both is not something the parser produces, but the branch is there and asymmetric.
     // Mechanism G (ctrl-kd f328838): a fontless span's family still resolves to Courier
-    // (`pdfFamily(nil) == .courier`), so this now reduces by Courier's own measured 9.25/12
-    // ratio (round(12 * 9.25/12) = 9), not the old flat 2/3 (8).
+    // (`pdfFamily(nil) == .courier`), so this reduces by WS7's own Courier rule,
+    // floor(240 * 198 / 256) twips = 9.25pt, not the old flat 2/3 (8).
     let line: Page = [[Span(text: "x", styles: [.sup, .sub])]]
-    #expect(latin1(pageStream(line, top: 72)).contains("/F1 9 Tf 3 Ts"))
+    #expect(latin1(pageStream(line, top: 72)).contains("/F1 9.25 Tf 3 Ts"))
 }
 
 // MARK: - emit_pdf gaps
@@ -463,7 +463,13 @@ import Testing
     // default 8 columns at the FIXED 7.2pt/column (ctrl-kd ace279b, pitch-independent) --
     // 8 * 7.2 = 57.6pt, the WS7 manual's ".8 inch" (PDFLayout.swift's `printedLeft`), not
     // the old 72.0.
-    #expect(latin1(emitPDF(ws, mode: .printed)).contains("57.6 744.0 Td"))
+    // planning #549: `ws` is a WS4 file printed by WS4, whose HPLJET driver sets line 1 its
+    // 1/3" vbias (24pt) below the top margin whatever the lead: 792-36-24 = 732.0
+    // (`HPLJETTests.lineOneSitsTheVbiasBelowTheTopMarginWhateverLh`). Printed by WS7 it
+    // keeps the 744.0 above.
+    #expect(latin1(emitPDF(ws, mode: .printed)).contains("57.6 732.0 Td"))
+    let ws7 = parseWS(ws4Text("Some words here") + HARD, printedBy: .ws7)
+    #expect(latin1(emitPDF(ws7, mode: .printed)).contains("57.6 744.0 Td"))
 
     // A print stream overrides `modern` — `isPrinted` wins, because reflowing a document
     // whose layout IS its content destroys it.

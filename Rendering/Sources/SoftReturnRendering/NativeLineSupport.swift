@@ -72,6 +72,76 @@ func nativeLineParagraphStyle(fontSize: Double, lead: Double?, lineBreakMode: NS
 /// its root cause is still open — see this job's report/LESSONS, not a re-derivation here.
 let nativeNoKerning: Float = 0
 
+/// The kern that puts a Courier Prime character on the engine's 10-pitch grid, 0.6 em: Courier
+/// Prime advances 0.5996 em, and a running line of it drifted a quarter point left by its last
+/// word (-README's head against its WS7 capture). Any other face takes no kern.
+@MainActor
+func nativeCourierPitchKern(_ font: NSFont) -> Float {
+    guard font.familyName == "Courier Prime" else { return nativeNoKerning }
+    return Float(0.6 * Double(font.pointSize) - nativeResolvedAdvance(of: "0", in: font))
+}
+
+
+/// A line's graphic cells, less the `.l#` bars (`PDFMetrics.lineNoBarChars` at
+/// `PDFMetrics.lineNoBarXs`): the engine draws those at fixed x on every numbered row, and
+/// they are not characters in the line's text, so they would put the character-by-character
+/// match of the rest out of step. Native draws them with the line number instead.
+func nativeLineGraphicCells(_ line: PageLine) -> (cells: [PageLine.GraphicCellPlacement],
+                                                bars: [PageLine.GraphicCellPlacement]) {
+    let all = line.graphicCells ?? []
+    guard line.lineNo != nil else { return (all, []) }
+    let isBar = { (cell: PageLine.GraphicCellPlacement) in
+        zip(PDFMetrics.lineNoBarChars, PDFMetrics.lineNoBarXs).contains {
+            $0.0 == cell.char && abs($0.1 - cell.x) < 1e-6
+        }
+    }
+    return (all.filter { !isBar($0) }, all.filter(isBar))
+}
+
+/// The pieces Native pins a line to, and the scale tolerance to pin them with.
+///
+/// A line with text WS7's driver places (`PageLine.driverPieces`): every piece the engine
+/// places, at the driver's own x, each drawn in its Mac face and scaled to its paper width, so
+/// it neither runs into the gap after it nor leaves that gap wider (`nativeDriverScaleTolerance`
+/// is 0). WS7
+/// itself positioned every word from its tables and let the printer's face draw it; the Mac
+/// face is the printer's face here.
+///
+/// Otherwise the engine's justification pieces (`PageLine.justifyWordX`) for a line whose every
+/// inked span is fixed pitch, never scaled.
+func nativeLinePieces(
+    _ line: PageLine, fonts: [FontChange]
+) -> (pieces: [PageLine.JustifyWordPiece], scaleBeyond: Double?) {
+    if let driver = line.driverPieces, !driver.isEmpty {
+        return (driver, nativeDriverScaleTolerance)
+    }
+    return (nativeJustifyPieces(line, fonts: fonts), nil)
+}
+
+/// The `.kr` state Native's LJ6DTP substitution collapses doubled curly quotes under
+/// (`nativeLJ6DTPSubstitute`). A line the driver places keeps the pair as two characters,
+/// tucked by the driver's own kerning pairs, as Printed draws it.
+func nativeQuoteKerning(_ line: PageLine) -> Bool {
+    line.kerning && (line.driverPieces ?? []).isEmpty
+}
+
+/// A driver-placed word narrower than its width on paper keeps its Mac face's natural width
+/// unless it is narrower by more than this fraction; then it is scaled to the paper width. 0:
+/// every word is drawn at its paper width, which keeps a justified line's gaps even.
+let nativeDriverScaleTolerance = 0.0
+
+/// The justification pieces Native pins a line to: the engine's (`PageLine.justifyWordX`) for
+/// a line whose every inked span is fixed pitch, none otherwise. A proportional line is pinned
+/// to its `driverPieces` instead (`nativeLinePieces`).
+func nativeJustifyPieces(_ line: PageLine, fonts: [FontChange]) -> [PageLine.JustifyWordPiece] {
+    guard let pieces = line.justifyWordX, !pieces.isEmpty else { return [] }
+    let proportional = line.spans.contains { span in
+        guard span.text.contains(where: { !$0.isWhitespace }) else { return false }
+        let entry = span.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
+        return pdfFamily(entry) != .courier
+    }
+    return proportional ? [] : pieces
+}
 
 /// A JUSTIFIED LINE'S OWN WORD AND GAP WIDTHS, AS THE LIBRARY SPREAD THEM.
 ///
@@ -88,28 +158,73 @@ let nativeNoKerning: Float = 0
 ///
 /// Bails out entirely rather than partially if the pieces and the built string ever
 /// disagree: a line half-pinned to a model it does not match is worse than one not pinned.
+///
+/// `scaleBeyond`: for a line's driver pieces, an inked piece wider than its own width is
+/// scaled to it (`.expansion`); a narrower one is scaled only when it is narrower by more than
+/// this fraction, and otherwise keeps its natural width with the gap after it taking up the
+/// difference.
 @MainActor
 func nativePinJustifiedWords(
-    _ assembled: NSAttributedString, pieces: [PageLine.JustifyWordPiece]
+    _ input: NSAttributedString, pieces inputPieces: [PageLine.JustifyWordPiece],
+    scaleBeyond: Double? = nil
 ) -> NSAttributedString {
-    guard !pieces.isEmpty, assembled.length > 0 else { return assembled }
+    guard !inputPieces.isEmpty, input.length > 0 else { return input }
+    // A dot-leader tab on a driver-placed line: WS7 repeats the leader glyph at the driver's own
+    // advance to fill the gap, and the engine's piece is the dots it drew. The document's own run
+    // of dots is rebuilt to that many, each spaced at the engine's pitch, unscaled, and the run
+    // never joins the word beside it.
+    let pieces = inputPieces
+    var leaders = Set<Int>()
+    let assembled = NSMutableAttributedString(attributedString: input)
+    if scaleBeyond != nil {
+        var at = 0
+        for (index, piece) in inputPieces.enumerated() {
+            let length = (piece.text as NSString).length
+            let string = assembled.string as NSString
+            at = nativeSkipAttachments(in: string, from: at, before: piece.text)
+            var typed = 0
+            if length > 2, let dot = piece.text.first, !dot.isWhitespace, !dot.isLetter, !dot.isNumber,
+               piece.text.allSatisfy({ $0 == dot }) {
+                while at + typed < string.length,
+                      string.substring(with: NSRange(location: at + typed, length: 1)) == String(dot) {
+                    typed += 1
+                }
+            }
+            if typed > 0, let dot = piece.text.first,
+               let font = assembled.attribute(.font, at: at, effectiveRange: nil) as? NSFont {
+                let one = nativeResolvedAdvance(of: String(dot), in: font)
+                var attributes = assembled.attributes(at: at, effectiveRange: nil)
+                attributes[.kern] = max(0, piece.width / Double(length) - one)
+                attributes[.expansion] = nil
+                assembled.replaceCharacters(in: NSRange(location: at, length: typed),
+                                            with: NSAttributedString(string: piece.text, attributes: attributes))
+                leaders.insert(index)
+            }
+            at += length
+        }
+    }
     let text = assembled.string as NSString
     // Every piece's own character range in the built string, checked as we go.
     var ranges: [NSRange] = []
     var cursor = 0
     for piece in pieces {
+        cursor = nativeSkipAttachments(in: text, from: cursor, before: piece.text)
         let piece = piece.text as NSString
         guard cursor + piece.length <= text.length,
               text.substring(with: NSRange(location: cursor, length: piece.length)) == piece as String
-        else { return assembled }
+        else { return input }
         ranges.append(NSRange(location: cursor, length: piece.length))
         cursor += piece.length
     }
     let pinned = NSMutableAttributedString(attributedString: assembled)
-    for (index, range) in ranges.enumerated() where range.length > 0 {
-        // This piece's own advance as it currently stands, kerns already applied by the
-        // fixed-pitch and graphic-cell pins included.
-        var advance = 0.0
+    // Each piece's natural width in its own face and the kerns already on it (the fixed-pitch
+    // and graphic-cell pins), and the last character, which carries the pin.
+    var naturals: [Double] = []
+    var kernsOn: [Double] = []
+    var lasts: [NSRange] = []
+    for range in ranges {
+        var natural = 0.0
+        var kerns = 0.0
         var last = NSRange(location: NSNotFound, length: 0)
         var at = range.location
         while at < NSMaxRange(range) {
@@ -118,14 +233,134 @@ func nativePinJustifiedWords(
             guard clamped.length > 0 else { break }
             last = clamped
             if let font = pinned.attribute(.font, at: clamped.location, effectiveRange: nil) as? NSFont {
-                advance += nativeResolvedAdvance(of: text.substring(with: clamped), in: font)
+                natural += nativeResolvedAdvance(of: text.substring(with: clamped), in: font)
             }
-            advance += (pinned.attribute(.kern, at: clamped.location, effectiveRange: nil) as? Double) ?? 0
+            kerns += (pinned.attribute(.kern, at: clamped.location, effectiveRange: nil) as? Double) ?? 0
             at = NSMaxRange(composed)
         }
+        naturals.append(natural)
+        kernsOn.append(kerns)
+        lasts.append(last)
+    }
+    // The scale of each piece. A word a kerning pair split into pieces is judged whole: its
+    // width on paper is the sum of its pieces' advances, kerning included, against its face's
+    // natural width. Wider at all, or narrower past the tolerance, the whole word is scaled to it.
+    var scales = [Double](repeating: 1, count: ranges.count)
+    // Each piece's advance on screen: its width on paper, except inside a word a kerning pair
+    // split and that keeps its natural width (below).
+    var targets = pieces.map(\.width)
+    if let limit = scaleBeyond {
+        func inked(_ k: Int) -> Bool {
+            text.substring(with: ranges[k]).contains(where: { !$0.isWhitespace })
+        }
+        var k = 0
+        while k < ranges.count {
+            guard inked(k) else { k += 1; continue }
+            // LJ6DTP's © (`nativeLJ6DTPCopyright`) and a dot leader stand alone, never part of
+            // a word.
+            func standsAlone(_ k: Int) -> Bool { pieces[k].text == "©" || leaders.contains(k) }
+            var end = k
+            while end + 1 < ranges.count, inked(end + 1), !standsAlone(end), !standsAlone(end + 1) { end += 1 }
+            let natural = naturals[k...end].reduce(0, +)
+            let width = pieces[k...end].reduce(0) { $0 + $1.width }
+            // A lone symbol (a bullet, a © standing by itself) narrower than its cell keeps its
+            // own shape: the printer drew its own glyph there (the engine's `ljAlone`).
+            let scalars = pieces[k].text.unicodeScalars
+            let lone = k == end && scalars.count == 1
+                && !CharacterSet.alphanumerics.contains(scalars.first!)
+            if (lone && natural < width) || leaders.contains(k) {
+                k = end + 1
+                continue
+            }
+            if natural > 0, pieces[k...end].allSatisfy({ $0.drawn != nil }) {
+                // Each piece at the width the driver drew it, as Printed sets each piece's Tz:
+                // a kerning pair tucks the next piece under this one's end rather than
+                // squeezing this one into the advance (LJ6DTP p2's ’’, which the LaserJet and
+                // Printed print as one tight pair).
+                for w in k...end where naturals[w] > 0 {
+                    let scale = (pieces[w].drawn ?? pieces[w].width) / naturals[w]
+                    scales[w] = scale
+                    pinned.addAttribute(.expansion, value: log(scale), range: ranges[w])
+                }
+            } else if natural > 0, width > 0, natural > width || (width - natural) / width > limit {
+                // One scale for the word, except that a piece of more than one letter in a
+                // word a kerning pair split fills its own slot: the Mac face's letters are not
+                // in the driver's proportions, and one scale left the last piece short, a gap
+                // after the word. A single tucked letter keeps the word's scale, so a kerned
+                // pair still overlaps rather than squeezing.
+                // An underlined word keeps one scale: AppKit draws an underline per run, and a
+                // scale per piece broke a link's underline into steps (LJ6DTP p8).
+                let underlined = ((pinned.attribute(.underlineStyle, at: ranges[k].location,
+                                                    effectiveRange: nil) as? Int) ?? 0) != 0
+                for w in k...end {
+                    let own = end > k && !underlined && pieces[w].text.count > 1 && naturals[w] > 0
+                    let scale = own ? pieces[w].width / naturals[w] : width / natural
+                    scales[w] = scale
+                    pinned.addAttribute(.expansion, value: log(scale), range: ranges[w])
+                }
+            } else if end > k, natural > 0 {
+                // A split word drawn at its natural width keeps its pieces together, each
+                // moved only by the driver's kern, and the word's slack goes after its last
+                // piece rather than opening a gap at the split.
+                let slack = width / natural - 1
+                var moved = 0.0
+                for w in k..<end {
+                    targets[w] = pieces[w].width - naturals[w] * slack
+                    moved += naturals[w] * slack
+                }
+                targets[end] = pieces[end].width + moved
+            }
+            k = end + 1
+        }
+    }
+    for (index, last) in lasts.enumerated() where ranges[index].length > 0 {
         guard last.location != NSNotFound else { continue }
+        let advance = naturals[index] * scales[index] + kernsOn[index]
+        let delta = targets[index] - advance
         let existing = (pinned.attribute(.kern, at: last.location, effectiveRange: nil) as? Double) ?? 0
-        pinned.addAttribute(.kern, value: existing + (pieces[index].width - advance), range: last)
+        let lastAdvance = (pinned.attribute(.font, at: last.location, effectiveRange: nil) as? NSFont)
+            .map { nativeResolvedAdvance(of: text.substring(with: last), in: $0) * scales[index] } ?? 0
+        // AppKit never moves a glyph back: a character whose advance comes out negative advances
+        // nothing, and the line after it sits right by the difference. A cut too deep for the
+        // last character (a run of tab spaces before a symbol, LJ6DTP p3's chart) is shared
+        // among the piece's characters.
+        guard lastAdvance + existing + delta < 0 else {
+            pinned.addAttribute(.kern, value: existing + delta, range: last)
+            continue
+        }
+        var characters: [NSRange] = []
+        var at = ranges[index].location
+        while at < NSMaxRange(ranges[index]) {
+            let composed = NSIntersectionRange(text.rangeOfComposedCharacterSequence(at: at), ranges[index])
+            guard composed.length > 0 else { break }
+            characters.append(composed)
+            at = NSMaxRange(composed)
+        }
+        let share = delta / Double(characters.count)
+        for character in characters {
+            let own = (pinned.attribute(.kern, at: character.location, effectiveRange: nil) as? Double) ?? 0
+            pinned.addAttribute(.kern, value: own + share, range: character)
+        }
+    }
+    // The typesetter adds the face's kerning pair after some pinned characters and not others
+    // (Times' space before T, 0.2 pt, and ’ before a space, 0.9 pt; not W before o in a word
+    // scaled in two runs), so the line is set once as AppKit sets it and each piece's last
+    // character takes up the difference between where the next piece starts and its target.
+    let measured = nativeGlyphStarts(pinned, at: ranges.map(\.location))
+    // Each piece's place is the engine's x, moved by any slack a split word put after its last
+    // piece instead (`targets`), and a print control's spacer between pieces keeps its gap.
+    var moved = 0.0
+    var error = 0.0
+    for index in 0..<(ranges.count - 1) {
+        moved += targets[index] - pieces[index].width
+        let planned = pieces[index + 1].x - pieces[0].x + moved
+        let after = measured[index + 1] - measured[0] - planned
+        let last = lasts[index]
+        if ranges[index].length > 0, last.location != NSNotFound, abs(after - error) > 0.01 {
+            let kern = (pinned.attribute(.kern, at: last.location, effectiveRange: nil) as? Double) ?? 0
+            pinned.addAttribute(.kern, value: kern - (after - error), range: last)
+            error = after
+        }
     }
     return pinned
 }
@@ -458,6 +693,32 @@ func nativeResolvedAdvance(of character: String, in font: NSFont) -> Double {
     return advance
 }
 
+/// Past any attachment characters at `location` the next piece does not begin with: a print
+/// control's spacer (`pctlAdvanceAttachment`) is in the line but not in the engine's pieces,
+/// which only start that much further in.
+func nativeSkipAttachments(in text: NSString, from location: Int, before piece: String) -> Int {
+    guard !piece.hasPrefix("\u{FFFC}") else { return location }
+    var at = location
+    while at < text.length, text.character(at: at) == 0xFFFC { at += 1 }
+    return at
+}
+
+/// Where AppKit sets the glyph of each given character, one line laid out alone.
+@MainActor
+func nativeGlyphStarts(_ line: NSAttributedString, at locations: [Int]) -> [Double] {
+    let storage = NSTextStorage(attributedString: line)
+    let manager = softReturnLayoutManager()
+    let container = NSTextContainer(size: CGSize(width: 100_000, height: 10_000))
+    container.lineFragmentPadding = 0
+    manager.addTextContainer(container)
+    storage.addLayoutManager(manager)
+    manager.ensureLayout(for: container)
+    return locations.map { location in
+        guard location < storage.length else { return 0 }
+        return Double(manager.location(forGlyphAt: manager.glyphIndexForCharacter(at: location)).x)
+    }
+}
+
 /// Keyed on the face's NAME rather than the `NSFont` itself: two `NSFont` values for the same
 /// face and size are equal for this purpose and hashing the object would miss the cache.
 struct NativeAdvanceKey: Hashable {
@@ -493,31 +754,9 @@ struct NativeAdvanceKey: Hashable {
 /// a facsimile, so this is applied where `nativeNoKerning` is and nowhere else.
 let nativeNoLigatures: Int = 0
 
-/// MECHANISM G (engine commit f79ff29, mirroring ctrl-kd f328838) — the SIZE half.
-///
-/// A sup/sub span is SET SMALLER, and WS7's real reduction is a per-FAMILY x-height ratio,
-/// not the flat 2/3 this renderer (and the engine, before mechanism G) used everywhere.
-/// Measured from real WS7 PCL: Courier's is 9.25/12. Every other family keeps the flat 2/3,
-/// exactly as the engine's own `supSubXHeightRatio` table does — Courier is the only face
-/// with a captured sup/sub example in the corpus, and the engine deliberately declines to
-/// extrapolate. Values and call-site semantics mirror `PDFWriter.swift`'s
-/// `supSubXHeightRatio`/`supSubDefaultRatio`.
-let nativeSupSubCourierRatio = 9.25 / 12.0
-let nativeSupSubDefaultRatio = 2.0 / 3.0
-
-/// MECHANISM G — the PITCH half (`PDFWriter.swift`'s `supSubCellRatio`).
-///
-/// WS7 does not merely draw a smaller glyph inside the body's fixed-pitch cell: it
-/// RESELECTS a narrower pitch for the span, restoring the body's own value on exit. A
-/// 7.2pt (10 cpi) Courier body cell narrows to 5.5pt (13.04 cpi) — measured to the
-/// decipoint against -SCREEN.pcl's raw x-positions. Applied proportionally to whatever the
-/// span's own body cell actually is.
-let nativeSupSubCellRatio = 5.5 / 7.2
-
-/// Banker's rounding, matching the engine's own `roundHalfToEven` — `sized()` rounds a
-/// reduced point size with it, and 12 * (9.25/12) lands exactly on 9.25, a .25 case where
-/// the rounding MODE is what decides the answer. Swift's `.toNearestOrEven` is the same
-/// rule; spelled out here because the engine's helper is `internal`.
+/// Banker's rounding, matching the engine's own `roundHalfToEven`. Swift's
+/// `.toNearestOrEven` is the same rule; spelled out here because the engine's helper is
+/// `internal`.
 func nativeRoundHalfToEven(_ x: Double) -> Int { Int(x.rounded(.toNearestOrEven)) }
 
 /// Whether this span's face is the engine's `PDFFamily.courier` — the only family with a
@@ -541,12 +780,13 @@ func nativeFamilyIsCourier(_ entry: FontChange?) -> Bool {
     return nativeMacIsMonospace(entry)
 }
 
-/// The engine's `spanPitch` (`PDFWriter.swift`): a font block's own declared width word
-/// when it has one (1/1800in units, `hmiPerPoint` = 1800/72 = 25), else Courier's 0.6em at
-/// the span's declared size. `width1800` is `public` on `FontChange`, so this reads the
-/// same field the emitter does rather than re-deriving a pitch from AppKit metrics.
+/// The engine's `spanPitch` (`PDFWriter.swift`): the LaserJet driver's pitch for a fixed font
+/// (`pitch1800`, set on Native's fonts by `NativeEngineWork`), else a font block's own declared
+/// width word when it has one (1/1800in units, `hmiPerPoint` = 1800/72 = 25), else Courier's
+/// 0.6em at the span's declared size. Both are `public` on `FontChange`, so this reads the
+/// same fields the emitter does rather than re-deriving a pitch from AppKit metrics.
 func nativeSpanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
-    if let width = entry?.width1800, width != 0 { return Double(width) / (1800.0 / 72.0) }
+    if let width = entry?.pitch1800 ?? entry?.width1800, width != 0 { return Double(width) / (1800.0 / 72.0) }
     return Double(pt) * 0.6
 }
 
@@ -572,17 +812,15 @@ func nativeSpanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
 /// this job's LESSONS).
 func nativeStripControlChars(_ text: String) -> String {
     // AND `∙` IS A MIDDLE DOT IN PRINTED — `escFallback`'s own mapping (U+2219 -> U+00B7),
-    // not `runningOps`' fast-path one (U+2219 -> U+2022). Which of the two the engine applies
+    // not `runningOps`' fast-path one, which was U+2219 -> U+2022. Which of the two the engine applies
     // depends on the line: the fast path is for a running head with NO toggle bytes of its
     // own, and a head that has them goes run by run through `esc`, where `escFallback`
     // decides. LJ6DTP.WS's `.h1` wraps its title in a bold toggle, so it takes the second
     // path — measured, its PDF draws a middle dot, and the app drew the BULLET OPERATOR
     // itself, which is a third glyph again.
     //
-    // Modern is the other way and keeps its own substitution at its own call site: its writer
-    // takes the fast path, so `∙` really is a `•` there (measured on the same document, its
-    // Modern head reads "PDF • 2"). That replacement runs BEFORE this function, so what
-    // arrives here already has no `∙` in it.
+    // Both paths now agree: the fast path and `hfRuns` map `∙` to the middle dot too, the
+    // small dot the LaserJet prints for 0xF9 (planning #586), and so does Modern.
     String(text.unicodeScalars.map { scalar -> Character in
         if scalar.value == 0x2219 { return "\u{00B7}" }
         return scalar.value >= 0x20 && scalar.value != 0x7F ? Character(scalar) : " "
@@ -616,7 +854,7 @@ func nativeHeadFootRuns(_ text: String) -> [(text: String, styles: Style)] {
         if !buf.isEmpty { runs.append((buf, active)); buf = "" }
     }
     for scalar in text.unicodeScalars {
-        if scalar.value == 0x2219 { buf.unicodeScalars.append(Unicode.Scalar(0x2022)!); continue }
+        if scalar.value == 0x2219 { buf.unicodeScalars.append(Unicode.Scalar(0x00B7)!); continue }
         if let toggle = nativeHFToggles[scalar.value] {
             flush()
             active.formSymmetricDifference(toggle)

@@ -34,10 +34,11 @@ public struct QuickLookEngineWork: Sendable {
         bytes: [UInt8],
         docPath: String,
         pageSettingsPreset: DocumentOperations.PageSettingsPreset?,
-        quirks: QuirkChoices = .shipped
+        quirks: QuirkChoices = .shipped,
+        printedBy: PrintedBy = QuickLookPageSettingsPreference.resolvedPrintedBy()
     ) throws -> QuickLookEngineWork {
-        // Batch 46: `quirks`, the app's default quirks.
-        let parsed = try DocumentState.parsed(from: bytes, docPath: docPath, quirks: quirks)
+        // Batch 46: `quirks`, the app's default quirks; `printedBy`, which WordStar prints a WS4 file.
+        let parsed = try DocumentState.parsed(from: bytes, docPath: docPath, quirks: quirks, printedBy: printedBy)
         // `DocumentRenderer.nativeEngineOptions` of the state `QuickLookRender.nativeState(for:)` makes: the preset's
         // settings and the pictures resolved with the parse; `pictures: true`, `render`'s export flags.
         let options = EmitOptions(pageSettings: pageSettingsPreset?.settings, pixResults: parsed.pixResults)

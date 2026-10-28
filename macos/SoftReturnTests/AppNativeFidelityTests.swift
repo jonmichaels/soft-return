@@ -1,5 +1,6 @@
 import CtrlKD
 import SoftReturnShared
+import SoftReturnRendering
 import Foundation
 import Testing
 @testable import SoftReturn
@@ -149,6 +150,20 @@ struct AppNativeFidelityTests {
 
     // MARK: - Rendering the app's own Printed bytes
 
+    /// Each page's logical-page placement (1-based), for the document as the app opens it —
+    /// printed by WS7, as every capture was, when `asCaptured`; at the library defaults
+    /// otherwise. What `AppPDFWords`' `onLogicalPage` takes off to read in the gate's frame.
+    @MainActor
+    static func logicalPageX(forDocumentNamed name: String, asCaptured: Bool) throws -> (Int) -> Double {
+        let url = try #require(resolveSource(name), "no .WS/.WS4 source for \(name) in this corpus")
+        let settings = SettingsStore(defaults: UserDefaults(suiteName: "AppPCLFrame.\(UUID().uuidString)")!)
+        if asCaptured { settings.printedBy = .ws7 }
+        let state = try DocumentState(data: [UInt8](try Data(contentsOf: url)), settings: settings,
+                                      docPath: url.path)
+        let rendered = DocumentRenderer.render(state, style: .native)
+        return { page in Double(rendered.logicalPageX(atPage: page - 1)) }
+    }
+
     /// The app's AppKit-rendered Printed PDF for one document — the Cmd-P facsimile pass,
     /// not the library emitter.
     @MainActor
@@ -156,8 +171,11 @@ struct AppNativeFidelityTests {
         let url = try #require(resolveSource(name), "no .WS/.WS4 source for \(name) in this corpus")
         let bytes = [UInt8](try Data(contentsOf: url))
         let defaults = UserDefaults(suiteName: "AppPCLFidelity.\(UUID().uuidString)")!
-        let state = try DocumentState(data: bytes, settings: SettingsStore(defaults: defaults),
-                                      docPath: url.path)
+        // Every capture is WordStar 7's, so a WS4 document (BOXES) is printed as WS7 printed
+        // it, as ctrl-kd's PCL tier prints it.
+        let settings = SettingsStore(defaults: defaults)
+        settings.printedBy = .ws7
+        let state = try DocumentState(data: bytes, settings: settings, docPath: url.path)
         let products = try ExportEngine.render(
             document: state.document, state: state, formats: [.pdf], notes: NoteSelection(),
             style: .native, viewStyle: .native,
@@ -264,7 +282,9 @@ struct AppNativeFidelityTests {
         // CHARACTERS, not words: ctrl-kd segments both sides with one implementation
         // (engine-chars schema v2). The app used to segment its own side, and a second copy
         // of that rule is what this deletes.
-        try AppPDFWords.charsJSON(from: pdf).write(to: scratch)
+        // In the gate's frame: x from the LaserJet's logical page, as the captures measure it.
+        try AppPDFWords.charsJSON(from: pdf, logicalPageX: try Self.logicalPageX(
+            forDocumentNamed: doc, asCaptured: true)).write(to: scratch)
         defer { try? FileManager.default.removeItem(at: scratch) }
 
         let report = try Self.runGate(doc: doc, pdf: nil, words: scratch)

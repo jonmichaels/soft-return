@@ -98,6 +98,22 @@ public func detect(_ data: [UInt8]) -> Detection {
                     + "\(data[4] >> 4).\(data[4] & 0x0F))",
                 size: data.count))
         }
+        // A header-shaped opening whose block never closes is not a header: WS4 loads
+        // such a file as ordinary text and saves it back byte for byte (WS4 report 3.14,
+        // run ws5hdr -- `1D 7D 00 00 80 00` and zero fill read as one line of
+        // `^]}^@^@...`). The zero fill is WS4's kept 00h, not binary noise, so judge what
+        // follows the block by the ordinary statistics: when they say text, it is the
+        // WS4 file's text.
+        if jump >= 8, jump < 0x400, end < data.count, data[end] != 0x1D {
+            let after = detect(Array(data[(end + 1)...])).variant
+            if after == .text || after == .printstream || after == .ws4 {
+                return withMergeDataKind(data, Detection(
+                    variant: .ws4,
+                    reason: "opens with a header-shaped block that does not close: "
+                        + "WS4 holds it as text",
+                    size: data.count))
+            }
+        }
     }
     // core.py:1199 — truncate at the file's real EOF before any counting: the
     // start of the trailing ^Z padding run when one exists, else the first bare
@@ -173,6 +189,28 @@ public func detect(_ data: [UInt8]) -> Detection {
     // populations do not overlap: every genuine trip-carrying document sits at >= 7x
     // chance, every binary at <= 2x.
     let denseTrips = trips >= 3 && trips * 16384 >= core.count
+    // WS4 sets bit 7 on the last letter of every word and WS5+ dropped that convention
+    // (WSFORMAT), so the high-bit bytes that are NOT the middle of a wrapped triple and
+    // NOT the 8D/8A of a return or page mark -- the ones every WordStar writes -- are
+    // WS4's own. LASER1.DOC carries 709 wrapped box characters in 8 KB of WS4 text (WS4
+    // report 3.14, run laser1): the triples alone must not make it WS5+. One leftmost
+    // non-overlapping scan over `1B ? 1C | 8D 0A | 8D 8A | 0D 8A`, as the Python regex
+    // does (an 8D inside a triple's middle is not counted; an 8D before a triple is).
+    var ws4Hi = 0
+    var scan = 0
+    while scan < core.count {
+        let b = core[scan]
+        if b == 0x1B, scan + 2 < core.count, core[scan + 2] == 0x1C {
+            scan += 3
+        } else if scan + 1 < core.count,
+                  (b == 0x8D && (core[scan + 1] == 0x0A || core[scan + 1] == 0x8A))
+                    || (b == 0x0D && core[scan + 1] == 0x8A) {
+            scan += 2
+        } else {
+            if b >= 0x80 { ws4Hi += 1 }
+            scan += 1
+        }
+    }
     // ONE well-formed block is the threshold, not two. The old `>= 2` was a BYTE
     // threshold and a single real block spends two 0x1D bytes (opening bracket and
     // closing bracket), so `>= 2` bytes and `>= 1` block are the same standard for a
@@ -183,7 +221,15 @@ public func detect(_ data: [UInt8]) -> Detection {
     // core.py:72-74 — well-formed 1D symmetric blocks and 1B..1C wrapped extended
     // characters are WS5+ machinery regardless of anything else, checked first after
     // the binary gate.
-    if blocks1D >= 1 || denseTrips {
+    if blocks1D >= 1 {
+        return withMergeDataKind(data, result(.ws5plus))
+    }
+    if denseTrips {
+        // 1B..1C wrapped extended characters are WS5+ machinery too -- unless the file
+        // also carries WS4's bit-7 word ends, which WS5+ never writes.
+        if ws4Hi >= max(1, core.count / 20) && txt >= 70 {
+            return withMergeDataKind(data, result(.ws4))
+        }
         return withMergeDataKind(data, result(.ws5plus))
     }
     // core.py:75-83 — soft returns are strong WS evidence on their own; high-bit density
@@ -194,13 +240,24 @@ public func detect(_ data: [UInt8]) -> Detection {
     // chance bytes were the whole remaining case for calling a 21 MB Windows executable
     // a WS4 document. A real WS4 document soft-wraps every line: one per ~60 bytes,
     // thousands of times the floor asked for here.
-    let denseSoft = soft >= 3 && soft * 16384 >= core.count
-    if denseSoft || (hi >= max(1, core.count / 20) && txt >= 70) {
+    //
+    // Two soft returns are enough in a short file (WS7 report 14.6: the three-line
+    // paragraph of run just0 has two): the floor is the density.
+    let denseSoft = soft >= 2 && soft * 16384 >= core.count
+    // A page mark `0D 8A` is WS4's own write -- the editor stores one at every page it
+    // paginated, and print ignores them (WS4 report 1.10, 3.14; run marks3) -- under the
+    // same density floor, and only in a file that is text through and through: machine
+    // code is full of 0D and 8A.
+    let marks = countOccurrences(of: [0x0d, 0x8a], in: core)
+    let denseMarks = marks >= 1 && marks * 16384 >= core.count && txt >= 90
+    if denseSoft || denseMarks || (hi >= max(1, core.count / 20) && txt >= 70) {
         // WS5+ kept soft returns but dropped the bit-7-on-last-letter convention: a
-        // WordStar file with many soft returns and near-zero high bits is WS5+.
-        // (Symmetric blocks — footnotes etc., WS5+ only — settled it above; blocks1D is
-        // necessarily 0 by the time we get here, so this branch is about returns alone.)
-        if denseSoft && hi < soft / 4 {
+        // WordStar file with many soft returns and near-zero high bits is WS5+. The soft
+        // returns' own 8D bytes are high bits too, so the count is of the others
+        // (`ws4Hi`). (Symmetric blocks — footnotes etc., WS5+ only — settled it above;
+        // blocks1D is necessarily 0 by the time we get here, so this branch is about
+        // returns alone.)
+        if denseSoft && ws4Hi * 4 < soft {
             return withMergeDataKind(data, result(.ws5plus))
         }
         return withMergeDataKind(data, result(.ws4))

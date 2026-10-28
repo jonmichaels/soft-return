@@ -29,6 +29,10 @@ struct LineLeading {
     private let fontLeadOk: Bool
     private let fontLeadBase: Double
     private var fontLeadState: Double?
+    /// How far the line `lead(of:)` last resolved stands above the base line, in points,
+    /// when its lead came from the fonts on it (`.lh a`); `nil` otherwise. The paginator
+    /// lets such a line overhang the bottom by that rise (`PageLine.fontRise`).
+    private(set) var fontRise: Double?
 
     init(_ doc: Document) {
         self.doc = doc
@@ -54,9 +58,12 @@ struct LineLeading {
         if let styleLead {
             ownLead = styleLead
         }
+        fontRise = nil
         if ownLead == nil, fontLeadOk, block.lhAuto {
-            ownLead = fontLeadPt(line, fonts: doc.fonts, baseSize: fontLeadBase,
-                                 state: &fontLeadState)
+            let lead = fontLeadPt(line, fonts: doc.fonts, baseSize: fontLeadBase,
+                                  state: &fontLeadState)
+            ownLead = lead
+            fontRise = max(0.0, lead - printedLead(doc))
         }
         return ownLead
     }
@@ -338,10 +345,19 @@ func enteringLeadPt(_ block: Block, _ doc: Document, prevBlock: Block?) -> Doubl
 ///     advance(line N) = max( the size CARRIED OUT of line N-1,
 ///                            every font size declared anywhere ON line N )
 ///
-/// What a line carries OUT is the size of the font in force at its END (its last span's)
-/// when that font is PROPORTIONAL, and `baseSize` (the document default) when it is
-/// fixed-pitch or carries no font tag. A blank line has no spans, so it passes its
-/// predecessor's answer through and advances by it. A fixed-pitch block therefore never
+/// What a line carries OUT is the size of the font in force at its END when that font is
+/// PROPORTIONAL, and `baseSize` (the document default) when it is fixed-pitch or there is
+/// no font at all. A blank line declares nothing, so it passes its predecessor's answer
+/// through and advances by it.
+///
+/// THE END OF A LINE counts a font record that follows its last text and precedes its
+/// return (WS7 report 14.5, runs lead3 and lead5: Times 24 text closed by a restore
+/// record before the return, and the next line, Courier, advances 12; a 24-pt font that
+/// runs on from mid line 3 into line 4 makes line 4 advance 24 and line 5 12 -- "a
+/// line's height is the largest font on it, counting the font in effect at its start,
+/// and nothing carries further"). Such a record puts no span on the line it ends, so the
+/// font in force at the end is `Line.fontOut`, read at parse time; a line built without
+/// it falls back to its last span's. A fixed-pitch block therefore never
 /// carries into the next line, but it does raise its OWN line (an inline Courier 20pt line
 /// entered from a 12pt state advances 20pt). The result is multiplied by `autoLeadFactor`
 /// (1.0 on a stock install).
@@ -361,7 +377,12 @@ func fontLeadPt(_ line: Line, fonts: [FontChange], baseSize: Double, state: inou
     for span in line.spans {
         if let e = entry(span), e.points > governing { governing = e.points }
     }
-    if let last = line.spans.last {
+    if let fontOut = line.fontOut {
+        // the font in force at the line's end, a trailing record included
+        let e = (fontOut >= 0 && fontOut < fonts.count && fonts[fontOut].points > 0)
+            ? fonts[fontOut] : nil
+        state = (e?.proportional ?? false) ? e!.points : baseSize
+    } else if let last = line.spans.last {
         let e = entry(last)
         state = (e?.proportional ?? false) ? e!.points : baseSize
     }

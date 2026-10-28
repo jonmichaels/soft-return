@@ -258,6 +258,13 @@ final class DocumentWindowController: NSWindowController {
             name: SettingsStore.quirkDefaultsDidChange,
             object: settings)
 
+        // Settings ▸ which WordStar prints a WS4 file changed: the document re-reads itself under it.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(printedByChanged),
+            name: SettingsStore.printedByDidChange,
+            object: settings)
+
         // Printed style's own view, at rest until `reloadContent()` shows it — see the
         // property's own doc comment. `autoScales` stays false: `applyZoom()` drives
         // `pdfView.scaleFactor` explicitly, the same "one named ZoomSetting, one scale
@@ -932,6 +939,11 @@ final class DocumentWindowController: NSWindowController {
 
     @objc private func quirkDefaultsChanged() {
         guard documentState.setQuirkDefaults(settings.quirkDefaults), !documentState.isAwaitingParse else { return }
+        rerender()
+    }
+
+    @objc private func printedByChanged() {
+        guard documentState.setPrintedBy(settings.printedBy), !documentState.isAwaitingParse else { return }
         rerender()
     }
 

@@ -100,7 +100,10 @@ import Testing
         if CorpusDocumentFilter.recordIfUnmatched(doc) { return }
         let pdf = try Self.enginePDF(doc: doc)
         let theirs = try Self.ctrlkdDump(doc: doc)
-        let ours = try AppPDFWords.payload(from: pdf)
+        // ctrl-kd reads the engine's `Td`s inside its page placement, so ours are taken back
+        // to the logical page to compare like with like (`Payload.onLogicalPage`).
+        let ours = try AppPDFWords.payload(from: pdf).onLogicalPage(
+            try AppNativeFidelityTests.logicalPageX(forDocumentNamed: doc, asCaptured: false))
 
         #expect(ours.n_pages == theirs.n_pages,
                 "\(doc): we count \(ours.n_pages) pages, ctrl-kd counts \(theirs.n_pages)")

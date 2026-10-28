@@ -77,7 +77,10 @@ struct InvisiblesDesignPassTests {
                     // not the face's ascender to descender, which for Courier Prime is 14.32 pt against Native's 12 pt
                     // lead; and not the run's ink unioned into one rectangle, which b40-m14-after3 showed spanning a whole
                     // line at its deepest descender over a "¶" on the next row.
-                    let inks = Self.inks(of: runGlyphs, manager: manager, font: font)
+                    // Native draws a graphic character as its vector cell and skips the glyph
+                    // (`drawsGraphicGlyphs`), so the glyph's ink is not on the page.
+                    let inks = Self.inks(of: runGlyphs, manager: manager, font: font,
+                                         skipping: style == .native ? nativeGeometryChars : [])
                     guard !inks.isEmpty else { return }
                     runCount += 1
                     let kind = mark ? Self.kind(of: text) : "text"
@@ -140,9 +143,18 @@ struct InvisiblesDesignPassTests {
 
     /// Each of `glyphs`' drawn bounds in `font`, placed where the glyph is set, in the container's coordinates; glyphs
     /// that draw nothing are left out.
-    static func inks(of glyphs: NSRange, manager: NSLayoutManager, font: NSFont) -> [CGRect] {
+    static func inks(of glyphs: NSRange, manager: NSLayoutManager, font: NSFont,
+                     skipping skipped: Set<Character> = []) -> [CGRect] {
         var rects: [CGRect] = []
+        let text = (manager.textStorage?.string ?? "") as NSString
         for glyph in glyphs.location..<NSMaxRange(glyphs) where !manager.notShownAttribute(forGlyphAt: glyph) {
+            if !skipped.isEmpty {
+                let index = manager.characterIndexForGlyph(at: glyph)
+                if index < text.length,
+                   skipped.contains(Character(text.substring(with: text.rangeOfComposedCharacterSequence(at: index)))) {
+                    continue
+                }
+            }
             var cgGlyph = manager.cgGlyph(at: glyph)
             var bounds = CGRect.zero
             CTFontGetBoundingRectsForGlyphs(font as CTFont, .horizontal, &cgGlyph, &bounds, 1)

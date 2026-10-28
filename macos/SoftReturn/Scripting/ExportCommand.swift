@@ -33,7 +33,8 @@ enum ExportCommand {
         /// .handleExportScriptCommand`).
         var viewStyle: ViewStyle
         var notes: Set<NoteKind>
-        var noteRefs: NoteRefs
+        /// nil when the script gave no `note references`: Modern then follows the document.
+        var noteRefs: NoteRefs?
         var pageSettings: PageSettings?
         /// Job 373 (b24 FLAG UI): the export-sheet's own four flags. Their sdef parameters
         /// are optional — omitted means "Settings' own default", which the CALLER supplies
@@ -49,7 +50,7 @@ enum ExportCommand {
         /// Job 504: the sdef's `line numbers` parameter — `EmitOptions.lineNumbers`/the
         /// CLI's `--line-numbers`. Default true, a plain literal (unlike `headers`/`toc`/
         /// `inlineStyling`/`pictures` above, this has no Settings-backed export-sheet UI
-        /// default to fall back to — same shape as `noteRefs`'s own literal default below).
+        /// default to fall back to).
         var lineNumbers: Bool = true
         /// Job 504: the sdef's `styles` parameter — `EmitOptions.styles`/the CLI's
         /// `--no-styles`. Default true, same plain-literal shape as `lineNumbers` above.
@@ -136,7 +137,7 @@ enum ExportCommand {
         setNote(.annotation, in: &notes, from: arguments["scriptingAnnotations"] as? Bool)
         setNote(.comment, in: &notes, from: arguments["scriptingComments"] as? Bool)
 
-        var noteRefs = NoteRefs.word
+        var noteRefs: NoteRefs?
         if let refsNumber = arguments["scriptingNoteReferences"] as? NSNumber,
            let decoded = ScriptingEnumCoding.noteRefs(forCode: refsNumber.uint32Value) {
             noteRefs = decoded

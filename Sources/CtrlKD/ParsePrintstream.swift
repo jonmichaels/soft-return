@@ -67,7 +67,8 @@ private func detectCommentBug(_ data: [UInt8]) -> CommentBug? {
 
 public func parsePrintstream(
     _ data: [UInt8],
-    codes: [UInt8: PrintCode] = printCodes
+    codes: [UInt8: PrintCode] = printCodes,
+    keepBit7: Bool = false
 ) -> Document {
     // core.py:343-345
     var body = data
@@ -102,7 +103,13 @@ public func parsePrintstream(
         // space. Note this happens BEFORE the code lookup, so a style code carrying bit 7
         // still dispatches.
         let c = rawByte & 0x7F
-        if let code = codes[c] {
+        // ...unless the caller says the file is a nondocument (`keepBit7`): WS7 keeps bit 7
+        // there (WS7 report 14.2, run ws4an: the bytes of a WS4 file opened as a nondocument
+        // show as CP437 characters); only the flagged line end, form feed and return are
+        // read as theirs.
+        if keepBit7 && rawByte >= 0x80 && c != 0x0A && c != 0x0C && c != 0x0D {
+            buf.append(rawByte)
+        } else if let code = codes[c] {
             // core.py:364-367 — set/clear, not toggle.
             flush()
             if code.on {

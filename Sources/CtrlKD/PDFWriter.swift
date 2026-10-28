@@ -223,7 +223,9 @@ public func hfOffSheet(_ y: Double) -> Bool { y < 0 }
 func hfNaturalWidthPt(_ txt: String, fontIdx: Int?, doc: Document, size: Int,
                       styleAttrs: Style = []) -> Double {
     var entry: FontChange? = nil
-    if let fontIdx, fontIdx >= 0, fontIdx < doc.fonts.count { entry = doc.fonts[fontIdx] }
+    if let fontIdx, fontIdx >= 0, fontIdx < doc.fonts.count {
+        entry = laserjetFonts(doc.fonts, driver: doc.printerDriver)[fontIdx]
+    }
     let family = pdfFamily(entry)
     let pt: Int
     if let entry, entry.points != 0 { pt = max(1, roundHalfToEven(entry.points)) }
@@ -237,6 +239,11 @@ func hfNaturalWidthPt(_ txt: String, fontIdx: Int?, doc: Document, size: Int,
             continue
         }
         let styles = run.styles.union(styleAttrs)
+        if let lj = ljPieces(runText, entry, styles, pt, kerning: true,
+                             source: ljHeadSource(runText)) {
+            if let last = lj.last { total += last.x + last.width }
+            continue
+        }
         let basefont = base14(family, bold: styles.contains(.bold), italic: styles.contains(.italic))
         total += stringWidthPt(runText, basefont, pt)
     }
@@ -413,7 +420,12 @@ struct ResolvedHeadFoot {
 /// A `^K` with NO blanks after it would tell this apart from "the run collapses to one
 /// blank"; no document in the corpus has one, and both readings give the identical
 /// answer on every page that does exist.
-func ctrlKEvenPage(_ txt: String, _ pageNo: Int) -> String {
+///
+/// WS4 DROPS THE `^K` TOGETHER WITH EVERY BLANK AND TAB THAT FOLLOWS and keeps nothing
+/// (`Era.pkEvenKeepsBlank` false; WS4 teardown `wordstar4-dos/evidence/pass3/exe-static.md`
+/// 9, code 16FD3-16FEB; run p12-hepk: `.HE ^K<5 blanks>Pg #` prints `     Pg 1` and
+/// `Pg 2`).
+func ctrlKEvenPage(_ txt: String, _ pageNo: Int, keepBlank: Bool = true) -> String {
     guard pageNo % 2 == 0, txt.unicodeScalars.contains(where: { $0.value == 0x0B }) else {
         return txt
     }
@@ -421,11 +433,11 @@ func ctrlKEvenPage(_ txt: String, _ pageNo: Int) -> String {
     var suppressing = false
     for ch in txt {
         if ch.unicodeScalars.first?.value == 0x0B {
-            out.append(" ")
+            if keepBlank { out.append(" ") }
             suppressing = true
             continue
         }
-        if suppressing, ch == " " { continue }
+        if suppressing, ch == " " || (!keepBlank && ch == "\t") { continue }
         suppressing = false
         out.append(ch)
     }
@@ -440,7 +452,8 @@ func resolveHeadFootLines(
     footerInUse: Bool? = nil,
     headersPcl: [Int: [HFPrintControl]]? = nil,
     footersPcl: [Int: [HFPrintControl]]? = nil,
-    poCols: Double? = nil
+    poCols: Double? = nil,
+    footEjected: Bool = false
 ) -> ResolvedHeadFoot? {
     // Planning #250: a document with NO real body blocks at all (GALLEYS.DOT/
     // ADVANCE.DOT -- pseudogalley templates) never builds a real per-page `Page` via
@@ -455,7 +468,7 @@ func resolveHeadFootLines(
     // never uses the family) reads the flat `doc.headerFonts`/`headerTabs` exactly as
     // before this feature existed.
     let headers = headers ?? doc.headers
-    let footers = footers ?? doc.footers
+    var footers = footers ?? doc.footers
     // A `.fo` the author WROTE puts footers in use even when its text is EMPTY -- `.fo`
     // with nothing after it is WordStar's own documented way to silence the automatic
     // bottom-of-page number without `.op`, and it is how several real documents do it.
@@ -479,14 +492,20 @@ func resolveHeadFootLines(
     // `footers`", which is what every call site passing an explicit dict (TOC/index:
     // `[:]`) wants. Port of Python's `pdf._resolve_head_foot_lines`.
     let footerInUse = footerInUse ?? !footers.isEmpty
-    let showAutoNum = printed && autoPageNumber && !footerInUse
+    var showAutoNum = printed && autoPageNumber && !footerInUse
     // 2026-09-12 (cause 10): a running head whose ENTIRE content was a 0x0F user print
     // control has empty text and a real rule to draw -- `sawyer/LSRBOX/LSRBOX.WS`'s own
     // `.h1` is exactly that. Only the PDF WRITER passes these (`runningOps`); the
     // shared head/foot MODEL (`attachHeadFootLinesPrinted`, the `layout` JSON) does
     // not, so its own resolved lines -- and that JSON -- stay byte-identical.
     let headersPcl = headersPcl ?? [:]
-    let footersPcl = footersPcl ?? [:]
+    var footersPcl = footersPcl ?? [:]
+    if footEjected {
+        // `Page.endedByFormFeed`: no footer block at all.
+        footers = [:]
+        footersPcl = [:]
+        showAutoNum = false
+    }
     guard printed, !headers.isEmpty || !footers.isEmpty || showAutoNum
             || !headersPcl.isEmpty || !footersPcl.isEmpty else { return nil }
     // `.op` does NOT suppress a `#` in a header or footer. WSFORMAT.TXT is explicit:
@@ -511,6 +530,14 @@ func resolveHeadFootLines(
     let autoPl = doc.page?.plLines ?? defaultPlLines
     let autoMb = doc.page?.mbLines ?? defaultMbLines
     let autoFm = doc.page?.fmLines ?? 2.0
+    // How far below the foot row its baseline sits. WS7 puts it at `PL - MB + FM + LH`
+    // whatever `.cw` is (WS7 report 15.10, run w16-cwtab: with `.cw 20` the number stays
+    // at V=7320); the type size stood in for the last term until then, which is the same
+    // 12pt at the default `.cw`.
+    // WS4's HPLJET: its 1/3" vbias below the foot row (WS4 teardown 4 §15.2:
+    // V = ((PL - MB + FM)·8 + 16)·15 decipoints).
+    let rowDrop = printed && printingEra(doc).hpljetDriver ? Int(PDFMetrics.hpljetVbiasPt)
+        : printingEra(doc).pagenoRowBelowPageLine ? PDFMetrics.lead : size
 
     // `#` -> the page number. Written by hand because this module imports nothing —
     // `replacingOccurrences` is Foundation, which CtrlKD deliberately does without.
@@ -592,7 +619,9 @@ func resolveHeadFootLines(
                 txt = String(chars[0..<charIdx]) + String(repeating: " ", count: newCols) + suffix
             }
         }
-        return render(ctrlKEvenPage(txt, pageNo))
+        return render(ctrlKEvenPage(
+            txt, pageNo,
+            keepBlank: printingEra(doc).pkEvenKeepsBlank))
     }
 
     // The header block is anchored to the BODY, not the paper edge: its last line sits
@@ -701,8 +730,11 @@ func resolveHeadFootLines(
     // `PDFMetrics.lead`, where WordStar uses the `.lh` in force at each line's own
     // command. Identical for every document that leaves `.lh` alone (the default 8/48in
     // IS 12pt), and 0 for the one that asks for 0.
+    // WS4's HPLJET adds its 1/3" vbias where WS7 adds a line (WS4 teardown 4 §15.2:
+    // header V = ((MT - HM - 1)·8 + 16)·15 decipoints).
     let lastHeadY = Double(pageHeight) - (headBase + topHead - 1.0)
-        * Double(PDFMetrics.lead) - Double(size)
+        * Double(PDFMetrics.lead) - (printed && printingEra(doc).hpljetDriver
+                                     ? PDFMetrics.hpljetVbiasPt : Double(size))
     for n in Set(headers.keys).union(headersPcl.keys).sorted() {
         let txt = headers[n] ?? ""
         guard !txt.isEmpty || !(headersPcl[n] ?? []).isEmpty else { continue }
@@ -779,7 +811,7 @@ func resolveHeadFootLines(
     // margin -- there is nowhere to put it"), and the SAME outcome the removed
     // `y >= 0` guard already produced for that case.
     let firstFootY = autoPagenoRowY(pageHeight: pageHeight, pl: autoPl, mb: autoMb,
-                                    fm: autoFm, size: size)
+                                    fm: autoFm, size: rowDrop)
     var resolvedFooters: [(n: Int, text: String, y: Double, fontIdx: Int?, x: Double, styleAttrs: Style)] = []
     for n in Set(footers.keys).union(footersPcl.keys).sorted() {
         let txt = footers[n] ?? ""
@@ -827,7 +859,7 @@ func resolveHeadFootLines(
         // never collides with the loop just above — at most one of the two ever fires
         // for a given page.
         if let y = autoPagenoRowY(pageHeight: pageHeight, pl: autoPl, mb: autoMb,
-                                  fm: autoFm, size: size) {
+                                  fm: autoFm, size: rowDrop) {
             auto = (text: String(pageNo), x: autoPageNumberXPt(doc, poCols: poCols), y: y)
         }
     }
@@ -858,7 +890,8 @@ func runningOps(
     footerInUse: Bool? = nil,
     headersPcl: [Int: [HFPrintControl]]? = nil,
     footersPcl: [Int: [HFPrintControl]]? = nil,
-    poCols: Double? = nil
+    poCols: Double? = nil,
+    footEjected: Bool = false
 ) -> [[UInt8]] {
     guard let resolved = resolveHeadFootLines(doc, pageNo: pageNo, pageHeight: pageHeight,
                                               lead: lead, size: size, left: left,
@@ -869,7 +902,8 @@ func runningOps(
                                               footerInUse: footerInUse,
                                               headersPcl: headersPcl,
                                               footersPcl: footersPcl,
-                                              poCols: poCols)
+                                              poCols: poCols,
+                                              footEjected: footEjected)
     else { return [] }
 
     /// One already-resolved header/footer LINE's ops (register C6). `fontIdx` is the
@@ -908,17 +942,17 @@ func runningOps(
                    styleAttrs: Style = []) -> [[UInt8]] {
         var entry: FontChange? = nil
         if let fontIdx, res != nil, fontIdx >= 0, fontIdx < doc.fonts.count {
-            entry = doc.fonts[fontIdx]
+            entry = laserjetFonts(doc.fonts, driver: doc.printerDriver)[fontIdx]
         }
         let hasControlByte = txt.unicodeScalars.contains { $0.value < 0x20 }
         if entry == nil, styleAttrs.isEmpty, res == nil || !hasControlByte {
-            // `txt.replacingAll("\u{2219}", with: "\u{2022}")`: this fast path (no
+            // `txt.replacingAll("\u{2219}", with: "\u{00B7}")`: this fast path (no
             // font block, no control/toggle byte anywhere) never calls `hfRuns` at
             // all -- fine for style and control-byte handling, since the gate just
             // above already proves there is neither to interpret, but `hfRuns` ALSO
             // does one plain character substitution unconditionally: `∙` (U+2219
-            // BULLET OPERATOR) -> `•` (U+2022 BULLET), because cp1252 carries a real
-            // bullet glyph and WordStar's own list marker means the round one. This
+            // BULLET OPERATOR) -> `·` (U+00B7 MIDDLE DOT), the small dot the printer
+            // prints for the document's F9 (LJ6DTP's heads, on the LaserJet scan). This
             // path skipped that too, reintroducing the exact "downgrades a round
             // bullet to a middle dot for no encoding reason" regression that
             // substitution fixed for every OTHER header/footer line -- found
@@ -930,7 +964,7 @@ func runningOps(
             // ops` carries the identical fix (pdf.py, same commit).
             var out = Array("BT /\(pdfFont(bold: false, italic: false)) \(size) Tf 0 Ts ".utf8)
             out += Array("\(fixedOneDecimalDouble(x0)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-            out += esc(txt.replacingAll("\u{2219}", with: "\u{2022}"))
+            out += esc(txt.replacingAll("\u{2219}", with: "\u{00B7}"))
             out += Array(") Tj ET".utf8)
             return [out]
         }
@@ -948,6 +982,7 @@ func runningOps(
         }
         var ops: [[UInt8]] = []
         var x = x0
+        var scaled = false
         for (i, run) in hfRuns(txt).enumerated() {
             let runText = run.text
             if runText.isEmpty { continue }
@@ -966,6 +1001,22 @@ func runningOps(
             let basefont = base14(family, bold: styles.contains(.bold),
                                   italic: styles.contains(.italic))
             let font = res.ref(basefont)
+            if let lj = ljPieces(runText, entry, styles, pt, kerning: true,
+                                 source: ljHeadSource(runText)) {
+                // placed by WS7's LASERJET driver, as a body line's words are
+                for (i, (piece, px, pw)) in lj.enumerated() where piece.contains(where: { !$0.isWhitespace }) {
+                    let tz = ljPieceTz(piece, basefont, Double(pt), pw, alone: ljAlone(lj, i))
+                    var op = Array("BT /\(font) \(pt) Tf 0 Ts ".utf8)
+                    op += Array("\(fixedTwoDecimal(hundredths: tz)) Tz ".utf8)
+                    op += Array("\(fixedOneDecimalDouble(ljX(x + px))) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                    op += esc(piece)
+                    op += Array(") Tj ET".utf8)
+                    ops.append(op)
+                    scaled = true
+                }
+                if let last = lj.last { x += last.x + last.width }
+                continue
+            }
             var op = Array("BT /\(font) \(pt) Tf 0 Ts ".utf8)
             op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
             op += esc(runText)
@@ -973,6 +1024,7 @@ func runningOps(
             ops.append(op)
             x += stringWidthPt(runText, basefont, pt)
         }
+        if scaled { ops.append(Array("BT 100 Tz ET".utf8)) }
         return ops
     }
 
@@ -1109,53 +1161,91 @@ struct LineSegment {
     }
 }
 
-// Mechanism G (ctrl-kd f328838, research: 2026-09-06_ws7-blank-lines-and-superscript-
-// advance.md, "G -- superscript/subscript advance in fixed-pitch text"). Real WS7's own
-// *Reference* manual (ch. 10 "Style," Sub/Superscript, p. 10-8/9) states the reduced size
-// is "the x-height... of the original height" and gives ONE worked example — 12pt Times
-// Roman -> 8.1pt (ratio 0.675) — but that ratio is Times Roman's own, not a universal
-// constant: raw PCL from two independent real WS7 captures (a private paper's own .pcl, -SCREEN.pcl —
-// byte-identical `ESC(sp9.25v13.04hsb4099T` font-select command in both, typeface 4099 =
-// Courier) measures Courier's own ratio at 9.25pt from a 12pt body = 0.7708, a DIFFERENT
-// number. Confirms the manual's own wording: this is a real, font-specific x-height
-// fraction, not a flat scale — so it is a lookup keyed by family, not one constant. Only
-// Courier has a captured data point in this corpus; every other face keeps this emitter's
-// long-standing flat 2/3 default, unverified against any real WS7 sup/sub-in-that-face
-// capture.
-private let supSubXHeightRatio: [PDFFamily: Double] = [.courier: 9.25 / 12.0]
-private let supSubDefaultRatio = 2.0 / 3.0
+// Mechanism G: superscript/subscript size in Printed. Port of ctrl-kd's `_SUP_SUB_X38` /
+// `_sup_sub_points` / `_sized`. WS7 shrinks a sub- or superscript by one byte of the printer
+// font's values record, X+0x38, by the same rule for every face (WS7 teardown,
+// `wordstar-dos/9-printer-drivers.md` 9.6): size' = floor(size_twips * X38 / 256), X38 = 0
+// meaning no scaling, then the LaserJet driver rounds the point size down to its 5-twip
+// (0.25pt) step. Courier 198: 12pt -> 185 twips = 9.25pt, the `ESC(s...9.25v` real WS7
+// captures send; Times Roman 175: 164 -> 160 twips = 8pt, LYING.WS's `8v`. Values are factory
+// LASERJET.PDF's, keyed by WordStar typestyle number and ordered normal, italic, bold, bold
+// italic. A span with no font block is the install's default font, Courier; a typestyle the
+// driver has no group for falls back to its PDF family's group.
+private let supSubX38: [Int: [Int]] = [
+    3: [198, 198, 199, 199],      // Courier
+    6: [187, 187, 190, 187],      // Gothic
+    5: [175, 174, 174, 178],      // Tms Rmn (CG Times)
+    46: [178, 177, 177, 178],     // Univers
+    45: [177, 177, 178, 177],     // UniversCondensed
+    49: [177, 178, 179, 179],     // Optima
+    18: [158, 162, 170, 173],     // Garamond
+    213: [216, 217, 217, 217],    // Antique Olive
+    27: [194, 194, 194, 194],     // Clarendon
+    50: [178, 178, 178, 178],     // Aachen
+    149: [172, 166, 176, 169],    // Serif (Times New Roman)
+    175: [185, 185, 185, 185],    // Triumvirate (Arial)
+    82: [175, 175, 175, 175],     // ZapfDingbats
+    192: [175, 175, 175, 175],    // Symbol
+    20: [78, 78, 78, 78],         // Coronet
+    81: [0, 0, 0, 0],             // ZapfChancery: no scaling
+    0: [0, 0, 0, 0],              // LinePrinter: no values record
+]
+private let supSubFamilyTypestyle: [PDFFamily: Int] = [
+    .courier: 3, .times: 5, .helvetica: 46, .symbol: 192, .zapfDingbats: 82,
+]
+private let supSubStepTwips = 5
+// Modern is not a WS7 print: it keeps its flat 2/3.
+private let supSubModernRatio = 2.0 / 3.0
 
-/// `(point size, baseline rise)` for a span set at `size`. Port of `pdf._sized`.
-///
-/// Superscript and subscript are both SET SMALLER, not just moved: one size test covering
-/// either, then the rise chooses the direction. `sup` wins if a span somehow carries both,
-/// matching Python's nested conditional. Reduced by `family`'s own x-height ratio
-/// (`supSubXHeightRatio`, mechanism G) — 2/3 (8pt at the default 12, the ratio this emitter
-/// used before mechanism G) for any family with no measured WS7 ratio of its own. `family:
-/// nil` (every call site that predates mechanism G — Modern's three call sites in
-/// `PDFModernLayout.swift`) keeps the flat 2/3 default unconditionally, so nothing outside
-/// Printed's fixed-pitch line renderer changes behaviour.
-/// `rollPt` (b24 round 17, RULINGS-LEDGER row 3, register C22): the declared `.sr` roll,
-/// ALREADY converted to points — Printed's own domain only. `nil` (every Modern call site,
-/// and any caller that predates this) keeps the exact prior fixed 3/-2 rise, same "reader
-/// owns presentation" doctrine as every other Printed-only vertical-space item. WSFORMAT's
-/// own text: "[.SR] The increments... which the carriage is to roll up OR DOWN for
-/// subscript and superscript printing" — ONE symmetric amount, so a real `.sr` corrects
-/// BOTH the sup rise (the old hardcoded +3 happened to already look plausible) and the sub
-/// rise (the old -2 was never spec-derived at all).
-func sized(_ styles: Style, _ size: Int, rollPt: Double? = nil, family: PDFFamily? = nil)
-    -> (points: Int, rise: Int)
-{
-    let ratio = family.flatMap { supSubXHeightRatio[$0] } ?? supSubDefaultRatio
+/// The Printed size of a sub/superscript set at `size` points. Port of `pdf._sup_sub_points`.
+private func supSubPoints(_ styles: Style, _ size: Int, _ family: PDFFamily,
+                          _ entry: FontChange?) -> Double {
+    let number = entry.map { $0.typestyle & 0x01FF } ?? 3
+    let row = supSubX38[number] ?? supSubX38[supSubFamilyTypestyle[family] ?? 3]!
+    let x38 = row[(styles.contains(.italic) ? 1 : 0) + 2 * (styles.contains(.bold) ? 1 : 0)]
+    if x38 == 0 { return Double(size) }
+    var twips = (size * 20 * x38) / 256
+    twips -= twips % supSubStepTwips
+    return Double(max(supSubStepTwips, twips)) / 20.0
+}
+
+/// `(point size, baseline rise)` for a span set at `size`, Modern's form: a sub/superscript
+/// is reduced by a flat 2/3, rounded to a whole point. Port of `pdf._sized` with
+/// `family=None`.
+func sized(_ styles: Style, _ size: Int) -> (points: Int, rise: Int) {
     if styles.contains(.sup) {
-        return (max(1, roundHalfToEven(Double(size) * ratio)),
-                rollPt.map { roundHalfToEven($0) } ?? 3)
+        return (max(1, roundHalfToEven(Double(size) * supSubModernRatio)), 3)
     }
     if styles.contains(.sub) {
-        return (max(1, roundHalfToEven(Double(size) * ratio)),
-                rollPt.map { roundHalfToEven(-$0) } ?? -2)
+        return (max(1, roundHalfToEven(Double(size) * supSubModernRatio)), -2)
     }
     return (size, 0)
+}
+
+/// `(point size, baseline rise)` for a span set at `size`, Printed's form: a sub/superscript
+/// is reduced by WS7's own per-face rule (`supSubPoints`). Port of `pdf._sized` with a
+/// family.
+/// `rollPt` (b24 round 17, RULINGS-LEDGER row 3, register C22): the declared `.sr` roll,
+/// ALREADY converted to points. `nil` keeps the fixed 3/-2 rise. WSFORMAT's own text: "[.SR]
+/// The increments... which the carriage is to roll up OR DOWN for subscript and superscript
+/// printing" — ONE symmetric amount.
+func sizedPrinted(_ styles: Style, _ size: Int, rollPt: Double?, family: PDFFamily,
+                  entry: FontChange?) -> (points: Double, rise: Double) {
+    guard styles.contains(.sup) || styles.contains(.sub) else { return (Double(size), 0) }
+    let pt = supSubPoints(styles, size, family, entry)
+    if styles.contains(.sup) {
+        return (pt, rollPt ?? 3)
+    }
+    return (pt, rollPt.map { -$0 } ?? -2)
+}
+
+/// A Tf or Ts operand: a whole number as an integer, otherwise to the hundredth with trailing
+/// zeros dropped (`9.25`, `8.5`, a 4.5pt `.sr` roll). Port of `pdf._tf_size`.
+func tfSize(_ pt: Double) -> String {
+    if pt == pt.rounded(.towardZero) { return "\(Int(pt))" }
+    var text = fixedTwoDecimal(hundredths: hundredths(pt))
+    while text.hasSuffix("0") { text.removeLast() }
+    return text
 }
 
 /// The stroke ops for one line's strikeout, from `rules`'s own `strikeSink` records
@@ -1261,10 +1351,12 @@ func rules(_ styles: Style, _ text: String, x: Double, y: Double, w: Double,
 /// return, or a sup/sub run's own already-reduced size — see `supSubSpanPitch` for why that
 /// one passes the UNREDUCED body size instead). Returns the per-character advance in POINTS.
 ///
-/// - Font-block case: a WS5+ font block's FIRST word is the font width in HMIs (1/1800in) —
-///   the pitch WordStar itself laid the document out on, and the pitch it sent the printer.
-///   1800 HMI = 1 inch = 72pt, so the conversion is /25. When present, this value ENTIRELY
-///   DETERMINES the answer; `pt` is ignored.
+/// - Font-block case: a WS5+ font block's FIRST word is the font width in HMIs (1/1800in),
+///   the pitch the document declares. 1800 HMI = 1 inch = 72pt, so the conversion is /25.
+///   Under WS7's LASERJET driver the driver's own pitch for the font it prints in
+///   (`pitch1800`, `laserjetFonts`) wins: the record's width only picks that font (Sawyer's
+///   151 prints at 150, 12 cpi). When present, this value ENTIRELY DETERMINES the answer;
+///   `pt` is ignored.
 /// - The `.cw` case: a span with no font block gets the document's own `.cw`-derived pitch
 ///   instead. `.cw` is character width in 1/120in, which `printedSize` already resolved into
 ///   the point size for exactly this reason (a Courier em advances 0.6, so cw/120in per
@@ -1273,49 +1365,55 @@ func rules(_ styles: Style, _ text: String, x: Double, y: Double, w: Double,
 ///   number and it is the same float this emitter has always produced, which is what keeps
 ///   a fontless PDF byte-identical.
 public func spanPitch(_ entry: FontChange?, _ pt: Int) -> Double {
-    if let width = entry?.width1800, width != 0 { return Double(width) / hmiPerPoint }
+    if let width = entry?.pitch1800 ?? entry?.width1800, width != 0 { return Double(width) / hmiPerPoint }
     return Double(pt) * 0.6
 }
 
-// Mechanism G, the pitch half (ctrl-kd f328838, research: 2026-09-06_ws7-blank-lines-and-
-// superscript-advance.md). The manual is silent on this; the raw PCL is not: WS7 does not
-// merely draw a smaller glyph at the document's ambient fixed-pitch cell — it RESELECTS a
-// narrower pitch for the sup/sub span, an independent field of the same PCL font-selection
-// command, restored to the body's own H/V values immediately on exit. Measured directly
-// (-SCREEN's own unjustified demo line, clean of any justification confound): a 7.2pt
-// (10.00cpi) Courier body cell narrows to a 5.5pt (13.04cpi) cell for the span — confirmed
-// to the decipoint against -SCREEN.pcl's raw x-positions. `supSubCellRatio` is that measured
-// 5.5/7.2 fraction, applied proportionally to whatever the span's own body cell actually is
-// (Courier only — no other face has a captured sup/sub-in-fixed-pitch example in this
-// corpus); a body cell other than 7.2pt is unverified extrapolation.
-//
-// Two real shapes hit this, both confirmed against the corpus directly:
-//   - a WS7 span with its own font block (`entry` carries `width1800`) — `spanPitch`
-//     normally IGNORES `pt` entirely once a font block exists, which is exactly why the
-//     engine used to draw the full, un-narrowed body cell for a sup/sub run and land
-//     everything after it +1.7pt (one character's worth of the 7.2/5.5 shortfall) too far
-//     right (-SCREEN).
-//   - a WS4/print-stream span (no font block at all, `entry` is `nil`) — `spanPitch` falls
-//     back to `pt * 0.6`, where `pt` was already the REDUCED sup/sub size (`sized`'s own
-//     return) — narrowing the cell TWICE (once for the smaller drawn glyph, a second time
-//     implicitly via `pt`) to 4.8pt, 0.7pt narrower than WS7's real 5.5pt, landing everything
-//     after it that same 0.7pt too far LEFT (a private paper). Passing `bodyPt` (the span's own
-//     UNREDUCED declared size, `seg.size` at the call site) rather than the already-reduced
-//     `pt` fixes both shapes with the one call: `spanPitch(entry, bodyPt)` always answers
-//     "the span's own BODY cell," which this then scales down by the measured ratio.
-private let supSubCellRatio = 5.5 / 7.2
+/// The same at a fractional size (a Printed sub/superscript).
+public func spanPitch(_ entry: FontChange?, _ pt: Double) -> Double {
+    if let width = entry?.pitch1800 ?? entry?.width1800, width != 0 { return Double(width) / hmiPerPoint }
+    return pt * 0.6
+}
 
-/// The per-character advance for a sup/sub run inside a fixed-pitch span (mechanism G), or
-/// `nil` when the override does not apply — the caller falls back to the ordinary
-/// `spanPitch(entry, pt)` unchanged. Port of `pdf._sup_sub_span_pitch`.
-func supSubSpanPitch(_ entry: FontChange?, _ styles: Style, _ family: PDFFamily, _ bodyPt: Int)
-    -> Double?
+// Mechanism G, the pitch half. Port of ctrl-kd's `_sup_sub_span_pitch`. WS7 reselects a
+// narrower pitch for a sub/superscript, restored to the body's own values on exit; the
+// driver builds a fixed-pitch width from the scaled size, `round_half_up(size * block+4 *
+// block+6 / 14 745 600)` dots at 300 dpi (WS7 teardown, `wordstar-dos/9-printer-drivers.md`
+// 9.6); for Courier that is size_twips / 8, so 185 twips -> 23 dots = 5.52pt = 13.04 cpi, the
+// pitch real WS7 captures send, for a Courier span (typestyle 3, or no font block). Another
+// fixed-pitch face drawn in Courier (LinePrinter, Gothic) has its own block+4/+6, not read
+// here, so its body cell is scaled by the size ratio instead — unchanged where X38 is 0.
+
+/// The per-character advance for a sup/sub run inside a fixed-pitch span drawn in Courier,
+/// `pt` being its reduced size (`sizedPrinted`) and `bodyPt` the span's own size, or `nil`
+/// when the override does not apply — the caller falls back to the ordinary
+/// `spanPitch(entry, pt)` unchanged.
+func supSubSpanPitch(_ entry: FontChange?, _ styles: Style, _ family: PDFFamily, _ pt: Double,
+                     _ bodyPt: Int) -> Double?
 {
-    guard supSubXHeightRatio[family] != nil,
-          styles.contains(.sup) || styles.contains(.sub) else { return nil }
+    guard family == .courier, styles.contains(.sup) || styles.contains(.sub) else { return nil }
+    if let entry, entry.proportional { return nil }
+    if entry == nil || entry!.typestyle & 0x01FF == 3 {
+        let twips = Int((pt * 20).rounded())
+        let dots = (twips + 4) / 8
+        return Double(dots) * 72 / 300
+    }
     let bodyCell = spanPitch(entry, bodyPt)
-    guard bodyCell != 0 else { return nil }
-    return bodyCell * supSubCellRatio
+    guard bodyCell != 0, bodyPt != 0 else { return nil }
+    return bodyCell * pt / Double(bodyPt)
+}
+
+/// A Printed sub/superscript span's reduced point size (`supSubPoints`) and, inside a
+/// fixed-pitch span, the cell WS7 advances it on (`supSubSpanPitch`), for a view that sets
+/// the same run in its own face (Native). `size` is the span's own unreduced size; `nil` for
+/// a span that is neither.
+public func printedSupSubMetrics(_ styles: Style, size: Int, entry: FontChange?)
+    -> (points: Double, cell: Double?)?
+{
+    guard styles.contains(.sup) || styles.contains(.sub) else { return nil }
+    let family = pdfFamily(entry)
+    let points = supSubPoints(styles, size, family, entry)
+    return (points, supSubSpanPitch(entry, styles, family, points, size))
 }
 
 /// The slot WordStar reserved for a run of `count` characters, in points.
@@ -1328,9 +1426,9 @@ func supSubSpanPitch(_ entry: FontChange?, _ styles: Style, _ family: PDFFamily,
 /// these, and the fontless digests are pinned on the result. So the legacy order is kept
 /// verbatim where it can be observed, and the HMI form is used only where there was no
 /// previous answer to preserve.
-private func spanTarget(_ entry: FontChange?, _ pt: Int, count: Int) -> Double {
+private func spanTarget(_ entry: FontChange?, _ pt: Double, count: Int) -> Double {
     if entry?.width1800 ?? 0 != 0 { return Double(count) * spanPitch(entry, pt) }
-    return Double(count) * Double(pt) * 0.6
+    return Double(count) * pt * 0.6
 }
 
 /// `(Tz percentage or nil, width actually occupied)` for one span asked to fill `targetW`
@@ -1356,6 +1454,13 @@ private func spanTarget(_ entry: FontChange?, _ pt: Int, count: Int) -> Double {
 func tzScale(_ text: String, _ baseFont: String, _ pt: Int, _ targetW: Double)
     -> (scale: Double?, width: Double)
 {
+    tzScale(text, baseFont, Double(pt), targetW)
+}
+
+/// The same at a fractional size (a Printed sub/superscript).
+func tzScale(_ text: String, _ baseFont: String, _ pt: Double, _ targetW: Double)
+    -> (scale: Double?, width: Double)
+{
     let natural = stringWidthPt(text, baseFont, pt)
     if natural <= 0 || targetW <= 0 { return (nil, natural) }
     let scale = targetW / natural * 100.0
@@ -1364,60 +1469,267 @@ func tzScale(_ text: String, _ baseFont: String, _ pt: Int, _ targetW: Double)
     return (scale, targetW)
 }
 
-/// `[(text, x, width)]` left to right from `x0` -- one FIXED-PITCH justified line's own
-/// word/gap split (planning #238's measured rule, factored out planning #251(b) so
-/// `attachJustifyWordXPrinted` can call the EXACT SAME arithmetic at model-build time
-/// and attach the result to `PageLine.justifyWordX`; `lineOpsPrinted` then renders from
-/// that stored list when given one, byte-identical to before by construction — same
-/// function, same inputs, computed once). Returns `nil` when the line has no single-
-/// blank gap to stretch or no slack to distribute — the caller falls back to the
-/// un-split natural-width path, unchanged. Port of ctrl-kd's `_justify_pieces_printed`.
+/// `spans` (a Printed line's spans) with each bare 09h put at the next tab stop by DISTANCE,
+/// or `nil` when that does not apply. Port of `_expand_bare_tabs_by_distance`.
 ///
-/// Cumulative-floor Bresenham distribution across the elastic (single-blank) gaps, in
-/// whole decipoints — see `lineOpsPrinted`'s own doc comment for the measured rule and
-/// its documented approximation. `neumaierSum` (not a naive left-to-right fold) and
-/// `roundHalfToEven` (not `Double.rounded()`) are unchanged from the code this was
-/// factored out of — see their own call sites' doc comments (just above, historically)
-/// for why each matters for cross-engine byte parity. A run of 2+ literal blanks is
-/// left at its natural width, like every non-space WORD piece: only `tzScale`'s own
-/// target changes (the gap's own stretched width, not a fresh `pw`), which is why a
-/// piece's stored `width` alone is enough for a later caller to reproduce its own scale
-/// — `tzScale(piece, baseFont, pt, width)` on an ALREADY-RESOLVED width reproduces the
-/// same scale/actual-width pair `tzScale(piece, baseFont, pt, pw)` produced the first
-/// time (self-consistent: in-clamp, `width == pw` already; out-of-clamp, `width` IS the
-/// natural width, so scaling to it is a no-op ratio of 100 either way).
-func justifyPiecesPrinted(_ text: String, pitch: Double, x0: Double, justifyRightX: Double,
-                          baseFont: String, pt: Int) -> [PageLine.JustifyWordPiece]? {
-    let pieces = splitKeepingSpaceRuns(text)
-    let elastic = pieces.indices.filter { pieces[$0] == " " }
-    let naturalTotal = neumaierSum(pieces.map { Double($0.count) * pitch })
-    let stretchTotal = justifyRightX - x0 - naturalTotal
-    guard !elastic.isEmpty, stretchTotal > 0 else { return nil }
-    let n = elastic.count
-    let stretchTotalDp = roundHalfToEven(stretchTotal * 10)
-    let stretchDp: [Int] = (0..<n).map { i in
-        ((i + 1) * stretchTotalDp) / n - (i * stretchTotalDp) / n
-    }
-    var out: [PageLine.JustifyWordPiece] = []
-    var x = x0
-    var ei = 0
-    for (pi, piece) in pieces.enumerated() {
-        var pw = Double(piece.count) * pitch
-        let isElasticGap = piece == " " && ei < elastic.count && elastic[ei] == pi
-        let actualW: Double
-        if isElasticGap {
-            pw += Double(stretchDp[ei]) / 10.0
-            ei += 1
-            actualW = pw            // nothing is ever drawn for a space piece (see
-                                    // this function's own doc comment) -- no glyph-
-                                    // metric lookup
-        } else {
-            (_, actualW) = tzScale(piece, baseFont, pt, pw)
+/// It applies only to a line that has text in the printer's alternate font (^PA): there a
+/// character is not a 10-cpi column wide, and WS7 (run raw01-lj) takes the tab to the next
+/// stop of its 10-cpi ruler -- every 8 columns, 1440/1800 inch, from the page offset --
+/// measured from where the pen actually is: after ten alternate-font characters (7
+/// columns) the stop is 8 columns out, where the column count of the ordinary rule
+/// (`expandBareTabsForPrintedLayout`) would say 16. Each tab becomes a span carrying its
+/// absolute target (`tabHMI`), the form a type-9 tab record already has, so the writer
+/// jumps the pen there. As in the ordinary rule, blanks typed just before the tab are added
+/// back after the stop. A line with a proportional span keeps the ordinary rule.
+func expandBareTabsByDistance(_ spans: [Span], fonts: RenderFonts, size: Int) -> [Span]? {
+    guard fonts.alt != nil,
+          spans.contains(where: { $0.text.contains("\t") }),
+          spans.contains(where: { $0.styles.contains(.altFont) }) else { return nil }
+    var out: [Span] = []
+    var pen = 0.0                       // 1/1800 inch from the left margin
+    var blankRun = 0.0
+    for span in spans {
+        let rendered = spanRender(span.text, font: span.font, fonts: fonts.fonts, size: size,
+                                  altFont: span.styles.contains(.altFont), alt: fonts.alt)
+        if rendered.entry?.proportional ?? false { return nil }
+        let cell = spanPitch(rendered.entry, rendered.size) * hmiPerPoint
+        var buf = ""
+        for ch in span.text {
+            if ch != "\t" {
+                buf.append(ch)
+                pen += cell
+                blankRun = ch == " " ? blankRun + cell : 0.0
+                continue
+            }
+            if !buf.isEmpty {
+                var piece = span
+                piece.text = buf
+                out.append(piece)
+                buf = ""
+            }
+            let base = pen - blankRun
+            let target = ((base / 1440).rounded(.down) + 1) * 1440 + blankRun
+            var tab = span
+            tab.text = String(repeating: " ", count: max(0, roundHalfToEven((target - pen) / 180.0)))
+            tab.tabHMI = roundHalfToEven(target)
+            tab.tabLeader = 0x20
+            out.append(tab)
+            pen = target
+            blankRun = 0.0
         }
-        out.append(PageLine.JustifyWordPiece(text: piece, x: x, width: actualW))
-        x += actualW
+        if !buf.isEmpty {
+            var piece = span
+            piece.text = buf
+            out.append(piece)
+        }
     }
     return out
+}
+
+/// Points -> 1/1800 inch, rounded (the unit a WS7 font block counts in). Port of
+/// `_units_1800`.
+func units1800(_ pt: Double) -> Int {
+    Int((pt * 25 + 0.5).rounded(.down))
+}
+
+/// Points -> printer dots (1/300 inch), rounded half up -- WS7's conversion of a width or a
+/// margin when it first selects a font for the justification pass (WS7 report 11.7.3).
+/// Port of `_dots_300`.
+func dots300(_ pt: Double) -> Int {
+    (units1800(pt) + 3) / 6
+}
+
+/// WS7's word-gap justification (WS7 report 11.7.3, DRIVERN +0x0DEE, +0x0E6A), as the left
+/// edge in decipoints of each item of one line, or `nil` when the line has nothing to
+/// stretch. Port of `_justify_x_printed`.
+///
+/// `isSpace` is `true` for a run of blanks and `false` for a word, `widths` the items'
+/// natural widths in points, `x0` where the first item starts and `justifyRightX` the right
+/// margin. Everything is counted in dots (1/300 inch): the slack is the margin less where
+/// the last WORD ends (leading blanks and the blanks before the soft return are not items),
+/// rounded half up; then, for each run of blanks from the first word to the last and in
+/// order, `share = floor(w * S_rem / W_rem)` of the slack still left, `w` being that run's
+/// own width. A run of two blanks takes twice a single blank's share, a proportional blank
+/// its own width's, and the remainder of every division falls to the later runs. An item
+/// lands at `floor(x_dots * 720 / 300)` decipoints. A line that is too long (negative
+/// slack) runs the same loop with the sign reversed, the amount capped at half the total
+/// width of the blanks (`+0x0E6A`): it is squeezed, never overlapped. WS7's own wrap never
+/// leaves a line longer than that, so a line over the cap has the wrong margin here (a
+/// `.co` column's own right edge is not modelled) and is left at its natural widths.
+func justifyXPrinted(isSpace: [Bool], widths: [Double], x0: Double,
+                     justifyRightX: Double) -> [Int]? {
+    let n = isSpace.count
+    let words = (0..<n).filter { !isSpace[$0] }
+    guard words.count >= 2 else { return nil }
+    let first = words[0], last = words[words.count - 1]
+    let gaps = (first..<last).filter { isSpace[$0] }
+    guard !gaps.isEmpty else { return nil }
+    let wd = widths.map { dots300($0) }
+    var xd: [Int] = []
+    var cur = dots300(x0)
+    for i in 0..<n {
+        xd.append(cur)
+        cur += wd[i]
+    }
+    var slack = units1800(justifyRightX) - 6 * (xd[last] + wd[last])
+    var sign = 1
+    if slack < 0 {
+        sign = -1
+        let cap = gaps.reduce(0) { $0 + units1800(widths[$1]) } / 2
+        if -slack > cap { return nil }
+        slack = -slack
+    }
+    var sRem = (slack + 3) / 6
+    var wRem = gaps.reduce(0) { $0 + wd[$1] }
+    var carry = 0
+    var out: [Int] = []
+    for i in 0..<n {
+        out.append((xd[i] + sign * carry) * 12 / 5)
+        if isSpace[i], first < i, i < last {
+            if sRem != 0, wRem > 0 {
+                let share = wd[i] * sRem / wRem
+                carry += share
+                sRem -= share
+            }
+            wRem -= wd[i]
+        }
+    }
+    return out
+}
+
+/// `[(piece, x, width)]` left to right across ALL of one justified line's spans, or `nil`
+/// when the line cannot be justified here (a tab, print-control or graphic span, a `.pm`
+/// column indent, fewer than two words, or no run of blanks between them -- it is drawn at
+/// its natural widths instead). WS7 report 11.7.3: the rule runs over
+/// the whole line with each item's own width, so a mixed-font or proportional line is
+/// justified like a Courier one (mixj1-mixj4); the pieces are the runs of blanks and the
+/// words, each at the width the line's ordinary drawing gives it, and they tile the
+/// line's text exactly. Port of `_justify_line_printed`.
+///
+/// `segs` are the line's spans after the same preprocessing `lineOpsPrinted` does. `soft` is
+/// the set of offsets, in the line's text (Unicode scalars), of the blanks that were WS5+
+/// soft spaces: the driver ignores the stored ones (WS7 report 14.6), so a run of blanks is
+/// as wide as the blanks that were typed (at least one, so words never touch).
+func justifyLinePrinted(_ segs: [LineSegment], x0: Double, justifyRightX: Double,
+                        rollPt: Double?, pmActive: Bool, soft: Set<Int>, kerning: Bool = true)
+    -> [PageLine.JustifyWordPiece]?
+{
+    var isSpace: [Bool] = []
+    var widths: [Double] = []
+    var texts: [String] = []
+    var off = 0
+    var prevSpan: LineSegment? = nil        // the span before, for a pair across records
+    for seg in segs {
+        let ljPrev = prevSpan.flatMap(ljLast)
+        prevSpan = seg
+        if (seg.indent && pmActive) || seg.pctlHMI != nil || seg.tabHMI != nil
+            || seg.text.contains(where: { graphicChars.contains($0) }) {
+            return nil
+        }
+        let (pt, _) = sizedPrinted(seg.styles, seg.size, rollPt: rollPt, family: seg.family,
+                                   entry: seg.entry)
+        let baseFont = base14(seg.family, bold: seg.styles.contains(.bold),
+                              italic: seg.styles.contains(.italic))
+        if let lj = ljPieces(seg.text, seg.entry, seg.styles, seg.size, kerning: kerning,
+                             prev: ljPrev) {
+            if let first = lj.first, first.x != 0, !widths.isEmpty {
+                widths[widths.count - 1] += first.x     // a pair across the record before
+            }
+            // WS7's LASERJET driver: each piece's width is its advance to the next (kerning
+            // included); a run of blanks is as wide as the blanks that were typed.
+            let space = ljPieces(" ", seg.entry, seg.styles, seg.size, kerning: false)![0].width
+            var at = off
+            for (j, (piece, px, pw)) in lj.enumerated() {
+                let w: Double
+                if piece.first == " " {
+                    var typed = 0
+                    for k in at..<(at + piece.width) where !soft.contains(k) { typed += 1 }
+                    if typed == 0 { typed = 1 }
+                    w = Double(typed) * space
+                    isSpace.append(true)
+                } else {
+                    w = j + 1 < lj.count ? lj[j + 1].x - px : pw
+                    isSpace.append(false)
+                }
+                widths.append(w)
+                texts.append(piece)
+                at += piece.width
+            }
+            off += seg.text.width
+            continue
+        }
+        let proportional = seg.entry?.proportional ?? false
+        var pitch = 0.0
+        var factor = 1.0
+        if proportional {
+            pitch = spanPitch(seg.entry, seg.size)
+            factor = Double(hundredths(faceTz(baseFont, pitch, seg.size))) / 10000.0
+        } else if seg.entry?.bitmap == true {
+            pitch = spanPitch(seg.entry, seg.size)   // a bitmap face keeps its size
+        } else {
+            pitch = supSubSpanPitch(seg.entry, seg.styles, seg.family, pt, seg.size)
+                ?? spanPitch(seg.entry, pt)
+        }
+        var pos = 0
+        for piece in splitKeepingSpaceRuns(seg.text) {
+            let len = piece.width
+            if piece.first == " " {
+                var typed = 0
+                for k in 0..<len where !soft.contains(off + pos + k) { typed += 1 }
+                if typed == 0 { typed = 1 }
+                let w: Double
+                if !proportional {
+                    w = Double(typed) * pitch
+                } else if seg.indent {
+                    w = Double(typed) * Double(pt) * typedIndentSpaceEM
+                } else {
+                    let nat = stringWidthPt(String(repeating: " ", count: typed), baseFont, pt)
+                    w = nat > 0 ? nat * factor : Double(typed) * pitch
+                }
+                isSpace.append(true)
+                widths.append(w)
+            } else {
+                let w: Double
+                if proportional {
+                    let nat = stringWidthPt(piece, baseFont, pt)
+                    w = nat > 0 ? nat * factor : Double(len) * pitch
+                } else {
+                    w = Double(len) * pitch
+                }
+                isSpace.append(false)
+                widths.append(w)
+            }
+            texts.append(piece)
+            pos += len
+        }
+        off += seg.text.width
+    }
+    guard let xs = justifyXPrinted(isSpace: isSpace, widths: widths, x0: x0,
+                                   justifyRightX: justifyRightX) else { return nil }
+    var out: [PageLine.JustifyWordPiece] = []
+    for (i, piece) in texts.enumerated() {
+        if isSpace[i], i + 1 < texts.count {
+            out.append(PageLine.JustifyWordPiece(text: piece, x: Double(xs[i]) / 10.0,
+                                                 width: Double(xs[i + 1] - xs[i]) / 10.0))
+        } else {
+            out.append(PageLine.JustifyWordPiece(text: piece, x: Double(xs[i]) / 10.0,
+                                                 width: widths[i]))
+        }
+    }
+    return out
+}
+
+/// The offsets of the WS5+ soft spaces within the joined text of `segs`, or an empty set
+/// when the line's text is no longer the text they were recorded against (the
+/// preprocessing changed it). Port of `_soft_blanks_of`.
+func softBlanksOf(_ segs: [LineSegment], _ softBlanks: PageLine.SoftBlanks?) -> Set<Int> {
+    guard let softBlanks else { return [] }
+    let joined = segs.map(\.text).joined()
+    // LJ6DTP's display substitutions change characters one for one, never the blanks, so the
+    // offsets still hold through them.
+    return joined == softBlanks.text
+        || ljUnsubstituted(joined) == ljUnsubstituted(softBlanks.text)
+        ? Set(softBlanks.offsets) : []
 }
 
 /// `segs` with each entry gaining an INDENT flag, and the first span split where a line's
@@ -1558,21 +1870,21 @@ private let italicShear = "0.2126"       // round(tan(12 degrees), 4)
 private let boldStrokeFrac = 0.04        // faux-bold weight
 
 private func symbolStyleOp(
-    font: String, pt: Int, rise: Int, want: Int, tzState: inout Int,
+    font: String, pt: Double, rise: Double, want: Int, tzState: inout Int,
     x: Double, y: Double, textBytes: [UInt8], isBold: Bool, isItalic: Bool
 ) -> [UInt8] {
-    var op = Array("BT /\(font) \(pt) Tf ".utf8)
+    var op = Array("BT /\(font) \(tfSize(pt)) Tf ".utf8)
     if want != tzState {
         op += Array("\(fixedTwoDecimal(hundredths: want)) Tz ".utf8)
         tzState = want
     }
     if isBold {
-        let strokeW = hundredths(Double(pt) * boldStrokeFrac)
+        let strokeW = hundredths(pt * boldStrokeFrac)
         op += Array("2 Tr \(fixedTwoDecimal(hundredths: strokeW)) w ".utf8)
     } else {
         op += Array("0 Tr ".utf8)
     }
-    op += Array("\(rise) Ts ".utf8)
+    op += Array("\(tfSize(Double(rise))) Ts ".utf8)
     if isItalic {
         op += Array("1 0 \(italicShear) 1 \(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Tm (".utf8)
     } else {
@@ -1687,6 +1999,18 @@ private func expandBareTabsForPrintedLayout(_ segs: [LineSegment]) -> [LineSegme
 /// this parameter existed, and any line `attachJustifyWordXPrinted` could not resolve
 /// on its own -- a styled/tagged span outside its narrow scope) falls back to
 /// computing it fresh here, unchanged from before.
+///
+/// `recordPieces`: `inout`, or `nil`. When non-`nil`, every piece this call places is
+/// appended as a `DriverPiece` (text, x, width), left to right and tiling the line's
+/// text: a driver-placed word or kerned part of one, a run of blanks, or a whole span
+/// drawn as one (`PageLine.driverPieces`).
+///
+/// `fullScripts`: WS4's HPLJET sets a sub/superscript in the line's own font and cell, only
+/// moved `.SR` x 15 decipoints up or down (WS4 teardown 4 §15.2, run hj-sr), where WS7
+/// reduces it.
+///
+/// `face`: the face a WS4 `.PS ON` line is drawn in (`PageLine.face`): its words are drawn
+/// in that face at their `justifyWordX` places.
 private func lineOpsPrinted(
     _ segs: [LineSegment], left: Double, y: Double, size: Int, res: FontResources,
     tzState: inout Int, colState: inout PDFFill, darkenState: inout Bool,
@@ -1696,8 +2020,11 @@ private func lineOpsPrinted(
     kerning: Bool = true, justifyRightX: Double? = nil,
     justifyWordX: [PageLine.JustifyWordPiece]? = nil,
     recordGraphicCells: inout [PageLine.GraphicCellPlacement]?,
+    recordPieces: inout [PageLine.DriverPiece]?,
     pmActive: Bool = false,
-    driverQuirks: DriverQuirks = .none
+    driverQuirks: DriverQuirks = .none,
+    softBlanks: PageLine.SoftBlanks? = nil,
+    fullScripts: Bool = false, face: PageLine.Face? = nil
 ) -> [[UInt8]] {
     var ops: [[UInt8]] = []
     // Planning #244 (the round-trip gauntlet fix) moved this expansion out of
@@ -1722,14 +2049,6 @@ private func lineOpsPrinted(
                        typography: driverQuirks.typography, corners: driverQuirks.corners)
         : segs
     let splitSegs = splitIndent(splitSymbolFallback(splitGraphics(segs)))
-    // Planning #238 (.oj on full justification): justification only ever touches the
-    // ONE span that IS the whole line -- a line that split into several segs (a styled
-    // word mid-sentence, a leading indent, graphics) is left unjustified rather than
-    // guess how to divide the slack among them. Port of Python's `justify_eligible`
-    // (`_line_ops_printed`, ctrl-kd aeb34ad) -- measured on the SAME `splitSegs` this
-    // function's own loop below iterates, after indent/symbol/graphics splitting, same
-    // as Python's `segs` at that point in its own function.
-    let justifyEligible = justifyRightX != nil && splitSegs.count == 1
     // b24 round 17 (RULINGS-LEDGER row 5/7): `.pm`'s first-line indent, in points,
     // already resolved relative to `left` (li=0 baseline — see `printedPMFiPt`).
     //
@@ -1755,6 +2074,37 @@ private func lineOpsPrinted(
         fi = nil
     }
     var x = left + (fi ?? 0.0)
+    // Justification spreads the slack over the whole line, whatever its spans (see
+    // `justifyLinePrinted`): the pieces for every span, or `nil` when the line cannot be
+    // spread. Port of the matching block in `_line_ops_printed`.
+    var justified: [PageLine.JustifyWordPiece]? = nil
+    if let justifyRightX, !splitSegs.isEmpty {
+        justified = justifyWordX
+        if let j = justified,
+           j.map(\.text).joined() != splitSegs.map(\.text).joined() {
+            justified = nil
+        }
+        if justified == nil {
+            justified = justifyLinePrinted(
+                splitSegs, x0: left + (fi ?? 0.0), justifyRightX: justifyRightX,
+                rollPt: rollPt, pmActive: pmActive,
+                soft: softBlanksOf(splitSegs, softBlanks), kerning: kerning)
+        }
+    }
+    var segPieces: [Int: [PageLine.JustifyWordPiece]] = [:]
+    if let justified {
+        var at = 0
+        for (si, sg) in splitSegs.enumerated() {
+            var n = 0
+            var got: [PageLine.JustifyWordPiece] = []
+            while n < sg.text.width, at < justified.count {
+                got.append(justified[at])
+                n += justified[at].text.width
+                at += 1
+            }
+            segPieces[si] = got
+        }
+    }
     // A pctl span whose display string carries a graphic char (box-drawing, LJ6DTP's own
     // «...┌─│...» labels) gets fragmented by `splitGraphics` above into several pieces
     // that all still carry the same pctl/pcl values — `drawnPCL` guards against executing
@@ -1763,7 +2113,18 @@ private func lineOpsPrinted(
     // E3: every `rules` call on this line records into here instead of emitting its own
     // strike rule; `strikeRuns` draws them at the end.
     var strikeSink: [(struck: Bool, x0: Double, x1: Double)]? = []
-    for seg in splitSegs {
+    var prevSpan: LineSegment? = nil        // the span before, for a pair across records
+    var recOpen: (text: String, x: Double)? = nil   // a span recorded whole when it ends
+    for (segIndex, seg) in splitSegs.enumerated() {
+        let ljPrev = prevSpan.flatMap(ljLast)
+        prevSpan = seg
+        if recordPieces != nil {
+            if let open = recOpen {
+                recordPieces!.append(.init(text: open.text, x: open.x, width: x - open.x))
+            }
+            // A print control's display string is screen-only, as the line's segments say.
+            recOpen = (seg.pctlHMI == nil ? seg.text : "", x)
+        }
         // A 0x0F user print control's display string is SCREEN-ONLY: on paper WordStar
         // sent the raw printer payload and advanced by the block's own HMI word (0 for
         // LJ6DTP's rule-drawing controls, whose payload draws with no character advance
@@ -1811,9 +2172,27 @@ private func lineOpsPrinted(
             x += Double(hmi) / hmiPerPoint
             continue
         }
-        let (pt, rise) = sized(seg.styles, seg.size, rollPt: rollPt, family: seg.family)
-        let baseFont = base14(seg.family, bold: seg.styles.contains(.bold),
+        let sized = sizedPrinted(seg.styles, seg.size, rollPt: rollPt, family: seg.family,
+                                 entry: seg.entry)
+        var pt = sized.points
+        let rise = sized.rise
+        // WS4's HPLJET sets a sub/superscript in the line's own font and cell, only moved
+        // `.SR` up or down (`fullScripts`); a `.PS ON` line under it is drawn in its
+        // cartridge face (`face`).
+        // LJ6DTP's bitmap Courier keeps the line's size too (`bitmap`, teardown 17.8).
+        let bitmap = seg.entry?.bitmap == true
+        if fullScripts || bitmap { pt = Double(seg.size) }
+        var family = seg.family
+        let baseFont: String
+        if let face {
+            family = face.family
+            pt = face.size
+            baseFont = base14(family, bold: face.bold || seg.styles.contains(.bold),
                               italic: seg.styles.contains(.italic))
+        } else {
+            baseFont = base14(family, bold: seg.styles.contains(.bold),
+                              italic: seg.styles.contains(.italic))
+        }
         let font = res.ref(baseFont)
         // Driver-aware colour: a span tagged with a colour under a driver whose palette
         // we know renders at that palette's gray. Emitted only when the value CHANGES
@@ -1925,32 +2304,47 @@ private func lineOpsPrinted(
                 // the target, exactly as a real dot leader looks.
                 let wGap = targetX - x
                 let leaderChar = Character(Unicode.Scalar(UInt8(leaderByte)))
-                let charW = stringWidthPt(String(leaderChar), baseFont, pt)
+                var charW = stringWidthPt(String(leaderChar), baseFont, pt)
+                // In a font the LaserJet driver places, the printer advances each leader glyph
+                // at the driver's own width (LJ6DTP p5: 27 dots in the gap on the scan, not the
+                // stand-in face's 33): counted at that width, and the run scaled to it.
+                var wantTz = hundredths(tzDefault)
+                if let entry = seg.entry, entry.laserjet != nil, charW > 0 {
+                    let (block, tw) = ljBlock(entry, seg.styles, seg.size)
+                    let driverW = LaserJet.dotsToPt(
+                        block, LaserJet.charDots(block, tw, LaserJet.code(leaderChar.unicodeScalars.first!)))
+                    if driverW > 0 {
+                        wantTz = hundredths(driverW / charW * 100)
+                        charW = driverW
+                    }
+                }
                 let count = charW > 0 ? Int(wGap / charW) : seg.text.count
                 let runText = String(repeating: String(leaderChar), count: max(0, count))
-                let symbolBold = seg.family == .symbol && seg.styles.contains(.bold)
-                let symbolItalic = seg.family == .symbol && seg.styles.contains(.italic)
+                // The leader's piece is the dots drawn, so a view draws as many.
+                if recordPieces != nil, let open = recOpen { recOpen = (runText, open.x) }
+                let symbolBold = family == .symbol && seg.styles.contains(.bold)
+                let symbolItalic = family == .symbol && seg.styles.contains(.italic)
                 if count == 0 {
                     // nothing fits: no ink, and the pen still lands on the stop below
                 } else if symbolBold || symbolItalic {
                     ops.append(symbolStyleOp(
-                        font: font, pt: pt, rise: rise, want: hundredths(tzDefault),
+                        font: font, pt: pt, rise: rise, want: wantTz,
                         tzState: &tzState, x: x, y: y, textBytes: esc(runText),
                         isBold: symbolBold, isItalic: symbolItalic))
-                } else if hundredths(tzDefault) == tzState {
-                    var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
+                } else if wantTz == tzState {
+                    var op = Array("BT /\(font) \(tfSize(pt)) Tf \(tfSize(Double(rise))) Ts ".utf8)
                     op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
                     op += esc(runText)
                     op += Array(") Tj ET".utf8)
                     ops.append(op)
                 } else {
-                    var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
-                    op += Array("\(fixedTwoDecimal(hundredths: hundredths(tzDefault))) Tz ".utf8)
+                    var op = Array("BT /\(font) \(tfSize(pt)) Tf \(tfSize(Double(rise))) Ts ".utf8)
+                    op += Array("\(fixedTwoDecimal(hundredths: wantTz)) Tz ".utf8)
                     op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
                     op += esc(runText)
                     op += Array(") Tj ET".utf8)
                     ops.append(op)
-                    tzState = hundredths(tzDefault)
+                    tzState = wantTz
                 }
                 if count != 0 {
                     ops += rules(seg.styles, runText, x: x, y: y,
@@ -1972,7 +2366,9 @@ private func lineOpsPrinted(
         if seg.text.contains(where: { graphicChars.contains($0) }) {
             let proportionalCell = seg.entry?.proportional ?? false
             let pitch = proportionalCell ? Double(pt) : spanPitch(seg.entry, pt)
-            ops += graphicOps(seg.text, x: x, y: y, pitch: pitch, pt: pt)
+            // A superscript or subscript rolls the carriage for a block as for a letter
+            // (LJ6DTP p6: the superscripted second row of █ heightens the bar).
+            ops += graphicOps(seg.text, x: x, y: y + Double(rise), pitch: pitch, pt: pt)
             // planning #251(c): the model's own per-cell x/width -- see
             // `recordGraphicCells`'s own doc comment on this function's signature.
             // Recorded here, the ONE place this run's per-character cell positions
@@ -2003,6 +2399,74 @@ private func lineOpsPrinted(
         // what real WS7 did with -HOW-TO.RJS's typed spaces (measured: Univers 10pt's
         // own space glyph, ~3.36pt wide, not the 7.2pt 10-CPI column this branch used
         // to charge every one of them -- see `typedIndentSpaceEM`).
+        if justified != nil, let jp = segPieces[segIndex], !jp.isEmpty, let justifyRightX {
+            // WS7's word-gap justification (WS7 report 11.7.3): this span's words and runs
+            // of blanks at the x `justifyLinePrinted` gave them. A proportional span keeps
+            // its face's constant stretch (`want`, as in its ordinary path below); a
+            // fixed-pitch one fits each word to its own width. Nothing is drawn for a
+            // blank.
+            if recordPieces != nil {
+                recordPieces!.append(contentsOf: jp)
+                recOpen = nil
+            }
+            let jwant: Int?
+            if let entry = seg.entry, entry.proportional, entry.laserjet == nil {
+                jwant = hundredths(faceTz(baseFont, spanPitch(entry, seg.size), seg.size))
+            } else {
+                jwant = nil
+            }
+            let symbolBoldJ = family == .symbol && seg.styles.contains(.bold)
+            let symbolItalicJ = family == .symbol && seg.styles.contains(.italic)
+            var ulX0: Double? = nil
+            var ulX1 = 0.0
+            let spanUL = ulContinuous && seg.styles.contains(.underline)
+            let pieceStyles = spanUL ? seg.styles.subtracting(.underline) : seg.styles
+            for piece in jp {
+                let text = piece.text, pieceX = piece.x, actualW = piece.width
+                let pwant: Int
+                if let jwant {
+                    pwant = jwant
+                } else if text == " " {
+                    pwant = hundredths(tzDefault)
+                } else {
+                    let (pscale, _) = tzScale(text, baseFont, pt, actualW)
+                    pwant = hundredths(pscale ?? tzDefault)
+                }
+                if text.contains(where: { !$0.isWhitespace }) {
+                    if symbolBoldJ || symbolItalicJ {
+                        ops.append(symbolStyleOp(
+                            font: font, pt: pt, rise: rise, want: pwant,
+                            tzState: &tzState, x: pieceX, y: y, textBytes: esc(text),
+                            isBold: symbolBoldJ, isItalic: symbolItalicJ))
+                    } else if pwant == tzState {
+                        var op = Array("BT /\(font) \(tfSize(pt)) Tf \(tfSize(Double(rise))) Ts ".utf8)
+                        op += Array("\(fixedOneDecimalDouble(pieceX)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                        op += esc(text)
+                        op += Array(") Tj ET".utf8)
+                        ops.append(op)
+                    } else {
+                        var op = Array("BT /\(font) \(tfSize(pt)) Tf \(tfSize(Double(rise))) Ts ".utf8)
+                        op += Array("\(fixedTwoDecimal(hundredths: pwant)) Tz ".utf8)
+                        op += Array("\(fixedOneDecimalDouble(pieceX)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                        op += esc(text)
+                        op += Array(") Tj ET".utf8)
+                        ops.append(op)
+                        tzState = pwant
+                    }
+                    if ulX0 == nil { ulX0 = pieceX }
+                    ulX1 = pieceX + actualW
+                }
+                ops += rules(pieceStyles, text, x: pieceX, y: y, w: actualW,
+                             continuous: ulContinuous, strikeSink: &strikeSink)
+            }
+            if spanUL, let ulX0 {
+                ops.append(rule(xFrom: ulX0, xTo: ulX1, y: y - 1.5))
+            }
+            // Land EXACTLY on the margin regardless of any rounding accumulated across
+            // the pieces above.
+            x = justifyRightX
+            continue
+        }
         let columnIndent = seg.indent && pmActive
         if let entry = seg.entry, entry.proportional, !columnIndent {
             // PROPORTIONAL runs advance at NATURAL widths, face-scaled. Every piece
@@ -2041,47 +2505,96 @@ private func lineOpsPrinted(
             // Explicit `.ul off` (`ulContinuous == false`) keeps the per-piece path.
             let spanUL = ulContinuous && seg.styles.contains(.underline)
             let pieceStyles = spanUL ? seg.styles.subtracting(.underline) : seg.styles
-            let symbolBold = seg.family == .symbol && seg.styles.contains(.bold)
-            let symbolItalic = seg.family == .symbol && seg.styles.contains(.italic)
+            let symbolBold = family == .symbol && seg.styles.contains(.bold)
+            let symbolItalic = family == .symbol && seg.styles.contains(.italic)
             var ulX0: Double? = nil
             var ulX1 = 0.0
-            for piece in splitKeepingSpaceRuns(seg.text) {
-                let pw: Double
-                if seg.indent, piece.first == " " {
-                    // planning #257: this piece IS the whole typed leading run
-                    // (`splitIndent` only ever flags an all-space or all-text
-                    // segment) -- see `typedIndentSpaceEM`'s own doc comment for
-                    // the measured ratio and why it skips `factor` (the
-                    // face-average Tz scale) entirely.
-                    pw = Double(piece.width) * Double(pt) * typedIndentSpaceEM
-                } else {
-                    let nat = stringWidthPt(piece, baseFont, pt)
-                    pw = nat > 0 ? nat * factor : Double(piece.width) * pitch
+            // A font WS7's LASERJET driver carries is placed by the driver: each piece at
+            // the x its own widths and kerning give, and drawn to the width it had on
+            // paper, so the stand-in face's glyphs neither run into the next word nor
+            // leave it a wider gap.
+            let lj = ljPieces(seg.text, entry, seg.styles, seg.size, kerning: kerning,
+                              prev: ljPrev)
+            var plan: [(piece: String, x: Double, width: Double, want: Int)] = []
+            let xEnd: Double
+            if let lj {
+                plan = lj.indices.map { i in
+                    (lj[i].text, ljX(x + lj[i].x), lj[i].width,
+                     ljPieceTz(lj[i].text, baseFont, pt, lj[i].width, alone: ljAlone(lj, i)))
                 }
-                if piece.first != " " {
+                xEnd = x + (lj.last.map { $0.x + $0.width } ?? 0.0)
+            } else {
+                var xx = x
+                for piece in splitKeepingSpaceRuns(seg.text) {
+                    let pw: Double
+                    if seg.indent, piece.first == " " {
+                        // planning #257: this piece IS the whole typed leading run
+                        // (`splitIndent` only ever flags an all-space or all-text
+                        // segment) -- see `typedIndentSpaceEM`'s own doc comment for
+                        // the measured ratio and why it skips `factor` (the
+                        // face-average Tz scale) entirely.
+                        pw = Double(piece.width) * Double(pt) * typedIndentSpaceEM
+                    } else {
+                        let nat = stringWidthPt(piece, baseFont, pt)
+                        pw = nat > 0 ? nat * factor : Double(piece.width) * pitch
+                    }
+                    plan.append((piece, xx, pw, want))
+                    xx += pw
+                }
+                xEnd = xx
+            }
+            if recordPieces != nil {
+                recordPieces!.append(contentsOf: plan.map {
+                    PageLine.DriverPiece(text: $0.piece, x: $0.x, width: $0.width)
+                })
+                recOpen = nil
+            }
+            for (piece, px, pw, pwant) in plan {
+                if piece == "©", entry.laserjet == .lj6dtp {
+                    var op = Array("BT /\(res.ref("Symbol")) \(tfSize(pt)) Tf \(tfSize(Double(rise))) Ts ".utf8)
+                    if tzState != hundredths(tzDefault) {
+                        op += Array("\(fixedTwoDecimal(hundredths: hundredths(tzDefault))) Tz ".utf8)
+                        tzState = hundredths(tzDefault)
+                    }
+                    op += Array("\(fixedOneDecimalDouble(px)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                    op += [ljCopyright(family)]
+                    op += Array(") Tj ET".utf8)
+                    ops.append(op)
+                    if ulX0 == nil { ulX0 = px }
+                    ulX1 = px + pw
+                } else if piece.first != " " {
                     if symbolBold || symbolItalic {
                         ops.append(symbolStyleOp(
-                            font: font, pt: pt, rise: rise, want: want, tzState: &tzState,
-                            x: x, y: y, textBytes: esc(piece), isBold: symbolBold,
+                            font: font, pt: pt, rise: rise, want: pwant, tzState: &tzState,
+                            x: px, y: y, textBytes: esc(piece), isBold: symbolBold,
                             isItalic: symbolItalic))
                     } else {
-                        var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
-                        if want != tzState {
-                            op += Array("\(fixedTwoDecimal(hundredths: want)) Tz ".utf8)
-                            tzState = want
+                        var op = Array("BT /\(font) \(tfSize(pt)) Tf \(tfSize(Double(rise))) Ts ".utf8)
+                        if pwant != tzState {
+                            op += Array("\(fixedTwoDecimal(hundredths: pwant)) Tz ".utf8)
+                            tzState = pwant
                         }
-                        op += Array("\(fixedOneDecimalDouble(x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                        op += Array("\(fixedOneDecimalDouble(px)) \(fixedOneDecimalDouble(y)) Td (".utf8)
                         op += esc(piece)
                         op += Array(") Tj ET".utf8)
                         ops.append(op)
                     }
-                    if ulX0 == nil { ulX0 = x }
-                    ulX1 = x + pw
+                    if ulX0 == nil { ulX0 = px }
+                    ulX1 = px + pw
                 }
-                ops += rules(pieceStyles, piece, x: x, y: y, w: pw,
-                             continuous: ulContinuous, strikeSink: &strikeSink)
-                x += pw
+                if lj == nil {
+                    ops += rules(pieceStyles, piece, x: px, y: y, w: pw,
+                                 continuous: ulContinuous, strikeSink: &strikeSink)
+                }
             }
+            if lj != nil {
+                // a word split at a kerning pair is still one word to rule
+                for (word, gx, gw) in ljWords(plan.map { ($0.piece, $0.x, $0.width) }) {
+                    ops += rules(pieceStyles, word, x: gx, y: y, w: gw,
+                                 continuous: ulContinuous, strikeSink: &strikeSink)
+                }
+            }
+            x = xEnd
             if spanUL, let ulX0 {
                 ops.append(rule(xFrom: ulX0, xTo: ulX1, y: y - 1.5))
             }
@@ -2093,91 +2606,6 @@ private func lineOpsPrinted(
             scale = nil
             w = Double(seg.text.width) * Double(size) * 0.6      // document print columns
         } else {
-            // Planning #238 (.oj on full justification, research/
-            // 2026-09-08_justification-rule.md, ctrl-kd aeb34ad): `justifyEligible`
-            // guarantees this line IS the whole span and it reached the fixed-pitch
-            // branch (not proportional, not graphics, not a tab, not the leading
-            // indent) — split it into word/gap pieces (the same run-splitter the
-            // proportional branch above uses) and stretch only the single-blank gaps.
-            // See `lineOpsPrinted`'s own doc comment for the measured rule and its
-            // documented approximation (cumulative-floor Bresenham across elastic
-            // gaps, in whole decipoints — WS7's own per-gap split is NOT perfectly
-            // flat and not reverse-engineered to the decipoint this pass; see
-            // research/2026-09-08_justification-gap-model.md).
-            let pitch = supSubSpanPitch(seg.entry, seg.styles, seg.family, seg.size)
-                ?? spanPitch(seg.entry, pt)
-            if justifyEligible, let justifyRightX {
-                // planning #251(b): `justifyWordX` (the model's own precomputed
-                // answer, when `attachJustifyWordXPrinted` could resolve one) is
-                // used directly when present; every other call site recomputes via
-                // the same pure function, `justifyPiecesPrinted` -- see that
-                // function's own doc comment for the measured rule, its documented
-                // approximation, and the `neumaierSum`/`roundHalfToEven` parity
-                // notes (unchanged, just relocated).
-                let wordPieces = justifyWordX ?? justifyPiecesPrinted(
-                    seg.text, pitch: pitch, x0: x, justifyRightX: justifyRightX,
-                    baseFont: baseFont, pt: pt)
-                if let wordPieces, !wordPieces.isEmpty {
-                    let symbolBoldJ = seg.family == .symbol && seg.styles.contains(.bold)
-                    let symbolItalicJ = seg.family == .symbol && seg.styles.contains(.italic)
-                    var ulX0: Double? = nil
-                    var ulX1 = 0.0
-                    let spanUL = ulContinuous && seg.styles.contains(.underline)
-                    let pieceStyles = spanUL ? seg.styles.subtracting(.underline) : seg.styles
-                    for piece in wordPieces {
-                        let text = piece.text, pieceX = piece.x, actualW = piece.width
-                        // Nothing is drawn for a bare elastic gap (a single blank --
-                        // the `piece.text.contains(where:)` check below is what
-                        // actually gates the draw); `tzScale` is skipped for it too,
-                        // same as before this was factored out (see
-                        // `justifyPiecesPrinted`'s own doc comment for why
-                        // recomputing against the STORED width is safe for every
-                        // piece that IS drawn).
-                        let pscale: Double?
-                        if text == " " {
-                            pscale = nil
-                        } else {
-                            (pscale, _) = tzScale(text, baseFont, pt, actualW)
-                        }
-                        let pwant = hundredths(pscale ?? tzDefault)
-                        if text.contains(where: { !$0.isWhitespace }) {
-                            if symbolBoldJ || symbolItalicJ {
-                                ops.append(symbolStyleOp(
-                                    font: font, pt: pt, rise: rise, want: pwant,
-                                    tzState: &tzState, x: pieceX, y: y, textBytes: esc(text),
-                                    isBold: symbolBoldJ, isItalic: symbolItalicJ))
-                            } else if pwant == tzState {
-                                var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
-                                op += Array("\(fixedOneDecimalDouble(pieceX)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-                                op += esc(text)
-                                op += Array(") Tj ET".utf8)
-                                ops.append(op)
-                            } else {
-                                var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
-                                op += Array("\(fixedTwoDecimal(hundredths: pwant)) Tz ".utf8)
-                                op += Array("\(fixedOneDecimalDouble(pieceX)) \(fixedOneDecimalDouble(y)) Td (".utf8)
-                                op += esc(text)
-                                op += Array(") Tj ET".utf8)
-                                ops.append(op)
-                                tzState = pwant
-                            }
-                            if ulX0 == nil { ulX0 = pieceX }
-                            ulX1 = pieceX + actualW
-                        }
-                        ops += rules(pieceStyles, text, x: pieceX, y: y, w: actualW,
-                                    continuous: ulContinuous, strikeSink: &strikeSink)
-                    }
-                    if spanUL, let ulX0 {
-                        ops.append(rule(xFrom: ulX0, xTo: ulX1, y: y - 1.5))
-                    }
-                    // Land EXACTLY on the margin regardless of any rounding
-                    // accumulated across the pieces above -- the one part of the
-                    // measured rule confirmed on every justified line in the corpus,
-                    // never left to float drift.
-                    x = justifyRightX
-                    continue
-                }
-            }
             // Fixed-pitch (and metric-less) runs: width-matched onto the font block's
             // own HMI grid with Tz — for Courier the ratio is 100 by construction and no
             // operator is ever written, which is what keeps every fontless PDF
@@ -2188,7 +2616,8 @@ private func lineOpsPrinted(
             // not `pt` (already reduced by `sized`), so a fontless (WS4/print-stream)
             // sup/sub span's cell is not narrowed twice.
             let target: Double
-            if let pitch = supSubSpanPitch(seg.entry, seg.styles, seg.family, seg.size) {
+            if !fullScripts, !bitmap,
+               let pitch = supSubSpanPitch(seg.entry, seg.styles, family, pt, seg.size) {
                 target = Double(seg.text.width) * pitch
             } else {
                 target = spanTarget(seg.entry, pt, count: seg.text.width)
@@ -2196,8 +2625,8 @@ private func lineOpsPrinted(
             (scale, w) = tzScale(seg.text, baseFont, pt, target)
         }
         let want = hundredths(scale ?? tzDefault)
-        let symbolBold = seg.family == .symbol && seg.styles.contains(.bold)
-        let symbolItalic = seg.family == .symbol && seg.styles.contains(.italic)
+        let symbolBold = family == .symbol && seg.styles.contains(.bold)
+        let symbolItalic = family == .symbol && seg.styles.contains(.italic)
         // BLANKS PUT NO INK ON THE PAPER (planning #270 item 39 / triage Q6,
         // 2026-09-14; port of ctrl-kd). A run that is all whitespace draws no glyph in
         // any face, so it gets no text-showing op; it still moves the print position,
@@ -2226,7 +2655,7 @@ private func lineOpsPrinted(
                     x: x, y: y, textBytes: esc(seg.text), isBold: symbolBold,
                     isItalic: symbolItalic))
             } else {
-                var op = Array("BT /\(font) \(pt) Tf \(rise) Ts ".utf8)
+                var op = Array("BT /\(font) \(tfSize(pt)) Tf \(tfSize(Double(rise))) Ts ".utf8)
                 if want != tzState {
                     op += Array("\(fixedTwoDecimal(hundredths: want)) Tz ".utf8)
                     tzState = want
@@ -2240,6 +2669,9 @@ private func lineOpsPrinted(
         ops += rules(seg.styles, seg.text, x: x, y: y, w: w, continuous: ulContinuous,
                      strikeSink: &strikeSink)
         x += w
+    }
+    if recordPieces != nil, let open = recOpen {
+        recordPieces!.append(.init(text: open.text, x: open.x, width: x - open.x))
     }
     // E3 (2026-09-16): the line's strikeout, drawn once now that every piece has been
     // placed — one rule per struck RUN, word gaps included, the way real WS7 overstrikes
@@ -2286,14 +2718,18 @@ func pageStream(
     running: [[UInt8]] = [], fonts: [FontChange] = [], res: FontResources? = nil,
     colourMap: [Int: Double] = [:], rollPt: Double? = nil, ulContinuous: Bool = true,
     lineNoTimeline: Timeline<Int?>? = nil, pclPrograms: [[UInt8]] = [],
-    driverQuirks: DriverQuirks = .none
+    driverQuirks: DriverQuirks = .none, altFont: FontChange? = nil, hpljet: Bool = false
 ) -> [UInt8] {
     let res = res ?? FontResources()
     var ops: [[UInt8]] = running
     // The baseline of the first line: down from the top of the paper by the margin, then by
     // that line's own height, because `Td` positions a baseline and not a line's top edge.
     let firstLead = pagelines.first?.lead ?? lead
-    var y = Double(pageHeight - top) - firstLead
+    // WS4's HPLJET puts line 1 at its vbias, 1/3" below the top margin, whatever `.lh` is,
+    // and steps each later line by the `.lh` in force on the line ABOVE it (WS4 teardown 4
+    // §15.2; runs hj-mt0, hj-lh12top, hj-lhmix).
+    var y = Double(pageHeight - top) - (hpljet ? PDFMetrics.hpljetVbiasPt : firstLead)
+    var prevLead = firstLead
     // Horizontal scaling persists across text objects within a content stream; it starts at
     // PDF's own default on every page. See `lineOpsPrinted`.
     var tzState = hundredths(tzDefault)
@@ -2333,10 +2769,13 @@ func pageStream(
         if n > 0, !prevOverprint {
             if let curCol = line.col, curCol != prevCol {
                 y = Double(pageHeight - top) - columnTopOffsetPt - (line.lead ?? lead)
+            } else if hpljet {
+                y -= prevLead
             } else {
                 y -= line.lead ?? lead
             }
         }
+        prevLead = line.lead ?? lead
         prevCol = line.col
         prevOverprint = line.overprint
         // register b31: this line's own `.po` override (already resolved to points --
@@ -2429,6 +2868,10 @@ func pageStream(
             op += esc(lineNo.text)
             op += Array(") Tj ET".utf8)
             ops.append(op)
+            for (bar, barX) in zip(PDFMetrics.lineNoBarChars, PDFMetrics.lineNoBarXs) {
+                ops += graphicOps(String(bar), x: barX, y: y, pitch: PDFMetrics.lineNoBarWidthPt,
+                                  pt: gutterSize)
+            }
         }
         var segs: [LineSegment] = []
         // Coalesced FIRST (pdf.py:136): the wrapper leaves one segment per word and per
@@ -2438,7 +2881,8 @@ func pageStream(
             if span.text.isEmpty && span.tabHMI == nil {
                 continue                       // no operator, and no advance either
             }
-            let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
+            let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size,
+                                      altFont: span.styles.contains(.altFont), alt: altFont)
             segs.append(LineSegment(text: rendered.text, styles: span.styles,
                                     family: rendered.family, size: rendered.size,
                                     entry: rendered.entry, indent: false,
@@ -2447,6 +2891,7 @@ func pageStream(
                                     tabLeader: span.tabLeader))
         }
         var discardedGraphicCells: [PageLine.GraphicCellPlacement]? = nil
+        var discardedPieces: [PageLine.DriverPiece]? = nil
         ops += lineOpsPrinted(segs, left: leftHere, y: y, size: size, res: res, tzState: &tzState,
                              colState: &colState, darkenState: &darkenState,
                              colourMap: colourMap, rollPt: rollHere,
@@ -2455,7 +2900,26 @@ func pageStream(
                              kerning: line.kerning, justifyRightX: line.justifyRightX,
                              justifyWordX: line.justifyWordX,
                              recordGraphicCells: &discardedGraphicCells,
-                             pmActive: line.pmActive, driverQuirks: driverQuirks)
+                             recordPieces: &discardedPieces,
+                             pmActive: line.pmActive, driverQuirks: driverQuirks,
+                             softBlanks: line.softBlanks, fullScripts: hpljet, face: line.face)
+        if hpljet, !line.overstrike.isEmpty {
+            // COMPOS's second character, printed over the first (WS4 teardown 4 §15.7), in
+            // the line's own face
+            let baseFont = line.face.map { base14($0.family, bold: $0.bold, italic: false) }
+                ?? "Courier"
+            let pt = line.face?.size ?? Double(size)
+            let fref = res.ref(baseFont)
+            for over in line.overstrike {
+                var op = Array("BT /\(fref) \(tfSize(pt)) Tf 0 Ts ".utf8)
+                op += Array("\(fixedTwoDecimal(hundredths: hundredths(tzDefault))) Tz ".utf8)
+                op += Array("\(fixedOneDecimalDouble(over.x)) \(fixedOneDecimalDouble(y)) Td (".utf8)
+                op += esc(over.char)
+                op += Array(") Tj ET".utf8)
+                ops.append(op)
+                tzState = hundredths(tzDefault)
+            }
+        }
     }
     return joined(ops, separator: 0x0A)                                 // Python's b'\n'.join
 }
@@ -2473,6 +2937,25 @@ func attachLineNumbersPrinted(_ doc: Document, _ pages: inout [Page], size: Int)
     let lineNoTimeline = doc.lineNumberingTimeline()
     let gutterRendered = spanRender("", font: nil, fonts: doc.fonts, size: size)
     let gutterSize = gutterRendered.size
+    // WS7 numbers EVERY row of the page, the empty ones after the text too, and draws a
+    // double bar and a single bar beside each number (WS7 report `drivera-map.txt`, run
+    // lnum-courier). So when numbering is still on at the document's last line, that last
+    // page is filled out with empty rows to the page's capacity, and each numbered row
+    // carries the two bars as graphic cells (`PDFMetrics.lineNoBarChars`), in x order with
+    // the line's own. Port of the same block in `_attach_line_numbers_printed`.
+    if let lastPage = pages.indices.last, !lineNoTimeline.isEmpty {
+        let last = pages[lastPage]
+        if let lastBI = last.last?.bi,
+           last.allSatisfy({ $0.lead == nil && $0.image == nil }),
+           let interval = lineNoTimeline.at(lastBI), interval != 0 {
+            let missing = printedCap(doc) - last.count
+            if missing > 0 {
+                for _ in 0..<missing {
+                    pages[lastPage].append(PageLine([], bi: lastBI))
+                }
+            }
+        }
+    }
     for pi in pages.indices {
         var lineNoState: (interval: Int?, k: Int) = (nil, 0)
         for li in pages[pi].indices {
@@ -2492,6 +2975,18 @@ func attachLineNumbersPrinted(_ doc: Document, _ pages: inout [Page], size: Int)
                 let label = String(k / interval + 1)
                 let gx = PDFMetrics.lineNoRightPt - Double(label.count) * Double(gutterSize) * 0.6
                 pages[pi][li].lineNo = PageLine.LineNumberLabel(text: label, x: gx)
+                var cells = (line.graphicCells ?? [])
+                for (bar, barX) in zip(PDFMetrics.lineNoBarChars, PDFMetrics.lineNoBarXs) {
+                    cells.append(PageLine.GraphicCellPlacement(
+                        char: bar, x: barX, width: PDFMetrics.lineNoBarWidthPt))
+                }
+                // `sorted(key: x)` in Python is STABLE: bars first in the list, then the
+                // line's own cells; equal x keeps that order.
+                let ordered = cells.enumerated().sorted {
+                    $0.element.x != $1.element.x ? $0.element.x < $1.element.x
+                                                 : $0.offset < $1.offset
+                }.map(\.element)
+                pages[pi][li].graphicCells = ordered
             }
         }
     }
@@ -2500,21 +2995,26 @@ func attachLineNumbersPrinted(_ doc: Document, _ pages: inout [Page], size: Int)
 /// planning #251(b): sets `PageLine.justifyWordX` (see that field's own doc comment) on
 /// every justified line that resolves, through the SAME preprocessing pipeline
 /// `lineOpsPrinted` itself runs (bare-tab expansion; `ljSubstitute`; `splitGraphics`;
-/// `splitSymbolFallback`; `splitIndent`), to exactly one FIXED-PITCH, untagged span
-/// with real slack to distribute. Anything outside that -- a styled/mixed line, a
-/// proportional span, a `pctlHMI`/`tabHMI`-tagged span (the writer's own preamble
-/// branches off those BEFORE reaching ordinary per-character placement, so this
-/// function's own arithmetic does not apply), or a line with no elastic gap or no slack
-/// -- leaves `justifyWordX` unset; `lineOpsPrinted` then computes it fresh at render
-/// time, byte-identical to before this function existed. Port of ctrl-kd's
-/// `_attach_justify_word_x_printed`.
+/// `splitSymbolFallback`; `splitIndent`), to plain text that WS7's word-gap rule can
+/// spread: any number of spans, fixed-pitch or proportional (WS7 report 11.7.3, 14.15). A
+/// line with a tab, print-control or graphic span, a `.pm` column indent, no run of blanks
+/// between two words leaves `justifyWordX` unset;
+/// `lineOpsPrinted` then draws it at its natural widths, as before this function existed.
+/// Port of ctrl-kd's `_attach_justify_word_x_printed`.
 func attachJustifyWordXPrinted(_ doc: Document, _ pages: inout [Page], size: Int) {
-    let fonts = doc.fonts
+    let fonts = RenderFonts(doc)
     let left = printedLeft(doc, size: size)
     let rollPt = printedRollPt(doc)
     let dq = DriverQuirks(doc)
+    let hpljet = printingEra(doc).hpljetDriver
+    let checkpoints = hpljet ? hpljetCheckpoints(doc) : []
     for pi in pages.indices {
         for li in pages[pi].indices {
+            if hpljet {
+                attachHpljetPieces(&pages[pi][li], fonts: fonts, size: size, left: left,
+                                   checkpoints: checkpoints)
+                continue
+            }
             let line = pages[pi][li]
             guard let justifyRightX = line.justifyRightX else { continue }
             var segs: [LineSegment] = []
@@ -2526,7 +3026,9 @@ func attachJustifyWordXPrinted(_ doc: Document, _ pages: inout [Page], size: Int
                 // MICKEE.WS page 23: a 90-HMI leading tab, half a 10-CPI column, starts
                 // the line at 10.8pt where the margin alone is 7.2pt).
                 if span.text.isEmpty && span.tabHMI == nil { continue }
-                let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
+                let rendered = spanRender(span.text, font: span.font, fonts: fonts.fonts,
+                                          size: size, altFont: span.styles.contains(.altFont),
+                                          alt: fonts.alt)
                 segs.append(LineSegment(text: rendered.text, styles: span.styles,
                                         family: rendered.family, size: rendered.size,
                                         entry: rendered.entry, indent: false,
@@ -2540,26 +3042,256 @@ func attachJustifyWordXPrinted(_ doc: Document, _ pages: inout [Page], size: Int
                                     typography: dq.typography, corners: dq.corners)
             }
             let splitSegs = splitIndent(splitSymbolFallback(splitGraphics(segs)))
-            guard splitSegs.count == 1 else { continue }
-            let seg = splitSegs[0]
-            if seg.pctlHMI != nil || seg.tabHMI != nil { continue }
-            if seg.entry?.proportional ?? false { continue }   // rule 4: fixed-pitch only
+            guard let firstSeg = splitSegs.first else { continue }
             let leftHere = line.left ?? left
             var fi = line.fi
-            if fi != nil, seg.indent { fi = nil }
-            let x0 = leftHere + (fi ?? 0.0)
-            let (pt, _) = sized(seg.styles, seg.size, rollPt: rollPt, family: seg.family)
-            let baseFont = base14(seg.family, bold: seg.styles.contains(.bold),
-                                  italic: seg.styles.contains(.italic))
-            let pitch = supSubSpanPitch(seg.entry, seg.styles, seg.family, seg.size)
-                ?? spanPitch(seg.entry, pt)
-            if let pieces = justifyPiecesPrinted(seg.text, pitch: pitch, x0: x0,
-                                                 justifyRightX: justifyRightX,
-                                                 baseFont: baseFont, pt: pt) {
+            if fi != nil, firstSeg.indent { fi = nil }
+            if let pieces = justifyLinePrinted(
+                splitSegs, x0: leftHere + (fi ?? 0.0), justifyRightX: justifyRightX,
+                rollPt: rollPt, pmActive: line.pmActive,
+                soft: softBlanksOf(splitSegs, line.softBlanks), kerning: line.kerning) {
                 pages[pi][li].justifyWordX = pieces
             }
         }
     }
+}
+
+// MARK: - WS4's HPLJET driver
+
+/// The `.PS`/`.UJ`/`.CW`/`.PO` in force from one line on, as `HPLJET.placeLine` takes
+/// them, with the `.CW` in force when `.PO` was read (WS4 teardown 4 §15.3).
+struct HPLJETSettings: Equatable {
+    var ps = false
+    /// "on", "off" or "dis" (on for HPLJET).
+    var uj = "dis"
+    var cw = 12
+    var po = Int(defaultPoCols)
+    var poCW = 12
+}
+
+/// `[((blockIndex, lineIndex), settings)]` ascending: the `.PS`/`.UJ`/`.CW`/`.PO` in force
+/// from that line on. A bare or bad `.PO` is 0 (`Era.barePoZero`); `.UJ` is on, off or
+/// "dis" (on for HPLJET), anything but ON/OFF reading as "dis" (WS4 teardown 4 §2). Port of
+/// `_hpljet_checkpoints`, whose pattern is `^\.(PS|UJ|CW|PO)\b\s*(\S*)` (case-insensitive)
+/// on the stripped command.
+func hpljetCheckpoints(_ doc: Document) -> [(at: (bi: Int, li: Int), settings: HPLJETSettings)] {
+    func isSpace(_ s: Unicode.Scalar) -> Bool { String(s).isPythonSpaceOnly }
+    func isWord(_ s: Unicode.Scalar) -> Bool {
+        s == "_" || s.properties.isAlphabetic || s.properties.numericType != nil
+    }
+    func isDigits(_ s: String) -> Bool {
+        !s.isEmpty && s.unicodeScalars.allSatisfy { ("0"..."9").contains($0) }
+    }
+    var cur = HPLJETSettings()
+    var out: [(at: (bi: Int, li: Int), settings: HPLJETSettings)] = [((0, 0), cur)]
+    for dp in doc.dotPositions {
+        let cmd = Array(dp.text.trimmed().unicodeScalars)
+        guard cmd.count >= 3, cmd[0] == "." else { continue }
+        let name = String(String.UnicodeScalarView(cmd[1...2])).uppercased()
+        guard ["PS", "UJ", "CW", "PO"].contains(name) else { continue }
+        if cmd.count > 3, isWord(cmd[3]) { continue }          // `\b`
+        var k = 3
+        while k < cmd.count, isSpace(cmd[k]) { k += 1 }
+        var argEnd = k
+        while argEnd < cmd.count, !isSpace(cmd[argEnd]) { argEnd += 1 }
+        let arg = String(String.UnicodeScalarView(cmd[k..<argEnd])).uppercased()
+        switch name {
+        case "PS":
+            cur.ps = arg == "ON"
+        case "UJ":
+            cur.uj = arg == "ON" ? "on" : arg == "OFF" ? "off" : "dis"
+        case "CW":
+            if isDigits(arg), let v = Int(arg) { cur.cw = v }
+        default:
+            cur.po = isDigits(arg) ? (Int(arg) ?? 0) : 0
+            cur.poCW = cur.cw
+        }
+        if out[out.count - 1].at == (dp.blockIndex, dp.lineIndex) {
+            out[out.count - 1] = ((dp.blockIndex, dp.lineIndex), cur)
+        } else {
+            out.append(((dp.blockIndex, dp.lineIndex), cur))
+        }
+    }
+    return out
+}
+
+/// The settings in force at line `li` of block `bi` (nil reads as 0). Port of
+/// `_hpljet_settings_at`.
+func hpljetSettingsAt(_ checkpoints: [(at: (bi: Int, li: Int), settings: HPLJETSettings)],
+                      bi: Int?, li: Int?) -> HPLJETSettings {
+    var found = checkpoints[0].settings
+    let here = (bi ?? 0, li ?? 0)
+    for (at, st) in checkpoints where at <= here {
+        found = st
+    }
+    return found
+}
+
+/// WS4's HPLJET on one Printed line: `PageLine.justifyWordX` from `HPLJET.placeLine` (WS4
+/// teardown 4 §15.3-15.6) when the driver does anything but set the line on its cell grid
+/// -- a line it justifies, or a `.PS` or `^PA` line -- and no WS7 word-gap justification
+/// either way. Port of `_attach_hpljet_pieces`.
+func attachHpljetPieces(_ line: inout PageLine, fonts: RenderFonts, size: Int, left: Double,
+                        checkpoints: [(at: (bi: Int, li: Int), settings: HPLJETSettings)]) {
+    let st = hpljetSettingsAt(checkpoints, bi: line.bi, li: line.li)
+    let leftHere = line.left ?? left
+    let over = line.overstrike
+    // placed on the cell grid until the driver places the line itself
+    for k in line.overstrike.indices {
+        line.overstrike[k].x = leftHere + Double(line.overstrike[k].offset * st.cw) * 0.6
+    }
+    var segs: [LineSegment] = []
+    var pix = false
+    for span in coalesce(line) {
+        if span.text.isEmpty && span.tabHMI == nil { continue }
+        let rendered = spanRender(span.text, font: span.font, fonts: fonts.fonts, size: size,
+                                  altFont: span.styles.contains(.altFont), alt: fonts.alt)
+        if span.pix != nil { pix = true }
+        segs.append(LineSegment(text: rendered.text, styles: span.styles,
+                                family: rendered.family, size: rendered.size,
+                                entry: rendered.entry, indent: false,
+                                colour: span.colour, pctlHMI: span.pctlHMI,
+                                pcl: span.pcl, tabHMI: span.tabHMI,
+                                tabLeader: span.tabLeader))
+    }
+    line.justifyRightX = nil
+    if segs.isEmpty { return }
+    segs = splitIndent(splitSymbolFallback(splitGraphics(segs)))
+    if pix || segs.contains(where: {
+        $0.pctlHMI != nil || $0.tabHMI != nil || $0.text.contains("\t")
+            || $0.text.contains(where: { graphicChars.contains($0) })
+    }) {
+        return
+    }
+    let text = segs.map(\.text).joined()
+    let hib = Set(line.hibit?.offsets ?? [])
+    if !hib.isEmpty, line.hibit?.text != text { return }
+    var chars: [HPLJET.Char] = []
+    for sg in segs {
+        let alt = sg.styles.contains(.altFont)
+        for ch in sg.text.unicodeScalars {
+            guard var code = hpljetPrinterCode(ch) else { return }
+            let k = chars.count
+            if code == 0x20 && hib.contains(k) { code = 0xA0 }
+            chars.append(HPLJET.Char(code: code, hib: hib.contains(k) && code != 0xA0,
+                                     cw: alt ? HPLJET.altCW : st.cw,
+                                     bold: sg.styles.contains(.bold),
+                                     italic: sg.styles.contains(.italic)))
+        }
+    }
+    if line.softHyphen, let last = chars.last, last.code == 0x2D {
+        chars[chars.count - 1].measureAs = 0x1F    // measured as COMPOS[1F], '?'
+    }
+    let usesAlt = chars.contains { $0.cw == HPLJET.altCW && $0.cw != st.cw }
+    guard st.ps || usesAlt || (line.soft && st.uj != "off") else { return }
+    guard let placed = HPLJET.placeLine(chars, po: st.po, poCW: st.poCW, ps: st.ps,
+                                        uj: st.uj, soft: line.soft),
+          !placed.isEmpty else { return }
+    let xLine = st.po * st.poCW * 6
+    let xs = placed.map { leftHere + Double($0.x - xLine) / 10.0 }
+    if !st.ps && !usesAlt && xs.enumerated().allSatisfy({
+        abs($1 - (leftHere + Double($0 * st.cw) * 0.6)) < 0.05
+    }) {
+        return                    // on its cell grid: drawn as one run, as before
+    }
+    // `' +|[^ ]+'` over the line's text, by Unicode scalar
+    let scalars = Array(text.unicodeScalars)
+    var pieces: [PageLine.JustifyWordPiece] = []
+    var a = 0
+    while a < scalars.count {
+        let isBlank = scalars[a] == " "
+        var b = a + 1
+        while b < scalars.count, (scalars[b] == " ") == isBlank { b += 1 }
+        let x0 = xs[a]
+        let x1 = b < scalars.count ? xs[b] : xs[b - 1] + placed[b - 1].advance / 10.0
+        pieces.append(PageLine.JustifyWordPiece(
+            text: String(String.UnicodeScalarView(scalars[a..<b])), x: x0, width: x1 - x0))
+        a = b
+    }
+    line.justifyWordX = pieces
+    line.justifyRightX = pieces[pieces.count - 1].x + pieces[pieces.count - 1].width
+    line.overstrike = over.map {
+        PageLine.Overstrike(char: $0.char, offset: $0.offset, x: xs[$0.offset])
+    }
+    if st.ps { line.face = hpljetFace(st.cw) }
+}
+
+/// The faces WS4's proportional width tables were made for, inferred from the widths
+/// themselves: PS14B matches Helvetica Bold at 14.4pt (median ratio 0.99 over 21h-7Eh) and
+/// PS10/PS8 match Times; together they are the fonts of HP's 92286B "Tms Proportional 1"
+/// cartridge (Tms Rmn 10pt medium, bold and italic, Tms Rmn 8pt, Helv 14.4pt bold). WS4
+/// teardown 4 §15.4: a bare LaserJet II would have drawn Courier; a stand-in face is the
+/// converter's choice. Sized by the `ESC)s<h>V` height HPLJET asks for. Port of
+/// `_HPLJET_PS_FACES`/`_HPLJET_PS_HEIGHT`.
+private let hpljetPSFaces: [String: (family: PDFFamily, bold: Bool)] = [
+    "PS8": (.times, false), "PS10": (.times, false), "PS10I": (.times, false),
+    "PS10B": (.times, false), "PS14B": (.helvetica, true),
+]
+private let hpljetPSHeight: [Int: Int] = [
+    7: 6, 8: 8, 9: 10, 10: 10, 11: 10, 12: 12, 13: 12, 14: 12, 15: 14, 16: 18, 17: 24, 18: 30,
+]
+
+/// The Unicode character for a LaserJet Roman-8 code. 7Fh, which COMPOS gives the shading
+/// characters, prints as Roman-8's shaded block. Port of `_roman8`.
+func roman8(_ code: Int) -> String {
+    if code == 0x7F { return "\u{2592}" }
+    guard let value = HPLJETTables.roman8[code], let scalar = Unicode.Scalar(value) else {
+        return "\u{FFFD}"
+    }
+    return String(scalar)
+}
+
+/// `(spans, overstrike)`: each span's text as WS4's HPLJET prints it. A character outside
+/// ASCII goes through COMPOS, CP437 to the LaserJet's Roman-8 (WS4 teardown 4 §15.7): box
+/// drawing prints as `|`, `-`, `/` and backslash, Greek and math as ASCII stand-ins,
+/// shading as Roman-8's block. A character COMPOS prints as two (┼ is `-` then `|`) keeps
+/// the first in the text; the second is returned with its offset, printed over it. Port of
+/// `_hpljet_compos_spans`.
+func hpljetComposSpans(_ spans: [Span]) -> ([Span], [PageLine.Overstrike]) {
+    var out: [Span] = []
+    var over: [PageLine.Overstrike] = []
+    var off = 0
+    for span in spans {
+        var text = String.UnicodeScalarView()
+        for ch in span.text.unicodeScalars {
+            if ch.value < 0x80 && ch.value >= 0x20 {
+                text.append(ch)
+            } else if let code = encodeCP437(ch) {
+                let (first, second) = HPLJETTables.compos[Int(code)]
+                if first >= 0x20 {
+                    text.append(contentsOf: roman8(first).unicodeScalars)
+                } else {
+                    text.append(ch)
+                }
+                if second != 0 {
+                    over.append(PageLine.Overstrike(char: roman8(second), offset: off))
+                }
+            } else {
+                text.append(ch)
+            }
+            off += 1
+        }
+        var copy = span
+        copy.text = String(text)
+        out.append(copy)
+    }
+    return (out, over)
+}
+
+/// The LaserJet code of a character `hpljetComposSpans` printed, or nil. Port of
+/// `_hpljet_printer_code`.
+func hpljetPrinterCode(_ ch: Unicode.Scalar) -> Int? {
+    if ch == "\u{2592}" { return 0x7F }
+    return HPLJETTables.roman8Encode[ch.value].map { Int($0) }
+}
+
+/// `(family, size, bold)` a WS4 `.PS ON` line at `.CW` `cw` is drawn in. Port of
+/// `_hpljet_face`.
+func hpljetFace(_ cw: Int) -> PageLine.Face {
+    let rec = HPLJET.fontFor(cw, ps: true).record
+    let face = hpljetPSFaces[HPLJETTables.fonts[rec].table ?? ""] ?? (.courier, false)
+    return PageLine.Face(family: face.family, size: Double(hpljetPSHeight[rec] ?? 12),
+                         bold: face.bold)
 }
 
 /// planning #251(c): sets `PageLine.graphicCells` (see that field's own doc comment) on
@@ -2580,7 +3312,7 @@ func attachJustifyWordXPrinted(_ doc: Document, _ pages: inout [Page], size: Int
 /// the overwhelming majority of ordinary prose lines a throwaway render call. Port of
 /// ctrl-kd's `_attach_graphic_cells_printed`.
 func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int) {
-    let fonts = doc.fonts
+    let fonts = RenderFonts(doc)
     let left = printedLeft(doc, size: size)
     let rollPt = printedRollPt(doc)
     let ulContinuous = doc.formatting.underlineBlanks ?? true
@@ -2602,7 +3334,9 @@ func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int
                 // MICKEE.WS page 23: a 90-HMI leading tab, half a 10-CPI column, starts
                 // the line at 10.8pt where the margin alone is 7.2pt).
                 if span.text.isEmpty && span.tabHMI == nil { continue }
-                let rendered = spanRender(span.text, font: span.font, fonts: fonts, size: size)
+                let rendered = spanRender(span.text, font: span.font, fonts: fonts.fonts,
+                                          size: size, altFont: span.styles.contains(.altFont),
+                                          alt: fonts.alt)
                 segs.append(LineSegment(text: rendered.text, styles: span.styles,
                                         family: rendered.family, size: rendered.size,
                                         entry: rendered.entry, indent: false,
@@ -2616,16 +3350,80 @@ func attachGraphicCellsPrinted(_ doc: Document, _ pages: inout [Page], size: Int
             var colState = PDFFill.gray(0.0)
             var darkenState = false
             var record: [PageLine.GraphicCellPlacement]? = []
+            var noPieces: [PageLine.DriverPiece]? = nil
             _ = lineOpsPrinted(segs, left: leftHere, y: 0.0, size: size, res: FontResources(),
                               tzState: &tzState, colState: &colState, darkenState: &darkenState,
                               colourMap: colourMap, rollPt: rollHere, fi: line.fi,
                               ulContinuous: ulContinuous, pclPrograms: pclPrograms,
                               pageHeight: Double(pageHeight), kerning: line.kerning,
                               justifyRightX: line.justifyRightX, justifyWordX: line.justifyWordX,
-                              recordGraphicCells: &record, pmActive: line.pmActive,
-                              driverQuirks: dq)
+                              recordGraphicCells: &record, recordPieces: &noPieces,
+                              pmActive: line.pmActive,
+                              driverQuirks: dq, softBlanks: line.softBlanks,
+                              fullScripts: printingEra(doc).hpljetDriver)
             if let record, !record.isEmpty {
                 pages[pi][li].graphicCells = record
+            }
+        }
+    }
+}
+
+/// Sets `PageLine.driverPieces` on every line with text WS7's LASERJET driver places (a
+/// `laserjet` font): the pieces tiling the line's text left to right, each width the
+/// advance to the next piece, so a piece lands on its x by construction. Recorded from a
+/// real (throwaway-state) call to `lineOpsPrinted`, as `attachGraphicCellsPrinted` records
+/// its cells, so they are the positions the writer draws. Port of ctrl-kd's
+/// `_attach_driver_pieces_printed`.
+func attachDriverPiecesPrinted(_ doc: Document, _ pages: inout [Page], size: Int) {
+    if printingEra(doc).hpljetDriver { return }
+    let fonts = RenderFonts(doc)
+    if !fonts.fonts.contains(where: { $0.laserjet != nil }) { return }
+    let left = printedLeft(doc, size: size)
+    let rollPt = printedRollPt(doc)
+    let ulContinuous = doc.formatting.underlineBlanks ?? true
+    let dq = DriverQuirks(doc)
+    let colourMap: [Int: Double] = dq.colour ? colourGrayLJ6DTP : [:]
+    let pageHeight = resolvedPageHeight(doc, printed: true)
+    for pi in pages.indices {
+        for li in pages[pi].indices {
+            let line = pages[pi][li]
+            var segs: [LineSegment] = []
+            for span in coalesce(line) {
+                if span.text.isEmpty && span.tabHMI == nil { continue }
+                let rendered = spanRender(span.text, font: span.font, fonts: fonts.fonts,
+                                          size: size, altFont: span.styles.contains(.altFont),
+                                          alt: fonts.alt)
+                segs.append(LineSegment(text: rendered.text, styles: span.styles,
+                                        family: rendered.family, size: rendered.size,
+                                        entry: rendered.entry, indent: false,
+                                        colour: span.colour, pctlHMI: span.pctlHMI,
+                                        pcl: span.pcl, tabHMI: span.tabHMI,
+                                        tabLeader: span.tabLeader))
+            }
+            guard segs.contains(where: {
+                $0.entry?.laserjet != nil
+                    && !$0.text.trimmed().isEmpty
+            }) else { continue }
+            var tzState = hundredths(tzDefault)
+            var colState = PDFFill.gray(0.0)
+            var darkenState = false
+            var noCells: [PageLine.GraphicCellPlacement]? = nil
+            var record: [PageLine.DriverPiece]? = []
+            _ = lineOpsPrinted(segs, left: line.left ?? left, y: 0.0, size: size,
+                              res: FontResources(), tzState: &tzState, colState: &colState,
+                              darkenState: &darkenState, colourMap: colourMap,
+                              rollPt: line.roll ?? rollPt, fi: line.fi,
+                              ulContinuous: ulContinuous, pclPrograms: doc.pclPrograms,
+                              pageHeight: Double(pageHeight), kerning: line.kerning,
+                              justifyRightX: line.justifyRightX, justifyWordX: line.justifyWordX,
+                              recordGraphicCells: &noCells, recordPieces: &record,
+                              pmActive: line.pmActive, driverQuirks: dq,
+                              softBlanks: line.softBlanks, fullScripts: false)
+            let kept = (record ?? []).filter { !$0.text.isEmpty }
+            pages[pi][li].driverPieces = kept.isEmpty ? nil : kept.enumerated().map { i, p in
+                PageLine.DriverPiece(
+                    text: p.text, x: p.x,
+                    width: i + 1 < kept.count ? kept[i + 1].x - p.x : p.width, drawn: p.width)
             }
         }
     }
@@ -2710,7 +3508,8 @@ func attachHeadFootLinesPrinted(_ doc: Document, _ pages: inout [Page], size: In
             // and clamped inside a Letter sheet (`REF/BOOKLET.RJS`'s `.poo` is 58
             // columns and its number's column is past that clamp), and never the
             // head/foot's own page-OPEN `.po`. See `autoPageNumberXPt`.
-            poCols: page.autoPagenoPo)
+            poCols: page.autoPagenoPo,
+            footEjected: page.endedByFormFeed)
         else { continue }
         // Planning #255: `styleAttrs` is a PDF-render-time concern only, applied by
         // `runningOps`'s `hfLineOps` -- the page-lines MODEL keeps its pre-existing
@@ -2865,7 +3664,7 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
         // Font runs are a PRINTED-mode facsimile feature — WS4 documents and print
         // streams have no font blocks, so `doc.fonts` is empty for them and this is a
         // no-op either way.
-        let fonts = doc.fonts
+        let fonts = RenderFonts(doc).fonts
         // Colour is DRIVER-DEFINED: the palette indices a document records mean whatever
         // its printer description file says. LJ6DTP's table is known (recovered from the
         // driver file's own string table and confirmed against the document's sample
@@ -3046,13 +3845,16 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                      // columns, resolved at the page's CLOSE. Twin of
                                      // the one in `attachHeadFootLinesPrinted`; see
                                      // `autoPageNumberXPt`.
-                                     poCols: page.autoPagenoPo)
+                                     poCols: page.autoPagenoPo,
+                                     footEjected: page.endedByFormFeed)
             built.append(pageStream(page, top: pageTop, pageHeight: pageHeightThis, lead: lead,
                                     size: size, left: left, running: running,
                                     fonts: fonts, res: res, colourMap: colourMap,
                                     rollPt: rollPt, ulContinuous: ulContinuous,
                                     lineNoTimeline: lineNoTimeline,
-                                    pclPrograms: doc.pclPrograms, driverQuirks: dq))
+                                    pclPrograms: doc.pclPrograms, driverQuirks: dq,
+                                    altFont: RenderFonts(doc).alt,
+                                    hpljet: printingEra(doc).hpljetDriver))
         }
         // b24 round 18 (RULINGS-LEDGER row 4): TOC/Index compiled as ADDITIONAL pages at
         // the document's own end (Jon: "It should probably export in all formats even
@@ -3075,7 +3877,8 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                                         size: size, left: left, running: running,
                                         fonts: fonts, res: res, colourMap: colourMap,
                                         rollPt: rollPt, ulContinuous: ulContinuous,
-                                        lineNoTimeline: nil, driverQuirks: dq))
+                                        lineNoTimeline: nil, driverQuirks: dq,
+                                        hpljet: printingEra(doc).hpljetDriver))
                 // M31: a compiled TOC/Index sheet is the DOCUMENT's own sheet, not any
                 // body page's -- it is not part of the document's own flow and carries no
                 // running head or foot either, the same documented simplification.
@@ -3083,7 +3886,13 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
                 chunkStart += cap
             }
         }
-        streams = built
+        // every page drawn so far, the body's and then any compiled TOC/Index sheets (the
+        // document's own orientation), placed on its sheet
+        streams = built.enumerated().map { i, stream in
+            let orientation = printedPageOrientation(doc, i < pages.count ? pages[i] : nil)
+            return placeOnSheet(stream, x: logicalPageX(doc, orientation: orientation,
+                                                         sheetWidth: pageBoxes[i].width))
+        }
     } else {
         // Modern: the printed form of the Modern RTF (ruling 2026-08-05) — document fonts
         // carried, proportional reflow at the real measure, footnotes at the page bottom,

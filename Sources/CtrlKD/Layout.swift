@@ -809,18 +809,19 @@ public func endnoteRomanLabel(_ label: String) -> String {
 
 /// `[refNotes index: reference-mark text]` under the requested scheme (M8). Port of
 /// `layout._shown_labels`.
-func shownLabels(_ refNotes: [Note], doc: Document, noteRefs: NoteRefs) -> [Int: String] {
+func shownLabels(_ refNotes: [Note], doc: Document, noteRefs: NoteRefs?) -> [Int: String] {
     // Modern PDF must NEVER renumber (ruling 2026-08-24 item 1) -- WordStar's own
     // per-page numbers stay exactly as stored here.
     if noteRefs == .prefixed {
-        return noteRefLabels(refNotes, labels: annotatedNoteLabels(doc), scheme: .prefixed)
+        return noteRefLabels(refNotes, labels: annotatedNoteLabels(doc, noteRefs: noteRefs),
+                             scheme: .prefixed)
     }
     var shown: [Int: String] = [:]
     var ords: [NoteKind: Int] = [:]
     for (i, note) in refNotes.enumerated() {
         let k = (ords[note.kind] ?? 0) + 1
         ords[note.kind] = k
-        let label = noteLabel(note, doc: doc, index: i)
+        let label = noteLabel(note, doc: doc, index: i, noteRefs: noteRefs)
         switch note.kind {
         case .endnote:
             shown[i] = endnoteRomanLabel(label)
@@ -899,7 +900,7 @@ func euroText(_ text: String, _ patched: Bool) -> String {
 /// (`PDFModernLayout.swift`, the app) convert columns to their own units and wrap at
 /// their own measure. Port of `layout.modern_flow`.
 public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = EmitOptions.defaultNotes,
-                               noteRefs: NoteRefs = .word) -> SemanticFlow {
+                               noteRefs: NoteRefs? = nil) -> SemanticFlow {
     // Modern is never printed. No options reach this function, so `ctx.sentenceSpacing`
     // (the Modern default) is not read here.
     let ctx = RenderContext(doc, printed: false)
@@ -916,7 +917,8 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
         guard keep.contains(note.kind) else { continue }
         rowIndexByRef[i] = noteRows.count
         noteRows.append(SemanticNoteRow(kind: note.kind,
-                                        label: noteLabel(note, doc: doc, index: i),
+                                        label: noteLabel(note, doc: doc, index: i,
+                                                         noteRefs: noteRefs),
                                         shown: shownByIndex[i] ?? "",
                                         text: euroText(note.text, euro),
                                         origin: note.origin))
@@ -1078,7 +1080,8 @@ public func modernSemanticFlow(_ doc: Document, notes keep: Set<NoteKind> = Emit
                     if note.kind == .footnote {
                         footnotes.append(SemanticFootnote(index: ni,
                                                           label: noteLabel(note, doc: doc,
-                                                                           index: n - 1)))
+                                                                           index: n - 1,
+                                                                           noteRefs: noteRefs)))
                     } else if !endSeen.contains(ni) {
                         endSeen.insert(ni)
                         endRows.append(ni)
@@ -1844,6 +1847,29 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                             ("width", .double(roundToOneDecimal($0.width)))])
                 })))
             }
+            // 'driver_pieces' (version 15): a line WS7's LASERJET driver places carries the
+            // pieces the writer places, tiling its text -- see `PageLine.driverPieces`.
+            if let pieces = pl.driverPieces {
+                fields.append(("driver_pieces", .array(pieces.map {
+                    .object([("text", .string($0.text)), ("x", .double(roundToOneDecimal($0.x))),
+                            ("width", .double(roundToOneDecimal($0.width)))])
+                })))
+            }
+            // 'face'/'overstrike' (version 15): a WS4 `.ps on` line under HPLJET carries
+            // the face its `justify_word_x` words are drawn in; a line with a character
+            // WS4 prints as two carries the second, printed over the first at x.
+            if let face = pl.face {
+                fields.append(("face", .object([
+                    ("family", .string(face.family == .helvetica ? "Helvetica"
+                                       : face.family == .times ? "Times" : "Courier")),
+                    ("size", .double(face.size)), ("bold", .bool(face.bold)),
+                ])))
+            }
+            if !pl.overstrike.isEmpty {
+                fields.append(("overstrike", .array(pl.overstrike.map {
+                    .object([("char", .string($0.char)), ("x", .double(roundToOneDecimal($0.x)))])
+                })))
+            }
             // 'line_no' (version 4, planning #251(d)): present ONLY on a line an
             // active `.l#` interval numbers -- see `PageLine.lineNo`'s own doc
             // comment.
@@ -1966,6 +1992,14 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                 ("orientation", .string(pageOr.rawValue)),
             ])))
         }
+        // `logical_page_x` (version 14): where this page's x = 0 sits on the sheet. Every
+        // x above is in the printer's own frame.
+        let pageOrEff = printedPageOrientation(doc, page)
+        let sheetWidth = doc.page.map {
+            roundHalfToEven(inchesToPoints(pageGeometryFor($0, orientation: pageOrEff).pwIn))
+        } ?? 612
+        pageFields.append(("logical_page_x", .double(Double(hundredths(
+            logicalPageX(doc, orientation: pageOrEff, sheetWidth: sheetWidth))) / 100.0)))
         printedPages.append(.object(pageFields))
     }
 
@@ -2006,9 +2040,26 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
     // emits byte-identical JSON to version 12 apart from the version number. A page
     // WITHOUT `size` is the document's sheet: the top-level `page` object's own
     // `pw_in`/`height_in`, exactly as before.
+    //
+    // version 14 (2026-10-27): every PRINTED PAGE carries `logical_page_x`, in points:
+    // where the page's x = 0 sits on the sheet. Printed lays a page out in the LaserJet's
+    // own frame, the PCL logical page, which starts 1/4" in from a Letter sheet's left
+    // edge (HP's table: 75 dots at 300 dpi; 71 on A4; 60 and 59 in landscape). Every x in
+    // this file is in that frame; add `logical_page_x` for a position on the paper, as the
+    // PDF does. A print stream's is 0.
+    //
+    // version 15 (2026-10-27): `printed.driver` names the printer driver the Printed pages
+    // model: "hpljet" for a WS4 file printed by WS4 (its HPLJET: line 1 24pt below the top
+    // margin, each line a step of the `lead` of the line ABOVE it, sub/superscripts full
+    // size), "laserjet" otherwise (WS7's LASERJET.PDF). A WS4 `.ps on` line carries `face`,
+    // `{family, size, bold}`, the face its `justify_word_x` words are drawn in, and a line
+    // with a character WS4 prints as two carries `overstrike`, `[{char, x}]`, the second
+    // character printed over the first at x. A line with text WS7's LASERJET driver places
+    // carries `driver_pieces`, `[{text, x, width}]`: the pieces the writer places, left to
+    // right and tiling the line's text, each width the advance to the next piece.
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
-        ("version", .int(13)),
+        ("version", .int(15)),
         ("meta", jsonMeta(doc)),
         ("page", jsonPage(doc.page)),
         ("fonts", .array(doc.fonts.map(jsonFont))),
@@ -2018,7 +2069,10 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
             })),
             ("notes", .array(flow.notes.map(jsonNoteRow))),
         ])),
-        ("printed", .object([("pages", .array(printedPages))])),
+        ("printed", .object([
+            ("pages", .array(printedPages)),
+            ("driver", .string(printingEra(doc).hpljetDriver ? "hpljet" : "laserjet")),
+        ])),
         ("invisibles", .object([
             // Planning #270 item 36 (version 9): a 0x0F print control's own SCREEN
             // label, the ONE place this contract still publishes it. Every rendering

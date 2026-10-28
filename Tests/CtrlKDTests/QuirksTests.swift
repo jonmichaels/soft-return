@@ -354,7 +354,7 @@ import Testing
     /// a document with no quirk available emits byte-identical JSON to version 11.
     @Test func aDocumentThatTripsNothingSaysNothing() throws {
         let json = Self.layoutJSON(try QuirkRegistry.standard.applyQuirks(to: Self.plainDoc()))
-        #expect(json["version"] as? Int == 13)
+        #expect(json["version"] as? Int == 15)
         #expect(json["quirks_applicable"] == nil)
         #expect(json["quirks_applied"] == nil)
     }

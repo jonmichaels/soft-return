@@ -27,7 +27,8 @@ public enum ParseError: Error, Hashable, Sendable {
 /// Throws `ParseError` for content it cannot convert; the error carries the detection
 /// evidence so callers can explain the refusal (task #18, ruled 2026-08-06: "whatever
 /// error and debug handling we can wire in early, the better").
-public func parse(_ data: [UInt8], variant: Variant? = nil) throws -> Document {
+public func parse(_ data: [UInt8], variant: Variant? = nil,
+                  printedBy: PrintedBy = .own) throws -> Document {
     if data.isEmpty {
         throw ParseError.empty
     }
@@ -40,9 +41,9 @@ public func parse(_ data: [UInt8], variant: Variant? = nil) throws -> Document {
     }
     switch v {
     case .ws4, .ws5plus:
-        return parseWS(data)
+        return parseWS(data, variant: variant, printedBy: printedBy)
     case .printstream, .text:
-        return parsePrintstream(data)
+        return parsePrintstream(data, keepBit7: v == .text)
     case .binary:
         throw ParseError.notConvertible(variant: v,
                                         reason: detection?.reason ?? "content statistics",

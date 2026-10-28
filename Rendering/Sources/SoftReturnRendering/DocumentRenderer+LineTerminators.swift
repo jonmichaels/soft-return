@@ -130,16 +130,16 @@ extension DocumentRenderer {
         let font = resolvedFont(for: span, fallback: fallback, fonts: fonts,
                                 defaultSize: defaultSize, useCourierPrime: useCourierPrime)
         // Mechanism G: this probe is Printed-only (its one caller is inside `renderNative`),
-        // so it must measure the SAME reduced face the real run gets — otherwise the
-        // compensation it folds into the line's own leading is computed off a 2/3 face while
-        // the glyph is drawn at WordStar's ratio, and the raise it corrects for is wrong by
-        // the difference.
+        // so it must measure the SAME reduced face the real run gets (the engine's
+        // `printedSupSubMetrics`) — otherwise the compensation it folds into the line's own
+        // leading is computed off a different face from the one the glyph is drawn in, and the
+        // raise it corrects for is wrong by the difference.
         let entry = span.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
-        let ratio = nativeFamilyIsCourier(entry)
-            ? nativeSupSubCourierRatio : nativeSupSubDefaultRatio
+        let points = printedSupSubMetrics(span.styles, size: Int(font.pointSize.rounded()),
+                                          entry: entry)?.points
         // #271 M1: the LAID-OUT offset only. The rest of Printed's roll is added when the glyphs
         // are drawn (`.nativeScriptRise`), which moves no fragment and so needs no compensation.
         return Double(scriptMetrics(for: font, raise: span.styles.contains(.sup),
-                                    ratio: ratio).offset)
+                                    points: points).offset)
     }
 }

@@ -143,9 +143,9 @@ import Testing
     var data: [UInt8] = bytes("x")
     data += [0x14]; data += bytes("2"); data += [0x14]; data += bytes(" end") + HARD
     let pdf = emitPDF(parseWS(data), mode: .printed)
-    // WSFORMAT's own stated default (3/48in = 4.5pt, rounds to 4 half-to-even) replaces
-    // the old hardcoded fixed +3 rise.
-    #expect(contains(pdf, bytes(" 4 Ts")))
+    // WSFORMAT's own stated default (3/48in = 4.5pt, written exactly, as WS7 rolls it: WS7
+    // report 14.8, run fnmb0) replaces the old hardcoded fixed +3 rise.
+    #expect(contains(pdf, bytes(" 4.5 Ts")))
 }
 
 @Test func srRollDrivesPrintedRTFUpDnAlongsideSuperSub() throws {
@@ -185,9 +185,9 @@ import Testing
     // is that the PDF's per-line rise must NOT use it.
     #expect(doc.formatting.subSuperRoll48 == 6.0)
     let pdf = emitPDF(doc, mode: .printed)
-    // 3/48in * 1.5 pt/48in-unit = 4.5pt, truncates to 4 -- the roll actually in force
+    // 3/48in * 1.5 pt/48in-unit = 4.5pt, written exactly -- the roll actually in force
     // where the superscript sat (no `.sr` had been reached yet).
-    #expect(contains(pdf, bytes(" 4 Ts")))
+    #expect(contains(pdf, bytes(" 4.5 Ts")))
     // NOT the later, not-yet-reached `.sr 6` (6/48in * 1.5 = 9pt) -- that was the bug: a
     // `.sr` appearing anywhere in the document could shift a superscript that printed
     // BEFORE it was ever reached.
@@ -310,7 +310,9 @@ import Testing
     let pdf = emitPDF(doc, mode: .printed)
     let spans = contentSpans(pdf)
     func x(_ text: String) -> Double? { spans.first { $0.text == text }?.x }
-    #expect(x("Ten") == 129.6)    // left 57.6 + 10-space indent 72 (NOT +fi 28.8)
+    // left 57.6 + 10-space indent 72 (NOT +fi 28.8); the driver's T-e kerning pair prints
+    // 'Ten' as 'T' + 'en'
+    #expect(x("T") == 129.6)
     #expect(x("Five") == 93.6)    // left 57.6 + 5-space indent 36, unaffected
 }
 
@@ -589,7 +591,7 @@ import Testing
     #expect(doc.blocks[0].paraMargin == 4.0)
     let pdf = emitPDF(doc, mode: .printed)
     let spans = contentSpans(pdf)
-    let ten = try #require(spans.first { $0.text == "Ten" })
+    let ten = try #require(spans.first { $0.text == "T" })    // 'T' + 'en', kerned
     #expect(ten.x == 129.6)   // left 57.6 + 10-space indent 72 (10-CPI columns,
                               // .pm really is active here)
 }
@@ -753,7 +755,10 @@ import Testing
     let gutterLabels = contentSpans(pdf)
         .filter { ($0.x ?? 999) < 30.0 }
         .map { $0.text.trimmed() }
-    #expect(gutterLabels == ["1", "2", "3"])
+    // WS7 keeps numbering to the end of the page, the empty rows included (WS7 report,
+    // run lnum-courier): 55 rows, every second one numbered.
+    #expect(Array(gutterLabels.prefix(3)) == ["1", "2", "3"])
+    #expect(gutterLabels.count == 28 && gutterLabels.last == "28")
 
     let rtf = emitRTF(doc, mode: .printed, options: EmitOptions())
     #expect(rtf.contains(#"1\tab"#) && rtf.contains(#"2\tab"#) && rtf.contains(#"3\tab"#))
@@ -781,7 +786,8 @@ import Testing
     let gutterLabels = contentSpans(pdf)
         .filter { ($0.x ?? 999) < 30.0 }
         .map { $0.text.trimmed() }
-    #expect(gutterLabels == ["1", "2", "3"])
+    // every row of the page, the empty ones after the text too
+    #expect(gutterLabels == (1...55).map { String($0) })
 
     let rtf = emitRTF(doc, mode: .printed, options: EmitOptions())
     #expect(rtf.contains(#"1\tab"#) && rtf.contains(#"2\tab"#) && rtf.contains(#"3\tab"#))

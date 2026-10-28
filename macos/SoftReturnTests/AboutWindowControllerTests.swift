@@ -592,8 +592,8 @@ struct AboutWindowControllerTests {
         // cadence, and the dev date/hash change with every pinned commit and every build
         // (CLAUDE.md: no version literals in tests; `AboutInfoTests`' own header notes a
         // hardcoded version broke on this app's very first bump).
-        #expect(info.srVersion.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil,
-                "srVersion \(info.srVersion) is not a plain X.Y.Z")
+        #expect(info.srVersion.range(of: #"^\d+\.\d+\.\d+(b\d+)?$"#, options: .regularExpression) != nil,
+                "srVersion \(info.srVersion) is not a plain X.Y.Z or a beta's X.Y.ZbN")
         if let devDate = info.devDate {
             #expect(devDate.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
                     "devDate \(devDate) is not a plain YYYY-MM-DD")

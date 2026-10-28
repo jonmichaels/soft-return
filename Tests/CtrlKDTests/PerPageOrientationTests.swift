@@ -156,7 +156,7 @@ private func same(_ boxes: [(width: Int, height: Int)],
                        m31Dot(".pa"), m31Dot(".pr or=p"), m31Body("THREE")])
     let json = try #require(try JSONSerialization.jsonObject(
         with: Data(emitLayout(parseWS(data), mode: .printed).utf8)) as? [String: Any])
-    #expect(json["version"] as? Int == 13)
+    #expect(json["version"] as? Int == 15)
     let printed = try #require(json["printed"] as? [String: Any])
     let pages = try #require(printed["pages"] as? [[String: Any]])
     #expect(pages.count == 3)

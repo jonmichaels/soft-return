@@ -400,6 +400,16 @@ final class PageScan {
         Double(textMatrix.concatenating(ctm).a)
     }
 
+    /// How tall text-space units are on the page: the length of the text's own vertical axis.
+    /// A type size is a height. Read from `a`, a run the app stretches sideways to the
+    /// driver's width (`.expansion`) read as larger type, 12.66 pt for 12 — and smaller type
+    /// beside larger is a raised run to the reader, so LSRBOX's second column was folded onto
+    /// the first column's rows 4.6 pt below it.
+    private var textToPageHeight: Double {
+        let matrix = textMatrix.concatenating(ctm)
+        return Double(hypot(matrix.c, matrix.d))
+    }
+
     /// The face's own space width in PAGE POINTS, capped. The cap is a point value in
     /// ctrl-kd (`WORD_GAP_MAX_PT` 1.5, `SUBSTITUTED_PROPORTIONAL_GAP_MAX_PT` 0.3), so it is
     /// applied AFTER scaling into page space, not before.
@@ -437,7 +447,7 @@ final class PageScan {
                     // cosmetic: `char_space_width_pt` derives the word-boundary threshold from
                     // this size, so a size of 1 shrinks a fixed face's threshold from 1.35pt to
                     // 0.45pt and re-segments the whole document.
-                    baseline: start.y, size: fontSize * abs(textToPageScale), font: font.baseFont,
+                    baseline: start.y, size: fontSize * textToPageHeight, font: font.baseFont,
                     fontClass: fontClass, isSpace: character == " ", spaceWidthPt: space))
             }
             // Character and word spacing advance the pen but are not part of the glyph.
@@ -489,8 +499,9 @@ final class PageScan {
     /// cluster is one cause" and "one edit fixes the cluster" are different claims.
     func firstInkByBaseline() -> [Double: Double] {
         var out: [Double: Double] = [:]
+        // U+FFFC is a print control's or an empty tab's invisible spacer, no ink.
         for glyph in glyphs
-        where !glyph.text.isWhitespace && !CtrlKD.graphicChars.contains(glyph.text) {
+        where !glyph.text.isWhitespace && !CtrlKD.graphicChars.contains(glyph.text) && glyph.text != "\u{FFFC}" {
             let key = (glyph.baseline * 100).rounded() / 100
             out[key] = min(out[key] ?? .greatestFiniteMagnitude, glyph.xStart)
         }

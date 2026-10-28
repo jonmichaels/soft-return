@@ -5,31 +5,38 @@
 
 // MARK: - Printed mode: the period-authentic footnote/endnote/annotation layout
 //
-// The WordStar 5 manual, verbatim: "Footnotes are separated from the text by a line of 20
-// dashes. If a footnote doesn't fit at the bottom of the page, the continued text is
-// printed in the footnote area at the bottom of the next page (except after the last page
-// of regular text, where footnotes are printed at the top of the page). A minimum of three
-// lines of regular text are printed on a page regardless of the size of the footnote area
-// except on the last page of the document."
-//
-// Rules this implements, in the same numbering the job brief used:
-// 1. The reference never moves — a `Note` is never reserved-and-pushed; it renders exactly
-//    where `resolvePrintedBody` finds its `fnref` span, and the footer for it appears
-//    whenever the PAGE holding that reference closes.
-// 2. The footer area grows to hold what's due, eating into the page's body allotment.
-// 3. Floor: the first three lines of body on a page are placed unconditionally, before the
-//    footer's size is ever allowed to compete for room.
-// 4. Overflow splits across pages; a continuation chunk is preceded by one literal
-//    `...Continued...` line.
-// 5. On the true last page of body text, the floor no longer matters (there is no next body
-//    page to defer to) and any footer overflow prints at the TOP of a fresh page instead of
-//    the bottom of one.
+// The WordStar 5 manual: "Footnotes are separated from the text by a line of 20 dashes. If
+// a footnote doesn't fit at the bottom of the page, the continued text is printed in the
+// footnote area at the bottom of the next page." What WS7 does, from the teardown (WS7
+// report 11.11, 14.8, 14.15, 15.1; runs fn1, fn2, fnfit52, fnlong2, fnr0-fnr99, fnbig,
+// fnhuge, fnlong120, ann52), room counted in lines from the reference line down to the
+// bottom margin:
+// 1. A note that fits whole prints under its reference with its last line one line above
+//    the bottom margin line (the reserve in `printedNotesReservePt`).
+// 2. A note that does not fit and finds under `fnrun` note lines of room (factory 8,
+//    `footnoteRunFactory`) moves to the next page together with its reference line.
+// 3. Otherwise the note RUNS: its first part prints under the reference (the room after
+//    the reference line less four lines: the area's three and one WS7 keeps), the area
+//    ends ON the bottom margin line, and the page takes no more body lines. The rest
+//    continues on the next page under a separator with `...Continued...` directly below
+//    it, then a blank line.
+// 4. There is no floor of body lines: a carried-over note takes as much of its page as it
+//    needs, a whole page when it is long enough (run fnlong120: note-only pages).
+// 5. After the last page of body text, whatever is still queued prints on fresh pages.
 //
 // Annotations share the footnote area (their `tag` is the marker); endnotes never appear
 // there at all — they collect at the true end of the document with no heading, per the
-// spec. Comments never print. Footnote/endnote numbering is independent, driven by
-// `doc.footnoteNumberStart`/`endnoteNumberStart` (default 1) plus each `Note.number`
-// (0-based).
+// spec. Comments never print. Footnote/endnote numbering is independent: the shown number is
+// each `Note.number` (0-based, with the `.f#`/`.e#` start already folded in by WS7) plus one.
+
+/// WS7's "footnote run" setting, in note lines (WS7 report 14.15, root:1A12): below this
+/// much room a note moves to the next page with its reference line instead of running over.
+/// `Document.footnoteRunLines` overrides it.
+let footnoteRunFactory = 8
+
+/// A note-only page's area sits 16 decipoints (1.6 pt) below the grid (WS7 report 15.1,
+/// runs fnlong120, fnch175, fnch250, fnch250mb).
+let noteOnlyDropPt = 1.6
 
 /// A footnote/annotation waiting in the page-bottom queue. `remaining` shrinks as pages
 /// consume it; `needsContinuedMarker` is set the moment a page takes only part of it, so the
@@ -76,9 +83,9 @@ func notesMarkerPadCols(_ doc: Document) -> Int? {
     for (i, note) in doc.notes.enumerated() {
         if note.textIndents.contains(where: { $0 != 0 }) { continue }
         switch note.kind {
-        case .footnote: widths.insert("\(noteLabel(note, doc: doc, index: i))." .width)
-        case .endnote: widths.insert("(\(noteLabel(note, doc: doc, index: i)))".width)
-        case .annotation: widths.insert(noteLabel(note, doc: doc, index: i).width)
+        case .footnote: widths.insert("\(noteLabel(note, doc: doc, index: i, printed: true))." .width)
+        case .endnote: widths.insert("(\(noteLabel(note, doc: doc, index: i, printed: true)))".width)
+        case .annotation: widths.insert(noteLabel(note, doc: doc, index: i, printed: true).width)
         case .comment: continue
         }
     }
@@ -107,8 +114,11 @@ func padMarker(_ base: String, padCols: Int?) -> String {
 /// the SAME marker. Two different footnotes both showed "1", inline and in the footer.
 /// The flat emitters were correct; only this lane was wrong, and no vector caught it
 /// because none exercises a nil number in printed mode.
-func noteMarker(_ note: Note, doc: Document, index: Int) -> String {
-    noteLabel(note, doc: doc, index: index)
+///
+/// `printed` is false only for the legacy Modern notes dump (`docToPagelines(printed: false)`),
+/// whose labels are never lettered by `.f#`/`.e#`.
+func noteMarker(_ note: Note, doc: Document, index: Int, printed: Bool = true) -> String {
+    noteLabel(note, doc: doc, index: index, printed: printed)
 }
 
 /// The footer entry for one footnote/annotation, wrapped to `width` — factory-default
@@ -209,7 +219,8 @@ func noteWrapLines(marker: String, texts: [String], width: Int,
 func footerEntryLines(_ note: Note, doc: Document, index: Int,
                               width: Int, padCols: Int? = nil,
                               sentenceSpacing: Bool = false,
-                              separateSpans: Bool = true) -> [PageLine] {
+                              separateSpans: Bool = true,
+                              printed: Bool = true) -> [PageLine] {
     // N9 (b33 field notes): applied to the note's own text before the marker is
     // prepended -- the marker itself (a bare number/tag) carries no sentence-ending
     // punctuation of its own to interact with.
@@ -219,10 +230,12 @@ func footerEntryLines(_ note: Note, doc: Document, index: Int,
     let marker: String
     switch note.kind {
     case .footnote:
-        let base = "\(noteMarker(note, doc: doc, index: index))."
+        let base = "\(noteMarker(note, doc: doc, index: index, printed: printed))."
         marker = padCols != nil ? padMarker(base, padCols: padCols) : base
     case .annotation:
-        marker = padMarker(noteMarker(note, doc: doc, index: index), padCols: padCols)
+        let label = noteMarker(note, doc: doc, index: index, printed: printed)
+        // an untagged annotation: WS7 prints its text at the margin
+        marker = label.isEmpty ? "" : padMarker(label, padCols: padCols)
     default:
         // unreached: endnotes/comments never queue here
         return wrapLine([Span(text: noteTextLines.joined(separator: " "))], width: width)
@@ -238,8 +251,10 @@ func footerEntryLines(_ note: Note, doc: Document, index: Int,
 func endnoteEntryLines(_ note: Note, doc: Document, index: Int,
                                width: Int, padCols: Int? = nil,
                                sentenceSpacing: Bool = false,
-                               separateSpans: Bool = true) -> [PageLine] {
-    let marker = padMarker("(\(noteMarker(note, doc: doc, index: index)))", padCols: padCols)
+                               separateSpans: Bool = true,
+                               printed: Bool = true) -> [PageLine] {
+    let marker = padMarker("(\(noteMarker(note, doc: doc, index: index, printed: printed)))",
+                           padCols: padCols)
     // planning #266: see `footerEntryLines`.
     return noteWrapLines(marker: marker,
                          texts: noteTexts(note, doc: doc, sentenceSpacing: sentenceSpacing),
@@ -247,13 +262,9 @@ func endnoteEntryLines(_ note: Note, doc: Document, index: Int,
                          indents: note.textIndents)
 }
 
-/// WordStar's minimum-body-line guarantee (pdf.py's `FOOTNOTE_FLOOR`): "a minimum of three
-/// lines of regular text are printed on a page regardless of the size of the footnote
-/// area." Used here only for the same floor Python applies to the page height and capacity
-/// themselves, before any footnote ever enters the picture — see `_resolved_page_height`/
-/// `_printed_cap` (pdf.py:37-60). The unrelated literal `3` a little further down (the
-/// "first three lines of body are unconditional" rule, `footnoteCeiling`) is the same
-/// WordStar constant.
+/// The fewest text lines a page's geometry may leave (pdf.py's `FOOTNOTE_FLOOR`): the floor
+/// Python applies to the page height and capacity themselves — see `_resolved_page_height`/
+/// `_printed_cap`. WS7 keeps no body-line floor against a note area (WS7 report 15.1).
 ///
 /// `internal` since M18 (2026-09-15): `modernSheetH` applies the same floor to Modern's
 /// own sheet, for the same reason, and must read the same constant rather than a second
@@ -262,7 +273,7 @@ let footnoteFloor = 3
 
 /// Total lines the footnote area occupies FOR PAGE-CAPACITY PURPOSES (how many body lines
 /// this paginator admits onto a page before the footnote area needs room, and this area's
-/// own share of `footnoteCeiling`'s budget): the fixed 3-line header (blank / 20-dash
+/// own share of the page's room): the fixed 3-line header (blank / 20-dash
 /// separator / blank — VMI 240 = one blank line at 6 LPI) plus each entry's own lines plus
 /// one blank line between entries (VMI 240 "between notes"). 0 when there's nothing to
 /// show at all. Port of Python's `_area_size`.
@@ -280,36 +291,40 @@ func areaSize(_ entries: [[PageLine]]) -> Int {
     return 3 + entries.reduce(0) { $0 + $1.count } + (entries.count - 1)
 }
 
+/// True for a note chunk that opens with the `...Continued...` line.
+func isContinuationChunk(_ chunk: [PageLine]) -> Bool {
+    guard let first = chunk.first else { return false }
+    return first.count == 1 && first[0].text == footerContinuedLine
+}
+
 /// The admitted area as page lines: separator / blank, then the entries with one blank
-/// between. Port of Python's `_render_area`.
+/// between. A carried-over note puts `...Continued...` directly under the separator, then
+/// the blank (WS7 report 14.15, runs fnr0, fnbig: separator, Continued, blank, note lines).
+/// Port of Python's `_render_area`.
 ///
-/// UPDATED (mechanism U, ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`, `ws7-prints/v3` PRISTINE.EXE
-/// round, commit 26169cd): the separator directly follows the body's own last line, with
-/// NO leading blank — confirmed on `ws7-prints/v1`/-SCREEN.pcl and `ws7-prints/v3`/LYING.pcl,
-/// both landing the rule exactly one lead after the body's own last line, not two. The
-/// header this function draws is now 2 lines, not 3 — but `areaSize`'s own page-CAPACITY
+/// The header this function draws is 2 lines, not 3 — but `areaSize`'s own page-CAPACITY
 /// cost stays 3 (see that function's own doc comment): the rendered and budgeted line
-/// counts DELIBERATELY diverge.
-func renderArea(_ entries: [[PageLine]]) -> [PageLine] {
-    guard !entries.isEmpty else { return [] }
-    var out: [PageLine] = [[Span(text: String(repeating: "-", count: 20))], []]
-    for (k, e) in entries.enumerated() {
-        if k > 0 { out.append([]) }
+/// counts DELIBERATELY diverge (mechanism U, ctrl-kd `PCL-DIVERGENCE-TRIAGE.md`).
+///
+/// `extraBlank`: the page where a chain of note-only pages ends prints one blank row more
+/// under `...Continued...` (WS7 report 15.1, runs fnlong120, fnch175, fnch250).
+func renderArea(_ entries: [[PageLine]], extraBlank: Bool = false) -> [PageLine] {
+    guard let firstEntry = entries.first else { return [] }
+    let sep: PageLine = [Span(text: String(repeating: "-", count: 20))]
+    var out: [PageLine]
+    if isContinuationChunk(firstEntry) {
+        out = [sep, firstEntry[0], []]
+        if extraBlank { out.append([]) }
+        out.append(contentsOf: firstEntry.dropFirst())
+    } else {
+        out = [sep, []]
+        out.append(contentsOf: firstEntry)
+    }
+    for e in entries.dropFirst() {
+        out.append([])
         out.append(contentsOf: e)
     }
     return out
-}
-
-/// Max lines the footnote area may occupy on a page with `room` whole default-lead lines
-/// left under the body already placed (the paginator's `roomLines`, which floors, never
-/// rounds, so a fractional line of room already spent by a styled body line is never
-/// credited as a whole line the area can use). Always bounded by that room — entries can
-/// never push the total past the page. Additionally bounded by `capacity - footnoteFloor`
-/// on every page EXCEPT the one holding the document's last line of regular text, where the
-/// floor's protection lifts (the WS5 manual's stated exception). Port of Python's
-/// `_footnote_ceiling`.
-func footnoteCeiling(room: Int, capacity: Int, isTerminal: Bool) -> Int {
-    isTerminal ? room : min(room, capacity - footnoteFloor)
 }
 
 /// Move whole/partial note-chunks from the FRONT of `queue` into `entries` (mutating both)
@@ -317,14 +332,22 @@ func footnoteCeiling(room: Int, capacity: Int, isTerminal: Bool) -> Int {
 /// split: the part that fits joins `entries`, and the remainder stays queued behind a
 /// `...Continued...` marker, ready to resume on a later page's area — this is the only
 /// place a note's text is ever cut. Port of Python's `_admit_footnotes`, including its
-/// hang guard: splitting costs the NEXT page one `...Continued...` line, so a split only
-/// makes net progress when at least 2 lines fit; when the page cannot even manage that AND
-/// the area is still empty, two lines are forced through — a page that overflows slightly
-/// beats a hang or lost text.
+/// hang guard: a chunk already carrying the continuation line only advances when at least
+/// 2 lines fit (at one it would admit the marker and add it straight back); a NEW note's
+/// first line is progress. When the page cannot manage that AND the area is still empty,
+/// two lines are forced through — a page that overflows slightly beats a hang or lost text.
+///
+/// `freshSlack`: lines a NEW note's first part leaves unused when it is split under its
+/// reference (WS7 report 14.15: the room after the reference line less four, the area's
+/// own three being counted in `ceiling`); a carried-over chunk uses every line it is
+/// given. Returns true when a chunk was split, i.e. the area ends in a running note; a
+/// chunk with no room at all just stays queued.
 // internal (not private): the progress invariant is unit-tested.
+@discardableResult
 internal func admitFootnotes(
-    _ entries: inout [[PageLine]], _ queue: inout [QueuedNote], ceiling: Int
-) {
+    _ entries: inout [[PageLine]], _ queue: inout [QueuedNote], ceiling: Int,
+    freshSlack: Int = 0
+) -> Bool {
     while !queue.isEmpty {
         var chunk: [PageLine] = []
         if queue[0].needsContinuedMarker {
@@ -339,26 +362,29 @@ internal func admitFootnotes(
             queue.removeFirst()
             continue
         }
+        let carried = queue[0].needsContinuedMarker
+        let avail = room - (carried ? 0 : freshSlack)
         let split: Int
-        if room >= 2 {
-            split = room
+        if avail >= (carried ? 2 : 1) {
+            split = avail
         } else if entries.isEmpty {
-            split = min(chunk.count, 2)             // forced progress, per the doc above
+            split = Swift.min(chunk.count, 2)       // forced progress, per the doc above
         } else {
-            break                                   // defer: next page starts empty
+            return false                            // defer: next page starts empty
         }
         entries.append(Array(chunk.prefix(split)))
         // However many of `split` came from the synthetic `...Continued...` line (at most
         // one, always first) don't count against the note's own remaining text.
-        let markerTaken = queue[0].needsContinuedMarker ? min(split, 1) : 0
-        queue[0].remaining.removeFirst(min(split - markerTaken, queue[0].remaining.count))
+        let markerTaken = queue[0].needsContinuedMarker ? Swift.min(split, 1) : 0
+        queue[0].remaining.removeFirst(Swift.min(split - markerTaken, queue[0].remaining.count))
         if queue[0].remaining.isEmpty {
             queue.removeFirst()
         } else {
             queue[0].needsContinuedMarker = true
         }
-        break
+        return true
     }
+    return false
 }
 
 /// The note area of the page being filled, and the notes still waiting for one: the whole
@@ -376,12 +402,13 @@ struct NoteArea {
     var queue: [QueuedNote] = []
     /// The chunks admitted to the OPEN page's area.
     var entries: [[PageLine]] = []
-    /// The open page holds the document's last line of regular text: the three-line floor
-    /// lifts and the area may grow to the whole remaining page (rule 5 above).
-    var isTerminal = false
-    /// Index (in the body items) of the last item carrying real ink -- an image, or any
-    /// non-blank text. The page that admits it is the terminal page.
-    let lastInkIndex: Int
+    /// The open page's area ends in a note that runs on (a split first part, or a
+    /// carried-over part), which WS7 anchors on the bottom margin line instead of one line
+    /// above it.
+    var running = false
+    /// A note was split under its reference on this page, so the page takes no more body
+    /// lines (the rest of it is the running note's).
+    var sealed = false
     /// Finding 4 (b26 visual pass): see `notesMarkerPadCols` -- computed ONCE, shared by the
     /// footnote/annotation area and the endnote section, so a document whose footnotes and
     /// endnotes land on the same page agree on one column.
@@ -389,31 +416,51 @@ struct NoteArea {
     let doc: Document
     let defaultLead: Double
     let sentenceSpacing: Bool
+    /// A note that runs over several pages (WS7 report 15.1): whether the open page follows
+    /// a note-only page, or a page whose block had to print under its text; and what the
+    /// page being closed was.
+    var afterNoteOnly = false
+    var afterUnderText = false
+    var closedNoteOnly = false
+    var closedUnderText = false
 
-    init(_ doc: Document, items: [PrintedBodyItem], defaultLead: Double, sentenceSpacing: Bool) {
+    init(_ doc: Document, defaultLead: Double, sentenceSpacing: Bool) {
         self.doc = doc
         self.defaultLead = defaultLead
         self.sentenceSpacing = sentenceSpacing
         padCols = notesMarkerPadCols(doc)
-        var last = -1
-        for (i, item) in items.enumerated() {
-            if case .line(let line, _) = item,
-               line.image != nil
-                   || line.spans.contains(where: { !$0.text.allSatisfy { $0 == " " || $0 == "\t" } }) {
-                last = i
-            }
-        }
-        lastInkIndex = last
     }
 
     /// The open page's area, in points.
-    var heightPt: Double { Double(areaSize(entries)) * defaultLead }
+    var heightPt: Double { Double(capacityLines) * defaultLead }
+
+    /// The open page is where a long note's chain resumes its text: it follows a note-only
+    /// page (or the page whose block printed under its text), and its area is that note's
+    /// remainder alone, whole.
+    var isChainPage: Bool {
+        (afterNoteOnly || afterUnderText) && entries.count == 1
+            && isContinuationChunk(entries[0]) && !(queue.first?.needsContinuedMarker ?? false)
+    }
+
+    /// Lines the open page's area takes from its body. On a chain page the editor keeps one
+    /// row less than the printed header needs: it leaves 55 - 47 - 3 = 5 rows of text for a
+    /// 47-line remainder where a two-page split would leave 4 (WS7 report 15.1, run fnch250
+    /// p6: text lines 51-55).
+    var capacityLines: Int {
+        let size = areaSize(entries)
+        return isChainPage ? size - 1 : size
+    }
 
     /// A page opens with an empty area; whatever an earlier page could not hold is admitted
     /// by `admit` before any new reference queues behind it.
     mutating func beginPage() {
         entries = []
-        isTerminal = false
+        running = false
+        sealed = false
+        afterNoteOnly = closedNoteOnly
+        afterUnderText = closedUnderText
+        closedNoteOnly = false
+        closedUnderText = false
     }
 
     /// The notes referenced on a body line just placed, in order.
@@ -427,12 +474,28 @@ struct NoteArea {
         }
     }
 
-    /// Admit queued notes while the area fits `roomLines` of the open page (`capacity` is that
-    /// page's own line capacity, the floor's reference) -- see `footnoteCeiling`.
-    mutating func admit(roomLines: Int, capacity: Int) {
-        admitFootnotes(&entries, &queue,
-                       ceiling: footnoteCeiling(room: roomLines, capacity: capacity,
-                                                isTerminal: isTerminal))
+    /// Admit queued notes while the area fits `roomLines` of the open page.
+    /// `freshSlack` is the line a new note's first part leaves unused when it runs
+    /// (`admitFootnotes`); the carry-over a page opens with takes every line it can.
+    mutating func admit(roomLines: Int, freshSlack: Int = 1) {
+        if let first = queue.first, first.needsContinuedMarker { running = true }
+        if admitFootnotes(&entries, &queue, ceiling: roomLines, freshSlack: freshSlack) {
+            running = true
+            if freshSlack > 0 { sealed = true }
+        }
+    }
+
+    /// Whether queueing the notes of `due` now would leave one of them running or deferred,
+    /// and how many lines the open page's area would take. Leaves the area untouched.
+    func runWouldSplit(_ due: [(note: Note, index: Int)], width: Int,
+                       roomLines: Int) -> (split: Bool, taken: Int) {
+        var trial = self
+        let before = trial.entries.reduce(0) { $0 + $1.count }
+        trial.enqueue(due, width: width)
+        let split = admitFootnotes(&trial.entries, &trial.queue, ceiling: roomLines,
+                                   freshSlack: 1)
+        let taken = trial.entries.reduce(0) { $0 + $1.count } - before
+        return (split || !trial.queue.isEmpty, taken)
     }
 
     /// The area as page lines, bottom-anchored on its page.
@@ -460,17 +523,70 @@ struct NoteArea {
     /// correct for a SMALL positive override, only ever coincidentally close enough not to
     /// be caught. A negative or zero override (the body's own flow already reached or passed
     /// the target) is still left alone -- "never move backward into the body" is unchanged.
-    func anchoredArea(in geometry: Document, bodyY: Double) -> [PageLine] {
+    mutating func anchoredArea(in geometry: Document, bodyY: Double,
+                               bodyEmpty: Bool = false) -> [PageLine] {
         var area = renderArea(entries)
         guard !area.isEmpty else { return area }
         let pageH = Double(resolvedPageHeight(geometry, printed: true))
-        let reserve = printedNotesReservePt(geometry)
-        let targetFirst = pageH - reserve - Double(area.count - 1) * defaultLead
+        var reserve = printedNotesReservePt(geometry)
+        if running { reserve -= defaultLead }       // ends ON the bottom margin line
+        var targetFirst = pageH - reserve - Double(area.count - 1) * defaultLead
+        if bodyEmpty {
+            // A note-only page sits `noteOnlyDropPt` below the grid: the separator at 616,
+            // the last line at BB + 16 decipoints, at either margin (WS7 report 15.1, runs
+            // fnlong120, fnch175, fnch250, fnch250mb; the cause is not established).
+            targetFirst += noteOnlyDropPt
+            closedNoteOnly = true
+        } else if isChainPage {
+            let chain = chainArea(bottomY: pageH - reserve, bodyY: bodyY,
+                                  targetFirst: targetFirst, area: area)
+            area = chain.area
+            targetFirst = chain.first
+        }
         let override = targetFirst - bodyY
         if override > 0 {
             area[0].lead = override
         }
         return area
+    }
+
+    /// The remainder of a long note on the page where its chain resumes the text (WS7 report
+    /// 15.1; runs fnlong120 p4, fnch175 p5, fnch250 p6-p7, fnch250mb p7). `bottomY` is the
+    /// bottom margin line, BB. Port of Python's `_NoteArea._chain_area`.
+    ///
+    /// The block is placed with the header counted twice and one blank row more under
+    /// `...Continued...`: P = BB - R*LH - 2H, the last note line three rows above BB. Where
+    /// that would put the separator above the place under the text (the last text baseline
+    /// + 3 rows), the block prints directly under the text instead, with no extra row, fills
+    /// to BB, and the rest of the note carries on; the page after that prints its remainder
+    /// under the text again, with the extra row. Returns the area and the first line's y.
+    private mutating func chainArea(bottomY: Double, bodyY: Double, targetFirst: Double,
+                                    area: [PageLine]) -> (area: [PageLine], first: Double) {
+        let lead = defaultLead
+        let notes = entries[0].count - 1
+        let under = bodyY + 3 * lead
+        if !afterUnderText {
+            let first = bottomY - 3 * lead - Double(notes + 3) * lead
+            if first >= under {
+                return (renderArea(entries, extraBlank: true), first)
+            }
+        }
+        let extra = afterUnderText ? 1 : 0
+        let firstNote = under + Double(3 + extra) * lead
+        // Floored by hand, as `roomLines` does (this engine does not link `floor`).
+        let rows = (bottomY - firstNote) / lead + 1e-9
+        let whole = Int(rows)
+        let room = (Double(whole) > rows ? whole - 1 : whole) + 1
+        if room < 1 { return (area, targetFirst) }
+        if room < notes {
+            let chunk = entries[0]
+            queue.insert(QueuedNote(remaining: Array(chunk.dropFirst(1 + room)),
+                                    needsContinuedMarker: true), at: 0)
+            entries[0] = Array(chunk.prefix(1 + room))
+            running = true
+        }
+        closedUnderText = true
+        return (renderArea(entries, extraBlank: extra == 1), under)
     }
 
     /// Lines still queued, for the post-loop progress guard.

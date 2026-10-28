@@ -18,7 +18,7 @@ import Testing
 ///   `{\qr \s17 {\f2\fs28 Robert J. Sawyer}\par }`                          — byline
 ///   `{\qc \s7 {\i \f2\fs24 Winner of the Aurora Award}...}`                — citation
 ///   `{\ql \s5 {\i \f4\fs24      The transference went smoothly...}`        — body copy
-/// `\f2` = Univers -> Helvetica Neue, `\f3` = Aachen -> Rockwell, `\f4` = Courier ->
+/// `\f2` = Univers -> Helvetica Neue, `\f3` = Aachen -> Optima, `\f4` = Courier ->
 /// Courier New (the MAC target table, `nativeMacFontRows` in `DocumentRenderer.swift`,
 /// mistake-registry #24) — this RTF reference is EMITTED output and stays Courier New
 /// forever (`OutputParityTests`, the boundary job 306/312's Courier Prime ruling never
@@ -56,12 +56,12 @@ struct ModernViewerStyleTests {
         return (paragraph.alignment, paragraph.headIndent, font)
     }
 
-    /// Title: centered, bold, Aachen -> Rockwell at 18pt (`\qc\b\fs36`) — not the user's
+    /// Title: centered, bold, Aachen -> Optima at 18pt (`\qc\b\fs36`) — not the user's
     /// body face, and not just character-level bold on the flat body font (job 263's bug).
-    @Test @MainActor func titleIsCenteredBoldRockwell18pt() throws {
+    @Test @MainActor func titleIsCenteredBoldOptima18pt() throws {
         let (align, _, font) = try Self.attributes(of: "Just Like Old Times", in: Self.oldtimesModernText())
         #expect(align == .center)
-        #expect(font.familyName == "Rockwell", "title font family is \(font.familyName ?? "nil"), expected Rockwell (Aachen mapped via the MAC target)")
+        #expect(font.familyName == "Optima", "title font family is \(font.familyName ?? "nil"), expected Optima (Aachen mapped via the MAC target)")
         #expect(font.pointSize == 18)
         #expect(font.fontDescriptor.symbolicTraits.contains(.bold))
     }

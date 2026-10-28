@@ -35,8 +35,23 @@ func layoutPrintedPages(
                                    pictures: pictures, sentenceSpacing: sentenceSpacing)
     var capacity = printedCap(doc)
     let defaultLead = printedLead(doc)
-    var notes = NoteArea(doc, items: items, defaultLead: defaultLead,
-                         sentenceSpacing: sentenceSpacing)
+    var notes = NoteArea(doc, defaultLead: defaultLead, sentenceSpacing: sentenceSpacing)
+    // WS4's page counter (`Era.lineStartsInRoom`, `.geometryActsAtOnce`): the body height is
+    // exactly `.pl - .mt - .mb` at the geometry in force, with no rounding up to the cap or
+    // "never tighten" clamp, and it is re-read for the page IN PROGRESS whenever one of them
+    // changes (WS4 teardown 3.1, `evidence/pass3/exe-static.md` 8; runs t43-mtmb). Port of
+    // Python's `exact_budget`/`_budget_for`.
+    let era = printingEra(doc)
+    let exactBudget = era.geometryActsAtOnce
+    let bodyGeometry = exactBudget ? doc.bodyGeometryTimeline() : nil
+    func budgetFor(_ capacity: Int, _ mt: Double, _ mb: Double, _ pl: Double) -> Double {
+        if exactBudget, pl != 0 {
+            let usable = (pl - mt - mb) * Double(PDFMetrics.lead)
+            if usable.isFinite { return max(0.0, usable) }
+        }
+        return printedBudgetPt(doc, capacity: capacity, defaultLead: defaultLead,
+                               mtLines: mt, mbLines: mb, plLines: pl)
+    }
     var budget = printedBudgetPt(doc, capacity: capacity, defaultLead: defaultLead)
     // b24 round 17b (RULINGS-LEDGER row 5/6, register C8): `.sb` suppresses blank lines
     // specifically at the TOP of a page — WordStar's own pagination concern, not a
@@ -63,6 +78,7 @@ func layoutPrintedPages(
     let plList = doc.plTimeline()
     let globalPl = plList.at(0)
     var curPl = globalPl
+    if exactBudget { budget = budgetFor(capacity, globalMt, globalMb, globalPl) }
     let hmFmList = doc.hmFmTimeline()
     let globalHm = hmFmList.at(0).hm
     let globalFm = hmFmList.at(0).fm
@@ -95,6 +111,8 @@ func layoutPrintedPages(
     // it get its own override even when that resolved value equals the (correct)
     // checkpoint global, which is exactly the pages BEFORE such a command's first real
     // occurrence.
+    let docMt = doc.page?.mtLines ?? defaultMtLines
+    let docMb = doc.page?.mbLines ?? defaultMbLines
     let docPl = doc.page?.plLines ?? defaultPlLines
     let docHm = doc.page?.hmLines ?? defaultHmLines
     let docFm = doc.page?.fmLines ?? defaultFmLines
@@ -125,9 +143,15 @@ func layoutPrintedPages(
     func recomputeGeom(_ bi: Int) -> (mt: Double, mb: Double, pl: Double, hm: Double, fm: Double,
                                       po: Double, poe: Double?, poo: Double?,
                                       orientation: Orientation) {
-        let margins = mtMbList.at(bi)
+        var margins = mtMbList.at(bi)
+        var pl = plList.at(bi)
+        if let bodyGeometry {
+            // WS4: the line-exact reading (`bodyGeometryTimeline`), at the page's opening line.
+            let geometry = bodyGeometry.at(bi, consumed: readTally[bi] ?? 0)
+            margins = MarginLines(mt: geometry.mt, mb: geometry.mb)
+            pl = geometry.pl
+        }
         let (mt, mb) = (margins.mt, margins.mb)
-        let pl = plList.at(bi)
         let headFoot = hmFmList.at(bi)
         let (hm, fm) = (headFoot.hm, headFoot.fm)
         let po = poList.at(bi)
@@ -145,6 +169,14 @@ func layoutPrintedPages(
     var page: [PageLine] = []
     var readPos: PageReadPos?
     var spent = 0.0
+    var pageEndGeom: BodyGeometry?   // (mt, mb, pl) at the open page's last line (WS4)
+    // True from the moment the paginator ends a page for room until a line lands on the
+    // page it opens: the blank soft-return lines at that top are swallowed
+    // (`era.softBlanksSwallowed`).
+    var roomBreakOpen = false
+    // The index in `items` of the last line appended to a page, for the clean-up that tells
+    // a last page made of the document's own trailing blank lines from padding.
+    var lastAppendedItem = -1
     var carryOpen = true            // the open page's note-area carry-over is not yet admitted
     var lastRoomLines = 0           // whole lines free on the page closed last, under its area
     var lastHasArea = false         // ...and whether that page ends with a note area
@@ -241,7 +273,7 @@ func layoutPrintedPages(
         if let last = page.last, last.overprint { return 0.0 }
         return lead
     }
-    func closePage(explicit: Bool = false, breakBI: Int? = nil) {
+    func closePage(explicit: Bool = false, breakBI: Int? = nil, formFeed: Bool = false) {
         var pg = Page(page,
                       headers: pageHeaders.filter { !$0.value.isEmpty },
                       footers: pageFooters.filter { !$0.value.isEmpty })
@@ -251,6 +283,7 @@ func layoutPrintedPages(
         pg.headerPcl = pageHeadersPcl.filter { !$0.value.isEmpty }
         pg.footerPcl = pageFootersPcl.filter { !$0.value.isEmpty }
         pg.footerInUse = !pageFooters.isEmpty
+        pg.endedByFormFeed = formFeed
         // #228: only ever true from the post-loop trailing-`.pa` branch below,
         // and only when `page` (this closing page's own body) is empty -- a
         // page WITH content already carries real `.bi`-bearing lines, so it
@@ -261,9 +294,14 @@ func layoutPrintedPages(
             pg.explicitBreak = true
             pg.explicitBreakBI = breakBI
         }
-        if curMt != globalMt || curMb != globalMb {
+        // WS4 sets the footer after the body from the bottom margin in force when the page
+        // ENDS (run t43-mtmb: the number of page 1 sits at row 67 = 66 - 2 + 2 + 1, `.MB 2`
+        // having been read mid-page), while the top margin printed at the page's start stays
+        // what it opened with.
+        let endMb = pageEndGeom?.mb ?? curMb
+        if curMt != docMt || endMb != docMb {
             pg.mtLines = curMt
-            pg.mbLines = curMb
+            pg.mbLines = endMb
         }
         // M31: this page's own sheet, stamped only when it differs from the document's
         // -- same `nil`/"document global" contract as everything else here, so every page
@@ -412,7 +450,15 @@ func layoutPrintedPages(
         if lastHasArea {
             let geometry = pageGeometryDocument(doc, for: pg) ?? doc
             let bodyY = Double(printedTop(geometry)) + colCut() + spent
-            for line in notes.anchoredArea(in: geometry, bodyY: bodyY) { pg.append(line) }
+            let bodyEmpty = pg.lines.isEmpty
+            for line in notes.anchoredArea(in: geometry, bodyY: bodyY, bodyEmpty: bodyEmpty) {
+                pg.append(line)
+            }
+            if bodyEmpty, let pos = readPos {
+                // a note-only page prints its page number (run fnlong120 p3): with no body
+                // line to look it up from, it takes the state of the last block read.
+                pg.explicitBreakBI = pos.bi
+            }
         }
         pages.append(pg)
     }
@@ -429,6 +475,7 @@ func layoutPrintedPages(
         }
         page = []
         spent = 0.0
+        pageEndGeom = nil
         pageHeaders = curHeaders
         pageFooters = curFooters
         pageHeadersPcl = curHeadersPcl
@@ -455,7 +502,23 @@ func layoutPrintedPages(
         return Double(whole) > lines ? whole - 1 : whole
     }
     func admitNotes() {
-        notes.admit(roomLines: roomLines(), capacity: capacity)
+        notes.admit(roomLines: roomLines())
+    }
+    /// Whether `line`, a body line that fits, goes to the next page together with its
+    /// notes (WS7 report 14.8, 14.15): its notes do not fit whole under it and the room
+    /// left from this line down, the line itself and any area already committed counted
+    /// out, is under `fnrun` note lines -- or leaves no room to run a first part at all.
+    /// Otherwise the line stays and the notes run (`NoteArea`).
+    func noteMovesWithLine(_ line: PageLine, _ due: [(note: Note, index: Int)]) -> Bool {
+        if due.isEmpty { return false }
+        let lines = (budget - colCut() - spent - cost(line)) / defaultLead + 1e-9
+        let whole = Int(lines)
+        let roomAfter = Double(whole) > lines ? whole - 1 : whole
+        let (split, taken) = notes.runWouldSplit(due, width: PDFMetrics.maxCols,
+                                                 roomLines: roomAfter)
+        if !split { return false }
+        let roomBefore = roomLines() - areaSize(notes.entries)
+        return roomBefore < (doc.footnoteRunLines ?? footnoteRunFactory) || taken < 1
     }
     func openArea() {
         guard carryOpen else { return }
@@ -558,6 +621,7 @@ func layoutPrintedPages(
             // Port of Python's identical `pdf._doc_to_pagelines` fix.
             var needed = 0.0
             var seen = 0
+            var lastLead = defaultLead
             peekLoop: for peekIndex in (itemIndex + 1)..<items.count {
                 switch items[peekIndex] {
                 case .pageBreak:
@@ -565,20 +629,34 @@ func layoutPrintedPages(
                 case .hf, .condPage:
                     continue peekLoop
                 case .line(let peekLine, _):
-                    needed += peekLine.lead ?? defaultLead
+                    lastLead = peekLine.lead ?? defaultLead
+                    needed += lastLead
                     seen += 1
                     if seen >= n { break peekLoop }
                 }
             }
+            // `.cp n` asks whether n lines fit, not whether the lines that happen to follow
+            // it do: a line that is not there (a `.pa`, the end of the text) still takes the
+            // room it would have (WS4 teardown 7.7, runs w14-pafoot/w14-cpfoot; WS7 teardown
+            // `wordstar-dos/11-print-engine.md` 11.3, 15.1: room / line height < n breaks).
+            needed += Double(max(0, n - seen)) * lastLead
             let room = budget - colCut() - spent - notes.heightPt
-            if room < needed - 1e-6, !page.isEmpty {
+            // WS4: floor(R / LH) + 1 < n, i.e. the nth line from here would not start in the
+            // room that is left.
+            let short = era.lineStartsInRoom ? (needed - lastLead) >= room - 1e-6
+                                             : room < needed - 1e-6
+            if short, !page.isEmpty {
                 closePage()
                 openNewPage()
+                roomBreakOpen = false
             }
-        case .pageBreak:
-            // Always closes -- even an empty page, which IS a blank sheet (`.pa .pa`).
-            closePage()
+        case .pageBreak(let formFeed):
+            // Always closes -- even an empty page, which IS a blank sheet (`.pa .pa` before
+            // WS5; in WS7 a `.pa` on an empty page never gets here, see
+            // `resolvePrintedBody`).
+            closePage(formFeed: formFeed)
             openNewPage()
+            roomBreakOpen = false
         case .line(let line, let due):
             // Finding 3: a line about to start a FRESH page picks up the `.mt`/`.mb`
             // in force at ITS OWN block — recomputing `capacity`/`budget` for THIS
@@ -596,8 +674,7 @@ func layoutPrintedPages(
                 curPoo = poo
                 curOr = orient
                 capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
-                budget = printedBudgetPt(doc, capacity: capacity, defaultLead: defaultLead,
-                                         mtLines: mt, mbLines: mb, plLines: pl)
+                budget = budgetFor(capacity, mt, mb, pl)
             }
             openArea()
             // A line LEAVING the columnar region releases the group's shared prefix
@@ -611,15 +688,39 @@ func layoutPrintedPages(
             }
             // A body line is admitted while it fits ABOVE the note area already committed
             // (`notes.heightPt`, 0 for a page with none), which `admitNotes` grew
-            // incrementally, splitting notes when they couldn't finish -- so a reference line
-            // whose notes only PARTLY fit is still admitted and its overflow continues on
-            // the next page's area (rule 4). The three-line body floor needs no arm of its
-            // own: the non-terminal ceiling caps the area at `capacity - footnoteFloor`, so
-            // the first three line units always fit. A page's first line is admitted
-            // whatever it costs (`page.isEmpty` below), so an image taller than the whole page
-            // still lands somewhere: a slightly overflowing page beats a hang or lost
-            // content (the same doctrine `admitFootnotes` documents).
-            let overflow = spent + cost(line) + notes.heightPt > budget - colCut() + 1e-6
+            // incrementally, splitting notes when they couldn't finish. A reference line
+            // whose notes only PARTLY fit stays when the room is `fnrun` lines or more, and
+            // its overflow continues on the next page's area; below that it moves with its
+            // notes to the next page (`noteMovesWithLine`). A page whose area ends in a
+            // note that runs takes no more body lines (`notes.sealed`). A page's first line
+            // is admitted whatever it costs (`page.isEmpty` below), so an image taller than
+            // the whole page still lands somewhere: a slightly overflowing page beats a
+            // hang or lost content (the same doctrine `admitFootnotes` documents).
+            var lineGeometry: BodyGeometry?
+            if exactBudget, let bi = line.bi {
+                // WS4: a `.pl/.mt/.mb` read mid-page changes this page's budget at once; the
+                // page's own stamps (`curMt`..., its printed top margin) stay what the page
+                // opened with.
+                let geometry = bodyGeometry!.at(bi, consumed: readTally[bi] ?? 0)
+                lineGeometry = geometry
+                budget = budgetFor(capacity, geometry.mt, geometry.mb, geometry.pl)
+            }
+            var need = cost(line)
+            if let rise = line.fontRise, rise > 0, era.overhangsByFontRise {
+                // WS7 report 15.1 (runs tall24, tall36): under `.lh a` the paginator looks
+                // one base line ahead at each line's end, so a line starts while a base
+                // line still fits, and a font on it that raises its height moves it to the
+                // next page only when the room left is smaller than the RISE -- otherwise
+                // it stays and overhangs the bottom. The room test is therefore against the
+                // larger of the base line and the rise, not against the line's whole
+                // height.
+                need = max(defaultLead, rise)
+            }
+            // WS4 starts a line while the height used is under the body height; the page ends
+            // after the first line that overruns it (`Era.lineStartsInRoom`).
+            let overflow = era.lineStartsInRoom
+                ? spent + notes.heightPt > budget - colCut() - 1e-6
+                : spent + need + notes.heightPt > budget - colCut() + 1e-6
             // Finding 1 (b26 visual pass): the FIRST `ws4Spacing` blank (see
             // `ws4SpacingBlankIndices`) to overflow a page's budget never triggers
             // the break by itself -- a physical blank-line paper advance right at
@@ -637,10 +738,14 @@ func layoutPrintedPages(
             // blank run): forgiving every blank in a run over-admits a whole extra
             // real line one measured source's own WS7 capture didn't have.
             let alreadyOver = spent + notes.heightPt > budget - colCut() + 1e-6
-            let full = overflow && !(line.ws4Spacing && !alreadyOver)
+            var full = overflow && !(line.ws4Spacing && !alreadyOver)
+            if !full, !page.isEmpty {
+                full = notes.sealed || noteMovesWithLine(line, due)
+            }
             if full, !page.isEmpty {
                 closePage()
                 openNewPage()
+                roomBreakOpen = true
                 // organic overflow (see `recomputeGeom`'s doc comment): `line` itself is
                 // the new page's first line and never reaches the top-of-case
                 // `page.isEmpty` gate above, since `page` is not empty until closePage/
@@ -657,15 +762,32 @@ func layoutPrintedPages(
                     curPoo = poo
                     curOr = orient
                     capacity = printedCapFor(doc, mtLines: mt, mbLines: mb, plLines: pl)
-                    budget = printedBudgetPt(doc, capacity: capacity, defaultLead: defaultLead,
-                                             mtLines: mt, mbLines: mb, plLines: pl)
+                    budget = budgetFor(capacity, mt, mb, pl)
                 }
                 openArea()
+                // A page of nothing but a carried-over note is a page too: the note takes
+                // the whole of it and the line waits for the next (WS7 report 15.1, run
+                // fnlong120).
+                while !notes.entries.isEmpty,
+                      spent + cost(line) + notes.heightPt > budget - colCut() + 1e-6 {
+                    closePage()
+                    openNewPage()
+                    openArea()
+                }
             }
             // `.sb`: a blank line at the top of a page doesn't print.
             if suppressBlanks, page.isEmpty, isBlankPageLine(line) {
                 continue
             }
+            if era.softBlanksSwallowed, roomBreakOpen, page.isEmpty, line.soft,
+               isBlankPageLine(line) {
+                // WS7 report 15.1 (run sb8d): when a line ends a page by room the paginator
+                // swallows the empty lines that follow it whose return is soft -- the same
+                // loop that serves `.sb`, which swallows every empty line. Hard-return
+                // empties carry over to the top of the next page (blank3).
+                continue
+            }
+            roomBreakOpen = false
             if let lc = lineCols(line), lc > 1, colGroupCols == 1 {
                 // The group starts HERE: whatever this page has already spent is the
                 // prefix every column of it shares.
@@ -679,10 +801,9 @@ func layoutPrintedPages(
                 readPos = PageReadPos(bi: bi, count: readTally[bi]!)
             }
             page.append(line)
-            // The page that admits the document's last line of regular text is the terminal
-            // page: the floor lifts there (rule 5). Then this line's notes queue, and as many
-            // as fit join the area.
-            if itemIndex == notes.lastInkIndex { notes.isTerminal = true }
+            if let lineGeometry { pageEndGeom = lineGeometry }
+            lastAppendedItem = itemIndex
+            // Then this line's notes queue, and as many as fit join the area.
             notes.enqueue(due, width: PDFMetrics.maxCols)
             admitNotes()
         }
@@ -696,6 +817,12 @@ func layoutPrintedPages(
     }
     if !page.isEmpty {
         closePage()
+        // The document's own trailing blank lines (`resolvePrintedBody` put them last): the
+        // page that holds the last of them is marked for `finalizePages`.
+        if era.blankLinesMakePages, !doc.blocks.isEmpty, doc.eofBlankLines > 0,
+           lastAppendedItem == items.count - 1 {
+            pages[pages.count - 1].eofBlankBI = doc.blocks.count - 1
+        }
     } else if case .pageBreak = items.last, doc.paEofBlankAfter {
         // #228 (research/2026-09-08_trailing-pa-rule.md, planning #228):
         // "WS7 opens the page after a forced `.pa` break ONLY when at
@@ -749,9 +876,7 @@ func layoutPrintedPages(
     while !notes.queue.isEmpty {
         let linesBefore = notes.queuedLineCount
         var entries: [[PageLine]] = []
-        admitFootnotes(&entries, &notes.queue,
-                       ceiling: footnoteCeiling(room: capacity, capacity: capacity,
-                                                isTerminal: true))
+        admitFootnotes(&entries, &notes.queue, ceiling: capacity)
         let area = renderArea(entries)
         if notes.queuedLineCount >= linesBefore {
             // No progress. Emit the page we just built, then flush the rest verbatim so

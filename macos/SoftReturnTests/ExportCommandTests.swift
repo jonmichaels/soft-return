@@ -136,14 +136,15 @@ import Testing
 
     // MARK: - note references
 
-    @Test func decodeDefaultsNoteReferencesToWordStyle() throws {
+    /// No `note references` names no scheme, so Modern follows the document's `.f#`/`.e#`.
+    @Test func decodeLeavesNoteReferencesUnsetWhenOmitted() throws {
         let args = try ExportCommand.decode(
             arguments: [
                 "scriptingDestination": Self.destination,
                 "scriptingFormat": ScriptingCodes.nsNumber("SRfr"),
             ],
             documentStyle: .modern)
-        #expect(args.noteRefs == .word)
+        #expect(args.noteRefs == nil)
     }
 
     @Test func decodeReadsAnExplicitPrefixedNoteReferenceStyle() throws {

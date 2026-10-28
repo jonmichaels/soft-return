@@ -76,7 +76,7 @@ private func expectDrawn(_ line: ModernHeadFootLine, on pageSpans: [ShownSpan],
     let drawnText = inkOnly(drawn.map(\.text).joined())
     let wantText = inkOnly(line.text)
     #expect(drawnText == wantText, "\(label): text")
-    #expect(first.size == line.pt, "\(label): furniture size")
+    #expect(first.size == Double(line.pt), "\(label): furniture size")
 }
 
 private func archiveDoc(_ name: String) throws -> Document {

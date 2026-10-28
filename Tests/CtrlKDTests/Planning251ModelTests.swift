@@ -38,13 +38,14 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON.
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 13"))
+    #expect(json.contains("\"version\": 15"))
     #expect(json.contains("\"justify_word_x\""))
 }
 
-@Test func justifyWordXAbsentForAStyledMixedLine() {
-    // A second (unjustified) line so the styled first line is not ALSO the block's
-    // own last physical line (rule 1 -- always unjustified regardless of shape).
+@Test func justifyWordXTilesAStyledMixedLine() {
+    // The model's pieces cover the whole line across its spans -- their texts
+    // concatenate to the line's text, so a consumer can map them onto its own spans by
+    // offset.
     var src = bytes(".po 0\"\r\n.lm 0\r\n.rm 40\r\n.oj on\r\n")
     src += bytes("AA ")
     src += [0x02]
@@ -57,8 +58,9 @@ import Testing
     let doc = parseWS(src)
     let pages = docToPagelines(doc, printed: true)
     let line = pages[0][0]
-    #expect(line.justifyRightX != nil)     // still eligible BY POSITION
-    #expect(line.justifyWordX == nil)       // not by SHAPE (2+ spans)
+    #expect(line.justifyRightX != nil)
+    #expect((line.justifyWordX ?? []).map(\.text).joined() == "AA BB CC")
+    #expect((line.justifyWordX ?? []).filter { !$0.text.contains(" ") }.map(\.x) == [0.0, 136.8, 273.6])
 }
 
 // ------------------------------------------------------------------ (d) lineNo
@@ -73,14 +75,17 @@ import Testing
     let doc = parseWS(src251d)
     let pages = docToPagelines(doc, printed: true)
     let labels = pages[0].compactMap { $0.lineNo?.text }
-    #expect(labels == ["1", "2", "3"])
+    // WS7 keeps numbering to the end of the page, the empty rows included (WS7 report,
+    // run lnum-courier): 55 rows, every second one numbered.
+    #expect(Array(labels.prefix(3)) == ["1", "2", "3"] && labels.count == 28)
+    #expect(pages[0].count == 55)
     // every labelled line lands at the SAME right-aligned x (single-digit labels).
-    let xs = Set(pages[0].compactMap { $0.lineNo?.x })
+    let xs = Set(pages[0].compactMap { $0.lineNo }.filter { $0.text.count == 1 }.map(\.x))
     #expect(xs.count == 1)
     #expect(pages[0].contains { $0.lineNo == nil })
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 13"))
+    #expect(json.contains("\"version\": 15"))
     #expect(json.contains("\"line_no\""))
 }
 
@@ -145,7 +150,7 @@ import Testing
     #expect(middle.map(\.char) == ["\u{2502}", "\u{2502}"])   // only the two bars
 
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 13"))
+    #expect(json.contains("\"version\": 15"))
     #expect(json.contains("\"graphic_cells\""))
 }
 
@@ -182,7 +187,7 @@ import Testing
 
     // Same answer, one level up, through the public `layout` JSON's `modern.items`.
     let json = emitLayout(doc, mode: .modern)
-    #expect(json.contains("\"version\": 13"))
+    #expect(json.contains("\"version\": 15"))
     #expect(json.contains("\"graphic_cells\""))
     #expect(json.contains("\"page\": 1"))
 }
@@ -377,7 +382,7 @@ import Testing
     #expect(pages[0].footerLines == nil)
     #expect(pages[0].autoPageno == nil)
     let json = emitLayout(doc, mode: .printed)
-    #expect(json.contains("\"version\": 13"))
+    #expect(json.contains("\"version\": 15"))
     #expect(!json.contains("\"header_lines\""))
     #expect(!json.contains("\"footer_lines\""))
     #expect(!json.contains("\"auto_page_number\""))

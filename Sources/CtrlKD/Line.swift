@@ -17,15 +17,23 @@ public struct Fixup: Hashable, Sendable {
 /// 2.0.0; core.py's `Line` dataclass). Before 2.0.0, word wrap was joined into one
 /// logical `Line` at parse time; printed mode could not undo that, so soft-wrapped
 /// paragraphs rendered as single thousand-column lines running off the page edge.
-/// `soft` now marks WordStar's own word wrap so a consumer can tell a real page break
+/// `soft` now marks a stored soft return so a consumer can tell a real page break
 /// from a mere wrap point; call `mergedLines(_:)` (Block.swift) to get logical lines
 /// back for reflowing.
 public struct Line: Hashable, Sendable {
     public var spans: [Span]
-    /// True when this line ends in WordStar's own word wrap (an 8D 0A soft return
-    /// classified `wrap` by `linesPass`): ON PAPER this was a real line break; for
-    /// reflow it joins the next line (see `mergedLines(_:)`).
+    /// True when the line's STORED terminator is a soft return (8D 0A, or 1F 8D 0A
+    /// after a soft hyphen), exactly what the file says: ON PAPER this is a real line
+    /// break that WordStar justifies under `.oj on` and re-wraps under `.pf on`, and
+    /// the writer puts it back. Reflow's own decision to keep a break is `keepBreak`,
+    /// not this.
     public var soft: Bool
+    /// A STORED soft return that Modern reflow reads as the author's deliberate break (a
+    /// poem line, an indented continuation, a short heading): `soft` stays true, because
+    /// WordStar still stores, justifies and re-wraps it as a soft return (WS4 report
+    /// 2.7, 6.1, 7.7), but `mergedLines(_:)` does not join it to the next line (see
+    /// `wraps`). Port of `Line.keep_break`.
+    public var keepBreak: Bool
     /// A 0x0B end-of-page mark fell at this line — the EDITOR's last-seen pagination.
     ///
     /// WSFORMAT.TXT on 0Bh End of page: "This sequence should usually be ignored. It's
@@ -76,6 +84,14 @@ public struct Line: Hashable, Sendable {
     /// the feed that lands on the line it was typed for. See `pageStream` for the archive
     /// document that measures it.
     public var lead48: Double?
+
+    /// The font in force when this line ends (a `fonts` index, -1 for none), counting a
+    /// font record that follows the last text and precedes the return -- which puts no
+    /// span on the line it closes, so the spans alone cannot say. `.lh a` leads a line by
+    /// the font it starts in, which is the font the line before it ended in (WS7 report
+    /// 14.5). `nil` for a line the parser did not read from a body entry. Port of
+    /// ctrl-kd's `Line.font_out`.
+    public var fontOut: Int?
 
     /// `.KR` in force AS THIS LINE ENDS — STATEFUL like `.lh` above, captured the same
     /// way (`closeLine()` reads the running format state, `true` being WordStar's own
@@ -156,17 +172,25 @@ public struct Line: Hashable, Sendable {
     /// degrades gracefully (guard fails, no patch) instead of corrupting. See
     /// `rtLineCapture` for the capture rules.
     public var fixups: [Fixup]
+    /// WS4: offsets (Unicode scalars), in `text()`, of the characters stored with bit 7 --
+    /// a letter is a word end, a blank an editor soft space (A0h), and a control toggle's
+    /// flag sits on the character before it (`decodeSpans`). WS4's HPLJET driver justifies
+    /// from these (WS4 teardown 4 §15.6). Empty for every other variant. Port of
+    /// `Line.hibit`.
+    public var hibit: [Int] = []
 
     public init(spans: [Span] = [], soft: Bool = false, softpage: Bool = false,
                 lead48: Double? = nil, overprint: Bool = false,
                 brkRaw: [UInt8]? = nil, togEnd: [UInt8] = [], fixups: [Fixup] = [],
                 kerning: Bool = true, poCols: Double? = nil, roll48: Double? = nil,
                 poeCols: Double? = nil, pooCols: Double? = nil,
-                softHyphen: Bool = false) {
+                softHyphen: Bool = false, fontOut: Int? = nil, keepBreak: Bool = false) {
         self.spans = spans
         self.soft = soft
+        self.keepBreak = keepBreak
         self.softpage = softpage
         self.softHyphen = softHyphen
+        self.fontOut = fontOut
         self.lead48 = lead48
         self.kerning = kerning
         self.overprint = overprint
@@ -178,6 +202,11 @@ public struct Line: Hashable, Sendable {
         self.poeCols = poeCols
         self.pooCols = pooCols
     }
+
+    /// A stored soft return that is plain word wrap to reflow: the next line continues
+    /// this one (`mergedLines(_:)` joins them). A soft return the author kept as a break
+    /// (`keepBreak`) is not. Port of `Line.wraps`.
+    public var wraps: Bool { soft && !keepBreak }
 
     /// All span text joined, e.g. for search or format-agnostic display.
     public func text() -> String {

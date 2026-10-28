@@ -13,6 +13,7 @@ import SoftReturnShared
 ///     Default Display
 ///     Default Page Size
 ///     Quick Look Margins
+///     WS4 Files Print As
 ///     -- Separator
 ///     "Font and size apply..."
 ///     Font
@@ -100,6 +101,8 @@ struct SettingsWindowOrderTests {
             .row("Default Display:"),
             .row("Default Page Size:"),
             .row("Quick Look Margins:"),
+            // Which WordStar prints a WS4 file, under the spec's own rows.
+            .row("WS4 Files Print As:"),
             // Batch 46 (canvas v3 MacSettings): Quirks…, centred and unlabelled, under the popups.
             .button("Quirks…"),
             .separator,
