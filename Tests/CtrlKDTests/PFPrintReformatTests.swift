@@ -164,6 +164,27 @@ private func pfPrintedLines(_ doc: Document) -> [String] {
     #expect(Array(pfPrintedLines(doc).prefix(2)) == ["aaaa bbbb cccc ", "dddd"])
 }
 
+// MARK: - a stored soft return that reflow keeps
+
+@Test func pfOnRewrapsAStoredSoftReturnReflowWouldKeep() {
+    // `.pf on` re-joins what WordStar itself broke: a stored soft return, whether or not
+    // Modern reflow keeps the break (WS4 report 6.1). The paragraph ends only at a hard
+    // return. Port of Python's `test_pf_on_rewraps_a_stored_soft_return_reflow_would_keep`.
+    var body = pfBytes(".pf on")
+    body += pfHard
+    body += pfBytes(".rm 40")
+    body += pfHard
+    body += pfBytes("short line one here")
+    body += pfSoft
+    body += pfBytes("short line two here")
+    body += pfHard
+    let doc = parseWS(body, variant: .ws4)
+    let block = doc.blocks[0]
+    #expect(block.lines[0].keepBreak)
+    #expect(pfRewrappedLines(doc, block).map { $0.text() }
+            == ["short line one here short line two here"])
+}
+
 // MARK: - hyphens
 
 @Test func aDiscretionaryHyphenDisappearsWhenItsBreakDoes() {

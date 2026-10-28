@@ -50,6 +50,13 @@ struct MarginLines: Equatable {
     var mb: Double
 }
 
+/// `.mt`/`.mb`/`.pl` in force, in lines -- what a WS4 page's body height is made of.
+struct BodyGeometry: Equatable {
+    var mt: Double
+    var mb: Double
+    var pl: Double
+}
+
 /// `.hm`/`.fm` in force, in lines.
 struct HeadFootLines: Equatable {
     var hm: Double
@@ -252,15 +259,48 @@ extension Document {
     /// figures — measured (ARTICLES/SCRIPT.WS's own dot-command bytes, via
     /// `doc.dotPositions`): block 64 sets `.mt1`/`.mb0` (Figure 1's near-zero margins),
     /// block 75 sets `.mt1"`/`.mb1"` (Figure 2's own, different margins).
+    ///
+    /// WS4 acts on `.mt`/`.mb` when the line is reached (`Era.geometryActsAtOnce`), so for
+    /// it the seed is the factory pair, not the first occurrence's: a page that opens before
+    /// the first one prints at the factory margins (`plTimeline` seeds the same way; WS4
+    /// teardown `evidence/pass3/exe-static.md` 8, run t43-mtmb).
     func mtMbTimeline() -> Timeline<MarginLines> {
-        let seed = MarginLines(mt: page?.mtLines ?? defaultMtLines,
+        var seed = MarginLines(mt: page?.mtLines ?? defaultMtLines,
                                mb: page?.mbLines ?? defaultMbLines)
+        if printingEra(self).geometryActsAtOnce {
+            seed = MarginLines(mt: defaultMtLines, mb: defaultMbLines)
+        }
         return Timeline(of: self, seed: seed) { current, dp in
             guard let (name, arg) = dp.command, name == "MT" || name == "MB",
                   let (value, unit) = parseDotNumber(arg) else { return nil }
             var next = current
             let resolved = resolveLinesArg(value, unit)
             if name == "MT" { next.mt = resolved } else { next.mb = resolved }
+            return next
+        }
+    }
+
+    /// `[(blockIndex, lineIndex, mt, mb, pl), ...]` in ascending order -- the body-height
+    /// commands IN FORCE from that LINE on, for an era whose page counter acts on them at
+    /// once (`Era.geometryActsAtOnce`, WS4). Port of Python's `_body_geometry_checkpoints`.
+    /// Seeded at the factory values, like `plTimeline`: a page that opens before the first
+    /// `.mt/.mb/.pl` has the factory margins. The line index is kept (as `orTimeline` keeps
+    /// it) because a WS4 file is usually ONE block, so a block-granular reading cannot tell
+    /// the lines before a `.MT` from the lines after it. WS4 teardown
+    /// `evidence/pass3/exe-static.md` 8 (routine 1EE1B re-derives the space left on every
+    /// change); run t43-mtmb.
+    func bodyGeometryTimeline() -> Timeline<BodyGeometry> {
+        let seed = BodyGeometry(mt: defaultMtLines, mb: defaultMbLines, pl: defaultPlLines)
+        return Timeline(of: self, seed: seed) { current, dp in
+            guard let (name, arg) = dp.command, name == "MT" || name == "MB" || name == "PL",
+                  let (value, unit) = parseDotNumber(arg) else { return nil }
+            var next = current
+            let resolved = resolveLinesArg(value, unit)
+            switch name {
+            case "MT": next.mt = resolved
+            case "MB": next.mb = resolved
+            default: next.pl = resolved
+            }
             return next
         }
     }
@@ -371,9 +411,13 @@ extension Document {
     /// (column 5, the figure's own local `.po .5"`) -- this engine, reading only the document's
     /// global `.po` default (8 columns, 57.6pt), rendered it 21.6pt (3 columns) too far right.
     func poTimeline() -> Timeline<Double> {
+        let era = printingEra(self)
         var timeline = Timeline(of: self, seed: defaultPoCols) { _, dp in
-            guard let (name, arg) = dp.command, name == "PO",
-                  let (value, unit) = parseDotNumber(arg) else { return nil }
+            guard let (name, arg) = dp.command, name == "PO" else { return nil }
+            guard let (value, unit) = parseDotNumber(arg) else {
+                // Era.barePoZero / badPoZero
+                return (isBlankDotArg(arg) ? era.barePoZero : era.badPoZero) ? 0.0 : nil
+            }
             return resolveColsArg(value, unit)
         }
         if timeline.entries.count == 1 {

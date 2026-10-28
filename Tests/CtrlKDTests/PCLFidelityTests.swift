@@ -348,6 +348,12 @@ private let capturedDocsV4: [String] = [
 ]
 private let capturedDocs = capturedDocsV1V3 + capturedDocsV4
 private let inventoryModeDocs = Set(capturedDocsV4)
+/// Documents whose non-font-substitution divergences are a known issue, the twin of
+/// ctrl-kd's `pcl_tolerance.KNOWN_ISSUE_DOCS`: still checked and named every run, recorded
+/// under `withKnownIssue`. A drift is never softened.
+private let knownIssueDocs = [
+    "LJ6DTP": "LJ6DTP class, modelled roughly, not to this bar (planning #210)",
+]
 
 /// THE RACE (found 2026-09-06, `swift test` run in parallel with 18 `pclFidelity(doc:)`
 /// cases in flight): every one of those cases' TWO subprocess calls (`resolve` then
@@ -660,7 +666,9 @@ enum PCLFidelityDriver {
             throw DriverError(message: "could not read \(wsPath) (resolved by ctrl-kd's own "
                 + "fidelity_gate.resolve_doc_paths, but not readable from this process)")
         }
-        let doc = try parse([UInt8](data), variant: nil)
+        // Every capture is WordStar 7's print, so a WS4 file is printed as WS7 printed it
+        // (`printedBy: .ws7`), as `render_engine_pdf` does, not as WS4's own HPLJET would.
+        let doc = try parse([UInt8](data), variant: nil, printedBy: .ws7)
         let pixResults = resolveDocumentPictures(doc, docPath: wsPath,
                                                   environment: .live)
         return emitPDF(doc, mode: .printed, options: EmitOptions(pictures: .embed, pixResults: pixResults))
@@ -804,6 +812,10 @@ enum PCLFidelityDriver {
                 let commentText = "PCL fidelity, \(doc): v4 expansion, untriaged pending " +
                     "Jon's per-cause ruling (planning #180 phase 2)"
                 withKnownIssue(Comment(rawValue: commentText)) {
+                    Issue.record("\(message)")
+                }
+            } else if let known = knownIssueDocs[doc] {
+                withKnownIssue(Comment(rawValue: "PCL fidelity, \(doc): \(known)")) {
                     Issue.record("\(message)")
                 }
             } else {

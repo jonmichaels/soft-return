@@ -42,11 +42,14 @@ let nativeMacFontRows: [String: (primary: String, falt: String?)] = {
         ("prestige", "Courier New", nil),
         ("univers", "Helvetica Neue", "Arial"),
         ("cg triumvirate|ps sansser qual", "Helvetica", "Arial"),
-        ("antique olive", "Optima", "Verdana"),
+        // Antique Olive, Albertus and Aachen (printed in the LaserJet driver's
+        // Albertus): the shipping faces whose widths are closest to the driver's.
+        ("antique olive", "Verdana", "Optima"),
         ("optima", "Optima", "Candara"),
         ("garamond", "Hoefler Text", "Garamond"),
         ("clarendon", "Rockwell", "Clarendon"),
-        ("aachen|rockwell", "Rockwell", "Courier New"),
+        ("aachen|albertus", "Optima", "Rockwell"),
+        ("rockwell", "Rockwell", "Courier New"),
         ("bodoni", "Bodoni 72", "Bodoni MT"),
         ("broadway", "Phosphate Solid", "Futura"),
         ("univ. roman", "Didot", "Georgia"),
@@ -145,7 +148,9 @@ func nativeMacIsMonospace(_ entry: FontChange) -> Bool {
 /// (`CourierPrimeFontRegistration`) as primary with "Courier New" as `falt` — reached only if
 /// the bundled face somehow failed to register/load — for exactly the two rows
 /// `courierPrimeRowKeys` names, ahead of the shared `nativeMacFontRows` lookup.
-func nativeMacFontName(_ entry: FontChange, useCourierPrime: Bool = false) -> (primary: String, falt: String?) {
+func nativeMacFontName(
+    _ entry: FontChange, useCourierPrime: Bool = false, bold: Bool = false
+) -> (primary: String, falt: String?) {
     let name = (entry.typestyleName ?? "").lowercased()
     if name.hasPrefix("symbol") { return ("Symbol", nil) }
     if name.contains("dingbat") { return ("Zapf Dingbats", nil) }
@@ -162,7 +167,12 @@ func nativeMacFontName(_ entry: FontChange, useCourierPrime: Bool = false) -> (p
     if useCourierPrime, courierPrimeRowKeys.contains(key) {
         return ("Courier Prime", "Courier New")
     }
-    if let row = nativeMacFontRows[key] { return row }
+    if let row = nativeMacFontRows[key] {
+        // A bold run of a family whose bold takes a face of its own (the engine's
+        // `boldFace`, its `mac` target): Garamond bold in Cochin.
+        if bold, let face = boldFace(entry.family, target: .mac) { return (face, row.primary) }
+        return row
+    }
     return (nativeMacGenericPrimary[entry.genericStyle] ?? "Helvetica", nil)
 }
 
@@ -241,10 +251,35 @@ func modernBase14MacFont(
     return nativeApplyTraits(base, bold: bold, italic: italic)
 }
 
+/// (bold, italic) as `font` itself carries them.
+func nativeFontTraits(_ font: NSFont) -> (bold: Bool, italic: Bool) {
+    let traits = font.fontDescriptor.symbolicTraits
+    #if os(iOS)
+    return (traits.contains(.traitBold), traits.contains(.traitItalic))
+    #else
+    return (traits.contains(.bold), traits.contains(.italic))
+    #endif
+}
+
+/// The Mac face for a WS4 `.PS ON` line's `PageLine.Face`: the engine's base-14 family
+/// as Native draws it everywhere else (`modernBase14MacFont`'s names).
+func nativeFaceMacFont(_ face: PageLine.Face, bold: Bool, italic: Bool) -> NSFont? {
+    let family: String
+    switch face.family {
+    case .times: family = "Times New Roman"
+    case .helvetica: family = "Helvetica"
+    case .courier: family = "Courier New"
+    case .symbol: family = "Symbol"
+    case .zapfDingbats: family = "Zapf Dingbats"
+    }
+    guard let base = NSFont(name: family, size: CGFloat(face.size)) else { return nil }
+    return nativeApplyTraits(base, bold: bold, italic: italic)
+}
+
 func nativeResolvedMacFont(
     _ entry: FontChange, size: CGFloat, bold: Bool, italic: Bool, useCourierPrime: Bool = false
 ) -> NSFont? {
-    let (primary, falt) = nativeMacFontName(entry, useCourierPrime: useCourierPrime)
+    let (primary, falt) = nativeMacFontName(entry, useCourierPrime: useCourierPrime, bold: bold)
     #if os(iOS)
     if primary == "Arial Narrow" { return iosHelveticaNarrow(size: size, bold: bold, italic: italic) }
     #endif
@@ -289,7 +324,7 @@ public func nativeCoverageAwareResolvedMacFont(
     _ entry: FontChange, size: CGFloat, bold: Bool, italic: Bool, useCourierPrime: Bool = false,
     coveringCharactersIn text: String
 ) -> NSFont? {
-    let (primary, falt) = nativeMacFontName(entry, useCourierPrime: useCourierPrime)
+    let (primary, falt) = nativeMacFontName(entry, useCourierPrime: useCourierPrime, bold: bold)
     #if os(iOS)
     if primary == "Arial Narrow" { return iosHelveticaNarrow(size: size, bold: bold, italic: italic) }
     #endif
@@ -439,6 +474,28 @@ public func nativeLJ6DTPSubstitute(_ text: String, entry: FontChange?, kerning: 
     }
     if (entry.typestyleName ?? "").hasPrefix("Univers") {
         out = String(out.map { nativeLJ6DTPCharSubstUnivers[$0] ?? $0 })
+    }
+    return out
+}
+
+/// LJ6DTP prints its © from the PS Math symbol set: a sans-serif C in Arial, Omega and Univers,
+/// a serif C in Times and Times New Roman (its manual, page 3), which the engine draws from
+/// base-14 Symbol. Native draws each © of a proportional LJ6DTP run in a Mac face whose own ©
+/// is that ring — Arial's sans, Times New Roman's serif — so the text keeps a real ©.
+func nativeLJ6DTPCopyright(_ string: NSAttributedString, entry: FontChange?) -> NSAttributedString {
+    guard let entry, entry.proportional, string.string.contains("©") else { return string }
+    let out = NSMutableAttributedString(attributedString: string)
+    let text = string.string as NSString
+    let face = pdfFamily(entry) == .helvetica ? "ArialMT" : "TimesNewRomanPSMT"
+    var at = 0
+    while at < text.length {
+        let found = text.range(of: "©", range: NSRange(location: at, length: text.length - at))
+        guard found.location != NSNotFound else { break }
+        let size = (out.attribute(.font, at: found.location, effectiveRange: nil) as? NSFont)?.pointSize ?? 12
+        if let ring = NSFont(name: face, size: size) {
+            out.addAttribute(.font, value: ring, range: found)
+        }
+        at = NSMaxRange(found)
     }
     return out
 }

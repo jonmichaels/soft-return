@@ -576,16 +576,18 @@ private func linesDoc(_ n: Int, page: PageGeometry) -> Document {
 
 // MARK: - Page breaks
 
-@Test func consecutivePageBreaksLeaveABlankPage() {
+@Test func consecutivePageBreaksLeaveABlankPageBeforeWS5() {
     // Python appends the current page on a break even when it is empty (`if page or l is
     // None`), so two `.pa` in a row cost a sheet of paper. The pagebreak vector has one
     // break between two paragraphs and cannot tell that apart from "skip empty pages".
+    // WS7 does not do this (WS7 report 15.1: a `.pa` on a page that holds nothing yet is
+    // ignored -- `WS7PageFlowTests`), so the blank sheet is the pre-WS5 reading only.
     let doc = Document(blocks: [
         Block(lines: [Line(spans: [Span(text: "first")])]),
         Block(kind: .pagebreak),
         Block(kind: .pagebreak),
         Block(lines: [Line(spans: [Span(text: "last")])]),
-    ])
+    ], detection: Detection(variant: .ws4))
     let pages = docToPagelines(doc, printed: true)
     #expect(pages.count == 3)
     #expect(pages[0].first?.first?.text == "first")
@@ -1304,17 +1306,23 @@ private func hfDoc(_ n: Int = 120) -> [UInt8] {
     // spacing blank's `ws4Spacing` flag (see `ws4SpacingBlankIndices`) -- pagination
     // reads it to decide whether the blank alone may force a page break, never
     // whether it exists as a PageLine at all.
+    //
+    // That forgiveness is WS7's, measured on WS7 printing WS4 files, so a WS4 file is
+    // classified only when WS7 prints it (`printedBy: .ws7`); WS4 itself forgives no blank
+    // line (WS4 teardown 3.1).
     var body: [UInt8] = []
     for n in 0..<6 {
         body += ws4Text("Line number \(n) of the double spaced body text.") + SOFT + SOFT
     }
-    let pages = docToPagelines(parseWS(body), printed: true)
     func blankPageLine(_ ln: PageLine) -> Bool {
         !ln.spans.contains { $0.text.contains { !$0.isWhitespace } }
     }
-    let pat = pages[0].prefix(6).map { blankPageLine($0) ? "." : "T" }.joined()
-    #expect(pat == "T.T.T.", "double spacing collapsed: \(pat)")
-    let blanks = pages[0].filter(blankPageLine)
-    #expect(!blanks.isEmpty && blanks.allSatisfy { $0.ws4Spacing },
-            "spacing blanks not classified: ws4SpacingBlankIndices")
+    for (printedBy, classified) in [(PrintedBy.ws7, true), (PrintedBy.own, false)] {
+        let pages = docToPagelines(parseWS(body, printedBy: printedBy), printed: true)
+        let pat = pages[0].prefix(6).map { blankPageLine($0) ? "." : "T" }.joined()
+        #expect(pat == "T.T.T.", "double spacing collapsed: \(pat)")
+        let blanks = pages[0].filter(blankPageLine)
+        #expect(!blanks.isEmpty && blanks.allSatisfy { $0.ws4Spacing == classified },
+                "spacing blanks classified wrongly when printed by \(printedBy)")
+    }
 }

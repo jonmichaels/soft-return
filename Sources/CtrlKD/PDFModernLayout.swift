@@ -903,7 +903,7 @@ struct ModernSourceCursor {
 /// `ModernFlowSource`. Gated, because its per-token source-offset walk is real work
 /// (`ModernSourceCursor`) that an export has no use for.
 func modernFlow(_ doc: Document, keep: Set<NoteKind>,
-                noteRefs: NoteRefs = .word, pixResults: [PixResult] = [],
+                noteRefs: NoteRefs? = nil, pixResults: [PixResult] = [],
                 pictures: EmitOptions.PixMode = .off,
                 textWidthPt: Double = 0.0, sentenceSpacing: Bool = false,
                 semIndexOfItem: inout [Int]?,
@@ -2719,7 +2719,7 @@ public func hasModernGraphicContent(_ doc: Document) -> Bool {
     }
 }
 
-public func attachGraphicCellsModern(_ doc: Document, notes: Set<NoteKind>, noteRefs: NoteRefs,
+public func attachGraphicCellsModern(_ doc: Document, notes: Set<NoteKind>, noteRefs: NoteRefs?,
                                      semCached: SemanticFlow? = nil)
     -> [Int: [PageLine.GraphicCellPlacement]]
 {

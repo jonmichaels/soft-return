@@ -261,19 +261,20 @@ let targetFonts: [FontsTarget: [String: (primary: String, falt: String?)]] = [
         ("prestige", "Courier New", nil),
         ("univers", "Helvetica Neue", "Arial"),
         ("cg triumvirate|triumvirate|ps sansser qual", "Helvetica", "Arial"),
-        ("antique olive", "Optima", "Verdana"),
+        // Antique Olive, Albertus and Aachen (which WS7's LaserJet driver
+        // prints in its Albertus) take the shipping face whose widths are
+        // closest to the driver's: Verdana -2.5%, Optima +1% (Optima was -16%
+        // for Antique Olive, Rockwell +16% for Albertus).
+        ("antique olive", "Verdana", "Optima"),
         ("optima", "Optima", "Candara"),
         ("garamond", "Hoefler Text", "Garamond"),
         ("clarendon", "Rockwell", "Clarendon"),
-        ("aachen|rockwell", "Rockwell", "Courier New"),
+        ("aachen", "Optima", "Rockwell"),
+        ("rockwell", "Rockwell", "Courier New"),
         ("bodoni", "Bodoni 72", "Bodoni MT"),
         ("broadway", "Phosphate Solid", "Futura"),
         ("univ. roman", "Didot", "Georgia"),
-        // Herculanum: Apple's own bundled glyphic/incised display face
-        // (Frutiger, ships standard in macOS's decorative set alongside
-        // Papyrus) -- the closest Mac-native chiseled-serif match to
-        // Albertus's flared, non-serif/non-sans character.
-        ("albertus", "Herculanum", "Copperplate"),
+        ("albertus", "Optima", "Herculanum"),
     ]),
     .google: expandTargetFonts([
         ("avant garde", "Poppins", "Century Gothic"),
@@ -365,6 +366,19 @@ let targetFonts: [FontsTarget: [String: (primary: String, falt: String?)]] = [
 /// NOT routed through `resolveFont` (b24 round 21 item 5, the shared target-agnostic
 /// resolution) — its own first tier consults `targetFonts`, a per-TARGET curated table
 /// with no target-agnostic equivalent there; see `resolveFont`'s own doc comment.
+/// A bold run takes a face of its own where the family's own bold is far from the
+/// driver's widths: Hoefler Text Bold sets Garamond bold 7% wide, Cochin Bold 2% narrow.
+/// Python's `BOLD_FACES`.
+let boldFaces: [FontsTarget: [String: String]] = [
+    .mac: ["garamond": "Cochin"],
+]
+
+/// The face a BOLD run of `family` takes on `target` in place of the family's own
+/// primary, or nil when it keeps it. Python's `bold_face`.
+public func boldFace(_ family: String, target: FontsTarget = .office) -> String? {
+    boldFaces[target]?[family.lowercased()]
+}
+
 func rtfFonts(_ family: String, generic: GenericStyle? = nil,
               target: FontsTarget = .office, proportional: Bool? = nil) -> (primary: String?, falt: String?) {
     if proportional == false {

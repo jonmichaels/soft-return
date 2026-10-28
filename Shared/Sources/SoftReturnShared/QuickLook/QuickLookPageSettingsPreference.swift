@@ -1,3 +1,4 @@
+import CtrlKD
 import Foundation
 
 /// The app group the app shares with its Quick Look extensions. The Mac's is the team-prefixed group from batch 8
@@ -31,6 +32,7 @@ public enum QuickLookPageSettingsPreference {
     public static let groupIdentifier = AppGroup.identifier
     private static let key = "pageSettingsDefaultPreset"
     private static let quirksKey = "quirkDefaults"
+    private static let printedByKey = "printedBy"
 
     /// The app group's suite, or nil where the app has no group (not provisioned).
     public static var groupDefaults: UserDefaults? {
@@ -55,6 +57,19 @@ public enum QuickLookPageSettingsPreference {
                                  defaults: UserDefaults? = QuickLookPageSettingsPreference.groupDefaults) {
         guard let data = try? JSONEncoder().encode(quirks) else { return }
         defaults?.set(data, forKey: quirksKey)
+    }
+
+    /// Which WordStar prints a WS4 file (`SettingsStore.printedBy`), for the two extensions. Written by the app at
+    /// launch and whenever Settings changes it.
+    public static func setPrintedBy(_ printedBy: PrintedBy,
+                                    defaults: UserDefaults? = QuickLookPageSettingsPreference.groupDefaults) {
+        defaults?.set(printedBy.rawValue, forKey: printedByKey)
+    }
+
+    /// The app's choice of which WordStar prints a WS4 file, or WordStar 4 when nothing is stored or it is unknown.
+    public static func resolvedPrintedBy(defaults: UserDefaults? = QuickLookPageSettingsPreference.groupDefaults
+    ) -> PrintedBy {
+        defaults?.string(forKey: printedByKey).flatMap(PrintedBy.init(rawValue:)) ?? .own
     }
 
     /// The app's default quirks, or what shipped when nothing is stored or it cannot be read.
@@ -88,7 +103,14 @@ extension QuickLookPageSettingsPreference {
             forName: SettingsStore.quirkDefaultsDidChange, object: settings, queue: .main) { _ in
                 MainActor.assumeIsolated { setQuirkDefaults(SettingsStore.shared.quirkDefaults) }
             }
+        // and which WordStar prints a WS4 file, the same way
+        setPrintedBy(settings.printedBy)
+        printedByObserver = NotificationCenter.default.addObserver(
+            forName: SettingsStore.printedByDidChange, object: settings, queue: .main) { _ in
+                MainActor.assumeIsolated { setPrintedBy(SettingsStore.shared.printedBy) }
+            }
     }
 
     @MainActor private static var quirkObserver: (any NSObjectProtocol)?
+    @MainActor private static var printedByObserver: (any NSObjectProtocol)?
 }

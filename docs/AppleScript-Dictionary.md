@@ -43,7 +43,8 @@ export document 1 to file "Macintosh HD:Users:yourname:Out:INDIAN.rtf" ¬
   313B: `native` only changes PDF output — every other format is identical to printed)
 - notes switches: `with/without footnotes, endnotes, annotations, comments`
   (defaults mirror the app: notes on, comments off)
-- `note references`: word style / prefixed  (the CLI's `--note-refs`)
+- `note references`: word style / prefixed  (the CLI's `--note-refs`); omitted, Modern follows
+  the document's own `.f#`/`.e#` letter format
 - `page settings`: see below
 - `line numbers` (job 504): boolean, default on — the CLI's `--line-numbers`
 - `styles` (job 504): boolean, default on; off is the CLI's `--no-styles`

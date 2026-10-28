@@ -51,8 +51,6 @@ extension PagedDocumentView {
             CGRect(x: 0, y: 0, width: sheet.width, height: sheet.height + nominalTop).fill()
             drawRunningLines(rendered: rendered, pageIndex: currentPageIndex,
                              pageOrigin: CGPoint(x: 0, y: nominalTop))
-            drawPCLGraphics(rendered: rendered, pageIndex: currentPageIndex,
-                            pageOrigin: CGPoint(x: 0, y: nominalTop))
             drawFootnoteBlock(rendered: rendered, pageIndex: currentPageIndex,
                               pageOrigin: CGPoint(x: 0, y: nominalTop))
         case .continuousScroll:
@@ -78,8 +76,6 @@ extension PagedDocumentView {
                     let nominalTop = pageTops.indices.contains(index) ? pageTops[index] : rect.origin.y
                     drawRunningLines(rendered: rendered, pageIndex: index,
                                      pageOrigin: CGPoint(x: 0, y: nominalTop))
-                    drawPCLGraphics(rendered: rendered, pageIndex: index,
-                                    pageOrigin: CGPoint(x: 0, y: nominalTop))
                     drawFootnoteBlock(rendered: rendered, pageIndex: index,
                                       pageOrigin: CGPoint(x: 0, y: nominalTop))
                 }
@@ -113,8 +109,8 @@ extension PagedDocumentView {
             // comment). Body text takes its own per-line `.po` through `PageLine.left`, so
             // this is the only place the page-granularity value is needed.
             let point = NSPoint(
-                x: rendered.textFrame.origin.x + CGFloat(running.leadingOffset)
-                    + CGFloat(running.pageLeftOffset),
+                x: rendered.textFrame.origin.x + rendered.logicalShift(atPage: pageIndex)
+                    + CGFloat(running.leadingOffset) + CGFloat(running.pageLeftOffset),
                 y: pageOrigin.y + CGFloat(running.baselineFromTop) - CGFloat(running.drawOriginOffset)
             )
             running.text.draw(at: point)
@@ -151,89 +147,22 @@ extension PagedDocumentView {
         block.draw(with: rect, options: [.usesLineFragmentOrigin])
     }
 
-    /// Job 490 (item 1, LJ6DTP title-top): a `.pctl` attachment glyph carrying
-    /// `.nativePCLProgram` (`DocumentRenderer.pctlAdvanceAttachment`) — execute that
-    /// control's own raw PCL program (`NativePCLGraphics.swift`) anchored at its real,
-    /// laid-out position, ADDED to the PAPER canvas here rather than inside the owning
-    /// `PageTextView` (same reasoning as `drawOversizedSelfPasses`'s own doc comment just
-    /// below: LJ6DTP's page border draws OUTSIDE the text container's own margins, all the
-    /// way to the paper edge — a view whose own bounds/clip ARE the text container cannot
-    /// show ink past them).
+    /// Every PCL program's ink, absolute (LJ6DTP's page border) and relative (page 4's
+    /// checkerboard), drawn from `OversizedPassOverlayView.draw(_:)`, above every
+    /// `PageTextView`: a page's text view is opaque and spans from the left margin to the
+    /// paper's right edge, so anything drawn beneath it shows only in the margins. Each
+    /// `.pctl` attachment's program runs at its glyph (`pclRectsInIsolatedPass`); an absolute
+    /// move is measured from the page's logical page.
     ///
-    /// Coordinates: `layoutManager.enumerateLineFragments`'s own `rect`/`location(forGlyphAt:)`
-    /// are CONTAINER-local; `textTop(atPage:)`/`rendered.textFrame.origin.x` (the same pair
-    /// `drawRunningLines`/`frameForPage` already use to place a container within the page)
-    /// convert that into PAGE-local before `pclGraphicRects` ever sees it — an ABSOLUTE PCL
-    /// move addresses the PAPER's own top-left corner, not the container's, so executing the
-    /// program in container-local coordinates would land an absolute fill wherever the
-    /// container's own local origin happens to be instead (confirmed empirically: the
-    /// border's own top rule landed at container-local y=20.4, well inside the text area's
-    /// own top edge, not 20.4pt down from the real page top, before this fix).
-    ///
-    /// Job 495: routed through `pclRectsInIsolatedPass` (shared with
-    /// `drawOversizedSelfPasses`'s own self-pass call just below, `drawPCLGraphicsOverlay`,
-    /// and this file's test-harness mirror) rather than a hand-rolled walk — its own doc
-    /// comment has the mechanism. ABSOLUTE-only programs (the border) ONLY — a RELATIVE one
-    /// (page 4's checkerboard) draws from `drawPCLGraphicsOverlay` instead: THIS call site is
-    /// UNDER every `PageTextView` in z-order, invisible for the border (drawn in the page's
-    /// own margin, nothing else paints there) but genuinely covered for content sitting
-    /// inside the text flow, which is exactly `pclRectsInIsolatedPass`'s own doc comment's
-    /// diagnosis of job 490's real (not the originally-suspected anchor) cause.
-    private func drawPCLGraphics(rendered: RenderedDocument, pageIndex: Int, pageOrigin: CGPoint) {
-        guard !rendered.pclPrograms.isEmpty, pageViews.indices.contains(pageIndex) else { return }
-        let textView = pageViews[pageIndex]
-        guard let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer,
-              let textStorage = textView.textStorage
-        else { return }
-
-        let originX = rendered.textFrame.origin.x
-        let originY = textTop(atPage: pageIndex)
-        let containerWidth = textContainer.size.width
-        let glyphRange = layoutManager.glyphRange(for: textContainer)
-        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, effectiveGlyphRange, _ in
-            for fill in pclRectsInIsolatedPass(
-                manager: layoutManager, storage: textStorage, glyphRange: effectiveGlyphRange,
-                fragment: rect, offset: CGPoint(x: originX, y: originY), containerWidth: containerWidth,
-                pclPrograms: rendered.pclPrograms, includeRelative: false) {
-                fill.offsetBy(dx: pageOrigin.x, dy: pageOrigin.y).fill()
-            }
-        }
-    }
-
-    /// Job 495 (Class 7, LJ6DTP.WS page 4's checkerboard): a RELATIVE PCL program's own
-    /// counterpart to `drawPCLGraphics` above — same walk, same shared
-    /// `pclRectsInIsolatedPass`, but called from `OversizedPassOverlayView.draw(_:)` (see
-    /// that type's own citation, and `drawOversizedSelfPasses`'s doc comment just below for
-    /// why an overlay subview is the ONLY way to paint on top of every `PageTextView`) so a
-    /// relative program's own ink — usually sitting on an ordinary line squarely inside the
-    /// text flow, unlike the border's own margin position — is not silently covered by
-    /// whatever that line's real fragment paints at the same spot.
-    ///
-    /// Job 503 item 3: `includeAbsolute` now also `true` — `drawPCLGraphics`'s own doc
-    /// comment's premise ("drawn in the page's own margin, nothing else paints there") is
-    /// false for the RIGHT half of LJ6DTP's own border. `RenderedDocument.textFrame`'s own
-    /// width is `pageWidth - metrics.left` ONLY (`DocumentRenderer.swift`'s own citation on
-    /// that field) — i.e. the container's real frame runs from the LEFT margin all the way
-    /// to the PAPER's own right edge, never narrowed to the document's declared `.rm`. The
-    /// border's right edge sits well inside that span (measured: page 2, x≈293pt of a
-    /// 612pt-wide page, comfortably left of the container's own right edge at 612pt) — so
-    /// `PageTextView`'s own opaque background COVERS it for exactly the container's own
-    /// vertical extent (the page's real body height), leaving only the slivers above/below
-    /// the container (the top/bottom margins) visible — precisely the "visible near the top
-    /// and bottom, missing through the middle" symptom. The border's LEFT edge (x≈9pt) never
-    /// has this problem: it sits left of the container's own left edge (`metrics.left`)
-    /// regardless. Drawing the absolute case from this topmost overlay too (redundantly
-    /// covering `drawPCLGraphics`'s own now-partially-hidden draw underneath, harmless for an
-    /// opaque solid fill at the identical position) fixes the cover-up without touching
-    /// `textFrame`'s own width — a much larger, doc-comment-guarded change this fixture-scale
-    /// fix has no need to risk.
+    /// The border used to be drawn a second time beneath the text views as well. Where that
+    /// copy showed, in the top and bottom margins, the two antialiased edges stacked and the
+    /// rule came out darker than the rest of it (LJ6DTP pages 1–4, the right side's top).
     /// job-491 (C5): the page-canvas-only origin `drawPCLGraphicsOverlay` must add on top of
     /// `pclRectsInIsolatedPass`'s own `offset:` argument (which already carries this page's
     /// own margin into every fill it returns) — `viewOrigin` is `view.frame.origin`
     /// (`frameForPage`'s own doc comment: page position + margin, for both display modes),
-    /// so subtracting `marginOrigin` back out reproduces `drawPCLGraphics`'s own page-only
-    /// `pageOrigin` parameter convention (`(0, nominalTop)`/`(0, pageTops[index])`) exactly.
+    /// so subtracting `marginOrigin` back out gives the page-only `pageOrigin` convention
+    /// the running lines use (`(0, nominalTop)`/`(0, pageTops[index])`) exactly.
     /// Before this fix, `drawPCLGraphicsOverlay` used `viewOrigin` directly as its own
     /// "pageOrigin" — double-counting the margin `offset:` already applied, and landing
     /// LJ6DTP.WS page 4's checkerboard (the only relative-addressed content this function
@@ -250,7 +179,8 @@ extension PagedDocumentView {
             guard let layoutManager = view.layoutManager, let textContainer = view.textContainer,
                   let textStorage = view.textStorage
             else { continue }
-            let originX = rendered.textFrame.origin.x
+            // the engine's frame: `pageOrigin` below lands on the page's logical page
+            let originX = rendered.engineLeftAnchor
             let originY = textTop(atPage: pageIndex)
             let pageOrigin = Self.pclOverlayPageOrigin(
                 viewOrigin: view.frame.origin, marginOrigin: CGPoint(x: originX, y: originY))
@@ -360,7 +290,7 @@ extension PagedDocumentView {
             guard !passes.isEmpty, let textContainer = view.textContainer else { continue }
             let paperOrigin = Self.pclOverlayPageOrigin(
                 viewOrigin: view.frame.origin,
-                marginOrigin: CGPoint(x: rendered.textFrame.origin.x,
+                marginOrigin: CGPoint(x: rendered.engineLeftAnchor,
                                       y: textTop(atPage: pageIndex)))
             let width = textContainer.size.width
             for pass in passes {
@@ -374,6 +304,9 @@ extension PagedDocumentView {
                     x: paperOrigin.x + CGFloat(pass.xPt) - isolated.fragmentRect.origin.x,
                     y: paperOrigin.y + CGFloat(pass.baselineY) - isolatedBaseline)
                 isolated.manager.drawGlyphs(forGlyphRange: isolated.glyphRange, at: origin)
+                for fill in pass.bars.flatMap(\.fills) {
+                    fill.offsetBy(dx: paperOrigin.x, dy: paperOrigin.y).fill()
+                }
             }
         }
     }
@@ -381,6 +314,9 @@ extension PagedDocumentView {
     func drawOversizedSelfPasses(_ dirtyRect: NSRect) {
         guard let rendered, rendered.clipsLines, !rendered.oversizedSelfPasses.isEmpty else { return }
         for (pageIndex, view) in pageViews.enumerated() {
+            // An HP pattern tiles from the page's bottom-left corner (`GraphicRect.fill(patternAnchor:)`).
+            let sheet = rect(ofPage: pageIndex)
+            let patternAnchor = CGPoint(x: sheet.minX, y: sheet.maxY)
             guard !view.isHidden, rendered.oversizedSelfPasses.indices.contains(pageIndex) else { continue }
             guard capturingPageIndex == nil || capturingPageIndex == pageIndex else { continue }
             // Batch 40 (M10): only a page the dirty rect reaches, with a gap's room either side for a pass that
@@ -406,7 +342,7 @@ extension PagedDocumentView {
             // program overlay. Reusing that same fix's own utility here instead.
             let pageOnlyOrigin = Self.pclOverlayPageOrigin(
                 viewOrigin: pageOrigin,
-                marginOrigin: CGPoint(x: rendered.textFrame.origin.x, y: textTop(atPage: pageIndex)))
+                marginOrigin: CGPoint(x: rendered.engineLeftAnchor, y: textTop(atPage: pageIndex)))
             let width = textContainer.size.width
             let glyphRange = layoutManager.glyphRange(for: textContainer)
             guard glyphRange.length > 0 else { continue }
@@ -516,6 +452,7 @@ extension PagedDocumentView {
                         }
                     }
                 }
+                (isolated.manager as? ScriptRiseLayoutManager)?.drawsGraphicGlyphs = false
                 if wantsDarken, let context = NSGraphicsContext.current {
                     context.saveGraphicsState()
                     context.compositingOperation = .darken
@@ -538,23 +475,22 @@ extension PagedDocumentView {
                     NSColor.white.setFill()
                     cell.eraseFrame.offsetBy(dx: offset.x, dy: offset.y).fill()
                     for fill in cell.fills {
-                        fill.offsetBy(dx: offset.x, dy: offset.y).fill()
+                        fill.offsetBy(dx: offset.x, dy: offset.y).fill(patternAnchor: patternAnchor)
                     }
                 }
                 // Job 495: this self-pass's OWN PCL control (LJ6DTP's border on its 4
                 // oversized page-open lines) — see `pclRectsInIsolatedPass`'s own doc
-                // comment for why this line's REAL fragment (`drawPCLGraphics`'s own walk)
+                // comment for why this line's REAL fragment (`drawPCLGraphicsOverlay`'s walk)
                 // never sees it.
                 //
-                // Job 503 item 3: split absolute/relative, same as `drawPCLGraphics`/
-                // `drawPCLGraphicsOverlay` — a RELATIVE program's own anchor already folds
+                // Job 503 item 3: split absolute/relative, as `drawPCLGraphicsOverlay` does — a RELATIVE program's own anchor already folds
                 // `offset` in (`pclRectsInIsolatedPass`'s own `anchorX`/`anchorY` computation),
                 // so `fill.fill()` alone is correct for it; an ABSOLUTE program's rects
                 // (`pageOnlyOrigin`'s own doc comment above) need that page's own canvas
                 // position added instead — `offset` was never in that coordinate space for
                 // an absolute op, which is why the border was drawing far off any visible
                 // page here (pages 5-8, this fixture's own 4 oversized-line occurrences)
-                // even though the SAME program renders correctly from `drawPCLGraphics`'s
+                // even though the SAME program renders correctly from `drawPCLGraphicsOverlay`'s
                 // ordinary-line walk (pages 1-4).
                 for fill in pclRectsInIsolatedPass(
                     manager: isolated.manager, storage: isolated.storage,
@@ -590,13 +526,14 @@ extension PagedDocumentView {
                     let chainOffset = NSPoint(
                         x: fragmentOrigin.x - chainIsolated.fragmentRect.origin.x,
                         y: targetBaseline - chainBaseline)
+                    (chainIsolated.manager as? ScriptRiseLayoutManager)?.drawsGraphicGlyphs = false
                     chainIsolated.manager.drawGlyphs(forGlyphRange: chainIsolated.glyphRange, at: chainOffset)
                     for cell in graphicCells(manager: chainIsolated.manager, storage: chainIsolated.storage,
                                               glyphRange: chainIsolated.glyphRange, fragment: chainIsolated.fragmentRect) {
                         NSColor.white.setFill()
                         cell.eraseFrame.offsetBy(dx: chainOffset.x, dy: chainOffset.y).fill()
                         for fill in cell.fills {
-                            fill.offsetBy(dx: chainOffset.x, dy: chainOffset.y).fill()
+                            fill.offsetBy(dx: chainOffset.x, dy: chainOffset.y).fill(patternAnchor: patternAnchor)
                         }
                     }
                 }

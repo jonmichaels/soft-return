@@ -18,6 +18,9 @@ public struct ColumnPass {
     public let text: NSAttributedString
     public let xPt: Double
     public let baselineY: Double
+    /// A `.l#` row's two bars (`PDFMetrics.lineNoBarChars` at `lineNoBarXs`), as cells in the
+    /// engine's frame like `xPt`, drawn with the number. Empty for any other pass.
+    public var bars: [GraphicCell] = []
 }
 
 
@@ -445,6 +448,33 @@ public struct RenderedDocument {
     /// The font records the document's `.h#`/`.f#` lines open (`Document.headerFonts`/`footerFonts`), by line number.
     public var modernHeaderFonts: [Int: FontChange] = [:]
     public var modernFooterFonts: [Int: FontChange] = [:]
+
+    /// Native's page placement (the engine's `logicalPageX`): how far in from the sheet's left edge the engine's
+    /// x = 0 sits. Printed lays a page out in the LaserJet's own frame and places it 1/4" in on a Letter sheet, so
+    /// every engine x (`PageLine.left`, the running lines' `x`, a `.l#` number, a graphic cell, a PCL program's
+    /// absolute move) is measured from there. `documentLogicalPageX` is the document's own sheet's, and is already
+    /// inside `textFrame.origin.x`; `perPageLogicalX` holds each page's, which differs only on a page turned by its
+    /// own `.pr or=`. Zero, and empty, for every surface but Native.
+    public var documentLogicalPageX: Double = 0
+    public var perPageLogicalX: [Double] = []
+
+    /// Page `index`'s placement: its own, or the document's.
+    public func logicalPageX(atPage index: Int) -> CGFloat {
+        CGFloat(perPageLogicalX.indices.contains(index) ? perPageLogicalX[index] : documentLogicalPageX)
+    }
+
+    /// How much further right page `index`'s text sits than `textFrame` says: nonzero only on a page whose own
+    /// orientation gives it a different placement from the document's.
+    public func logicalShift(atPage index: Int) -> CGFloat {
+        logicalPageX(atPage: index) - CGFloat(documentLogicalPageX)
+    }
+
+    /// The engine x a page view's own x = 0 stands for — `textFrame.origin.x` back in the engine's frame. Anything
+    /// the engine places by an absolute x is drawn at that x less this, inside the view; or, measured from a
+    /// page's paper corner, at the page's `logicalPageX(atPage:)` plus that x.
+    public var engineLeftAnchor: CGFloat {
+        textFrame.origin.x - CGFloat(documentLogicalPageX)
+    }
 
     /// Page `index`'s sheet: its own, or the document's.
     public func pageSize(atPage index: Int) -> CGSize {

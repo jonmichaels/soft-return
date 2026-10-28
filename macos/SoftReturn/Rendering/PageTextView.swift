@@ -77,8 +77,8 @@ final class PageTextView: NSTextView {
     var overprintPasses: [[NSAttributedString]] = []
     /// Planning #251(c): this page's `RenderedDocument.graphicCellRows[pageIndex]` — one
     /// entry per line fragment, the engine's own x and width for each graphic cell that
-    /// fragment draws. `leftAnchor` is the paper x this view's own local x = 0 sits at
-    /// (`RenderedDocument.textFrame.origin.x`), which is what converts one to the other.
+    /// fragment draws. `leftAnchor` is the engine x this view's own local x = 0 stands for
+    /// (`RenderedDocument.engineLeftAnchor`), which is what converts one to the other.
     var graphicCellRows: [[PageLine.GraphicCellPlacement]] = []
     var graphicLeftAnchor: Double = 0
     /// `RenderedDocument.baselineOffset` — see `drawOverprintPasses`'s job 246 doc comment
@@ -96,6 +96,8 @@ final class PageTextView: NSTextView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        // Native draws its graphic characters as vector cells, never as glyphs.
+        (layoutManager as? ScriptRiseLayoutManager)?.drawsGraphicGlyphs = !isPrintedStyle
         super.draw(dirtyRect)
         drawVectorGraphics(dirtyRect)
         drawOverprintPasses(dirtyRect)
@@ -110,27 +112,41 @@ final class PageTextView: NSTextView {
     /// running head does, since `makePrintOperation` prints this view's own draw path
     /// (unlike Printed-style PDF export, which goes straight through `emitPDF` and never
     /// touches this view at all — that path already draws real vector ops perfectly).
+    /// This page's bottom-left corner in this view's coordinates, where an HP pattern's tiles
+    /// start (`GraphicRect.fill(patternAnchor:)`), or nil outside a paged view.
+    private var pagePatternAnchor: CGPoint? {
+        var ancestor = superview
+        while ancestor != nil, !(ancestor is PagedDocumentView) { ancestor = ancestor?.superview }
+        guard let owner = ancestor as? PagedDocumentView,
+              let index = owner.pageViews.firstIndex(where: { $0 === self }) else { return nil }
+        let sheet = owner.rect(ofPage: index)
+        return convert(CGPoint(x: sheet.minX, y: sheet.maxY), from: owner)
+    }
+
     private func drawVectorGraphics(_ dirtyRect: NSRect) {
         guard isPrintedStyle else { return }
         guard let layoutManager, let textContainer, let textStorage else { return }
 
         let glyphRange = layoutManager.glyphRange(for: textContainer)
         var fragmentIndex = -1
+        var cells: [GraphicCell] = []
         layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, effectiveGlyphRange, _ in
             fragmentIndex += 1
             guard rect.intersects(dirtyRect) else { return }
             let placements = self.graphicCellRows.indices.contains(fragmentIndex)
                 ? self.graphicCellRows[fragmentIndex] : []
-            for cell in graphicCells(manager: layoutManager, storage: textStorage,
-                                      glyphRange: effectiveGlyphRange, fragment: rect,
-                                      placements: placements,
-                                      leftAnchor: self.graphicLeftAnchor) {
-                NSColor.white.setFill()
-                cell.eraseFrame.fill()
-                for fill in cell.fills {
-                    fill.fill()
-                }
-            }
+            cells += graphicCells(manager: layoutManager, storage: textStorage,
+                                  glyphRange: effectiveGlyphRange, fragment: rect,
+                                  placements: placements, leftAnchor: self.graphicLeftAnchor)
+        }
+        // Every cell's glyph is erased before any cell is filled: a rounded corner's arc
+        // spills into the row below, as it does on paper, and that row's erase would
+        // otherwise cut it to scraps (LJ6DTP page 3).
+        NSColor.white.setFill()
+        for cell in cells { cell.eraseFrame.fill() }
+        let patternAnchor = pagePatternAnchor
+        for cell in cells {
+            for fill in cell.fills { fill.fill(patternAnchor: patternAnchor) }
         }
     }
 
@@ -215,13 +231,14 @@ final class PageTextView: NSTextView {
                 let offset = NSPoint(
                     x: fragmentRect.origin.x - isolated.fragmentRect.origin.x,
                     y: baseBaseline - passBaseline)
+                (isolated.manager as? ScriptRiseLayoutManager)?.drawsGraphicGlyphs = false
                 isolated.manager.drawGlyphs(forGlyphRange: isolated.glyphRange, at: offset)
                 for cell in graphicCells(manager: isolated.manager, storage: isolated.storage,
                                           glyphRange: isolated.glyphRange, fragment: isolated.fragmentRect) {
                     NSColor.white.setFill()
                     cell.eraseFrame.offsetBy(dx: offset.x, dy: offset.y).fill()
                     for fill in cell.fills {
-                        fill.offsetBy(dx: offset.x, dy: offset.y).fill()
+                        fill.offsetBy(dx: offset.x, dy: offset.y).fill(patternAnchor: self.pagePatternAnchor)
                     }
                 }
             }

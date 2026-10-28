@@ -114,7 +114,8 @@ public func emitText(_ doc: Document, mode: EmitMode = .modern,
     // the MailMerge page-number variable is removed here, never shown as typed.
     let doc = mergePagenoDropped(driverSubstituted(doc))
     let printed = mode == .printed || isPrinted(doc)
-    let ctx = RenderContext(doc, printed: printed, sentenceSpacing: options.sentenceSpacing)
+    let ctx = RenderContext(doc, printed: printed, sentenceSpacing: options.sentenceSpacing,
+                            noteRefs: options.noteRefs)
     let refNotes = ctx.refNotes
     var options = options
     if printed {

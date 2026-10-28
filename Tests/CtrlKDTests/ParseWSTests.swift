@@ -408,7 +408,8 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     data += bytes(".rr\rL----!---------------------------!------------------------------R") + HARD
     data += HARD
     data += bytes("Line after the rulers.") + HARD
-    let doc = parseWS(data)
+    // the bare `.rr` form is WS7's: a WS4 file has none (WS4 report P17, P19B)
+    let doc = parseWS(data, variant: .ws5plus)
     let paras = doc.blocks.filter { $0.kind == .para }
     #expect(paras.count == 2)
     #expect(paras[0].lines.map { $0.spans.map(\.text).joined() } == [

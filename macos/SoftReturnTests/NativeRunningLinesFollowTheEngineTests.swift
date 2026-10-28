@@ -49,7 +49,9 @@ struct NativeRunningLinesFollowTheEngineTests {
                                  docPath: url.path)
     }
 
-    /// The engine's own placements, per page: its resolved heads, feet and automatic page number.
+    /// The engine's own placements, per page: its resolved heads, feet and automatic page number. Its x is in the
+    /// printer's frame; the Native view draws on the paper, so each is moved to where the page's logical page puts it
+    /// (1/4 in in on Letter).
     static func enginePlacements(_ state: DocumentState) -> [[Placement]] {
         let options = DocumentRenderer.nativeEngineOptions(state)
         let doc = printedDocument(state.document, options: options)
@@ -57,14 +59,18 @@ struct NativeRunningLinesFollowTheEngineTests {
         var result: [[Placement]] = []
         for page in pages {
             // Each page flips against its own sheet (engine 07b040c, M31).
-            let pageHeight = Double(printedMetrics(state.document, page: page, options: options).pageHeight)
+            let sheet = printedMetrics(state.document, page: page, options: options)
+            let pageHeight = Double(sheet.pageHeight)
+            let logicalX = logicalPageX(doc, orientation: printedPageOrientation(doc, page),
+                                        sheetWidth: Int(sheet.pageWidth.rounded()))
             var lines: [Placement] = []
             let resolved: [HeadFootLine] = (page.headerLines ?? []) + (page.footerLines ?? [])
             for line in resolved {
-                lines.append(Placement(text: line.text, x: line.x, baselineFromTop: pageHeight - line.y))
+                lines.append(Placement(text: line.text, x: logicalX + line.x, baselineFromTop: pageHeight - line.y))
             }
             if let number = page.autoPageno {
-                lines.append(Placement(text: number.text, x: number.x, baselineFromTop: pageHeight - number.y))
+                lines.append(Placement(text: number.text, x: logicalX + number.x,
+                                       baselineFromTop: pageHeight - number.y))
             }
             result.append(lines)
         }
@@ -74,9 +80,10 @@ struct NativeRunningLinesFollowTheEngineTests {
     /// The Native view's placements, per page, as `PagedDocumentView.drawRunningLines` puts them — the left edge before
     /// any proportional leading-whitespace skip (`leadingOffset`), which is where the engine's own x is measured.
     static func appPlacements(_ rendered: RenderedDocument) -> [[Placement]] {
-        let left = Double(rendered.textFrame.origin.x)
         var result: [[Placement]] = []
-        for page in rendered.runningLines {
+        for (index, page) in rendered.runningLines.enumerated() {
+            // this page's text frame on the paper: a page turned by its own `.pr or=` sits on its own logical page
+            let left = Double(rendered.textFrame.origin.x + rendered.logicalShift(atPage: index))
             var lines: [Placement] = []
             for line in page {
                 lines.append(Placement(text: line.text.string, x: left + line.pageLeftOffset,
@@ -129,8 +136,12 @@ struct NativeRunningLinesFollowTheEngineTests {
         print("NATIVE-HEADS BOOKLET.WS page 1: engine \(enginePageOne); app \(appPageOne)")
         let even = try #require(appPageOne.first { $0.trimmed == "Header Even 1" }, "no \"Header Even 1\" on page 1")
         let odd = try #require(appPageOne.first { $0.trimmed == "Header Odd 1" }, "no \"Header Odd 1\" on page 1")
-        #expect(abs(even.x - 14.4) <= 0.5, "Header Even 1 starts at \(even.x) pt; real WS7 at 0.20 in")
-        #expect(abs(odd.x - 662.9) <= 0.5, "Header Odd 1 starts at \(odd.x) pt; real WS7 at 9.21 in")
+        // WS7 measures from the logical page, which sits 14.4 pt in on a Letter landscape sheet.
+        let logicalX = Double(rendered.logicalPageX(atPage: 0))
+        #expect(abs(even.x - (logicalX + 14.4)) <= 0.5,
+                "Header Even 1 starts at \(even.x) pt; real WS7 at 0.20 in from the logical page (\(logicalX) pt)")
+        #expect(abs(odd.x - (logicalX + 662.9)) <= 0.5,
+                "Header Odd 1 starts at \(odd.x) pt; real WS7 at 9.21 in from the logical page (\(logicalX) pt)")
         #expect(abs(even.baselineFromTop - odd.baselineFromTop) <= 0.01, "the two heads are not on one row: \(even), \(odd)")
         #expect(abs(odd.baselineFromTop - 41.0) <= 0.5, "the head row sits \(odd.baselineFromTop) pt down; the engine's 612 − 571")
         let result = Self.compare(engine, app)

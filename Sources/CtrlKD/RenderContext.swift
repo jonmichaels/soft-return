@@ -37,11 +37,17 @@ struct RenderContext {
     /// doctrine.
     let nonpropFallback: Bool
 
+    /// The caller's `--note-refs` scheme, nil when none was given (Modern labels then follow
+    /// the document's `.f#`/`.e#`).
+    let noteRefs: NoteRefs?
+
     let doc: Document
 
     init(_ doc: Document, printed: Bool,
-         sentenceSpacing mode: EmitOptions.SentenceSpacingMode = .auto) {
+         sentenceSpacing mode: EmitOptions.SentenceSpacingMode = .auto,
+         noteRefs: NoteRefs? = nil) {
         self.doc = doc
+        self.noteRefs = noteRefs
         self.printed = printed
         refNotes = inlineReferenceNotes(doc)
         margin = docMargin(doc)
@@ -56,8 +62,8 @@ struct RenderContext {
     /// when printed and `.pageless` otherwise.
     func noteLabels(_ scheme: NoteLabelScheme) -> [String] {
         switch scheme {
-        case .annotated: return annotatedNoteLabels(doc)
-        case .pageless: return pagelessNoteLabels(doc)
+        case .annotated: return annotatedNoteLabels(doc, printed: printed, noteRefs: noteRefs)
+        case .pageless: return pagelessNoteLabels(doc, printed: printed, noteRefs: noteRefs)
         }
     }
 }

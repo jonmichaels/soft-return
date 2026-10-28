@@ -167,7 +167,8 @@ enum EngineTruth {
         /// when this page has one (the SAME `pageTop` local below), `left` is the document's
         /// own `.po`-derived left margin (`metrics.left` — no per-page override mechanism
         /// exists for the left margin in this engine, confirmed by `CtrlKD.Page` carrying
-        /// `mtLines`/`mbLines` only, no `poChars`/left-margin equivalent).
+        /// `mtLines`/`mbLines` only, no `poChars`/left-margin equivalent) plus this page's
+        /// logical page (1/4" in on Letter), so it reads on the paper like `StructuralLine.x`.
         var top: Double = 0
         var left: Double = 0
     }
@@ -294,6 +295,13 @@ enum EngineTruth {
         var nums: [Double] = []
         var gray = 0.0
         var grayStack: [Double] = []
+        // THE PAGE'S PLACEMENT ON THE SHEET. A Printed page's content is wrapped in
+        // `q 1 0 0 1 X 0 cm … Q` (X = the LaserJet's logical page, 1/4" in on Letter), and every
+        // operand inside stays in the printer's own frame. `tx` is the running pure-translation
+        // x, saved by `q` and restored by `Q`, so each `Td`/`re`/path x read below is on the
+        // PAPER — the frame the app draws in. Any other `cm` (an image's scale) is not applied.
+        var tx = 0.0
+        var txStack: [Double] = []
         var curSize = 0.0
         var pendingTd: (x: Double, y: Double)?
         var pendingStr: [UInt8]?
@@ -314,15 +322,23 @@ enum EngineTruth {
                     nums.removeAll()
                 case "q":
                     grayStack.append(gray)
+                    txStack.append(tx)
                     nums.removeAll()
                 case "Q":
                     gray = grayStack.popLast() ?? gray
+                    tx = txStack.popLast() ?? tx
+                    nums.removeAll()
+                case "cm":
+                    if nums.count >= 6 {
+                        let m = Array(nums.suffix(6))
+                        if m[0] == 1, m[1] == 0, m[2] == 0, m[3] == 1 { tx += m[4] }
+                    }
                     nums.removeAll()
                 case "Tf":
                     if let v = nums.last { curSize = v }
                     nums.removeAll()
                 case "Td":
-                    if nums.count >= 2 { pendingTd = (nums[nums.count - 2], nums[nums.count - 1]) }
+                    if nums.count >= 2 { pendingTd = (tx + nums[nums.count - 2], nums[nums.count - 1]) }
                     nums.removeAll()
                 case "Tj":
                     if let td = pendingTd, let bytes = pendingStr {
@@ -336,24 +352,24 @@ enum EngineTruth {
                 case "re":
                     if nums.count >= 4 {
                         let c = Array(nums.suffix(4))
-                        pendingRect = (c[0], c[1], c[2], c[3])
+                        pendingRect = (tx + c[0], c[1], c[2], c[3])
                     }
                     nums.removeAll()
                 case "m":
                     if nums.count >= 2 {
-                        pathPoints = [(nums[nums.count - 2], nums[nums.count - 1])]
+                        pathPoints = [(tx + nums[nums.count - 2], nums[nums.count - 1])]
                         pathOpen = true
                         pathHasCurve = false
                     }
                     nums.removeAll()
                 case "l":
                     if pathOpen, nums.count >= 2 {
-                        pathPoints.append((nums[nums.count - 2], nums[nums.count - 1]))
+                        pathPoints.append((tx + nums[nums.count - 2], nums[nums.count - 1]))
                     }
                     nums.removeAll()
                 case "c":
                     if pathOpen, nums.count >= 6 {
-                        pathPoints.append((nums[nums.count - 2], nums[nums.count - 1]))
+                        pathPoints.append((tx + nums[nums.count - 2], nums[nums.count - 1]))
                         pathHasCurve = true
                     }
                     nums.removeAll()
@@ -651,7 +667,11 @@ enum EngineTruth {
                 pageTop = metrics.top
             }
             page.top = pageTop
+            // On the PAPER, like every other x here: the document's `.po`-derived margin
+            // (printer frame) plus where THIS page's logical page sits on its own sheet.
+            let sheetWidth = Int(printedMetrics(doc, page: pageLines).pageWidth.rounded())
             page.left = metrics.left
+                + logicalPageX(doc, orientation: printedPageOrientation(doc, pageLines), sheetWidth: sheetWidth)
 
             // Group the remaining (body) ops by contiguous identical Y — one group per
             // drawing line, in stream order (`PDFWriter.swift:600-604`'s own per-line loop
@@ -700,8 +720,11 @@ enum EngineTruth {
             // graphics-only — see `Page`'s own doc comment) and is simply absent from
             // `page.body`, which is how a graphics-heavy fixture (`BOX.WS`, `LJ6DTP.WS`) stays
             // comparable for its TEXT lines.
+            // WS4's HPLJET puts line 1 its vbias below the top margin and steps each later
+            // line by the lead of the line ABOVE it (`pageStream`'s `prevLead`).
+            let hpljet = printingEra(doc).hpljetDriver
             let firstLead = pageLines.first?.lead ?? metrics.lead
-            var y = pageHeight - pageTop - firstLead
+            var y = pageHeight - pageTop - (hpljet ? PDFMetrics.hpljetVbiasPt : firstLead)
             var prevOverprint = false
             var groupIdx = 0
             // Job 426: the raw index an `.overprint` chain's content gets KEYED AT — the
@@ -715,7 +738,7 @@ enum EngineTruth {
             var chainStart = 0
             for (n, line) in pageLines.enumerated() {
                 if n > 0, !prevOverprint {
-                    y -= line.lead ?? metrics.lead
+                    y -= (hpljet ? pageLines[n - 1] : line).lead ?? metrics.lead
                     chainStart = n
                 }
                 prevOverprint = line.overprint
@@ -757,7 +780,7 @@ enum EngineTruth {
                     // `.kr off` and once under `.kr on` — so a truth built at the default
                     // `kerning: true` charges the app for the app being right about the
                     // half of that page where kerning is off.
-                    return nativeLJ6DTPSubstitute(span.text, entry: entry, kerning: line.kerning)
+                    return nativeLJ6DTPSubstitute(span.text, entry: entry, kerning: nativeQuoteKerning(line))
                 }.joined()
 
                 // Job 405 (task #62, Class 3/5 closure): a PageLine whose own text is
@@ -900,7 +923,9 @@ extension Oracle {
                         // rule, so neither side records a position for such a line.
                         let isGraphic = Unicode.Scalar(scalarValue)
                             .map { AppOutput.charactersTheEngineStrokesRatherThanSets.contains(Character($0)) } ?? false
-                        if let scalar = Unicode.Scalar(scalarValue), !CharacterSet.whitespaces.contains(scalar), !isGraphic {
+                        // U+FFFC is a print control's or an empty tab's invisible spacer, no ink.
+                        if let scalar = Unicode.Scalar(scalarValue), !CharacterSet.whitespaces.contains(scalar),
+                           !isGraphic, scalar != "\u{FFFC}" {
                             let loc = page.manager.location(forGlyphAt: g)
                             contentX = textFrame.origin.x + fragment.origin.x + loc.x
                             break
@@ -1005,7 +1030,12 @@ enum AppOutput {
         var index = 0
         while index < source.length {
             let scalar = Unicode.Scalar(string.character(at: index))
-            if let scalar, !CharacterSet.whitespaces.contains(scalar) {
+            // The body reader's rule: a graphic character is the engine's vector fill, never
+            // its text, and U+FFFC is an invisible spacer — neither is a pass's own ink.
+            let isGraphic = scalar.map {
+                AppOutput.charactersTheEngineStrokesRatherThanSets.contains(Character($0))
+            } ?? false
+            if let scalar, !CharacterSet.whitespaces.contains(scalar), !isGraphic, scalar != "\u{FFFC}" {
                 let attrs = source.attributes(at: index, effectiveRange: nil)
                 let size = Double((attrs[.font] as? NSFont)?.pointSize ?? 0)
                 let color = (attrs[.foregroundColor] as? NSColor)?.usingColorSpace(.deviceGray)
@@ -1125,7 +1155,7 @@ enum AppOutput {
     @MainActor
     private static func passVectors(
         _ pass: NSAttributedString, containerWidth: CGFloat, fragmentOrigin: CGPoint, baselineOffset: CGFloat,
-        pclPrograms: [[UInt8]] = []
+        pclPrograms: [[UInt8]] = [], absoluteFillShiftX: CGFloat = 0
     ) -> [EngineTruth.GraphicBox] {
         guard let isolated = isolatedLineLayout(pass, width: containerWidth) else { return [] }
         let targetBaseline = fragmentOrigin.y + baselineOffset
@@ -1146,10 +1176,21 @@ enum AppOutput {
         // Job 495: this pass's OWN PCL control (LJ6DTP's border on its 4 oversized page-open
         // lines) — mirrors `PagedDocumentView.drawOversizedSelfPasses`'s own identical
         // replay; see `pclRectsInIsolatedPass`'s own doc comment for the mechanism.
-        for fill in pclRectsInIsolatedPass(
+        //
+        // Split absolute/relative as `drawOversizedSelfPasses` is: an absolute move's rects
+        // are measured from the page's logical page, not from the container, so the caller
+        // (which adds the container's paper x to every box) passes the difference as
+        // `absoluteFillShiftX` — `logicalPageX(atPage:)` less that container x.
+        var pclFills: [GraphicRect] = pclRectsInIsolatedPass(
             manager: isolated.manager, storage: isolated.storage, glyphRange: isolated.glyphRange,
             fragment: isolated.fragmentRect, offset: offset, containerWidth: containerWidth,
-            pclPrograms: pclPrograms) {
+            pclPrograms: pclPrograms, includeAbsolute: false)
+        pclFills += pclRectsInIsolatedPass(
+            manager: isolated.manager, storage: isolated.storage, glyphRange: isolated.glyphRange,
+            fragment: isolated.fragmentRect, offset: offset, containerWidth: containerWidth,
+            pclPrograms: pclPrograms, includeRelative: false)
+            .map { $0.offsetBy(dx: absoluteFillShiftX, dy: 0) }
+        for fill in pclFills {
             let r = fill.frame
             boxes.append(EngineTruth.GraphicBox(x: Double(r.origin.x), top: Double(r.origin.y),
                                                 width: Double(r.width), height: Double(r.height),
@@ -1231,7 +1272,8 @@ enum AppOutput {
                         // header at its indent rather than at its text. Measured with the
                         // line's own attributes, the same way `styledLine` measures the runs
                         // it skips.
-                        x: Double(rendered.textFrame.origin.x) + $0.leadingOffset + $0.pageLeftOffset
+                        x: Double(rendered.textFrame.origin.x + rendered.logicalShift(atPage: pageIndex))
+                            + $0.leadingOffset + $0.pageLeftOffset
                             + Self.leadingSpaceWidth(of: $0.text),
                         yFromTop: $0.baselineFromTop,
                         kind: $0.kind == .header ? .header : .footer,
@@ -1256,8 +1298,14 @@ enum AppOutput {
             // document's global pair (SCRIPT.WS's figure-listing pages) compares against the
             // wrong baseline here, in the TEST HARNESS only — not a production defect; see
             // `AppOutput.remapToRawIndices`'s own call site below.
+            //
+            // Its x is this page's container on the PAPER: the document's text frame plus how
+            // much further right this page's own logical page sits (`logicalShift`, nonzero
+            // only on a page turned by its own `.pr or=`) — `PagedDocumentView.frameForPage`'s
+            // own x — so the engine's PDF, whose `cm` puts every page on its logical page,
+            // reads in the same frame.
             let pageTextFrame = CGRect(
-                x: rendered.textFrame.origin.x,
+                x: rendered.textFrame.origin.x + rendered.logicalShift(atPage: pageIndex),
                 y: rendered.perPageTextTop.indices.contains(pageIndex)
                     ? CGFloat(rendered.perPageTextTop[pageIndex]) : rendered.textFrame.origin.y,
                 width: rendered.textFrame.width, height: rendered.textFrame.height)
@@ -1308,7 +1356,9 @@ enum AppOutput {
                         for box in Self.passVectors(pass, containerWidth: containerWidth,
                                                      fragmentOrigin: fragment.origin,
                                                      baselineOffset: rendered.baselineOffset,
-                                                     pclPrograms: rendered.pclPrograms) {
+                                                     pclPrograms: rendered.pclPrograms,
+                                                     absoluteFillShiftX: rendered.logicalPageX(atPage: pageIndex)
+                                                         - pageTextFrame.origin.x) {
                             vectors.append(EngineTruth.GraphicBox(
                                 x: Double(pageTextFrame.origin.x) + box.x,
                                 top: Double(pageTextFrame.origin.y) + box.top,
@@ -1322,7 +1372,7 @@ enum AppOutput {
             }
             // Job 495 (Class 7 residual, re-diagnosed): LJ6DTP's page-border PCL execution
             // (`NativePCLGraphics.swift`, job 490) draws OUTSIDE any `PageTextView`'s own
-            // glyph walk — `PagedDocumentView.drawPCLGraphics` is called at the PAGE level,
+            // glyph walk — `PagedDocumentView.drawPCLGraphicsOverlay` is called at the PAGE level,
             // alongside `drawRunningLines`, precisely because the border bleeds past the
             // text container's own margins (that function's own doc comment). The vector
             // walk just above only ever visits `laidOutPage.manager`'s OWN glyph fragments
@@ -1334,11 +1384,11 @@ enum AppOutput {
             // LJ6DTP.WS page carrying an absolute-only PCL program — mistaking a harness
             // blind spot for an app rendering gap (job 494's own Class 7 table: pages 1, 2,
             // 5, 6, 7, 8 each divergent by exactly +4, engine over app). Mirrors
-            // `PageTextView.drawPCLGraphics`'s own walk exactly — same attribute key, same
+            // `drawPCLGraphicsOverlay`'s own walk exactly — same attribute key, same
             // anchor arithmetic (`pageTextFrame.origin` here plays `textTop(atPage:)`'s own
             // role) — so this measures what PRODUCTION actually draws. Defaults
             // `includeAbsolute`/`includeRelative` both true: unlike production (split across
-            // `drawPCLGraphics`/`drawPCLGraphicsOverlay` purely for their own z-order reasons,
+            // `drawPCLGraphicsOverlay` purely for their own z-order reasons,
             // `pclRectsInIsolatedPass`'s own doc comment), this harness has no view hierarchy
             // to layer — it counts everything the app really paints, from either call site, in
             // one pass. Page 4's checkerboard (relative-addressed) counts here too now that
@@ -1346,11 +1396,22 @@ enum AppOutput {
             if !rendered.pclPrograms.isEmpty, let storage = laidOutPage.textView.textStorage,
                laidOutPage.glyphs.length > 0 {
                 let glyphRange = laidOutPage.glyphs
+                // Split absolute/relative as production is (`drawPCLGraphicsOverlay`): a relative program's anchor already folds the
+                // container's paper origin in (`pageTextFrame.origin`), while an absolute
+                // move is measured from the page's logical page, not its corner, so it is
+                // moved there by `logicalPageX(atPage:)`.
+                let logicalX = rendered.logicalPageX(atPage: pageIndex)
                 laidOutPage.manager.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, effectiveGlyphRange, _ in
-                    for fill in pclRectsInIsolatedPass(
+                    var fills: [GraphicRect] = pclRectsInIsolatedPass(
                         manager: laidOutPage.manager, storage: storage, glyphRange: effectiveGlyphRange,
                         fragment: rect, offset: pageTextFrame.origin, containerWidth: containerWidth,
-                        pclPrograms: rendered.pclPrograms) {
+                        pclPrograms: rendered.pclPrograms, includeAbsolute: false)
+                    fills += pclRectsInIsolatedPass(
+                        manager: laidOutPage.manager, storage: storage, glyphRange: effectiveGlyphRange,
+                        fragment: rect, offset: pageTextFrame.origin, containerWidth: containerWidth,
+                        pclPrograms: rendered.pclPrograms, includeRelative: false)
+                        .map { $0.offsetBy(dx: logicalX, dy: 0) }
+                    for fill in fills {
                         let r = fill.frame
                         vectors.append(EngineTruth.GraphicBox(
                             x: Double(r.origin.x), top: Double(r.origin.y),
@@ -1470,10 +1531,16 @@ enum AppOutput {
                 // real characters or, since the pctl-span fix above, nothing), so comparing it
                 // literally would fail every pctl-suppressed/PIX line on the U+FFFC alone, with
                 // no text-content divergence actually behind it.
-                let eText = e.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .replacingOccurrences(of: "\u{FFFC}", with: "")
-                let aText = a.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .replacingOccurrences(of: "\u{FFFC}", with: "")
+                // A dot leader's length in dots is a drawing detail: the engine's text holds the
+                // document's own dots, and a view repeats the leader glyph to fill the gap (as
+                // the engine's PDF does), so a run of three or more is compared as one leader.
+                func leadersFolded(_ text: String) -> String {
+                    text.replacingOccurrences(of: "\\.{3,}", with: "…", options: .regularExpression)
+                }
+                let eText = leadersFolded(e.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "\u{FFFC}", with: ""))
+                let aText = leadersFolded(a.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "\u{FFFC}", with: ""))
                 if eText != aText {
                     // Job 403: UNTRUNCATED — a 40-char preview here previously hid the ACTUAL
                     // difference on two LJ6DTP.WS lines entirely (Class 3's own comment,

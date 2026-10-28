@@ -27,7 +27,7 @@ extension DocumentRenderer {
         font: NSFont, paragraph: NSParagraphStyle, fonts: [FontChange], defaultSize: Int,
         colourMap: [Int: Double], disableKerning: Bool, useCourierPrime: Bool = false,
         pixResults: [PixResult] = [], pixMeasureWidthPt: Double = 0,
-        nativeSupSub: Bool = false, nativeRoll: Double? = nil, nativePMActive: Bool? = nil,
+        nativeSupSub: Bool = false, nativeFullScripts: Bool = false, nativeRoll: Double? = nil, nativePMActive: Bool? = nil,
         nativeKerning: Bool = true, modernPitchScale: Bool = false,
         modernPrintedPt: Int? = nil, modernFontlessFamily: CtrlKD.PDFFamily = .times
     ) {
@@ -201,14 +201,14 @@ extension DocumentRenderer {
             Self.appendProportionalRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                nativeSupSub: nativeSupSub, nativeRoll: nativeRoll, nativeKerning: nativeKerning,
+                nativeSupSub: nativeSupSub, nativeFullScripts: nativeFullScripts, nativeRoll: nativeRoll, nativeKerning: nativeKerning,
                 modernPitchScale: modernPitchScale, modernPrintedPt: modernPrintedPt,
                 modernFontlessFamily: modernFontlessFamily, to: line)
         } else {
             line.append(Self.attributedRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                nativeSupSub: nativeSupSub, nativeRoll: nativeRoll, nativeKerning: nativeKerning,
+                nativeSupSub: nativeSupSub, nativeFullScripts: nativeFullScripts, nativeRoll: nativeRoll, nativeKerning: nativeKerning,
                 modernPitchScale: modernPitchScale, modernPrintedPt: modernPrintedPt,
                 modernFontlessFamily: modernFontlessFamily))
         }
@@ -252,7 +252,7 @@ extension DocumentRenderer {
     static func appendProportionalRun(
         _ span: Span, font: NSFont, paragraph: NSParagraphStyle,
         fonts: [FontChange], defaultSize: Int, colourMap: [Int: Double],
-        disableKerning: Bool, useCourierPrime: Bool, nativeSupSub: Bool = false,
+        disableKerning: Bool, useCourierPrime: Bool, nativeSupSub: Bool = false, nativeFullScripts: Bool = false,
         nativeRoll: Double? = nil, nativeKerning: Bool = true, modernPitchScale: Bool = false,
         modernPrintedPt: Int? = nil, modernFontlessFamily: CtrlKD.PDFFamily = .times,
         to line: NSMutableAttributedString
@@ -263,7 +263,7 @@ extension DocumentRenderer {
             line.append(Self.attributedRun(
                 span, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                 colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                nativeSupSub: nativeSupSub, nativeRoll: nativeRoll, nativeKerning: nativeKerning,
+                nativeSupSub: nativeSupSub, nativeFullScripts: nativeFullScripts, nativeRoll: nativeRoll, nativeKerning: nativeKerning,
                 modernPitchScale: modernPitchScale, modernPrintedPt: modernPrintedPt,
                 modernFontlessFamily: modernFontlessFamily))
             return
@@ -316,7 +316,7 @@ extension DocumentRenderer {
                 line.append(Self.attributedRun(
                     piece, font: font, paragraph: paragraph, fonts: fonts, defaultSize: defaultSize,
                     colourMap: colourMap, disableKerning: disableKerning, useCourierPrime: useCourierPrime,
-                    nativeSupSub: nativeSupSub, nativeRoll: nativeRoll))
+                    nativeSupSub: nativeSupSub, nativeFullScripts: nativeFullScripts, nativeRoll: nativeRoll))
             }
         }
     }
@@ -385,9 +385,11 @@ extension DocumentRenderer {
         pixResults: [PixResult] = [],
         pixMeasureWidthPt: Double = 0,
         nativeSupSub: Bool = false,
+        nativeFullScripts: Bool = false,
         nativeRoll: Double? = nil,
         nativePMActive: Bool? = nil,
         nativeKerning: Bool = true,
+        nativeFace: PageLine.Face? = nil,
         modernPitchScale: Bool = false, modernPrintedPt: Int? = nil,
         modernFontlessFamily: CtrlKD.PDFFamily = .times
     ) -> NSAttributedString {
@@ -401,7 +403,7 @@ extension DocumentRenderer {
                       fonts: fonts, defaultSize: defaultSize, colourMap: colourMap,
                       disableKerning: disableKerning, useCourierPrime: useCourierPrime,
                       pixResults: pixResults, pixMeasureWidthPt: pixMeasureWidthPt,
-                      nativeSupSub: nativeSupSub, nativeRoll: nativeRoll, nativePMActive: nativePMActive,
+                      nativeSupSub: nativeSupSub, nativeFullScripts: nativeFullScripts, nativeRoll: nativeRoll, nativePMActive: nativePMActive,
                       nativeKerning: nativeKerning, modernPitchScale: modernPitchScale,
                       modernPrintedPt: modernPrintedPt,
                       modernFontlessFamily: modernFontlessFamily)
@@ -432,6 +434,22 @@ extension DocumentRenderer {
                 .paragraphStyle: paragraph,
                 .foregroundColor: NSColor.black,
             ]))
+        }
+        // A WS4 `.PS ON` line under HPLJET is drawn in the face of WS4's width tables
+        // (`PageLine.face`, the engine's `lineOpsPrinted(face:)`), its words then pinned to
+        // the driver's positions by `nativePinJustifiedWords`: the run's own fixed-pitch
+        // kerns go with the Courier they were set for.
+        if let nativeFace {
+            let whole = NSRange(location: 0, length: line.length)
+            line.enumerateAttribute(.font, in: whole) { value, range, _ in
+                guard let current = value as? NSFont else { return }
+                let (bold0, italic) = nativeFontTraits(current)
+                let bold = nativeFace.bold || bold0
+                if let faced = nativeFaceMacFont(nativeFace, bold: bold, italic: italic) {
+                    line.addAttribute(.font, value: faced, range: range)
+                    line.addAttribute(.kern, value: 0.0, range: range)
+                }
+            }
         }
         return line
     }
@@ -481,13 +499,20 @@ extension DocumentRenderer {
         let targetX = CGFloat(tabHMI) / CGFloat(hmiPerPoint)
         let currentX = line.size().width
         if targetX <= currentX {
-            // Overrun guard (`PDFWriter.swift`'s own rule): the stop is at or behind the
-            // pen already — never move backward, advance by one document-column space
-            // instead (the same document-default-size 0.6em measure the fontless/fixed-
-            // pitch branch elsewhere in this file already uses).
-            line.append(NSAttributedString(string: " ", attributes: [
-                .font: courier(size: CGFloat(defaultSize)),
+            // The stop is at or behind the pen already: the tab takes no width at all, as the
+            // engine collapses it (`PDFWriter.swift`'s tab branch, measured on a WS7 capture).
+            // This used to add one document column, which put the rest of the line 7 pt right
+            // (-LASERJE.FNT's "Scalable") and left the line one space where the engine's pieces
+            // have the run, so it could not be pinned. The run's own characters stay, with no
+            // advance.
+            guard !span.text.isEmpty else { return }
+            let resolvedTabFont = Self.resolvedFont(
+                for: span, fallback: font, fonts: fonts, defaultSize: defaultSize, useCourierPrime: useCourierPrime)
+            let natural = NSAttributedString(string: span.text, attributes: [.font: resolvedTabFont]).size().width
+            line.append(NSAttributedString(string: span.text, attributes: [
+                .font: resolvedTabFont,
                 .paragraphStyle: paragraph,
+                .kern: -natural / CGFloat(span.text.count),
             ]))
             return
         }
@@ -680,7 +705,7 @@ extension DocumentRenderer {
         _ span: Span, font: NSFont, paragraph: NSParagraphStyle,
         fonts: [FontChange], defaultSize: Int, colourMap: [Int: Double] = [:],
         disableKerning: Bool = false, useCourierPrime: Bool = false,
-        nativeSupSub: Bool = false, nativeRoll: Double? = nil, nativeKerning: Bool = true,
+        nativeSupSub: Bool = false, nativeFullScripts: Bool = false, nativeRoll: Double? = nil, nativeKerning: Bool = true,
         modernPitchScale: Bool = false, modernPrintedPt: Int? = nil,
         modernFontlessFamily: CtrlKD.PDFFamily = .times
     ) -> NSAttributedString {
@@ -788,53 +813,57 @@ extension DocumentRenderer {
         if span.styles.contains(.sup) || span.styles.contains(.sub) {
             let base = attributes[.font] as? NSFont ?? font
             let isGraphic = text.contains(where: { graphicChars.contains($0) })
-            // MECHANISM G (engine commit f79ff29 / ctrl-kd f328838). Printed takes WordStar's
-            // own per-family x-height ratio; Native/Modern keep the flat Cocoa 2/3 (`nil`).
+            // Native sets the run at the size Printed does: the engine's per-face reduction
+            // (`printedSupSubMetrics`: WS7's own X38 byte for the span's typestyle, floored to
+            // the LaserJet's 1/4pt step — WS7 teardown 9.6), so 9.25pt Courier, 8.25pt
+            // Helvetica, at a 12pt body. Modern keeps the flat Cocoa 2/3 (`nil`).
             let isCourier = nativeSupSub && nativeFamilyIsCourier(entry)
-            let ratio: Double? = nativeSupSub
-                ? (isCourier ? nativeSupSubCourierRatio : nativeSupSubDefaultRatio)
+            // WS4's HPLJET keeps a script in the line's own font and cell, only moved by the
+            // roll (`nativeFullScripts`; the engine's `lineOpsPrinted(fullScripts:)`), and so
+            // does one of LJ6DTP's bitmap Couriers (the engine's `bitmap`).
+            let fullScripts = nativeFullScripts || (!colourMap.isEmpty && lj6dtpBitmapFont(entry))
+            let printedScript = nativeSupSub && !fullScripts
+                ? printedSupSubMetrics(span.styles, size: Int(base.pointSize.rounded()), entry: entry)
                 : nil
-            let (scaled, offset) = scriptMetrics(for: base, raise: span.styles.contains(.sup),
-                                                 ratio: ratio)
+            let (scaled, offset) = scriptMetrics(
+                for: base, raise: span.styles.contains(.sup),
+                points: fullScripts ? Double(base.pointSize) : printedScript?.points)
             attributes[.font] = scaled
             if !isGraphic { attributes[.baselineOffset] = offset }
-            // #271 M1: Printed moves the run by the `.sr` roll in force — `PDFWriter.sized()`'s
-            // `roundHalfToEven(roll)` up, `roundHalfToEven(-roll)` down, +4 / −4 at the default
-            // 3/48in. Laying it out that far would grow its line fragment past the envelope fit
+            // #271 M1: Printed moves the run by the `.sr` roll in force, exactly — `sizedPrinted()`'s
+            // rise is the roll itself, +4.5 / −4.5 at the default 3/48in (WS7 report 14.8, run
+            // fnmb0). Laying it out that far would grow its line fragment past the envelope fit
             // above and change pagination (batch 20: 13 GeometryOracle lines moved), so layout
             // keeps the fit and the difference is applied when the glyphs are drawn
             // (`ScriptRiseLayoutManager`). Native only; Modern keeps the fit.
-            if nativeSupSub, !isGraphic, let nativeRoll {
-                let printedRise = CGFloat(nativeRoundHalfToEven(span.styles.contains(.sup) ? nativeRoll : -nativeRoll))
-                if printedRise != offset { attributes[.nativeScriptRise] = printedRise - offset }
+            if nativeSupSub, let nativeRoll {
+                let printedRise = CGFloat(span.styles.contains(.sup) ? nativeRoll : -nativeRoll)
+                if isGraphic {
+                    // A block rolls with the carriage as a letter does (the engine raises its
+                    // cells); laid out on the shared baseline, drawn raised, and its vector
+                    // cells follow (`graphicCells`).
+                    attributes[.nativeScriptRise] = printedRise
+                } else if printedRise != offset {
+                    attributes[.nativeScriptRise] = printedRise - offset
+                }
             }
             // MECHANISM G, the PITCH half. WS7 reselects a NARROWER fixed-pitch cell for the
-            // span itself — the body cell scaled by `nativeSupSubCellRatio` — where AppKit
-            // would simply advance at the smaller face's own natural 0.6em. The gap is small
-            // per character (0.1pt at a 12pt Courier body: WS7's 5.5pt cell against the 9pt
-            // reduced face's own 5.4pt) and CUMULATIVE, so every glyph after the span lands
-            // progressively wrong without it. Closed with `.kern`, the same attribute the
-            // rest of this renderer uses to put a run on WordStar's grid rather than the
-            // font's.
+            // span itself — the engine's `printedSupSubMetrics` cell: for Courier the driver's
+            // own width, 23 dots = 5.52pt at a 9.25pt run; another fixed-pitch face's body
+            // cell scaled by the size ratio — where AppKit would simply advance at the smaller
+            // face's own natural 0.6em. The gap is small per character and CUMULATIVE, so
+            // every glyph after the span lands progressively wrong without it. Closed with
+            // `.kern`, the same attribute the rest of this renderer uses to put a run on
+            // WordStar's grid rather than the font's.
             //
-            // `bodyPt` is the span's own UNREDUCED declared size — `base.pointSize`, before
-            // the reduction just applied — which is exactly what the engine passes
-            // (`seg.size`, not `sized()`'s return). Passing the reduced size instead is the
-            // double-narrowing bug mechanism G's own commit message calls out by name.
-            //
-            // Courier only: no other face has a captured sup/sub-in-fixed-pitch example in
-            // the corpus, and the engine's `supSubSpanPitch` declines to extrapolate. A
-            // proportional span never reaches this branch's kern anyway — it goes through
-            // `appendProportionalRun` — but the family test is kept explicit so the rule is
-            // the engine's, not an accident of routing.
-            if isCourier {
-                let bodyPt = Int(base.pointSize.rounded())
-                let bodyCell = nativeSpanPitch(entry, bodyPt)
-                if bodyCell != 0 {
-                    let target = bodyCell * nativeSupSubCellRatio
-                    attributes[.kern] = Float(target - Double(scaled.pointSize) * 0.6)
-                    supSubPitched = true
-                }
+            // The size handed to the engine is the span's own UNREDUCED declared size —
+            // `base.pointSize`, before the reduction — exactly what the engine passes
+            // (`seg.size`). A proportional span has no cell (nil) and never reaches this
+            // branch's kern anyway — it goes through `appendProportionalRun` — and the Mac
+            // face must be fixed pitch too, since the kern assumes its 0.6em advance.
+            if isCourier, let target = printedScript?.cell {
+                attributes[.kern] = Float(target - Double(scaled.pointSize) * 0.6)
+                supSubPitched = true
             }
         }
         // Job 399 (Class 6 gate-debt): a footnote reference used to get an app-invented
@@ -848,6 +877,10 @@ extension DocumentRenderer {
         // this class actually tracks). The reference is already visually distinct via its own
         // `.sup` styling (WordStar's own mark, not this renderer's addition) — removed rather
         // than gated, since no engine surface ever wanted it.
+        // (Since planning #586 a line WS7's driver places is pinned to the engine's
+        // `driverPieces` after this, in `nativePinJustifiedWords`: each word at the driver's
+        // x, at its Mac face's natural width unless that is more than 3% off its paper width.
+        // The history below is why no per-word kern is set HERE.)
         // Job 240 (b13, Part 2): job 229's word-anchored proportional placement (per-word
         // corrective `.kern` to an AFM×Tz target) is REMOVED — MAC VIEWING RULING. Words in
         // a proportional WS5+ run now lay out at the resolved Mac font's own NATURAL
@@ -943,8 +976,11 @@ extension DocumentRenderer {
         // A fixed-pitch Modern run spends one declared cell per character — the library's
         // FIRST rule above, and exactly what `nativePinToCells` already states for Printed.
         let modernFixedPitch = modernPitchScale && entry?.proportional == false
+        // LJ6DTP's ©, in Native and Printed's facsimile only.
+        let ljEntry = colourMap.isEmpty || modernPitchScale ? nil : entry
         guard text.contains(where: { graphicChars.contains($0) }) else {
-            let plain = NSAttributedString(string: text, attributes: attributes)
+            let plain = nativeLJ6DTPCopyright(NSAttributedString(string: text, attributes: attributes),
+                                              entry: ljEntry)
             guard disableKerning || modernFixedPitch, !supSubPitched else { return plain }
             return nativePinToCells(plain, font: spanFontForCells, entry: entry)
         }
@@ -956,10 +992,10 @@ extension DocumentRenderer {
             guard modernPitchScale, let printedPt = modernPrintedPt else { return string }
             return modernPinGraphicCells(string, entry: entry, pt: printedPt)
         }
-        let split = coverageSplitAttributedString(
+        let split = nativeLJ6DTPCopyright(coverageSplitAttributedString(
             text, attributes: attributes, entry: entry, bold: span.styles.contains(.bold),
             italic: span.styles.contains(.italic), useCourierPrime: useCourierPrime,
-            modernPitchScale: modernPitchScale)
+            modernPitchScale: modernPitchScale), entry: ljEntry)
         guard disableKerning || modernFixedPitch, !supSubPitched else { return modernCells(split) }
         // The same cell pin as the plain path. In Printed this SUPERSEDES the split's own
         // per-run pitch kerns (job 512's space pinning, the graphic-pitch match): those
@@ -1173,19 +1209,14 @@ extension DocumentRenderer {
     /// at `base`'s own descender). Either edge, matched exactly rather than cleared with
     /// margin: the point is fitting inside a line built for `base`, not looking as large as
     /// possible while doing it.
-    /// `ratio` (mechanism G, engine commit f79ff29): the Printed view passes the engine's own
-    /// per-family x-height ratio and takes the engine's own rounding with it — `sized()`
-    /// (`PDFWriter.swift`) reduces to `roundHalfToEven(size * ratio)`, a WHOLE point size,
-    /// because a PDF font size is what it emits. `nil` keeps this function's prior Cocoa
-    /// arithmetic exactly (flat 2/3, `.rounded()`), which is what every Native/Modern caller
-    /// passes: that is a RULED font-class divergence, not an oversight — Native substitutes
-    /// the user's own face for WordStar's, so a ratio measured off Courier's x-height has
-    /// nothing to be true about there. Recorded by name in the Native divergences file.
+    /// `points`: Native passes the engine's own reduced size for the span
+    /// (`printedSupSubMetrics`, WS7's per-face rule, a quarter point at most), so the run is
+    /// set exactly as Printed sets it. `nil` keeps this function's Cocoa arithmetic (flat 2/3,
+    /// `.rounded()`), which is what Modern passes.
     public static func scriptMetrics(for base: NSFont, raise: Bool,
-                              ratio: Double? = nil) -> (font: NSFont, offset: CGFloat) {
-        let scaledSize: CGFloat = ratio.map {
-            CGFloat(max(1, nativeRoundHalfToEven(Double(base.pointSize) * $0)))
-        } ?? max(1, (base.pointSize * 2 / 3).rounded())
+                              points: Double? = nil) -> (font: NSFont, offset: CGFloat) {
+        let scaledSize: CGFloat = points.map { CGFloat($0) }
+            ?? max(1, (base.pointSize * 2 / 3).rounded())
         let scaled = fontResized(base, to: scaledSize) ?? base
         let offset = raise
             ? base.ascender - scaled.ascender

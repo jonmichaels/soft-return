@@ -59,6 +59,10 @@ enum AppPDFWords {
         let w_pt: Double
         let h_pt: Double
         let page: Int
+
+        func onLogicalPage(_ logicalPageX: (Int) -> Double) -> Raster {
+            Raster(x_pt: x_pt - logicalPageX(page), y_top_pt: y_top_pt, w_pt: w_pt, h_pt: h_pt, page: page)
+        }
     }
 
     struct Payload: Encodable, Sendable {
@@ -66,6 +70,17 @@ enum AppPDFWords {
         let n_pages: Int
         let words: [Word]
         let rasters: [Raster]
+
+        /// Every x measured from page `n`'s logical page — see `CharsPayload.onLogicalPage`.
+        func onLogicalPage(_ logicalPageX: (Int) -> Double) -> Payload {
+            Payload(
+                schema_version: schema_version, n_pages: n_pages,
+                words: words.map {
+                    Word(text: $0.text, x_pt: $0.x_pt - logicalPageX($0.page), y_top_pt: $0.y_top_pt,
+                         size_pt: $0.size_pt, font: $0.font, font_class: $0.font_class, page: $0.page)
+                },
+                rasters: rasters.map { $0.onLogicalPage(logicalPageX) })
+        }
     }
 
     /// ONE DRAWN CHARACTER — engine-chars schema v2, the form the gate now takes.
@@ -99,6 +114,24 @@ enum AppPDFWords {
         let n_pages: Int
         let chars: [Char]
         let rasters: [Raster]
+
+        /// Every x measured from page `n`'s LaserJet logical page instead of its paper edge
+        /// (`logicalPageX(n)` points in, 1-based). The WS7 captures and ctrl-kd's gate work in
+        /// that frame: the gate reads the engine's `Td`s as written, inside the page's
+        /// `q 1 0 0 1 18 0 cm` placement, and a capture's PCL positions are logical-page ones.
+        /// This reader applies the placement, as it must for the app's own PDFs, which have the
+        /// offset baked into every x — so BOXES read 18 pt right of its capture.
+        func onLogicalPage(_ logicalPageX: (Int) -> Double) -> CharsPayload {
+            CharsPayload(
+                schema_version: schema_version, n_pages: n_pages,
+                chars: chars.map {
+                    let dx = logicalPageX($0.page)
+                    return Char(text: $0.text, x_pt: $0.x_pt - dx, x_end_pt: $0.x_end_pt - dx,
+                                y_top_pt: $0.y_top_pt, size_pt: $0.size_pt, font: $0.font,
+                                font_class: $0.font_class, page: $0.page)
+                },
+                rasters: rasters.map { $0.onLogicalPage(logicalPageX) })
+        }
     }
 
     /// `classify_font()`'s vocabulary. The schema requires the PRODUCER to supply this — a
@@ -432,10 +465,10 @@ enum AppPDFWords {
                             chars: chars, rasters: rasters)
     }
 
-    static func charsJSON(from pdf: [UInt8]) throws -> Data {
+    static func charsJSON(from pdf: [UInt8], logicalPageX: (Int) -> Double = { _ in 0 }) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(charsPayload(from: pdf))
+        return try encoder.encode(charsPayload(from: pdf).onLogicalPage(logicalPageX))
     }
 
     static func json(from pdf: [UInt8]) throws -> Data {

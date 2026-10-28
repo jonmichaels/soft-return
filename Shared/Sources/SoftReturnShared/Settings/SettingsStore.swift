@@ -54,6 +54,7 @@ public final class SettingsStore {
         self.defaultPageNumbers = defaults.decode(Key.defaultPageNumbers) ?? .auto
         self.includeBetaVersions = defaults.object(forKey: Key.includeBetaVersions) as? Bool ?? false
         self.quirkDefaults = defaults.decode(Key.quirkDefaults) ?? .shipped
+        self.printedBy = defaults.decode(Key.printedBy) ?? .own
     }
 
     // MARK: - The eight
@@ -142,6 +143,21 @@ public final class SettingsStore {
     /// Posted by `quirkDefaults` when the set changes; the object is the store.
     public nonisolated static let quirkDefaultsDidChange = Notification.Name("SettingsStore.quirkDefaultsDidChange")
 
+    /// 17. Which WordStar prints a WS4 file in Native and Printed (the engine's `PrintedBy`): its own WordStar 4 (the
+    /// default: page number at column 28, WS4's page breaks) or WordStar 7, as it prints the same file. A WS5+ file is
+    /// always printed by WordStar 7. Every change posts `printedByDidChange`, so an open document can re-read itself.
+    public var printedBy: PrintedBy {
+        didSet {
+            defaults.encode(printedBy, Key.printedBy)
+            if printedBy != oldValue {
+                NotificationCenter.default.post(name: SettingsStore.printedByDidChange, object: self)
+            }
+        }
+    }
+
+    /// Posted by `printedBy` when it changes; the object is the store.
+    public nonisolated static let printedByDidChange = Notification.Name("SettingsStore.printedByDidChange")
+
     // MARK: - Fixed vocabularies
 
     /// The size menu, per spec: "9, 10, 11, 12, 13, 14, 16, 18 only, default 14".
@@ -168,6 +184,17 @@ public final class SettingsStore {
         static let defaultPageNumbers = "settings.defaultPageNumbers"
         static let includeBetaVersions = "settings.includeBetaVersions"
         static let quirkDefaults = "settings.quirkDefaults"
+        static let printedBy = "settings.printedBy"
+    }
+}
+
+extension PrintedBy {
+    /// The WordStar a WS4 file is printed by, as Settings names it.
+    public var displayName: String {
+        switch self {
+        case .own: return "WordStar 4"
+        case .ws7: return "WordStar 7"
+        }
     }
 }
 

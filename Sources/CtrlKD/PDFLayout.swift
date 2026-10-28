@@ -359,8 +359,9 @@ public func docToPagelines(
         let attachSize = printedSize(doc)
         substituteMergePageNumbersPrinted(doc, &plainPages)
         attachJustifyWordXPrinted(doc, &plainPages, size: attachSize)
-        attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
         attachGraphicCellsPrinted(doc, &plainPages, size: attachSize)
+        attachDriverPiecesPrinted(doc, &plainPages, size: attachSize)
+        attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
         attachHeadFootLinesPrinted(doc, &plainPages, size: attachSize)
         return capped(plainPages)
     }
@@ -513,9 +514,9 @@ private func layoutModernPages(_ doc: Document) -> [Page] {
             // pre-joined shape, byte-identical to before `separateSpans` existed.
             let entryLines = note.kind == .endnote
                 ? endnoteEntryLines(note, doc: doc, index: i, width: PDFMetrics.maxCols,
-                                    separateSpans: false)
+                                    separateSpans: false, printed: false)
                 : footerEntryLines(note, doc: doc, index: i, width: PDFMetrics.maxCols,
-                                   separateSpans: false)
+                                   separateSpans: false, printed: false)
             items.append(contentsOf: entryLines.map(LayoutItem.line))
         }
     }
@@ -687,12 +688,26 @@ private func finalizePages(_ rawPages: [Page], printed: Bool, isPrintStream: Boo
     }
     // else (printed, a DOCUMENT not a print stream): keep every leading blank -- it is
     // authorial, not the machine's -- and fall straight through to the trailing strip.
+    // A last page made only of the document's own trailing blank lines is a page, not
+    // padding: it prints its number (WS7 report 14.3, runs pg55b, pa3). It has no body line
+    // left for the number to be looked up from once the blanks are dropped, so it is marked
+    // like the empty page a trailing `.pa` opens (`explicitBreak`, which the trailing-page
+    // pop below leaves alone). A DOCUMENT only -- a print stream's trailing blanks are the
+    // machine's.
+    let eofBlankBI: Int? = (stripBlanks && printed && !isPrintStream
+                            && !pages[pages.count - 1].isEmpty
+                            && pages[pages.count - 1].allSatisfy(isBlankPageLine))
+        ? pages[pages.count - 1].eofBlankBI : nil
     if stripBlanks {
         for i in pages.indices {
             while let last = pages[i].last, isBlankPageLine(last) {
                 pages[i].removeLast()
             }
         }
+    }
+    if let eofBlankBI {
+        pages[pages.count - 1].explicitBreak = true
+        pages[pages.count - 1].explicitBreakBI = eofBlankBI
     }
 
     // A trailing empty page is a blank sheet. Two things can produce one: content that

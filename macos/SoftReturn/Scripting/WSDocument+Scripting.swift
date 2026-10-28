@@ -229,6 +229,7 @@ extension WSDocument {
                     noteRefs: args.noteRefs, docPath: fileURL?.path ?? "",
                     choices: args.choices, lineNumbers: args.lineNumbers)
                 options.quirks = args.quirks
+                options.printedBy = state.printedBy
                 let converted = try DocumentOperations.convert(data: state.data, options: options)
                 guard let product = converted.first else { throw ExportCommand.DecodeError.unknownFormat }
                 bytes = product.bytes

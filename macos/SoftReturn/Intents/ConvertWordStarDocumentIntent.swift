@@ -104,6 +104,7 @@ struct ConvertWordStarDocumentIntent: AppIntent {
                 headers: resolvedHeaders, toc: resolvedTOC, inlineStyling: resolvedInlineStyling,
                 pictures: resolvedPictures)
             options.quirks = quirks
+            options.printedBy = SettingsStore.shared.printedBy
 
             let converted: [DocumentOperations.ConvertedFile]
             do {

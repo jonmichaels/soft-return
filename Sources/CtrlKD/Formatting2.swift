@@ -275,7 +275,8 @@ func applyRulerMargins(_ ruler: [UInt8], _ state: inout FormatState) {
 }
 
 /// Update running formatting state from one dot-command line.
-func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
+func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState, barePoZero: Bool = false,
+                    badPoZero: Bool = false) {
     guard var (name, arg) = dotCommandNameAndArg(cmd) else { return }
     if name.map(ASCII.upper) == Array("P".utf8), arg.first == 0x23 {
         // `.p#` — '#' is not a letter, so the shared name scanner splits it into name
@@ -365,7 +366,10 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState) {
         // `resolveColsArg` never rejects (unlike `.lh`'s `resolveLhArg`), so this is a
         // direct assignment, matching `.lm`/`.rm`/`.pm` below and `parsePageDot`'s own
         // `.po` case. Register b31.
-        guard let (value, unit) = parseDotNumber(arg), value.isFinite else { return }
+        guard let (value, unit) = parseDotNumber(arg), value.isFinite else {
+            if isBlankDotArg(arg) ? barePoZero : badPoZero { state.poCols = 0.0 }   // Era.barePoZero / badPoZero
+            return
+        }
         state.poCols = resolveColsArg(value, unit)
     case "POE":
         // Planning #231: even-page offset — RUNNING state, same shape as `.po` just
@@ -595,6 +599,18 @@ public struct FontChange: Hashable, Sendable {
     public let height1440: Int
     /// The raw typestyle word; the accessors below decode its documented bit fields.
     public let typestyle: Int
+    /// Printed only (`laserjetFonts`): the driver (LASERJET, or Sawyer's LJ6DTP) that places
+    /// this font's words, so the writer measures it with that driver's widths and kerning; nil
+    /// when the font keeps its own path. Never set by the parser.
+    var laserjet: LaserJet.Driver?
+    /// Printed only (`laserjetFonts`): LJ6DTP prints this font in a bitmap face, so its
+    /// sub/superscripts keep the line's size (WS7 teardown 17.8). Never set by the parser.
+    var bitmap = false
+    /// Printed and Native only (`laserjetFonts`, `laserjetFixedPitches`): the pitch, in 1/1800
+    /// inch, a LaserJet driver prints this fixed-pitch font at, which `spanPitch` takes over
+    /// `width1800`: the record's width only picks the driver's font (WS7 teardown 11.17, 7a).
+    /// Never set by the parser.
+    public internal(set) var pitch1800: Int?
 
     public init(offset: Int, width1800: Int, height1440: Int, typestyle: Int) {
         self.offset = offset
@@ -796,4 +812,9 @@ private func splitOnDotSpace(_ b: [UInt8]) -> [[UInt8]] {
     }
     if !current.isEmpty { out.append(current) }
     return out
+}
+
+/// True when a dot command's argument is nothing but blanks — Python's `not arg.strip()`.
+func isBlankDotArg(_ arg: [UInt8]) -> Bool {
+    arg.allSatisfy { $0 == 0x20 || ($0 >= 0x09 && $0 <= 0x0D) }
 }

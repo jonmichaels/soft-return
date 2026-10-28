@@ -72,13 +72,19 @@ public struct LinesPassResult: Hashable, Sendable {
     /// ends in blank lines before its 0x1A — text and separators both, so the writer
     /// can put them back. Python's `raw_extras['eof_tail']`.
     public let eofTail: [UInt8]
+    /// How many of those trailing lines ended in a return: each is a blank text line to
+    /// WS7 (a page holds it and the page prints), though the IR keeps none. Printed
+    /// pagination reads the count (`Document.eofBlankLines`). Python's
+    /// `raw_extras['eof_blank_lines']`.
+    public let eofBlankLines: Int
 
     public init(lines: [PhysicalLine], margin: Int, rawBreaks: [[UInt8]] = [],
-                eofTail: [UInt8] = []) {
+                eofTail: [UInt8] = [], eofBlankLines: Int = 0) {
         self.lines = lines
         self.margin = margin
         self.rawBreaks = rawBreaks
         self.eofTail = eofTail
+        self.eofBlankLines = eofBlankLines
     }
 }
 
@@ -126,6 +132,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
     var out: [PhysicalLine] = []
     var rawBreaks: [[UInt8]] = []
     var eofTail: [UInt8] = []
+    var eofBlankLines = 0
     var i = 0
     while i < lines.count {
         let (text, kind) = (lines[i].text, lines[i].kind)
@@ -179,6 +186,14 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
         var nTotal = (kind == .eof) ? 0 : 1
         var j = i + 1
         while j < lines.count && isBlank(visible(lines[j].text)) {
+            // The file's last, unterminated, blank line holds a note reference (a note typed
+            // on a trailing empty line): it is the anchor of that note, so it stays a line
+            // of its own -- the run of blanks the end of file consumes must not swallow it
+            // (WS7 report 14.8, run fnmb0: the reference prints on the line after line 05).
+            if j == lines.count - 1, lines[j].kind == .eof,
+               lines[j].marks.contains(where: { if case .fnref = $0.1 { return true } else { return false } }) {
+                break
+            }
             let k = lines[j].kind
             if k != .eof {
                 nTotal += 1
@@ -198,6 +213,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
             for b in (i + 1)..<lines.count {
                 eofTail += lines[b].text
                 eofTail += lines[b].brk
+                if lines[b].kind != .eof { eofBlankLines += 1 }
             }
             break
         }
@@ -257,7 +273,7 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
         i = j
     }
     return LinesPassResult(lines: out, margin: margin, rawBreaks: rawBreaks,
-                           eofTail: eofTail)
+                           eofTail: eofTail, eofBlankLines: eofBlankLines)
 }
 
 // ---------------------------------------------------------------- internals
@@ -508,6 +524,16 @@ private func splitIntoRawLines(_ data: [UInt8], tabAt: Set<Int>,
                 // text ends exactly at `off` is the real anchor line, never a same-offset
                 // zero-length line that happens to start where it ends (that line, if
                 // any, necessarily comes later in this list).
+                result[prev.idx].marks.append((prev.len, m))
+            } else if case .font = m,
+                      let prev = starts.first(where: {
+                          $0.at + $0.len == off && result[$0.idx].kind != .eof }) {
+                // A font record just before a return closes the font on the line it ends:
+                // it is that line's END state, though it adds no text there (WS7 report
+                // 14.5, runs lead3 and lead5 -- the line below is led by the font it
+                // STARTS in). It used to be handed to the next line at offset 0, which set
+                // the same font for that line's text but left the line it sits on ending
+                // in the font before it. Port of Python's `lines_pass`.
                 result[prev.idx].marks.append((prev.len, m))
             } else if let n = starts.first(where: { $0.at >= off }) {
                 result[n.idx].marks.append((0, m))

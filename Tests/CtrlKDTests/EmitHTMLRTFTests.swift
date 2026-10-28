@@ -547,7 +547,7 @@ import Testing
     #expect(aachenFont.proportional)
 
     let expectedPrimary: [FontsTarget: String] = [
-        .office: "Colonna MT", .mac: "Herculanum", .google: "Cinzel", .linux: "DejaVu Serif",
+        .office: "Colonna MT", .mac: "Optima", .google: "Cinzel", .linux: "DejaVu Serif",
     ]
     for target in FontsTarget.allCases {
         // The real document's own bits (genericStyle/proportional), asked as
@@ -657,4 +657,29 @@ import Testing
         #expect(rtf.contains(#"{\f2 "# + expected[target]!),
                 "\(target): \(rtf)")
     }
+}
+
+@Test func macTargetTakesTheFacesClosestToTheDriversWidths() {
+    // Port of test_mac_target_takes_the_faces_closest_to_the_drivers_widths.
+    #expect(rtfFonts("antique olive", generic: .sans, target: .mac).0 == "Verdana")
+    #expect(rtfFonts("aachen", generic: .serif, target: .mac).0 == "Optima")
+    #expect(rtfFonts("albertus", generic: .serif, target: .mac).0 == "Optima")
+    #expect(rtfFonts("rockwell", generic: .serif, target: .mac).0 == "Rockwell")
+    #expect(boldFace("Garamond", target: .mac) == "Cochin")
+    #expect(boldFace("Garamond", target: .office) == nil)
+    var payload = le16(142) + le16(240)
+    payload += le16(0xC612) + [UInt8](repeating: 0, count: 6)
+    var data = ws7Block(0x00)
+    data += bytes("Prose padding for detection, a perfectly ordinary sentence.") + HARD
+    data += ws7Block(0x02, payload: payload)
+    data += bytes("Plain then ")
+    data += [0x02]
+    data += bytes("bold")
+    data += [0x02]
+    data += bytes(" again.") + HARD
+    data += bytes("Closing prose line keeps the byte ratio looking like text.") + HARD
+    let rtf = emitRTF(parseWS(data), mode: .modern, options: EmitOptions(fontsTarget: .mac))
+    #expect(rtf.contains(#"{\f2 Hoefler Text{\*\falt Garamond};}"#))
+    #expect(rtf.contains(#"{\f3 Cochin{\*\falt Hoefler Text};}"#))
+    #expect(rtf.range(of: #"\\b [^}]*\\f3 [^}]*bold"#, options: .regularExpression) != nil)
 }

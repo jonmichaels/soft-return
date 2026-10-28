@@ -65,7 +65,7 @@ extension DocumentRenderer {
         let work = engine ?? NativeAnnotatedEngineWork.make(document: state.document, options: options)
         let doc = work.doc
         let metrics = work.metrics
-        let baseFont = courier(size: CGFloat(metrics.size))
+        let baseFont = courierPrime(size: CGFloat(metrics.size))
         let annotated = work.annotated
         let pages = work.pages
         // Every REAL line's own engine `PageLine` (lead/overprint/spans), in document
@@ -606,8 +606,12 @@ extension DocumentRenderer {
         // `normalBaselineOffset` is now computed once, up front, before the render loop
         // (see that computation's own job 267 doc comment) — reused here unchanged.
         let textTop = max(0, firstBaseline - normalBaselineOffset)
+        // Placed on the sheet as plain Native is (`logicalPageX`): the engine's x = 0 sits at
+        // the LaserJet's logical page, 1/4" in on Letter.
+        let documentLogicalX = logicalPageX(doc, orientation: printedPageOrientation(doc, nil),
+                                            sheetWidth: Int(metrics.pageWidth.rounded()))
         let textFrame = CGRect(
-            x: metrics.left, y: textTop,
+            x: metrics.left + documentLogicalX, y: textTop,
             width: max(1, metrics.pageWidth - metrics.left),
             height: CGFloat(metrics.capacity) * metrics.lead
         )
@@ -621,7 +625,7 @@ extension DocumentRenderer {
         let leadingHeadroom = Self.leadingHeadroom(
             oversizedSelfPasses, firstBaselines: Array(repeating: firstBaseline, count: oversizedSelfPasses.count))
 
-        return RenderedDocument(
+        var annotatedNative = RenderedDocument(
             text: output,
             pageSize: pageSize,
             textFrame: textFrame,
@@ -656,6 +660,8 @@ extension DocumentRenderer {
             modernEndnoteAppendixStart: nil,
             pclPrograms: doc.pclPrograms
         )
+        annotatedNative.documentLogicalPageX = documentLogicalX
+        return annotatedNative
         }
         return SlicedRender(phases: [
             SlicedRender.Phase(count: { annotated.lines.count }, step: unitStep),

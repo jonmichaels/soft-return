@@ -31,7 +31,8 @@ public enum InkKind: Hashable, Sendable {
     /// mark WordStar itself renders as a small reference number is left untouched
     /// (`.visible`); this is the note's actual content, added alongside it.
     case comment
-    /// End-of-line marker: `Line.soft == true` (WordStar's own word wrap).
+    /// End-of-line marker: `Line.soft == true` (the line's stored terminator is a soft return,
+    /// whatever Modern reflow makes of it: `keepBreak`).
     case softReturn
     /// End-of-line marker: `Line.soft == false` (the author's own Return).
     case hardReturn

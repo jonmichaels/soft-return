@@ -279,6 +279,11 @@ public func stringWidthPt(_ text: String, _ baseFont: String, _ size: Int) -> Do
     Double(stringWidth1000(text, baseFont)) * Double(size) / 1000.0
 }
 
+/// The same at a fractional size (a Printed sub/superscript, `sizedPrinted`).
+public func stringWidthPt(_ text: String, _ baseFont: String, _ size: Double) -> Double {
+    Double(stringWidth1000(text, baseFont)) * size / 1000.0
+}
+
 
 // ----------------------------------------------------------------- ink tops
 //

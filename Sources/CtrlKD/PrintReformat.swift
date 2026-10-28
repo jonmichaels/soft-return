@@ -271,7 +271,9 @@ func pfRewrapParagraph(_ para: [Line], measure: Double, fonts: [FontChange],
         out.append(Line(spans: coalesceSpans((k == 0 ? firstIndent : contIndent) + spans),
                         soft: k < rows.count - 1 || para[para.count - 1].soft,
                         lead48: src.lead48, kerning: src.kerning, poCols: src.poCols,
-                        roll48: src.roll48, poeCols: src.poeCols, pooCols: src.pooCols))
+                        roll48: src.roll48, poeCols: src.poeCols, pooCols: src.pooCols,
+                        // the paragraph ends in the font its last stored line ended in
+                        fontOut: k == rows.count - 1 ? para[para.count - 1].fontOut : nil))
     }
     return out
 }

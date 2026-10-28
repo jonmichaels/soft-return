@@ -62,8 +62,18 @@ import Testing
     // fixtures (`makeProse`, `styled`) up 24pt; the print-stream fixture is UNCHANGED
     // (`page == nil` -> the fixed `PDFMetrics.topPrinted` constant, never `.mt`-derived
     // either way).
+    //
+    // Re-pinned 2026-10-27, twice (the `makeProse` PRINTED hash only). A Printed page is
+    // placed on its sheet at the LaserJet's logical page, 1/4" in (one `cm` wrapping the
+    // page's content); and `makeProse` has no header, so it is a WS4 document, which prints
+    // its automatic page number at the `.PC` default 28 (`Era.pcDefault`; WS4 teardown
+    // `wordstar4-dos/4-formatting-printing.md` 3.2, runs x41-*), not at WS7's centred 33.5.
+    // The body and the page breaks are unchanged. Then detection began reading `makeProse`
+    // (soft returns, no word-end high bits) as a headerless WS5+ file (WS4 teardown 3.14),
+    // which puts the number back at WS7's centre: the digest is the placement-only one again,
+    // the identical digest ctrl-kd's own re-pinned fixture carries.
     #expect(sha256Hex(emitPDF(parseWS(makeProse()), mode: .printed))
-        == "267278729cfed03a1fecae8a90feb3c6102b43639be92b3eebdc0c658e74f5a6")
+        == "74047110c0fce45fd4e6b3ca36af0c5e6d92dc45a605d8e4f3b4927f797bb041")
     // Modern's pin is RE-TAKEN (ruling 2026-08-05: "Modern PDF needs to be the printed
     // version of Modern RTF" — document fonts carried, proportional reflow, the
     // Courier-only Modern died with the WS4 lens). This exact digest is also what the
@@ -150,8 +160,10 @@ import Testing
     let helv = try! #require(fontName(for: "Helvetica", in: pdf))
     #expect(fonts["F1"] == "Courier")             // the four are still F1..F4
     let shown = contentSpans(pdf)
-    // The block's own points, on the run that asked for them.
-    #expect(shown.contains { $0.font == helv && $0.size == 14 && $0.text == "After." })
+    // The block's own points, on the run that asked for them; WS7's LASERJET prints Helv in
+    // its Univers, whose r-period kerning pair moves the period in as its own piece.
+    #expect(shown.contains { $0.font == helv && $0.size == 14 && $0.text == "After" })
+    #expect(shown.contains { $0.font == helv && $0.size == 14 && $0.text == "." })
     #expect(shown.contains { $0.font == "F1" && $0.size == 12 && $0.text.hasPrefix("Before.") })
 
     let modern = emitPDF(doc, mode: .modern)

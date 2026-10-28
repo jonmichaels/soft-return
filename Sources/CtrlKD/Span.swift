@@ -65,10 +65,19 @@ public struct Span: Hashable, Sendable {
     /// facsimile drops such a span; every other consumer keeps it exactly as before.
     /// Python tags this `ixentry` in the same frozenset as the style codes.
     public var indexEntry: Bool = false
+    /// Offsets, into `text` (Unicode scalars), of the blanks that were WS5+ soft spaces
+    /// (bare 0xA0) in the file. They decode to a plain " " like any blank and every
+    /// emitter treats them so; only print-time justification tells them apart, because
+    /// WordStar's driver ignores the stored soft spaces and spreads the line itself (WS7
+    /// report 11.7.3, 14.6). Empty for a span that came from anywhere else; code that
+    /// rebuilds a span from its text simply drops it. Python's `Span.soft`.
+    public var soft: [Int] = []
 
     public init(text: String, styles: Style = [], font: Int? = nil, colour: Int? = nil,
                 pctlHMI: Int? = nil, pix: Int? = nil, pcl: Int? = nil,
-                tabHMI: Int? = nil, tabLeader: Int? = nil, indexEntry: Bool = false) {
+                tabHMI: Int? = nil, tabLeader: Int? = nil, indexEntry: Bool = false,
+                soft: [Int] = []) {
+        self.soft = soft
         self.text = text
         self.styles = styles
         self.font = font

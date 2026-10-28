@@ -231,8 +231,14 @@ import TestSupport
                         wantX = tenth(entry.x + Double(runs[0].text.count) * pdfPtPerCol)
                         drawnRuns = Array(runs.dropFirst())
                     }
-                    let wantBytes = drawnRuns.flatMap { degrade($0.text) }
+                    // WS7's LASERJET driver sends no blank (it moves between words), so a
+                    // proportional head's PDF row carries its words without them; and it
+                    // moves each word to a whole decipoint, which can sit up to a tenth of a
+                    // point below the model's own x. The text is compared without blanks,
+                    // the position to that tenth.
+                    let wantBytes = drawnRuns.flatMap { degrade($0.text) }.filter { $0 != 0x20 }
                     guard !wantBytes.isEmpty else { continue }
+                    func inked(_ span: ShownSpan) -> [UInt8] { rawBytes(span.text).filter { $0 != 0x20 } }
                     // M16 (2026-09-15): TWO model lines can share one PDF row. A
                     // document whose `.lh 0` is in force where its `.h1`/`.h2` are
                     // defined prints them on the same baseline (measured against real
@@ -243,12 +249,12 @@ import TestSupport
                     // because every span on it is at or after that line's x anyway.
                     let rowAll = spans.filter { $0.y != nil && tenth($0.y!) == wantY }
                         .sorted { ($0.x ?? 0) < ($1.x ?? 0) }
-                    let fromHere = rowAll.filter { ($0.x ?? 0) >= wantX - 0.05 }
+                    let fromHere = rowAll.filter { ($0.x ?? 0) >= wantX - 0.15 }
                     var row: [ShownSpan] = []
                     var taken = 0
                     for span in fromHere where taken < wantBytes.count {
                         row.append(span)
-                        taken += rawBytes(span.text).count
+                        taken += inked(span).count
                     }
                     guard !row.isEmpty else {
                         var msg = "page \(pi + 1): \(kind)Lines[\(li)] "
@@ -257,13 +263,13 @@ import TestSupport
                         out.append(Mismatch(text: msg))
                         continue
                     }
-                    let gotBytes = row.flatMap { rawBytes($0.text) }
+                    let gotBytes = row.flatMap { inked($0) }
                     if gotBytes != wantBytes {
                         var msg = "page \(pi + 1): \(kind)Lines[\(li)] "
                         msg += "text \(wantBytes) != PDF row text \(gotBytes) at y=\(wantY)"
                         out.append(Mismatch(text: msg))
                     }
-                    if let gotX = row.first?.x, tenth(gotX) != wantX {
+                    if let gotX = row.first?.x, abs(tenth(gotX) - wantX) > 0.1 + 1e-6 {
                         var msg = "page \(pi + 1): \(kind)Lines[\(li)] x "
                         msg += "\(wantX) != PDF row x \(tenth(gotX)) at y=\(wantY)"
                         out.append(Mismatch(text: msg))

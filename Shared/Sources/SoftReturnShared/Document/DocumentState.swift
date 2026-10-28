@@ -235,19 +235,22 @@ public final class DocumentState {
         /// Batch 46: the parse before any quirk, and the quirks `document` was made with.
         public let unquirked: CtrlKD.Document
         public let quirks: QuirkChoices
+        /// Which WordStar's printing rules the parse took (`SettingsStore.printedBy`).
+        public let printedBy: PrintedBy
     }
 
     /// `init(data:settings:docPath:)`'s engine work — detect, parse, resolve the pictures — with
     /// no state of its own, so a large file can be read on another thread while its window shows.
     /// - Throws: whatever `init(data:settings:docPath:)` would.
     public nonisolated static func parsed(from data: [UInt8], docPath: String,
-                                          quirks: QuirkChoices = .shipped) throws -> Parsed {
+                                          quirks: QuirkChoices = .shipped,
+                                          printedBy: PrintedBy = .own) throws -> Parsed {
         let detection = detect(data)
-        let unquirked = try CtrlKD.parse(data, variant: detection.variant)
+        let unquirked = try CtrlKD.parse(data, variant: detection.variant, printedBy: printedBy)
         let document = quirks.apply(to: unquirked)
         return Parsed(detection: detection, document: document,
                       pixResults: DocumentPictures.resolve(document, docPath: docPath),
-                      unquirked: unquirked, quirks: quirks)
+                      unquirked: unquirked, quirks: quirks, printedBy: printedBy)
     }
 
     /// Batch 46 (Jon's quirks rulings, 2026-09-16): the parse before any quirk — what `document` is remade from when
@@ -296,6 +299,23 @@ public final class DocumentState {
     @discardableResult
     public func useAppDefaultQuirks() -> Bool { setQuirkOverrides([:]) }
 
+    /// Which WordStar prints this document if it is a WS4 file, from Settings (`SettingsStore.printedBy`). The
+    /// printing rules are read at parse time (a bare `.po`), so a change re-parses, under the variant in force.
+    /// - Returns: whether anything changed.
+    @discardableResult
+    public func setPrintedBy(_ newValue: PrintedBy) -> Bool {
+        guard newValue != printedBy else { return false }
+        printedBy = newValue
+        // A document still being read has no parse to remake; `adopt(_:)` re-reads it then.
+        guard !isAwaitingParse, let reparsed = try? parse(data, variant: variant.value, printedBy: newValue)
+        else { return true }
+        unquirkedDocument = reparsed
+        document = quirkChoices.apply(to: reparsed)
+        pixResults = DocumentPictures.resolve(reparsed, docPath: docPath)
+        refreshPageSizeAfterReparse()
+        return true
+    }
+
     /// New app defaults, from Settings. This document's own choices stay its own.
     @discardableResult
     public func setQuirkDefaults(_ defaults: QuirkChoices) -> Bool {
@@ -311,6 +331,9 @@ public final class DocumentState {
         document = quirkChoices.apply(to: unquirkedDocument)
         return true
     }
+
+    /// Which WordStar's printing rules this document's parse took (`setPrintedBy(_:)`).
+    public private(set) var printedBy: PrintedBy
 
     /// The parse currently on screen, with the quirks in force applied. Recomputed whenever `variant` or the quirks
     /// change.
@@ -371,7 +394,8 @@ public final class DocumentState {
         let detection = detect(data)
         self.detection = detection
         self.variant = Resolved(detection.variant, .detected)
-        let unquirked = try parse(data, variant: detection.variant)
+        self.printedBy = settings.printedBy
+        let unquirked = try parse(data, variant: detection.variant, printedBy: settings.printedBy)
         let parsed = settings.quirkDefaults.apply(to: unquirked)
         self.unquirkedDocument = unquirked
         self.quirkDefaults = settings.quirkDefaults
@@ -406,6 +430,7 @@ public final class DocumentState {
         self.document = CtrlKD.Document()
         self.unquirkedDocument = CtrlKD.Document()
         self.quirkDefaults = settings.quirkDefaults
+        self.printedBy = settings.printedBy
         self.pixResults = []
         self.style = Resolved(settings.defaultStyle, .default)
         self.zoom = Resolved(settings.defaultZoom, .default)
@@ -425,6 +450,15 @@ public final class DocumentState {
         isAwaitingParse = false
         detection = parsed.detection
         variant = Resolved(parsed.detection.variant, .detected)
+        // Settings may have changed which WordStar prints it while the bytes were read.
+        if parsed.printedBy != printedBy,
+           let reparsed = try? parse(data, variant: parsed.detection.variant, printedBy: printedBy) {
+            unquirkedDocument = reparsed
+            document = quirkChoices.apply(to: reparsed)
+            pixResults = DocumentPictures.resolve(reparsed, docPath: docPath)
+            refreshPageSizeAfterReparse()
+            return
+        }
         unquirkedDocument = parsed.unquirked
         // The quirks may have changed while the bytes were read — Settings, or a stored choice of the document's own.
         document = parsed.quirks == quirkChoices ? parsed.document : quirkChoices.apply(to: parsed.unquirked)
@@ -451,6 +485,7 @@ public final class DocumentState {
         self.variant = Resolved(.ws4, .detected)
         self.unquirkedDocument = document
         self.quirkDefaults = settings.quirkDefaults
+        self.printedBy = settings.printedBy
         self.document = settings.quirkDefaults.apply(to: document)
         self.pixResults = DocumentPictures.resolve(document, docPath: docPath)
         self.style = Resolved(settings.defaultStyle, .default)
@@ -470,7 +505,7 @@ public final class DocumentState {
     @discardableResult
     public func setVariant(_ newVariant: Variant) -> Error? {
         do {
-            let reparsed = try parse(data, variant: newVariant)
+            let reparsed = try parse(data, variant: newVariant, printedBy: printedBy)
             variant.setManually(newVariant)
             // A variant chosen before the background parse returned (restoration) parses the bytes
             // itself; that parse then has nothing to adopt.
@@ -490,7 +525,7 @@ public final class DocumentState {
     public func resetVariantToAuto() {
         // Auto is what a parse still under way is already doing; the detection is a placeholder until it returns.
         guard !isAwaitingParse else { return }
-        guard let reparsed = try? parse(data, variant: detection.variant) else { return }
+        guard let reparsed = try? parse(data, variant: detection.variant, printedBy: printedBy) else { return }
         variant = Resolved(detection.variant, .detected)
         unquirkedDocument = reparsed
         document = quirkChoices.apply(to: reparsed)

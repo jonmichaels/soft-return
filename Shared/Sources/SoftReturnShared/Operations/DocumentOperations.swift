@@ -92,10 +92,11 @@ public enum DocumentOperations {
 
     /// Detect, then parse — optionally under a forced `variant`, exactly like `sr --variant`
     /// and the app's own "Force Variant" menu (`DocumentState.setVariant(_:)`).
-    public static func open(data: [UInt8], variant: Variant? = nil) throws -> OpenedDocument {
+    public static func open(data: [UInt8], variant: Variant? = nil,
+                            printedBy: PrintedBy = .own) throws -> OpenedDocument {
         let detection = detect(data)
         do {
-            let document = try parse(data, variant: variant)
+            let document = try parse(data, variant: variant, printedBy: printedBy)
             return OpenedDocument(
                 data: data, detection: detection,
                 variant: variant ?? detection.variant, document: document)
@@ -126,7 +127,9 @@ public enum DocumentOperations {
         /// hides until something calls this layer bare.
         public var fontsTarget: FontsTarget
         public var pageSettings: PageSettings?
-        public var noteRefs: NoteRefs
+        /// nil when the caller named no scheme: Modern labels then follow the document's
+        /// `.f#`/`.e#` (see `NoteRefs`).
+        public var noteRefs: NoteRefs?
         /// b24 views wave, job 371 item 0 (PICTURE WIRING): the source document's own path,
         /// so `.PIX` tags can be resolved against real siblings/ancestors near it
         /// (`DocumentPictures.resolve`, the app's own Foundation-based port of the engine's
@@ -176,13 +179,16 @@ public enum DocumentOperations {
         /// The quirks this conversion runs — `sr`'s default, the shipped auto quirks, unless the caller asks otherwise
         /// (`QuirkChoices.requested`, R-74).
         public var quirks: QuirkChoices = .shipped
+        /// Which WordStar prints a WS4 file (`SettingsStore.printedBy`) — `sr`'s default, WordStar 4, unless the
+        /// caller asks otherwise.
+        public var printedBy: PrintedBy = .own
 
         /// The six choices field by field, for callers that decode them one at a time.
         public init(
             formats: [String], mode: EmitMode = .modern, variant: Variant? = nil,
             title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes,
             styles: Bool = true, fontsTarget: FontsTarget = .mac,
-            pageSettings: PageSettings? = nil, noteRefs: NoteRefs = .word, docPath: String = "",
+            pageSettings: PageSettings? = nil, noteRefs: NoteRefs? = nil, docPath: String = "",
             headers: Bool = true, toc: Bool = false, inlineStyling: Bool = true,
             pictures: EmitOptions.PixMode = .embed, lineNumbers: Bool = true,
             pageNumbers: EmitOptions.PageNumberMode = .auto,
@@ -204,7 +210,7 @@ public enum DocumentOperations {
             formats: [String], mode: EmitMode = .modern, variant: Variant? = nil,
             title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes,
             styles: Bool = true, fontsTarget: FontsTarget = .mac,
-            pageSettings: PageSettings? = nil, noteRefs: NoteRefs = .word, docPath: String = "",
+            pageSettings: PageSettings? = nil, noteRefs: NoteRefs? = nil, docPath: String = "",
             choices: ExportChoices, lineNumbers: Bool = true
         ) {
             self.formats = formats
@@ -249,7 +255,8 @@ public enum DocumentOperations {
     /// PDF, which is a documented difference, not a bug.
     public static func convert(data: [UInt8], options: ConversionOptions) throws -> [ConvertedFile] {
         // Parse, quirks, then the page: `sr`'s own order (`ConversionJob`).
-        var doc = options.quirks.apply(to: try open(data: data, variant: options.variant).document)
+        var doc = options.quirks.apply(to: try open(data: data, variant: options.variant,
+                                                    printedBy: options.printedBy).document)
         if let pageSettings = options.pageSettings, let page = doc.page {
             doc.page = effectivePage(page, settings: pageSettings)
         }

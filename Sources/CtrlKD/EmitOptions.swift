@@ -59,7 +59,8 @@ public struct PageSettings: Hashable, Sendable {
 }
 
 /// Note reference-mark display scheme in Modern output (ctrl-kd's `--note-refs`, ruling
-/// 2026-08-06 M8). `word` (the default) is the Word standard — arabic footnotes,
+/// 2026-08-06 M8). `word` (what Modern shows when neither a scheme nor the document's
+/// `.f#`/`.e#` says otherwise) is the Word standard — arabic footnotes,
 /// lowercase-roman endnotes (MS-OI29500 §17.11.17, Word's own documented default),
 /// WordStar tags for annotations. `prefixed` shows the Markdown emitter's own labels
 /// (footnotes bare 1 2 3, endnotes e1 e2, annotations a1 a2), matched across PDF, RTF,
@@ -117,10 +118,10 @@ public struct EmitOptions: Hashable, Sendable {
     /// `PageSettings`. `nil` (the default) applies no override at all.
     public var pageSettings: PageSettings?
 
-    /// Note reference-mark display scheme — see `NoteRefs` (ctrl-kd's `note_refs=`).
-    /// Read by the Modern paths of PDF, RTF, and HTML; the flat formats and printed
-    /// mode ignore it, exactly as in Python.
-    public var noteRefs: NoteRefs
+    /// Note reference-mark display scheme — see `NoteRefs` (ctrl-kd's `note_refs=`). nil
+    /// means none was given: Modern labels then follow the document's `.f#`/`.e#` and are
+    /// otherwise `word`. A scheme given wins over the document. Printed ignores it.
+    public var noteRefs: NoteRefs?
 
     /// b24 engine wave, round 17 (RULINGS-LEDGER row 1, register B1/B2 + Paged-surface
     /// doctrine point 1): the document's own running heads and feet (`.he`/`.fo`) in the
@@ -253,7 +254,7 @@ public struct EmitOptions: Hashable, Sendable {
 
     public init(title: String = "", notes: Set<NoteKind> = EmitOptions.defaultNotes,
                 styles: Bool = true, fontsTarget: FontsTarget = .office,
-                pageSettings: PageSettings? = nil, noteRefs: NoteRefs = .word,
+                pageSettings: PageSettings? = nil, noteRefs: NoteRefs? = nil,
                 headers: Bool = true, lineNumbers: Bool = true, toc: Bool = false,
                 inlineStyling: Bool = true, pictures: PixMode = .embed,
                 pageNumbers: PageNumberMode = .auto,

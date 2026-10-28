@@ -62,7 +62,12 @@ restore_devstamp() {
 # Release switch (2026-08-28, born of v4.0.0 shipping "sr 3.2.0 (dev ...)"):
 # a STABLE MARKETING_VERSION (no "b") is a release cut — the committed nils
 # stay untouched and the banner is clean; the suffix ships only on betas/dev.
-if [ -f "${DEVSTAMP}" ] && [[ "${MARKETING_VERSION:-dev}" == *b* || "${MARKETING_VERSION:-dev}" == "dev" ]]; then
+# An archive (ACTION=install, which only the release build makes) is a cut
+# too, a beta's included (2026-10-28, 5.0.0b1): the published beta's banner is
+# `sr v5.0.0b1`, which the release gates check; a Debug build of it keeps the
+# stamp.
+if [ -f "${DEVSTAMP}" ] && [ "${ACTION:-build}" != "install" ] \
+   && [[ "${MARKETING_VERSION:-dev}" == *b* || "${MARKETING_VERSION:-dev}" == "dev" ]]; then
     ENGINE_DATE="$(git -C "${CHECKOUT}" log -1 --format=%cs 2>/dev/null || true)"
     ENGINE_HASH="$(git -C "${CHECKOUT}" rev-parse --short=7 HEAD 2>/dev/null || true)"
     if [ -n "${ENGINE_DATE}" ] && [ -n "${ENGINE_HASH}" ]; then

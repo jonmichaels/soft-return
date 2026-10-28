@@ -1,6 +1,6 @@
 {
  "format": "ctrl-kd-layout",
- "version": 13,
+ "version": 15,
  "meta": {
   "variant": "ws5+",
   "producer": null,
@@ -493,7 +493,7 @@
         "styles": []
        },
        {
-        "text": "1",
+        "text": "",
         "styles": [
          "fnref",
          "sup"
@@ -695,14 +695,6 @@
      {
       "segments": [
        {
-        "text": "1",
-        "styles": []
-       },
-       {
-        "text": "    ",
-        "styles": []
-       },
-       {
         "text": "A",
         "styles": []
        },
@@ -751,7 +743,8 @@
       "font": null,
       "style": []
      }
-    ]
+    ],
+    "logical_page_x": 18.0
    },
    {
     "lines": [
@@ -782,15 +775,7 @@
       "style": []
      }
     ],
-    "footer_lines": [
-     {
-      "text": "- 2 -",
-      "x": 57.6,
-      "y": 48.0,
-      "font": null,
-      "style": []
-     }
-    ]
+    "logical_page_x": 18.0
    },
    {
     "lines": [
@@ -864,9 +849,11 @@
       "font": null,
       "style": []
      }
-    ]
+    ],
+    "logical_page_x": 18.0
    }
-  ]
+  ],
+  "driver": "laserjet"
  },
  "invisibles": {
   "print_controls": [],

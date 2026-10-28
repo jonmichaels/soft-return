@@ -18,10 +18,17 @@ import Testing
 /// block wants -- LYING's own entry (width1800=137) inflated `want` from a correct 101.12%
 /// to 151.69%, landing the sup '1' at 6.07pt, ~1.5x its natural 4.0pt advance (confirmed
 /// directly against ctrl-kd's own `tools/fidelity_gate.py --dump-engine-chars` on LYING.WS
-/// before/after this fix). Direct port of ctrl-kd's
-/// `test_pdf_sup_in_proportional_ws7_font_block_uses_body_size_for_the_tz_scale`
+/// before/after this fix).
+///
+/// WS7's LASERJET driver now places each piece (LaserJet.swift), and the face-constant scale
+/// this paragraph describes is gone for such a font: 'Prize.' is 122 dots of Times PC at 12pt
+/// (29.28pt), so the '1' starts at 57.6 + 29.28, moved to the whole decipoint below (86.8). The
+/// '1' is measured at the block's own script size (175/256 of 240 twips, floored to 160: 8pt),
+/// 17 dots; then a 15-dot blank, so 'X' is at 86.88 + 4.08 + 3.6 = 94.56 (94.5). Each piece is
+/// drawn to its own width with Tz. Port of ctrl-kd's
+/// `test_pdf_sup_in_proportional_ws7_font_block_is_measured_at_the_drivers_script_size`
 /// (tests/test_ctrlkd.py).
-@Test func supInProportionalWS7FontBlockUsesBodySizeForTheTzScale() throws {
+@Test func supInProportionalWS7FontBlockIsMeasuredAtTheDriversScriptSize() throws {
     let times = timesTypestyle()
     let styleBits = 0x8000 | (1 << 10)   // proportional + generic_style=serif
     var data: [UInt8] = ws7HeaderBlock()
@@ -37,24 +44,20 @@ import Testing
     #expect(entry.proportional)
     #expect(entry.width1800 == 137)
 
-    let spans = contentSpans(emitPDF(doc, mode: .printed))
+    // The page number at the foot is also a "1": only the body's own lines count.
+    let spans = contentSpans(emitPDF(doc, mode: .printed)).filter { ($0.y ?? 0) > 100 }
     var byText: [String: ShownSpan] = [:]
     for span in spans { byText[span.text] = span }
 
     let body = try #require(byText["Prize."])
     #expect(body.size == 12)
-    #expect(body.tz == 101.12)
     #expect(body.x == 57.6)
 
     let sup = try #require(byText["1"])
     #expect(sup.size == 8)                 // round(12 * 2/3) -- default ratio, non-Courier
-    // NO Tz operator for the sup span at all -- the SAME line-wide scale 'Prize.' already
-    // set, never a span-local recompute (mechanism G's proportional half: `factor` is the
-    // font block's property, not this one span's drawn size).
-    #expect(sup.tz == nil)
-    #expect(sup.x == 85.6)                 // immediately after 'Prize.', no gap
+    #expect(sup.x == 86.8)
 
     let tail = try #require(byText["X"])
-    #expect(tail.tz == nil)                // still unchanged, back to body size too
-    #expect(tail.x == 92.6)                // 85.6 + 4.0448 (natural '1'), NOT + 6.0676
+    #expect(tail.size == 12)
+    #expect(tail.x == 94.5)
 }

@@ -243,7 +243,6 @@ PAT_NEVER_CROSS_FILES=(
     macos/SoftReturnTests/UIRound4ARulingTests.swift
     macos/SoftReturnTests/UIRound4BRulingTests.swift
     macos/SoftReturnTests/ViewRestructureJob265Tests.swift
-    macos/SoftReturnUITests/MenuAndInspectorUITests.swift
 )
 
 # Build a git pathspec array (":(exclude)path" entries) for

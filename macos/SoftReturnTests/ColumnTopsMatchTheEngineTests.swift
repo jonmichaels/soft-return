@@ -31,7 +31,8 @@ struct ColumnTopsMatchTheEngineTests {
     /// Both sides are asked for the column's first line of TEXT ink. The engine draws box and
     /// block characters as vector fills, so a column opening with one has no text operator
     /// there, and `Oracle.Line.hasTextInk` skips the same lines on the app's side. The engine's
-    /// column is the band from its lines' own `left` across `columnWidthPt`.
+    /// column is the band from its lines' own `left` (moved onto the paper by the page's logical page) across
+    /// `columnWidthPt`.
     @Test(arguments: documents) @MainActor
     func laterColumnsStartOnTheEnginesBaseline(doc: String) throws {
         let url = try Self.fixture(doc)
@@ -57,8 +58,11 @@ struct ColumnTopsMatchTheEngineTests {
             let regionTop = printedMetrics(pageDoc).top + offset
             for column in 1..<(page.columns ?? 1) {
                 let place = "page \(index + 1) column \(column + 1)"
-                guard let left = page.lines.filter({ $0.col == column }).compactMap(\.left).min()
+                // The model's `left` is in the printer's frame; the engine PDF's runs read on the
+                // paper, where the page's logical page (1/4" in on Letter) puts them further right.
+                guard let modelLeft = page.lines.filter({ $0.col == column }).compactMap(\.left).min()
                 else { continue }
+                let left = modelLeft + Double(rendered.logicalPageX(atPage: index))
                 guard columnViews.indices.contains(column - 1) else {
                     wrong.append("\(place): the app laid out no text view for it")
                     continue

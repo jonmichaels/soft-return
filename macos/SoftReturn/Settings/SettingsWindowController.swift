@@ -56,6 +56,7 @@ final class SettingsWindowController: NSWindowController {
     private var fontPopup: NSPopUpButton!
     private var sizePopup: NSPopUpButton!
     private var pageSizePopup: NSPopUpButton!
+    private var printedByPopup: NSPopUpButton!
     private var quickLookMarginsPopup: NSPopUpButton!
     private var formatChecks: [ExportFormat: NSButton] = [:]
     private var restoreWindowsCheckbox: NSButton!
@@ -129,6 +130,8 @@ final class SettingsWindowController: NSWindowController {
                              "Default display", #selector(displayChanged(_:)))
         pageSizePopup = popup(NamedPageSize.allCases.map(\.displayName), "default-page-size-control",
                               "Default page size", #selector(pageSizeChanged(_:)))
+        printedByPopup = popup(PrintedBy.allCases.map(\.displayName), "printed-by-control",
+                               "WordStar 4 files print as", #selector(printedByChanged(_:)))
         quickLookMarginsPopup = popup(DocumentOperations.PageSettingsPreset.marginsChoiceNames,
                                       "quick-look-margins-control", "Quick Look margins",
                                       #selector(quickLookMarginsChanged(_:)))
@@ -174,6 +177,7 @@ final class SettingsWindowController: NSWindowController {
             [label("Default Display:"), displayPopup],
             [label("Default Page Size:"), pageSizePopup],
             [label("Quick Look Margins:"), quickLookMarginsPopup],
+            [label("WS4 Files Print As:"), printedByPopup],
         ])
         style(topGrid)
 
@@ -438,6 +442,7 @@ final class SettingsWindowController: NSWindowController {
         fontPopup.selectItem(withTitle: settings.modernFontName)
         sizePopup.selectItem(withTitle: String(settings.modernFontSize))
         pageSizePopup.selectItem(withTitle: settings.defaultPageSize.displayName)
+        printedByPopup.selectItem(withTitle: settings.printedBy.displayName)
         // Reads the app-group container directly (not `settings`/`UserDefaults.standard`):
         // "Embedded" when unset is exactly `QuickLookPageSettingsPreference.resolvedDefault()
         // == nil` — the same "no override" contract QL's own read side already relies on.
@@ -481,6 +486,11 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func sizeChanged(_ sender: NSPopUpButton) {
         settings.modernFontSize = Int(sender.titleOfSelectedItem ?? "") ?? 14
+    }
+
+    /// Which WordStar prints a WS4 file in Native and Printed: WordStar 4 (its own, the default) or WordStar 7.
+    @objc private func printedByChanged(_ sender: NSPopUpButton) {
+        settings.printedBy = PrintedBy.allCases.first { $0.displayName == sender.titleOfSelectedItem } ?? .own
     }
 
     @objc private func pageSizeChanged(_ sender: NSPopUpButton) {

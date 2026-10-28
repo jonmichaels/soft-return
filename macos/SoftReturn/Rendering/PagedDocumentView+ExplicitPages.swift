@@ -285,12 +285,14 @@ extension PagedDocumentView {
         switch display {
         case .singlePage:
             return CGRect(
-                x: text.origin.x, y: textTop(atPage: index) + headroom(atPage: index) + modernTopRise(atPage: index),
+                x: text.origin.x + rendered.logicalShift(atPage: index),
+                y: textTop(atPage: index) + headroom(atPage: index) + modernTopRise(atPage: index),
                 width: text.width + widening, height: textHeight(atPage: index))
         case .continuousScroll:
             guard pageTops.indices.contains(index) else { return .zero }
             return CGRect(
-                x: text.origin.x, y: pageTops[index] + textTop(atPage: index) + modernTopRise(atPage: index),
+                x: text.origin.x + rendered.logicalShift(atPage: index),
+                y: pageTops[index] + textTop(atPage: index) + modernTopRise(atPage: index),
                 width: text.width + widening, height: textHeight(atPage: index))
         }
     }
@@ -360,7 +362,7 @@ extension PagedDocumentView {
         view.baselineOffset = rendered.baselineOffset
         view.graphicCellRows = ownSlice(rendered.graphicCellRows.indices.contains(pageIndex)
             ? rendered.graphicCellRows[pageIndex] : [])
-        view.graphicLeftAnchor = Double(rendered.textFrame.origin.x)
+        view.graphicLeftAnchor = Double(rendered.engineLeftAnchor)
         // Job 211: gates the vector-graphics overlay — Printed only, same as
         // `softLineFlags`/`runningLines` (`RenderedDocument.clipsLines`'s own convention).
         view.isPrintedStyle = rendered.clipsLines

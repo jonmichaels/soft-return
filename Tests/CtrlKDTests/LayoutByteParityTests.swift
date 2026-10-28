@@ -21,7 +21,9 @@
 /// fix -- the fixture's own footnote/endnote/annotation area mixes marker widths, so
 /// `notesMarkerPadCols`/`_notes_marker_pad_cols` now pads three of its entries -- and
 /// again for planning #577, when its note pages began carrying the running head/foot
-/// the plain pages do: `ctrl-kd -t layout --fonts mac [--comments]` on the fixture) — regenerate them
+/// the plain pages do, and again for planning #549, when the fixture's form-feed page
+/// stopped carrying a footer, and again for layout version 15 (`printed.driver`, the WS4
+/// HPLJET driver, planning #549): `ctrl-kd -t layout --fonts mac [--comments]` on the fixture) — regenerate them
 /// from the oracle, never by hand and never from sr itself.
 /// `layout-parity-modern-comments.json` covers the non-default `--comments` path: kept
 /// comments produce zero-width anchor runs (`"text": ""` + `ref`) and positional

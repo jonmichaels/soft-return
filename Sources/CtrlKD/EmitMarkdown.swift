@@ -309,7 +309,8 @@ public func emitMarkdown(_ doc: Document, mode: EmitMode = .modern,
         return out
     }
 
-    let ctx = RenderContext(doc, printed: false, sentenceSpacing: options.sentenceSpacing)
+    let ctx = RenderContext(doc, printed: false, sentenceSpacing: options.sentenceSpacing,
+                            noteRefs: options.noteRefs)
     let refNotes = ctx.refNotes
     // Reached only in Modern mode (printed returned above via emit_text's own printed
     // facsimile, `\f` pages included) -- Modern MD has no pages of its own, so it

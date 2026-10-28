@@ -16,8 +16,8 @@
 /// proportional line path writes one `Td` for a whole line rather than one per span.
 struct ShownSpan {
     let font: String            // "F1", not "/F1"
-    let size: Int
-    let rise: Int
+    let size: Double           // a Printed sub/superscript can be fractional (9.25)
+    let rise: Double
     let tz: Double?
     let x: Double?
     let y: Double?
@@ -56,7 +56,7 @@ func contentSpans(_ pdf: [UInt8]) -> [ShownSpan] {
             j += 1
         }
         guard sawLiteral, tokens.count >= 4, tokens[1] == "Tf", tokens[3] == "Ts",
-              let size = Int(tokens[0]), let rise = Int(tokens[2]) else { i += 1; continue }
+              let size = Double(tokens[0]), let rise = Double(tokens[2]) else { i += 1; continue }
 
         var k = 4
         var tz: Double? = nil

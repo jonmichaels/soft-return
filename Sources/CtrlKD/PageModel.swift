@@ -20,6 +20,9 @@ public enum PDFMetrics {
     /// 12pt type on 12pt leading — 10 CPI pica by 6 LPI, the dot-matrix standard.
     public static let size = 12
     public static let lead = 12
+    /// WS4's HPLJET driver sets each line at `(pending y + 16)·15` decipoints, a vbias of
+    /// 16/48" = 1/3" below the top margin (WS4 teardown 4 §15.2). Port of `HPLJET_VBIAS_PT`.
+    public static let hpljetVbiasPt = 24.0
     /// Top margin. A print stream carries its own top-margin blanks, so it gets the smaller
     /// one and its blanks supply the rest (see the machine-margin rule in `docToPagelines`).
     /// `topPrinted` is also the FIXED fallback `printedTop(_:)` uses for a document with no
@@ -43,6 +46,13 @@ public enum PDFMetrics {
     /// narrower `.po` than this could in principle overlap its own body text; not
     /// observed, not guarded against. Port of Python's `LINE_NO_RIGHT_PT`.
     public static let lineNoRightPt = 28.8
+    /// ...and the two bars beside every numbered row: a double bar (cp437 BAh) at 504
+    /// decipoints and a single bar (B3h) at 5328 -- 0.7" and 7.4" in the same frame as
+    /// the text, one Courier 10 cpi cell wide each (WS7 report `drivera-map.txt`, run
+    /// lnum-lj). Port of Python's `LINE_NO_BARS`/`LINE_NO_BAR_WIDTH_PT`.
+    public static let lineNoBarChars: [Character] = ["║", "│"]
+    public static let lineNoBarXs: [Double] = [50.4, 532.8]
+    public static let lineNoBarWidthPt = 7.2
     // Printed-mode capacity is per-document now (`printedCap`, ctrl-kd 1.3.0): WordStar's
     // own vertical model, `.pl - .mt - .mb` at the `.lh` line height — 55 for WordStar's own
     // defaults, not a fixed line count. Python deleted the equivalent `LINES_PRINTED`
@@ -224,24 +234,40 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         public var text: String
         public var x: Double
         public var width: Double
-        public init(text: String, x: Double, width: Double) {
+        /// A driver piece's width as drawn, its letters at the driver's widths, where
+        /// `width` is the advance to the next piece: they differ by a kerning pair that
+        /// tucks the next piece under this one. `nil` for a justified line's pieces. Not
+        /// in the layout JSON; a viewer drawing in its own faces scales a piece to it.
+        public var drawn: Double?
+        public init(text: String, x: Double, width: Double, drawn: Double? = nil) {
             self.text = text
             self.x = x
             self.width = width
+            self.drawn = drawn
         }
     }
 
-    /// planning #251(b): this line's own PRECOMPUTED `justifyPiecesPrinted` result --
-    /// covering the whole line left to right -- or `nil`. Set by
-    /// `attachJustifyWordXPrinted` ONLY when this is a `justifyRightX`-carrying line
-    /// that resolves (after the SAME `splitIndent`/`splitSymbolFallback`/
-    /// `splitGraphics`/`ljSubstitute` pipeline `lineOpsPrinted` itself runs) to exactly
-    /// one FIXED-PITCH, untagged span with a real gap to stretch -- every other
-    /// justified line (styled/mixed, proportional, a pctl/tab span, or one with no
-    /// slack to distribute) leaves this `nil`, and `lineOpsPrinted` falls back to
-    /// computing it fresh at render time, unchanged from before this field existed.
-    /// Port of ctrl-kd's `PageLine.justify_word_x`.
+    /// planning #251(b): this line's own PRECOMPUTED justification -- the words and runs of
+    /// blanks left to right, covering the line's whole text across ALL its spans (the
+    /// pieces tile it, so a consumer maps them onto its own spans by text offset) -- or
+    /// `nil`. Set by `attachJustifyWordXPrinted` on a `justifyRightX`-carrying line that
+    /// WS7's word-gap rule can spread (`justifyLinePrinted`); a line it cannot (a tab,
+    /// print-control or graphic span, no blank between two words) leaves this
+    /// `nil`, and `lineOpsPrinted` draws it at its natural widths. Port of ctrl-kd's
+    /// `PageLine.justify_word_x`.
     public var justifyWordX: [JustifyWordPiece]?
+
+    /// One piece of a line WS7's LASERJET driver places: (text, x, width), the same shape
+    /// as a justified line's pieces.
+    public typealias DriverPiece = JustifyWordPiece
+
+    /// A line with text WS7's LASERJET driver places: the pieces the writer places, left
+    /// to right and tiling the line's text (a word, a kerned part of one, a run of blanks,
+    /// or a whole span drawn as one), each width the advance to the next piece, or `nil`.
+    /// Set by `attachDriverPiecesPrinted` from a throwaway call to `lineOpsPrinted`, as
+    /// `graphicCells` is, so a viewer that draws in its own faces can pin each piece to the
+    /// place the driver put it. Port of ctrl-kd's `PageLine.driver_pieces`.
+    public var driverPieces: [DriverPiece]?
 
     /// This line's own `.l#` gutter label and ABSOLUTE x -- see `lineNo`'s own doc
     /// comment. A named struct for the same `Hashable` reason as `JustifyWordPiece`.
@@ -323,6 +349,81 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     /// `PageLine.po_cols`.
     public var poCols: Double?
 
+    /// Pagination-time only: how far this line's `.lh a` height (taken from the fonts on
+    /// it) stands above the base line, in points, or `nil` for a line whose lead is not
+    /// font-driven. WS7 lets such a line overhang the bottom by that rise
+    /// (`layoutPrintedPages`' `overflow`). Port of ctrl-kd's `PageLine.font_rise`.
+    public var fontRise: Double?
+
+    /// On a justified line only: the line's text and the offsets (Unicode scalars) in it of
+    /// the blanks that were WS5+ soft spaces, which the driver ignores when it spreads the
+    /// line (WS7 report 14.6). `nil` when there are none, or the text changed since they
+    /// were read. Port of ctrl-kd's `PageLine.soft_blanks`.
+    public struct SoftBlanks: Hashable, Sendable {
+        public var text: String
+        public var offsets: [Int]
+        public init(text: String, offsets: [Int]) {
+            self.text = text
+            self.offsets = offsets
+        }
+    }
+    public var softBlanks: SoftBlanks?
+
+    /// WS4: the line's text as built here and the offsets (Unicode scalars) in it of the
+    /// characters stored with bit 7 (`Line.hibit`). WS4's HPLJET justifies from these
+    /// (`HPLJET.placeLine`). `nil` when there are none, or the text changed since they were
+    /// read. Port of ctrl-kd's `PageLine.hibit`.
+    public struct Hibit: Hashable, Sendable {
+        public var text: String
+        public var offsets: [Int]
+        public init(text: String, offsets: [Int]) {
+            self.text = text
+            self.offsets = offsets
+        }
+    }
+    public var hibit: Hibit?
+    /// The line ended in a soft hyphen (`Line.softHyphen`): WS4's HPLJET measures that `-`
+    /// as `?` (M6). Port of ctrl-kd's `PageLine.soft_hyphen`.
+    public var softHyphen: Bool = false
+    /// Its index among its block's lines (after any `.pf on` re-wrap), the position
+    /// `Document.dotPositions` counts in. `nil` for a line built outside the body path.
+    /// Port of ctrl-kd's `PageLine.li`.
+    public var li: Int?
+
+    /// The face a WS4 `.PS ON` line is drawn in under HPLJET (`hpljetFace`).
+    public struct Face: Hashable, Sendable {
+        public var family: PDFFamily
+        public var size: Double
+        public var bold: Bool
+        public init(family: PDFFamily, size: Double, bold: Bool) {
+            self.family = family
+            self.size = size
+            self.bold = bold
+        }
+    }
+    /// WS4 `.PS ON` under HPLJET: the face the proportional text is drawn in, at the
+    /// positions in `justifyWordX`, or `nil`. Port of ctrl-kd's `PageLine.face`.
+    public var face: Face?
+
+    /// One character WS4's HPLJET prints over another (COMPOS's second byte).
+    public struct Overstrike: Hashable, Sendable {
+        public var char: String
+        /// Its offset (Unicode scalars) in the line's text.
+        public var offset: Int
+        /// Where it is printed, in points; set by `attachHpljetPieces`.
+        public var x: Double
+        public init(char: String, offset: Int, x: Double = 0) {
+            self.char = char
+            self.offset = offset
+            self.x = x
+        }
+    }
+    /// WS4 under HPLJET: the characters COMPOS prints as two, the second over the first
+    /// (`hpljetComposSpans`), placed by `attachHpljetPieces`. Port of ctrl-kd's
+    /// `PageLine.overstrike`, which carries `(offset, char)` until placed and
+    /// `(char, x)` after.
+    public var overstrike: [Overstrike] = []
+
     public init() {
         spans = []
         lead = nil
@@ -343,6 +444,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         lineNo = nil
         graphicCells = nil
         poCols = nil
+        softBlanks = nil
     }
 
     public init(_ spans: [Span], soft: Bool = false, lead: Double? = nil,
@@ -352,7 +454,16 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
                 left: Double? = nil, roll: Double? = nil, justifyRightX: Double? = nil,
                 parityLeft: ParityLeft? = nil, col: Int? = nil,
                 justifyWordX: [JustifyWordPiece]? = nil, lineNo: LineNumberLabel? = nil,
-                graphicCells: [GraphicCellPlacement]? = nil, poCols: Double? = nil) {
+                graphicCells: [GraphicCellPlacement]? = nil, poCols: Double? = nil,
+                fontRise: Double? = nil, softBlanks: SoftBlanks? = nil,
+                hibit: Hibit? = nil, softHyphen: Bool = false, li: Int? = nil,
+                face: Face? = nil, overstrike: [Overstrike] = []) {
+        self.fontRise = fontRise
+        self.hibit = hibit
+        self.softHyphen = softHyphen
+        self.li = li
+        self.face = face
+        self.overstrike = overstrike
         self.spans = spans
         self.soft = soft
         self.lead = lead
@@ -372,6 +483,7 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
         self.lineNo = lineNo
         self.graphicCells = graphicCells
         self.poCols = poCols
+        self.softBlanks = softBlanks
     }
 
     public init(arrayLiteral elements: Span...) {
@@ -571,6 +683,17 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     /// `nil`) for every ordinary page.
     public var explicitBreak: Bool
     public var explicitBreakBI: Int?
+    /// The page ended at a bare form feed in the text: WS7 ejects the sheet without running
+    /// its page-end routine, so no footer block prints -- neither a `.fo` nor the
+    /// automatic page number (WS7 report 14.3, run ff2; WS4 report 3.2). `false` for every
+    /// other page. Port of ctrl-kd's `Page.ended_by_form_feed`.
+    public var endedByFormFeed: Bool = false
+    /// Pagination-time only: set on the last body page when its last line is one of the
+    /// document's own trailing blank lines (`Document.eofBlankLines`), to the block index
+    /// the page number is looked up from. `finalizePages` keeps such a page, when blank
+    /// lines are all it holds, as a page that prints its number (WS7 report 14.3, runs
+    /// pg55b and pa3). `nil` for every other page.
+    var eofBlankBI: Int?
     /// `columns`/`columnGutterPt`/`columnWidthPt` (planning #227 follow-up, 2026-09-09):
     /// this page's own `.co n` geometry, set ONLY by `applyColumns` on a page it actually
     /// merged from a columnar group -- `nil`/`nil`/`nil` for every ordinary page, the same

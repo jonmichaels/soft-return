@@ -201,6 +201,9 @@ private func rtfBodySpan(_ span: Span, refNotes: [Note], labels: [String], optio
             else if theseStyles.contains(.sub) { c += #"\dn\#(rollHalfPt) "# }
         }
         c += span.font.flatMap { fontControl[$0] } ?? ""
+        if theseStyles.contains(.bold) {
+            c += span.font.flatMap { fontControl[~$0] } ?? ""
+        }
         // planning #252 (Jon's ruling 2026-09-09): a run no WS5+ font block covers
         // (`span.font == nil`, the same test `fontControlRTF`/pdf.py's
         // `modernTokFont` use) gets Courier instead of the inherited `\f0` body
@@ -347,6 +350,17 @@ func fontControlRTF(_ doc: Document, target: FontsTarget = .office,
                 nextK += 1
             }
             parts += "\\f\(primaryToK[primary]!)"
+            // A bold run of a family whose bold takes a face of its own
+            // (`boldFace`). Kept in the same map as Python's `fontN:b` key, at the
+            // font's complement index (`~index`), so every pass-through carries it.
+            if font.proportional != false, let bold = boldFace(font.family, target: target) {
+                if primaryToK[bold] == nil {
+                    primaryToK[bold] = nextK
+                    extra += "{\\f\(nextK) \(bold){\\*\\falt \(primary)};}"
+                    nextK += 1
+                }
+                control[~index] = "\\f\(primaryToK[bold]!) "
+            }
         }
         // Python tests the float's own truthiness: a zero height is not a size.
         // b24 round 18 (RULINGS-LEDGER row 10): gated ONLY for a genuinely INLINE
@@ -450,7 +464,7 @@ func hfRuns(_ txt: String) -> [(text: String, styles: Style)] {
             buf = ""
         }
     }
-    for scalar in txt.replacingAll("\u{2219}", with: "\u{2022}").unicodeScalars {
+    for scalar in txt.replacingAll("\u{2219}", with: "\u{00B7}").unicodeScalars {
         if let toggle = hfToggles[scalar.value] {
             flush()
             active.formSymmetricDifference(toggle)
@@ -1619,7 +1633,8 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
         options.notes.remove(.comment)
     }
     // N9 (b33 field notes): mode-aware default, flag overrides either way.
-    let ctx = RenderContext(doc, printed: printed, sentenceSpacing: options.sentenceSpacing)
+    let ctx = RenderContext(doc, printed: printed, sentenceSpacing: options.sentenceSpacing,
+                            noteRefs: options.noteRefs)
     let ssOn = ctx.sentenceSpacing
     // \f0 Times, \f1 Courier — a printed document's alignment only survives in a
     // fixed-width font (emit.py:210).
@@ -2211,6 +2226,15 @@ public func emitRTF(_ doc: Document, mode: EmitMode = .modern,
     // `rtfSectionBreaks`.
     if let first = rtfColumnsState(doc).first {
         pageSetup += rtfColsControl(first.cols, first.gutter)
+    }
+    // `.f# a` / `.f# A` (`.e#` the same) print letters in Printed (WS7 report 15.10): the
+    // notes are Word-numbered by \chftn, so the letter format is the document's footnote /
+    // endnote number format, \ftnnalc / \ftnnauc and \aftnnalc / \aftnnauc. Modern does the
+    // same unless a note-refs scheme was given, which keeps Word's own defaults.
+    for (kind, control) in [(NoteKind.footnote, #"\ftnn"#), (NoteKind.endnote, #"\aftnn"#)] {
+        if let style = noteNumberStyle(doc, kind, printed: printed, noteRefs: options.noteRefs) {
+            pageSetup += control + (style == .lower ? "alc" : "auc")
+        }
     }
 
     // b24 round 17 (RULINGS-LEDGER row 1): `rtfRunningHeads` has no printed-specific

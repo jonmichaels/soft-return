@@ -230,6 +230,7 @@ public func mergedLines(_ block: Block) -> [Line] {
     // and emitting both double-spaces every paragraph of a WS4 document ([52, 26] where
     // [54] is right). Buffering them until real content follows serves both shapes.
     var pendingBlanks = 0
+    var sepAdded = false    // the join space a soft line just appended to `cur`
     for line in block.lines {
         if line.spans.isEmpty {
             // A blank PHYSICAL line, and the two kinds mean different things.
@@ -256,6 +257,10 @@ public func mergedLines(_ block: Block) -> [Line] {
                     // this one didn't, leaving un-merged seam spans in the IR for any
                     // paragraph that wraps across several physical lines and is THEN
                     // immediately followed by a blank line.
+                    // A soft line that ends the paragraph (WordStar keeps the stored
+                    // return soft before `.ls` filler's empty hard line, WS7 report 15.10)
+                    // joins nothing: its separator space goes.
+                    if sepAdded { c.spans.removeLast() }
                     c.spans = coalesceSpans(c.spans)
                     out.append(c)
                     cur = nil
@@ -268,6 +273,7 @@ public func mergedLines(_ block: Block) -> [Line] {
             out.append(contentsOf: (0..<pendingBlanks).map { _ in Line(spans: []) })
             pendingBlanks = 0
         }
+        sepAdded = false
         if cur == nil {
             cur = Line(spans: line.spans)
         } else {
@@ -302,11 +308,12 @@ public func mergedLines(_ block: Block) -> [Line] {
             }
             cur!.spans.append(contentsOf: spans)
         }
-        if line.soft {
+        if line.wraps {
             let t = cur!.spans.last?.text ?? ""
             if !t.isEmpty, !t.hasSuffix(" "), !t.hasSuffix("-") {
                 cur!.spans.append(Span(text: " ", styles: cur!.spans.last!.styles,
                                        font: cur!.spans.last!.font))
+                sepAdded = true
             }
             continue
         }
