@@ -6,8 +6,8 @@
 # in this workflow's script below):
 #
 #   - Sources/CtrlKD/EngineVersion.swift's `engineVersion` is the ONE (srVersion re-exports it; moved 2026-09-16)
-#     engine version, and it is a plain numeric X.Y.Z (no "v" prefix,
-#     no "-beta"/"b34"-style suffix).
+#     engine version: a plain numeric X.Y.Z, or a Mac beta's X.Y.ZbN
+#     (no "v" prefix, no other suffix).
 #   - macos/Project.swift carries MARKETING_VERSION and
 #     CURRENT_PROJECT_VERSION in exactly FOUR target blocks (app,
 #     quicklook, importer, thumbnail); all four MARKETING_VERSION
@@ -89,8 +89,8 @@ jobs:
                   fail("srVersion-count", f"expected exactly one srVersion declaration, found {len(matches)} at {loc}")
               else:
                   ln, val = matches[0]
-                  if not re.fullmatch(r"\d+\.\d+\.\d+", val):
-                      fail("srVersion-format", f'{ARGS_PATH}:{ln}: srVersion = "{val}" is not plain numeric X.Y.Z (no "v" prefix, no suffix)')
+                  if not re.fullmatch(r"\d+\.\d+\.\d+(?:b\d+)?", val):
+                      fail("srVersion-format", f'{ARGS_PATH}:{ln}: srVersion = "{val}" is not X.Y.Z or a beta X.Y.ZbN (no "v" prefix, no other suffix)')
                   else:
                       sr_version = val
 
@@ -159,7 +159,7 @@ jobs:
           # characters are `//` -- the changelog doc-comment's historical
           # version numbers are legitimate history and exempt) ---
           if args_text is not None and sr_version is not None:
-              ver_re = re.compile(r"\d+\.\d+\.\d+")
+              ver_re = re.compile(r"\d+\.\d+\.\d+(?:b\d+)?")
               comment_re = re.compile(r"^\s*//")
               stray = []
               for i, line in enumerate(args_text.splitlines(), start=1):
