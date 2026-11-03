@@ -488,6 +488,11 @@ public func emitWS(_ doc: Document) throws -> [UInt8] {
         // expansion, in consumption order. Offsets are trusted, not searched: if the
         // body reconstruction drifted, the census reports the divergence — silently
         // resynchronising would hide it.
+        //
+        // The 128-byte header is one of these, copied as read; this writer never makes
+        // one. A writer that does must name a driver (`1D 7D 00 00 70` + `LASERJET` +
+        // zeros, WS7 teardown 3.3, 14.1): WS7 will not print a WS5+ file whose header
+        // names none, "PDF or driver files not found" (21.8, run hb59b-cv-p).
         if !rt.sym.isEmpty {
             var spliced: [UInt8] = []
             var pos = 0

@@ -1330,6 +1330,7 @@ func pythonStyleTags(_ styles: Style, font: Int? = nil, colour: Int? = nil,
     if styles.contains(.strike) { tags.append("strike") }
     if styles.contains(.fnref) { tags.append("fnref") }
     if styles.contains(.altFont) { tags.append("altfont") }
+    if styles.contains(.bareTab) { tags.append("baretab") }
     if let font { tags.append("font\(font)") }
     if let colour { tags.append("colour\(colour)") }
     if let pctlHMI { tags.append("pctl\(pctlHMI)") }
@@ -1582,6 +1583,21 @@ private func jsonHeadFootLine(_ line: HeadFootLine) -> LayoutJSONValue {
     // the resolved y and the paper clips it, which is what real WS7 does, and an app
     // drawing from this model has no paper to do the clipping.
     if line.offSheet { fields.append(("off_sheet", .bool(true))) }
+    // `pieces` (planning #549): present ONLY on a line that changes face after its opening
+    // (WS7 teardown 3.15) — see `HeadFootLine.pieces`; `x` only on a piece that starts at
+    // an absolute position.
+    if let pieces = line.pieces, !pieces.isEmpty {
+        fields.append(("pieces", .array(pieces.map { piece in
+            var pf: [(String, LayoutJSONValue)] = [
+                ("text", .string(piece.text)),
+                ("font", piece.font.map { LayoutJSONValue.int($0) } ?? .null),
+            ]
+            if let x = piece.x { pf.append(("x", .double(roundToOneDecimal(x)))) }
+            return LayoutJSONValue.object(pf)
+        })))
+    }
+    // WS4: a line printed in its own `.CW` (`HeadFootLine.size`)
+    if let size = line.size { fields.append(("size", .int(size))) }
     return .object(fields)
 }
 
@@ -1870,6 +1886,9 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
                     .object([("char", .string($0.char)), ("x", .double(roundToOneDecimal($0.x)))])
                 })))
             }
+            if let strike = pl.strikeChar {
+                fields.append(("strike_char", .string(strike)))
+            }
             // 'line_no' (version 4, planning #251(d)): present ONLY on a line an
             // active `.l#` interval numbers -- see `PageLine.lineNo`'s own doc
             // comment.
@@ -1963,6 +1982,8 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
             ]
             // version 12: same omit-unless-true rule as the head/foot lines.
             if auto.offSheet { autoFields.append(("off_sheet", .bool(true))) }
+            // WS4: the install width (`AutoPageNumber.size`)
+            if let size = auto.size { autoFields.append(("size", .int(size))) }
             pageFields.append(("auto_page_number", .object(autoFields)))
         }
         // `columns`/`column_gutter_pt`/`column_width_pt` (version 2): same
@@ -2056,7 +2077,10 @@ public func emitLayout(_ doc: Document, mode: EmitMode = .modern,
     // with a character WS4 prints as two carries `overstrike`, `[{char, x}]`, the second
     // character printed over the first at x. A line with text WS7's LASERJET driver places
     // carries `driver_pieces`, `[{text, x, width}]`: the pieces the writer places, left to
-    // right and tiling the line's text, each width the advance to the next piece.
+    // right and tiling the line's text, each width the advance to the next piece. Since
+    // planning #549 a line with struck text carries `strike_char`, the character the
+    // driver's strike-out pass prints over it (WS7's `.xx`, `-` by default, a blank for a
+    // bare `.xx`; `strikeRuns` places the copies).
     let out = LayoutJSONValue.object([
         ("format", .string("ctrl-kd-layout")),
         ("version", .int(15)),

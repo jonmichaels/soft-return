@@ -392,7 +392,8 @@ func pdfContentStreams(_ pdf: [UInt8]) -> [[UInt8]] {
     // too; printed keeps its fontless-untouched doctrine (digests prove it).
     var data = ws7Block(0x00)
     data += bytes("A paragraph of ordinary prose before the bulleted list here.") + HARD
-    data += [0xFE] + bytes(" First item of the list, plain prose and clear.") + HARD
+    data += [0x1B, 0xFE, 0x1C]
+    data += bytes(" First item of the list, plain prose and clear.") + HARD
     data += bytes("A closing paragraph of ordinary prose after the list ends.") + HARD
     let pdf = emitPDF(parseWS(data), mode: .modern)
     #expect(!contains(pdf, bytes("(?")))                  // no mangled bullet

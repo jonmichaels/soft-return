@@ -27,6 +27,10 @@ extension NSAttributedString.Key {
     /// — the difference between the envelope fit that keeps pagination the engine's and the
     /// `.sr` roll Printed moves it by. `ScriptRiseLayoutManager` applies it; layout never reads it.
     public static let nativeScriptRise = NSAttributedString.Key("SoftReturn.nativeScriptRise")
+    /// `true` on an underlined run of blanks Native rules although it has no ink: the blanks a
+    /// bare tab became under `.ul off` (`Style.bareTab`; `DocumentRenderer.nativeUnderlineWordsOnly`).
+    /// `ScriptRiseLayoutManager.drawUnderline` rules the whole run, to where the next glyph is set.
+    public static let nativeRuleBlanks = NSAttributedString.Key("SoftReturn.nativeRuleBlanks")
 }
 
 /// Job 211 (b11 leg 3b): cp437 box/shade/block glyphs drawn as vector fills — the visible
@@ -701,6 +705,30 @@ public func graphicCell(
     return GraphicCell(eraseFrame: eraseFrame, fills: fills)
 }
 
+/// `count` cells of one cp437 graphic character side by side from `x0`, each `pitch` wide on `baselineY`, in black:
+/// how body text's cells (`graphicCells`) draw a run of the character, a run of one block (`█`, a shade) one rectangle
+/// as the engine's `graphicOps` draws it. Planning #549: the copies of a box-drawing or shading strike character
+/// (`PageLine.StrikeCopies`), which Printed draws as cells.
+public func graphicCellRun(_ ch: Character, x0: Double, count: Int, pitch: Double, baselineY: Double,
+                           pt: Double) -> [GraphicCell] {
+    var cells: [GraphicCell] = []
+    let joins = ch == fullBlockChar || shadeGray[ch] != nil
+    for k in 0..<max(0, count) {
+        let cell = graphicCell(ch, x0: x0 + Double(k) * pitch, baselineY: baselineY, pt: pt, pitch: pitch,
+                               color: 0, patternIndex: nil)
+        if joins, let last = cells.last, last.fills.count == 1, cell.fills.count == 1 {
+            let fill = last.fills[0]
+            cells[cells.count - 1] = GraphicCell(
+                eraseFrame: last.eraseFrame.union(cell.eraseFrame),
+                fills: [GraphicRect(shape: .rect(fill.frame.union(cell.fills[0].frame)), gray: fill.gray,
+                                    pattern: fill.pattern)])
+        } else {
+            cells.append(cell)
+        }
+    }
+    return cells
+}
+
 /// Vector fills for every eligible cp437 glyph in `glyphRange`, one line fragment's worth.
 ///
 /// `fragment` is that fragment's own `CGRect` (`NSLayoutManager.lineFragmentRect(forGlyphAt
@@ -965,12 +993,18 @@ public final class ScriptRiseLayoutManager: NSLayoutManager {
             + ownAdvance(ofGlyph: lastGlyph)
         // A word the driver placed in pieces is several attribute runs, each underlined alone; the kern after a
         // run's last glyph belongs to neither, and a link's rule broke at every split (LJ6DTP p8's "s|fwriter").
-        // When the next glyph on the line is underlined too, the rule runs on to where it is set.
-        let next = NSMaxRange(glyphRange)
-        if lastGlyph == next - 1, next < NSMaxRange(lineGlyphRange),
-           let storage = textStorage, characterIndexForGlyph(at: next) < storage.length,
-           ((storage.attribute(.underlineStyle, at: characterIndexForGlyph(at: next), effectiveRange: nil) as? Int) ?? 0) != 0 {
-            right = max(right, lineFragmentRect(forGlyphAt: next, effectiveRange: nil).minX + location(forGlyphAt: next).x)
+        // When the next glyph on the line is underlined too, the rule runs on to where it is set. A bare tab's ruled
+        // blanks (`.nativeRuleBlanks`) end where the next glyph is set, underlined or not: that is where the tab put
+        // the pen.
+        let next = lastGlyph + 1
+        if next < NSMaxRange(lineGlyphRange), let storage = textStorage, characterIndexForGlyph(at: next) < storage.length {
+            let nextX = lineFragmentRect(forGlyphAt: next, effectiveRange: nil).minX + location(forGlyphAt: next).x
+            if Self.rulesBlank(storage, at: characterIndexForGlyph(at: lastGlyph)) {
+                right = nextX
+            } else if lastGlyph == NSMaxRange(glyphRange) - 1,
+                      ((storage.attribute(.underlineStyle, at: characterIndexForGlyph(at: next), effectiveRange: nil) as? Int) ?? 0) != 0 {
+                right = max(right, nextX)
+            }
         }
         let extent = CGRect(x: left, y: 0, width: max(0, right - left), height: 0)
         let baseline = lineRect.minY + location(forGlyphAt: inked.location).y
@@ -997,7 +1031,8 @@ public final class ScriptRiseLayoutManager: NSLayoutManager {
             if notShownAttribute(forGlyphAt: glyph) { continue }
             let character = characterIndexForGlyph(at: glyph)
             guard character < string.length else { continue }
-            if let scalar = Unicode.Scalar(string.character(at: character)), Self.carriesNoRule(scalar) { continue }
+            if let scalar = Unicode.Scalar(string.character(at: character)), Self.carriesNoRule(scalar),
+               !Self.rulesBlank(storage, at: character) { continue }
             if first == nil { first = glyph }
             last = glyph
         }
@@ -1005,7 +1040,10 @@ public final class ScriptRiseLayoutManager: NSLayoutManager {
         return NSRange(location: first, length: last - first + 1)
     }
 
-    /// Batch 40 (M20): how far `glyph` advances in its own face, without any kern set on its character.
+    /// Batch 40 (M20): how far `glyph` advances in its own face, without any kern set on its character. A glyph
+    /// drawn wider or narrower (`.expansion`, a driver-placed word scaled to its width on paper) advances that much
+    /// more or less: the rule under such a word ends where its last letter does, as Printed's ends at the end of the
+    /// piece it scaled with Tz.
     public func ownAdvance(ofGlyph glyph: Int) -> CGFloat {
         let character = characterIndexForGlyph(at: glyph)
         guard let storage = textStorage, character < storage.length,
@@ -1015,7 +1053,14 @@ public final class ScriptRiseLayoutManager: NSLayoutManager {
         var cgGlyph = self.cgGlyph(at: glyph)
         var advance = CGSize.zero
         CTFontGetAdvancesForGlyphs(font as CTFont, .horizontal, &cgGlyph, &advance, 1)
-        return advance.width
+        let expansion = (storage.attribute(.expansion, at: character, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
+        return advance.width * CGFloat(exp(expansion))
+    }
+
+    /// Whether the character at `index` is a blank the underline covers although it has no ink: a bare tab's
+    /// blanks under `.ul off` (`.nativeRuleBlanks`), which Printed's `rules` rules across their width.
+    public static func rulesBlank(_ storage: NSTextStorage, at index: Int) -> Bool {
+        index < storage.length && (storage.attribute(.nativeRuleBlanks, at: index, effectiveRange: nil) as? Bool) == true
     }
 
     /// A character an underline does not start or end on.

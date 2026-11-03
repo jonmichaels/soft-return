@@ -37,7 +37,7 @@ private func measureDoc(_ body: String) -> Document {
     #expect(!emitHTML(measureDoc("some prose\r\n"), mode: .modern).contains(nowrapScrollCSS))
     // cp437 box-drawing bytes, not UTF-8: the parser reads the era's code page.
     var data = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
-    data += [0xda, 0xc4, 0xc4, 0xc4, 0xbf, 0x0d, 0x0a]        // ┌───┐
+    data += wsItems([0xda, 0xc4, 0xc4, 0xc4, 0xbf, 0x0d, 0x0a])   // ┌───┐
     let graphic = emitHTML(parseWS(data), mode: .modern)
     #expect(graphic.contains("class=\"ws-nowrap\""))
     #expect(graphic.contains(nowrapScrollCSS))

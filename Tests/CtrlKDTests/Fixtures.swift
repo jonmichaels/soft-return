@@ -28,6 +28,13 @@ func bytes(_ s: String) -> [UInt8] {
     Array(s.utf8)
 }
 
+/// `raw` as a WS7 document stores it: every byte above 7Fh a `1B x 1C` item (a bare high
+/// byte loses bit 7 on load, WS7 teardown 14.2, 21.8). Port of the `_items` helper in
+/// ctrl-kd's tests.
+func wsItems(_ raw: [UInt8]) -> [UInt8] {
+    raw.flatMap { $0 >= 0x80 ? [0x1B, $0, 0x1C] : [$0] }
+}
+
 extension String {
     /// Stand-in for Python's `str.strip()` in test assertions ported from the Python
     /// suite, which lean on it for leading/trailing whitespace.

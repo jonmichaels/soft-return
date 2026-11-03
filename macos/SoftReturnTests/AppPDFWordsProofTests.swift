@@ -12,8 +12,15 @@ import Testing
 ///
 /// The bytes are the ENGINE's own Printed PDF, produced through `DocumentOperations` with
 /// the library defaults, which `AppAnswerKeyParityTests` separately proves is byte-identical
-/// to ctrl-kd's own output. ctrl-kd reads it with `--dump-engine-words`; we read it with
-/// `AppPDFWords`. Every word must agree in text, page, and position.
+/// to ctrl-kd's own output. ctrl-kd reads it with `--dump-engine-chars`; we read it with
+/// `AppPDFWords.charsPayload`. Every character must agree in text, page, and position.
+///
+/// CHARACTERS, not words, because characters are what the tier hands ctrl-kd
+/// (`AppNativeFidelityTests`, engine-chars schema v2), and ctrl-kd segments both sides. The
+/// app's own word segmentation (`AppPDFWords.payload`) is no longer the tier's input; it
+/// stays for the geometry tests, which read Native and the engine through it alike. The two
+/// segmenters part on a run printed back over its own line (the strike-out pass, planning
+/// #549): ctrl-kd merges it into the word by x, this one keeps it as its own run.
 ///
 /// Running this the other way round — trusting the extractor because the app's numbers look
 /// plausible — is exactly how a coordinate gate goes quietly wrong, which is why the tier
@@ -45,11 +52,10 @@ import Testing
         "needs an armed corpus and a ctrl-kd checkout with tools/fidelity_gate.py — NOT a pass."
     }
 
-    struct DumpedWord: Decodable, Sendable {
+    struct DumpedChar: Decodable, Sendable {
         let text: String
         let x_pt: Double
         let y_top_pt: Double
-        let size_pt: Double
         let font_class: String
         let page: Int
     }
@@ -57,19 +63,19 @@ import Testing
     struct Dump: Decodable, Sendable {
         let schema_version: Int
         let n_pages: Int
-        let words: [DumpedWord]
+        let chars: [DumpedChar]
     }
 
     /// ctrl-kd's own extraction of its own PDF for this document.
     static func ctrlkdDump(doc: String) throws -> Dump {
         let out = FileManager.default.temporaryDirectory
-            .appendingPathComponent("engine-words-\(UUID().uuidString).json")
+            .appendingPathComponent("engine-chars-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: out) }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["python3", try #require(fidelityGate).path,
-                             "--doc=\(doc)", "--dump-engine-words", out.path]
+                             "--doc=\(doc)", "--dump-engine-chars", out.path]
         process.standardOutput = Pipe()
         let err = Pipe()
         process.standardError = err
@@ -78,7 +84,7 @@ import Testing
         process.waitUntilExit()
         guard FileManager.default.fileExists(atPath: out.path) else {
             throw AppNativeFidelityTests.GateError.badOutput(
-                "\(doc): --dump-engine-words wrote nothing (status \(process.terminationStatus)): \(errText)")
+                "\(doc): --dump-engine-chars wrote nothing (status \(process.terminationStatus)): \(errText)")
         }
         return try JSONDecoder().decode(Dump.self, from: try Data(contentsOf: out))
     }
@@ -101,27 +107,32 @@ import Testing
         let pdf = try Self.enginePDF(doc: doc)
         let theirs = try Self.ctrlkdDump(doc: doc)
         // ctrl-kd reads the engine's `Td`s inside its page placement, so ours are taken back
-        // to the logical page to compare like with like (`Payload.onLogicalPage`).
-        let ours = try AppPDFWords.payload(from: pdf).onLogicalPage(
+        // to the logical page to compare like with like (`CharsPayload.onLogicalPage`).
+        let ours = try AppPDFWords.charsPayload(from: pdf).onLogicalPage(
             try AppNativeFidelityTests.logicalPageX(forDocumentNamed: doc, asCaptured: false))
 
         #expect(ours.n_pages == theirs.n_pages,
                 "\(doc): we count \(ours.n_pages) pages, ctrl-kd counts \(theirs.n_pages)")
 
-        // Compare as multisets keyed by (page, text), then position — word ORDER is
-        // explicitly not depended on downstream, so requiring it here would be stricter
-        // than the schema and would fail on a difference that cannot matter.
-        let ourByKey = Dictionary(grouping: ours.words) { "\($0.page)\u{1}\($0.text)" }
-        let theirByKey = Dictionary(grouping: theirs.words) { "\($0.page)\u{1}\($0.text)" }
+        // Compare as multisets keyed by (page, text), then position — ORDER is explicitly
+        // not depended on downstream, so requiring it here would be stricter than the
+        // schema and would fail on a difference that cannot matter. A blank is no ink, and
+        // the gate sets its word gaps from positions, so blanks are left out of both sides.
+        let ourByKey = Dictionary(grouping: ours.chars.filter { !$0.text.allSatisfy(\.isWhitespace) }) {
+            "\($0.page)\u{1}\($0.text)"
+        }
+        let theirByKey = Dictionary(grouping: theirs.chars.filter { !$0.text.allSatisfy(\.isWhitespace) }) {
+            "\($0.page)\u{1}\($0.text)"
+        }
 
         let missing = theirByKey.keys.filter { ourByKey[$0] == nil }.sorted()
         let extra = ourByKey.keys.filter { theirByKey[$0] == nil }.sorted()
         #expect(missing.isEmpty, """
-            \(doc): \(missing.count) word(s) ctrl-kd found that we did not — \
+            \(doc): \(missing.count) character(s) ctrl-kd found that we did not — \
             \(missing.prefix(10).map { $0.replacingOccurrences(of: "\u{1}", with: " p") })
             """)
         #expect(extra.isEmpty, """
-            \(doc): \(extra.count) word(s) we produced that ctrl-kd did not — \
+            \(doc): \(extra.count) character(s) we produced that ctrl-kd did not — \
             \(extra.prefix(10).map { $0.replacingOccurrences(of: "\u{1}", with: " p") })
             """)
 
@@ -129,8 +140,8 @@ import Testing
         // sequences. Zipping needs a total order, and two identical words at the same x on
         // different lines have none that both producers must agree on — the first run
         // reported four "drift" rows on BOXES that were the SAME four coordinates in a
-        // different order. Rounding to 0.01pt and comparing sorted position lists removes
-        // ordering from the question entirely, which is the only honest way to ask it.
+        // different order. Comparing sorted position lists removes ordering from the
+        // question entirely, which is the only honest way to ask it.
         //
         // 0.01pt is the bar because the tolerance model works at sub-point resolution. These
         // are the same glyphs at the same size from the same bytes; they should agree to
@@ -140,13 +151,19 @@ import Testing
             guard let hers = theirByKey[key] else { continue }
             let label = key.replacingOccurrences(of: "\u{1}", with: " p")
             if mine.count != hers.count {
-                drift.append("\(label): we found \(mine.count) of this word, ctrl-kd found \(hers.count)")
+                drift.append("\(label): we found \(mine.count) of this character, ctrl-kd found \(hers.count)")
                 continue
             }
-            let ourPositions = mine.map { String(format: "%.2f,%.2f", $0.x_pt, $0.y_top_pt) }.sorted()
-            let theirPositions = hers.map { String(format: "%.2f,%.2f", $0.x_pt, $0.y_top_pt) }.sorted()
-            if ourPositions != theirPositions {
-                drift.append("\(label): ours \(ourPositions) vs ctrl-kd \(theirPositions)")
+            // Within 0.01pt by distance, not by rounding: two readings of 271.565 round to
+            // 271.57 and 271.56 (LYING).
+            let ourPositions = mine.map { ($0.y_top_pt, $0.x_pt) }.sorted { $0 < $1 }
+            let theirPositions = hers.map { ($0.y_top_pt, $0.x_pt) }.sorted { $0 < $1 }
+            let apart = zip(ourPositions, theirPositions).filter {
+                abs($0.0 - $1.0) > 0.01 || abs($0.1 - $1.1) > 0.01
+            }
+            if let first = apart.first {
+                drift.append("\(label): \(apart.count) apart, first ours " + String(
+                    format: "%.3f,%.3f vs ctrl-kd %.3f,%.3f", first.0.1, first.0.0, first.1.1, first.1.0))
             }
             let ourClasses = Set(mine.map(\.font_class)), theirClasses = Set(hers.map(\.font_class))
             if ourClasses != theirClasses {
@@ -154,7 +171,7 @@ import Testing
             }
         }
         #expect(drift.isEmpty, """
-            \(doc): \(drift.count) word group(s) placed differently by the two extractors over \
+            \(doc): \(drift.count) character group(s) placed differently by the two extractors over \
             the SAME bytes — the app-side extraction is wrong, not the app's rendering.
             \(drift.sorted().prefix(15).joined(separator: "\n"))
             """)

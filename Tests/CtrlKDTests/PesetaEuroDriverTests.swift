@@ -56,7 +56,9 @@ import TestSupport
     static func body(_ text: String = "Costs \u{20A7} 100 today") -> [UInt8] {
         var out: [UInt8] = []
         for ch in text.unicodeScalars {
-            out += ch == "\u{20A7}" ? [peseta] : Array(String(ch).utf8)
+            // the peseta as a document stores it: a `1B x 1C` item (a bare 9Eh is a
+            // flagged 1Eh, WS7 teardown 3.8, 21.8)
+            out += ch == "\u{20A7}" ? [0x1B, peseta, 0x1C] : Array(String(ch).utf8)
         }
         return out
     }

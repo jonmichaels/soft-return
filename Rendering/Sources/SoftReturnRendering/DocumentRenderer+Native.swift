@@ -181,6 +181,13 @@ extension DocumentRenderer {
         // `colourMap` (`PDFWriter.swift:708`) — non-empty only for LJ6DTP documents, so
         // every other driver's `span.colour` (if any) stays inert, same as before this job.
         let colourMap = doc.printerDriver == "LJ6DTP" ? nativeLJ6DTPColourGray : [:]
+        // Which blanks a line's underline covers, as Printed's `rules` draws it: `.ul off` (`underlineBlanks`
+        // false) underlines each word alone and a bare tab's blanks; no `.ul` and `.ul on` are continuous.
+        let underlineWords = doc.formatting.underlineBlanks == false
+        func underlineRule(_ line: PageLine) -> NativeUnderlineRule {
+            underlineWords ? .words
+                : .continuous(justified: line.justifyRightX != nil && !(line.justifyWordX ?? []).isEmpty)
+        }
 
         // Clipping, not wrapping — see the type's doc comment. A wrapped line would add a
         // line to a page and push every later page break off by one.
@@ -328,7 +335,7 @@ extension DocumentRenderer {
                                             paragraph: paragraph))
                 return piece
             }
-            let linePieces = nativeLinePieces(line, fonts: doc.fonts)
+            let linePieces = nativeLinePieces(line, fonts: doc.fonts, hpljet: hpljet)
             let piece = NSMutableAttributedString(attributedString: nativePinJustifiedWords(
                 nativePinGraphicCells(
                     attributedLine(
@@ -338,9 +345,11 @@ extension DocumentRenderer {
                         nativeSupSub: true, nativeFullScripts: hpljet,
                         nativeRoll: line.roll ?? documentRoll,
                         nativePMActive: line.pmActive, nativeKerning: nativeQuoteKerning(line),
-                        nativeFace: line.face),
+                        nativeFace: line.face, nativeUnderline: underlineRule(line),
+                        nativeStrikeOver: line.strikeChar != nil),
                     placements: nativeLineGraphicCells(line).cells),
-                pieces: linePieces.pieces, scaleBeyond: linePieces.scaleBeyond))
+                pieces: linePieces.pieces, scaleBeyond: linePieces.scaleBeyond,
+                stretch: linePieces.stretch))
             piece.append(lineTerminator(font: courierPrime(size: CGFloat(metrics.size)),
                                         paragraph: paragraph))
             return piece
@@ -459,6 +468,53 @@ extension DocumentRenderer {
         // fragment's own glyph geometry — zero extra height, on paper and here, matching
         // `layoutPrintedPagesPlain`'s `cost(_:)` (`PDFLayout.swift:1054-1058`) exactly instead
         // of merely approximating it.
+        // Planning #549: one op of Printed's strike-out pass (`PageLine.StrikeCopies`) as a column pass: `count`
+        // copies of the strike character from the engine's own x, in the face Native draws the struck span in at the
+        // size Printed prints them, each glyph scaled (`.expansion`) to the copy's width as Printed scales it with Tz,
+        // so the copies advance exactly as Printed's do. Nil for a blank character, which prints nothing.
+        // A box-drawing or shading character (`.xx` typed as an extended-character item) is drawn as Printed draws it
+        // (`strikeRuns`' `graphicOps`) and as body text draws it here: vector cells, one per copy at the copy's own
+        // width, at the copies' size, on the pass's baseline; the pass's text is a blank.
+        func strikeCopiesPass(_ char: String, _ copies: PageLine.StrikeCopies, face: PageLine.Face?,
+                              baselineY: Double) -> ColumnPass? {
+            guard copies.count > 0, char.contains(where: { !$0.isWhitespace }) else { return nil }
+            if char.count == 1, let cell = char.first, nativeGeometryChars.contains(cell) {
+                return ColumnPass(
+                    text: NSAttributedString(string: " ", attributes: [.font: courierPrime(size: CGFloat(metrics.size))]),
+                    xPt: copies.x, baselineY: baselineY,
+                    bars: graphicCellRun(cell, x0: copies.x, count: copies.count, pitch: copies.width,
+                                         baselineY: baselineY, pt: copies.size))
+            }
+            let bold = copies.styles.contains(.bold)
+            let italic = copies.styles.contains(.italic)
+            let base: NSFont
+            if let face, let faced = nativeFaceMacFont(face, bold: face.bold || bold, italic: italic) {
+                base = faced
+            } else if let entry = copies.entry {
+                base = resolvedFont(for: entry, styles: copies.styles, fallback: courierPrime(size: CGFloat(metrics.size)),
+                                    defaultSize: metrics.size, useCourierPrime: true)
+            } else {
+                base = styled(courierPrime(size: CGFloat(metrics.size)), with: copies.styles)
+            }
+            let font = fontResized(base, to: CGFloat(copies.size)) ?? base
+            // Clipped, never wrapped: a run longer than the column is still one row of copies.
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: NSColor.black,
+                .kern: nativeNoKerning,
+                .ligature: nativeNoLigatures,
+                .paragraphStyle: naturalParagraphStyle(),
+            ]
+            let natural = nativeResolvedAdvance(of: char, in: font)
+            if natural > 0, copies.width > 0, abs(copies.width / natural - 1) >= 0.00005 {
+                attributes[.expansion] = log(copies.width / natural)
+            } else if natural <= 0 {
+                attributes[.kern] = copies.width
+            }
+            return ColumnPass(text: NSAttributedString(string: String(repeating: char, count: copies.count),
+                                                       attributes: attributes),
+                              xPt: copies.x, baselineY: baselineY)
+        }
         // Job 246 (p6-knockout): NATURAL (unbounded) height, not `paragraphStyle(lead:
         // metrics.lead)` — a pass never contributes to pagination cost either way (see
         // this function's own doc comment above, "a chain member charges ZERO pagination
@@ -475,7 +531,7 @@ extension DocumentRenderer {
         // Pinned like a base line (`lineAndTerminator`): its cells and words at the engine's
         // own x, so a flush-right half of a bar meets the other half instead of running on.
         func overprintPass(_ line: PageLine) -> NSAttributedString {
-            let linePieces = nativeLinePieces(line, fonts: doc.fonts)
+            let linePieces = nativeLinePieces(line, fonts: doc.fonts, hpljet: hpljet)
             return nativePinJustifiedWords(nativePinGraphicCells(
                 attributedLine(coalesce(line).spans, font: courierPrime(size: CGFloat(metrics.size)),
                                paragraph: naturalParagraphStyle(), fonts: doc.fonts,
@@ -483,9 +539,11 @@ extension DocumentRenderer {
                                useCourierPrime: true, nativeSupSub: true, nativeFullScripts: hpljet,
                                nativeRoll: line.roll ?? documentRoll,
                                nativePMActive: line.pmActive, nativeKerning: nativeQuoteKerning(line),
-                               nativeFace: line.face),
+                               nativeFace: line.face, nativeUnderline: underlineRule(line),
+                               nativeStrikeOver: line.strikeChar != nil),
                 placements: nativeLineGraphicCells(line).cells),
-                pieces: linePieces.pieces, scaleBeyond: linePieces.scaleBeyond)
+                pieces: linePieces.pieces, scaleBeyond: linePieces.scaleBeyond,
+                stretch: linePieces.stretch)
         }
         // Job 227: LJ6DTP.WS's 72pt "LJ6DTP" banner title, immediately followed by its own
         // `.lh .05"` (3.6pt) shadow copy — the reference archive document `PDFWriter
@@ -535,13 +593,18 @@ extension DocumentRenderer {
                     paragraph: naturalParagraphStyle(), reservedLeadPt: reservedLead,
                     descentClearancePt: Self.nativePixDescentPt(metrics.size))
             }
+            // Planning #549: at the line's own left (`PageLine.left`), as `lineAndTerminator` sets an ordinary line
+            // and Printed draws this one; the pass is drawn from its row's fragment, at the text frame's anchor.
+            let extraLeftPt = (line.left ?? metrics.left) - printedLeftAnchor
             return attributedLine(coalesce(line).spans, font: courierPrime(size: CGFloat(metrics.size)),
-                           paragraph: naturalParagraphStyle(), fonts: doc.fonts,
+                           paragraph: nativeLineParagraphStyle(fontSize: Double(metrics.size), lead: nil,
+                                                               extraLeftPt: extraLeftPt), fonts: doc.fonts,
                            defaultSize: metrics.size, colourMap: colourMap, disableKerning: true,
                            useCourierPrime: true, nativeSupSub: true, nativeFullScripts: hpljet,
                            nativeRoll: line.roll ?? documentRoll,
                            nativePMActive: line.pmActive, nativeKerning: nativeQuoteKerning(line),
-                           nativeFace: line.face)
+                           nativeFace: line.face, nativeUnderline: underlineRule(line),
+                           nativeStrikeOver: line.strikeChar != nil)
         }
         // Job 225: this function no longer tries to make each page's own block of lines
         // RENDER to any particular height — it emits page N's own real lines and nothing
@@ -804,6 +867,36 @@ extension DocumentRenderer {
                                             pt: Double(metrics.size), pitch: $0.width,
                                             color: 0, patternIndex: nil)
                             }))
+                    }
+                    // The strike-out pass: copies of the line's strike character, where Printed prints them over each
+                    // struck run (`PageLine.strikeCopies`, recorded from the engine's own `strikeRuns`), on the group's
+                    // shared baseline, for the base line and every line overprinted on it.
+                    for struck in flowPage[i...j] {
+                        guard let char = struck.strikeChar else { continue }
+                        for copies in struck.strikeCopies ?? [] {
+                            guard let pass = strikeCopiesPass(char, copies, face: struck.face, baselineY: engineY)
+                            else { continue }
+                            numberPasses.append(pass)
+                        }
+                    }
+                    // An underlined dot-leader tab record: Printed rules it from where the pen stood to the end of the
+                    // last dot it printed (`PageLine.leaderRules`, recorded from the writer's own `rules` call), under any
+                    // `.ul`. Native sets the document's own dots across the stop its own way (`appendTabRun`), so the rule
+                    // is drawn here, at the engine's x, as `drawUnderline`'s rule is drawn: `underlineThickness` centred
+                    // `underlineDrop` below the group's baseline.
+                    for ruled in flowPage[i...j] {
+                        for rule in ruled.leaderRules ?? [] where rule.width > 0 {
+                            let thickness = Double(ScriptRiseLayoutManager.underlineThickness)
+                            let band = CGRect(x: rule.x,
+                                              y: engineY + Double(ScriptRiseLayoutManager.underlineDrop) - thickness / 2,
+                                              width: rule.width, height: thickness)
+                            numberPasses.append(ColumnPass(
+                                text: NSAttributedString(string: " ", attributes: [
+                                    .font: courierPrime(size: CGFloat(metrics.size)),
+                                ]),
+                                xPt: rule.x, baselineY: engineY,
+                                bars: [GraphicCell(eraseFrame: .zero, fills: [GraphicRect(shape: .rect(band), gray: 0)])]))
+                        }
                     }
                     // WS4's HPLJET prints a COMPOS pair's second character over the first
                     // (`PageLine.overstrike`, the engine's `pageStream`), in the line's face.

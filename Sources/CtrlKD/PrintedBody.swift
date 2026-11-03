@@ -236,6 +236,7 @@ func resolvePrintedBody(
 
             var spans: [Span] = []
             var due: [(note: Note, index: Int)] = []
+            var noteRefs: [Int] = []
             for sp in line.spans where keepSpanOnPageline(sp, refNotes: refNotes, printed: true) {
                 let span = printedSpan(sp, block: block, euro: euro)
                 if span.styles.contains(.fnref), let k = Int(sp.text),
@@ -246,6 +247,9 @@ func resolvePrintedBody(
                                       styles: span.styles, font: span.font))
                     if note.kind == .footnote || note.kind == .annotation {
                         due.append((note: note, index: noteIndex))
+                    }
+                    if note.kind == .footnote || note.kind == .endnote {
+                        noteRefs.append(noteIndex)
                     }
                     continue
                 }
@@ -314,12 +318,13 @@ func resolvePrintedBody(
                 let (reserved, nBlank) = pixReservedAdvance(
                     blkLines, startIdx: li, ownLeadPt: ownLead ?? defaultLeadPt)
                 li += nBlank
-                items.append(.line(PageLine([], soft: line.soft, lead: reserved + extra,
-                                            overprint: line.overprint, bi: bi,
-                                            image: .init(pixIndex: sub.pixIndex,
-                                                         widthPt: sub.wPt, heightPt: sub.hPt),
-                                            left: ownLeft, poCols: line.poCols),
-                                   due: due))
+                var imageLine = PageLine([], soft: line.soft, lead: reserved + extra,
+                                         overprint: line.overprint, bi: bi,
+                                         image: .init(pixIndex: sub.pixIndex,
+                                                      widthPt: sub.wPt, heightPt: sub.hPt),
+                                         left: ownLeft, poCols: line.poCols)
+                imageLine.noteRefs = noteRefs
+                items.append(.line(imageLine, due: due))
                 firstLineOfBlock = false
                 enteringLinePending = false
                 continue
@@ -332,8 +337,12 @@ func resolvePrintedBody(
             // Planning #251 (2026-09-09): model-build-time bare-tab expansion, the same point
             // ctrl-kd's own `_doc_to_pagelines` applies it (right before the PageLine is
             // built) — see `expandBareTabsForPrintedLayout` (`EmitterRules.swift`).
+            var tabMarks: [(span: Int, start: Int, end: Int)] = []
             spans = expandBareTabsByDistance(spans, fonts: renderFonts, size: sizeForLeft)
-                ?? expandBareTabsForPrintedLayout(spans)
+                ?? expandBareTabsForPrintedLayout(spans, marks: &tabMarks)
+            if !tabMarks.isEmpty, !(doc.formatting.underlineBlanks ?? true) {
+                spans = bareTabsUnderlined(spans, marks: tabMarks)
+            }
             // A `.oc on` line's own centring tab is the EDITOR's arithmetic; the printer
             // re-centres on the ink alone (see recentredCentreTabSpans).
             spans = recentredCentreTabSpans(spans, block: block, doc: doc)
@@ -404,18 +413,20 @@ func resolvePrintedBody(
             }
             // A PageLine, not a bare list of spans, so the line's own `.lh` survives the
             // paginator whether or not the document has notes.
-            items.append(.line(PageLine(spans, soft: line.soft, lead: ownLead,
-                                        overprint: line.overprint,
-                                        fi: isFirstLine ? fiPt : nil,
-                                        pmActive: pmActive, bi: bi,
-                                        ws4Spacing: ws4SpacingLine,
-                                        kerning: line.kerning, left: ownLeft, roll: ownRoll,
-                                        justifyRightX: justifyRightX,
-                                        parityLeft: ownParityLeft,
-                                        poCols: line.poCols, fontRise: fontRise,
-                                        softBlanks: softBlanks, hibit: hibit,
-                                        softHyphen: line.softHyphen, li: lineIdx,
-                                        overstrike: overstrike), due: due))
+            var bodyLine = PageLine(spans, soft: line.soft, lead: ownLead,
+                                    overprint: line.overprint,
+                                    fi: isFirstLine ? fiPt : nil,
+                                    pmActive: pmActive, bi: bi,
+                                    ws4Spacing: ws4SpacingLine,
+                                    kerning: line.kerning, left: ownLeft, roll: ownRoll,
+                                    justifyRightX: justifyRightX,
+                                    parityLeft: ownParityLeft,
+                                    poCols: line.poCols, fontRise: fontRise,
+                                    softBlanks: softBlanks, hibit: hibit,
+                                    softHyphen: line.softHyphen, li: lineIdx,
+                                    overstrike: overstrike)
+            bodyLine.noteRefs = noteRefs
+            items.append(.line(bodyLine, due: due))
             firstLineOfBlock = false
         }
         // triage Q9: events recorded at or past this block's own line count.

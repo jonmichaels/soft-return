@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import CtrlKD
 
@@ -1167,4 +1168,249 @@ private func pgnumOps(_ pdf: [UInt8]) -> [(x: Double, y: Double, n: String)] {
                           options: EmitOptions(headers: headers, pageNumbers: .auto))
         #expect(pgnumOps(out).isEmpty)
     }
+}
+
+// MARK: - planning #549: margins in whole VMI, positions in whole decipoints
+
+/// WS7 holds `.mt` in VMI (1/1440 inch) and the LaserJet driver sends a position as
+/// floor(y x 720 / 1440) decipoints (WS7 teardown 11.6), with no rounding to whole points:
+/// `.mt 0.55"` is 792 VMI, so body line 1's baseline is 396 + 120 = 516 dp (fixture
+/// note-only-mt-rounded, run nw-mt35), and `.mt 0.70"`, 1008 VMI, puts it at 624 (fixture
+/// note-only-mt-high-byte-2, run mt36-70). Port of
+/// `test_an_inch_top_margin_is_whole_vmi_sent_as_whole_decipoints`.
+@Test func anInchTopMarginIsWholeVMISentAsWholeDecipoints() throws {
+    for (mt, want) in [("0.55\"", 51.6), ("0.70\"", 62.4), ("0.35\"", 37.2)] {
+        var body = bytes(".mt " + mt)
+        body += HARD
+        body += bytes("line 01")
+        body += HARD
+        let doc = parseWS(body, variant: .ws5plus)
+        #expect(abs(printedTop(doc) - (want - 12)) < 1e-9)
+        let line = try #require(contentSpans(emitPDF(doc, mode: .printed))
+            .first { $0.text == "line 01" })
+        #expect(abs((line.y ?? 0) - (792 - want)) < 1e-9)
+    }
+}
+
+/// `.pl 10.84"` is 15609.6 VMI; WS7 prints the page number at 7204 dp (WS7 teardown 21.8,
+/// run nf59-pl): PL - MB + FM + LH = 15609 - 1920 + 480 + 240 = 14409 VMI, 7204 dp once
+/// halved and cut. Port of `test_a_fractional_inch_page_length_is_cut_to_whole_vmi`.
+@Test func aFractionalInchPageLengthIsCutToWholeVMI() throws {
+    var body = bytes(".pl 10.84\"")
+    body += HARD
+    body += bytes("line 01")
+    body += HARD
+    let number = try #require(contentSpans(emitPDF(parseWS(body, variant: .ws5plus),
+                                                   mode: .printed)).first { $0.text == "1" })
+    #expect(abs((number.y ?? 0) - 71.6) < 1e-9)                 // 792 - 720.4
+}
+
+/// `.mb 5.4`/`.fm 1.14` in VMI: 15840 - 1296 + 273 (273.6 cut) = 14817, sent as 7408 dp:
+/// 792 - 740.8 - 12 = 39.2. `.fm .19i`, the same 273.6, prints its number at the cut
+/// value in a WS7 capture of `sawyer/REF/ADVANCE.DOT`. Port of
+/// `test_footer_text_keeps_fractional_page_lines`.
+@Test func footerTextKeepsFractionalPageLinesInWholeVMI() throws {
+    var body = bytes(".mb 5.4")
+    body += HARD
+    body += bytes(".fm 1.14")
+    body += HARD
+    body += bytes(".fo FOOTERTEXT")
+    body += HARD
+    for i in 1..<40 {
+        body += bytes("FLINE-\(i)")
+        body += HARD
+    }
+    let foot = try #require(contentSpans(emitPDF(parseWS(body), mode: .printed))
+        .first { $0.text.hasPrefix("FOOTERTEXT") })
+    #expect(abs((foot.y ?? 0) - 39.2) < 1e-9)
+}
+
+// MARK: - planning #549: the strike-out pass prints the `.xx` character
+
+/// The printed lines of `doc`'s layout JSON, page 1.
+private func layoutLines(_ doc: Document) throws -> [[String: Any]] {
+    let json = try JSONSerialization.jsonObject(
+        with: Data(Array(emitLayout(doc, mode: .printed).utf8))) as! [String: Any]
+    let printed = json["printed"] as! [String: Any]
+    let pages = printed["pages"] as! [[String: Any]]
+    return pages[0]["lines"] as! [[String: Any]]
+}
+
+/// `[x, y]` operands of every `Td` showing exactly `text`.
+private func tdOf(_ content: String, _ text: String) -> [String] {
+    content.components(separatedBy: " Tj").compactMap { op in
+        guard op.hasSuffix("(" + text + ")"), let td = op.range(of: " Td (", options: .backwards)
+        else { return nil }
+        let head = op[..<td.lowerBound].split(separator: " ")
+        return head.suffix(2).joined(separator: " ")
+    }
+}
+
+private func printedContent(_ doc: Document) -> String {
+    pdfContentStreams(emitPDF(doc, mode: .printed))
+        .map { String(decoding: $0, as: UTF8.self) }.joined(separator: "\n")
+}
+
+/// WS7 teardown 9.5, 11.6 (run xx25): `.xx *` stores the strike character, and LASERJET
+/// strikes `struck out` by printing it over the run after the line, N = span / width
+/// copies from the run's x: `ESC&a1008H**********`. With no `.xx` (run xx25c) it is `-`.
+/// Port of `test_xx_sets_the_character_the_strike_out_pass_prints`.
+@Test func xxSetsTheCharacterTheStrikeOutPassPrints() throws {
+    for (dot, ch) in [(".xx *", "*"), ("", "-")] {
+        var body: [UInt8] = []
+        if !dot.isEmpty {
+            body += bytes(dot)
+            body += HARD
+        }
+        body += bytes("plain ")
+        body += [0x18]
+        body += bytes("struck out")
+        body += [0x18]
+        body += bytes(" end")
+        body += HARD
+        let doc = parseWS(body, variant: .ws5plus)
+        let content = printedContent(doc)
+        let pass = tdOf(content, String(repeating: ch, count: 10))
+        #expect(!pass.isEmpty && pass == tdOf(content, "struck out"))
+        #expect(!content.contains(" l S"))                       // no rule any more
+        #expect(try layoutLines(doc)[0]["strike_char"] as? String == ch)
+    }
+}
+
+/// `.xx` with no character stores 20h (WS7 teardown, `reference/dot-formatter-tables.txt`,
+/// XX): the pass prints blanks, so nothing shows; the layout still names the character.
+/// Port of `test_a_bare_xx_strikes_with_blanks`.
+@Test func aBareXXStrikesWithBlanks() throws {
+    var body = bytes(".xx *")
+    body += HARD
+    body += bytes(".xx")
+    body += HARD
+    body += bytes("plain ")
+    body += [0x18]
+    body += bytes("struck out")
+    body += [0x18]
+    body += bytes(" end")
+    body += HARD
+    let doc = parseWS(body, variant: .ws5plus)
+    let content = printedContent(doc)
+    #expect(tdOf(content, "**********").isEmpty && tdOf(content, "----------").isEmpty)
+    #expect(!content.contains(" l S"))
+    #expect(try layoutLines(doc)[0]["strike_char"] as? String == " ")
+}
+
+/// `.xx 1B B0 1C` strikes with CP437 B0h, the shaded box, and `.xx 1B C4 1C` with C4h, the
+/// horizontal line: the item is the character, as in body text (WS7's own print of
+/// `sawyer/PRINT.TST` sends B0h and C4h copies over the runs; WS7 teardown 11.6). A
+/// box-drawing or shading strike character is drawn as vector cells, as body text draws it,
+/// one cell per copy, and `strikeCopies` records the copies. Port of
+/// `test_xx_reads_an_extended_character_item`.
+@Test func xxReadsAnExtendedCharacterItem() throws {
+    for (item, ch) in [([UInt8](arrayLiteral: 0x1B, 0xB0, 0x1C), "\u{2591}"),
+                       ([UInt8](arrayLiteral: 0x1B, 0xC4, 0x1C), "\u{2500}")] {
+        var body = bytes(".xx ")
+        body += item
+        body += HARD
+        body += bytes("plain ")
+        body += [0x18]
+        body += bytes("struck out")
+        body += [0x18]
+        body += bytes(" end")
+        body += HARD
+        let doc = parseWS(body, variant: .ws5plus)
+        #expect(doc.strikeMarks == [Document.StrikeMark(blockIndex: 0, lineIndex: 0, char: ch)])
+        #expect(try layoutLines(doc)[0]["strike_char"] as? String == ch)
+        let content = printedContent(doc)
+        #expect(!content.contains("(\u{1B}"))
+        // ten copies over `struck out` (x 100.8, baseline 744), as cells
+        for op in graphicOps(String(repeating: ch, count: 10), x: 100.8, y: 744.0, pitch: 7.2,
+                             pt: 12) {
+            #expect(content.contains(String(decoding: op, as: UTF8.self)))
+        }
+        let line = docToPagelines(doc, printed: true)[0][0]
+        #expect(line.strikeChar == ch && line.strikeCopies?.map(\.count) == [10])
+    }
+}
+
+/// WS4's strike character is its STKCHR install byte, `-` (WS4 teardown 4 §15.7, run
+/// drv-hpljet: `---` over `str`); `.XX` is no WS4 command. Port of `test_ws4_has_no_xx`.
+@Test func ws4HasNoXX() {
+    var body = bytes(".XX *")
+    body += HARD
+    body += bytes("plain ")
+    body += [0x18]
+    body += bytes("str")
+    body += [0x18]
+    body += bytes(" end")
+    body += HARD
+    #expect(printedContent(parseWS(body, variant: .ws4)).contains("(---) Tj"))
+}
+
+/// WS7 teardown 11.6 (+0x22BA..0x22F0): N = floor(span / width) copies; a remainder r
+/// prints one more at the run's start and the N r further on, so the last ends flush.
+/// Counted in 300-dpi dots: a 7.2pt (30-dot) character over 95 dots is one copy, then 3
+/// copies 5 dots on. Port of `test_a_remainder_puts_one_copy_at_the_start`.
+@Test func aRemainderPutsOneCopyAtTheStart() {
+    var tz = hundredths(100.0)
+    let ops = strikeRuns([(true, 10.0, 10.0 + 95 * 0.24)], y: 700.0, char: "-",
+                         fonts: [StrikeFont(first: 0, font: "F1", pt: 12, width: 7.2,
+                                            tz: hundredths(100.0))],
+                         tzState: &tz)
+    #expect(ops.map { String(decoding: $0, as: UTF8.self) }
+            == ["BT /F1 12 Tf 0 Ts 10.0 700.0 Td (-) Tj ET",
+                "BT /F1 12 Tf 0 Ts 11.2 700.0 Td (---) Tj ET"])
+}
+
+// MARK: - planning #549: `.ul off` keeps the underline across a bare tab
+
+private func ul24Line() -> [UInt8] {
+    var body: [UInt8] = [0x13]
+    body += bytes("two words")
+    body += [0x13]
+    body += bytes(" and ")
+    body += [0x13]
+    body += bytes("a  double")
+    body += [0x13]
+    body += bytes(" and ")
+    body += [0x13]
+    body += bytes("tab")
+    body += [0x09]
+    body += bytes("here")
+    body += [0x13]
+    body += bytes(" end")
+    body += HARD
+    return body
+}
+
+/// `(x0, x1)` of every stroked rule in the printed content.
+private func rulesOf(_ content: String) -> [[Double]] {
+    content.components(separatedBy: "\n").compactMap { op in
+        let parts = op.split(separator: " ")
+        guard parts.count == 9, parts[0] == "0.6", parts[1] == "w", parts[4] == "m",
+              parts[7] == "l", parts[8] == "S",
+              let a = Double(parts[2]), let b = Double(parts[5]) else { return nil }
+        return [a, b]
+    }
+}
+
+/// WS7 teardown 11.6 (runs ul24f-l, ul24d-l): with `.ul off` LASERJET closes the underline
+/// at each blank (`ESC&dDtwo ESC&d@ ... ESC&dDwords`) but not across a bare tab:
+/// `ESC&dDtab ESC&a2880Hhere ESC&d@`. So `tab`, its tab and `here` are ruled without a
+/// break, while `two words` and `a  double` break at their blanks. Port of
+/// `test_ul_off_keeps_the_underline_across_a_bare_tab`.
+@Test func ulOffKeepsTheUnderlineAcrossABareTab() throws {
+    var body = bytes(".ul off")
+    body += HARD
+    body += ul24Line()
+    let off = parseWS(body, variant: .ws5plus)
+    let rules = rulesOf(printedContent(off))
+    #expect(Array(rules.suffix(3)) == [[259.2, 280.8], [280.8, 288.0], [288.0, 316.8]])
+    #expect(rules.contains([57.6, 79.2]) && rules.contains([86.4, 122.4]))
+    let segs = try layoutLines(off)[0]["segments"] as! [[String: Any]]
+    #expect(segs.contains { ($0["text"] as? String) == " "
+        && ($0["styles"] as? [String]) == ["baretab", "u"] })
+    // no `.ul` line (and `.ul on`): one rule over each underlined run, blanks and tab
+    // included, and no tab of its own in the model
+    let plain = parseWS(ul24Line(), variant: .ws5plus)
+    #expect(rulesOf(printedContent(plain)) == [[57.6, 122.4], [158.4, 223.2], [259.2, 316.8]])
+    #expect(!emitLayout(plain, mode: .printed).contains("baretab"))
 }

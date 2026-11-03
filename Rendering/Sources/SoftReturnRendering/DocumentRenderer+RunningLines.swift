@@ -90,51 +90,6 @@ extension DocumentRenderer {
         return (po + pc - 1) * 7.2
     }
 
-    /// MECHANISMS Q and X (engine commits 6d12d7e and 53d3114, mirroring ctrl-kd 605e27b /
-    /// 1017391 / e989028): re-evaluate a `.h#`/`.f#` line's own right-align tab against THIS
-    /// page's actual page-number width.
-    ///
-    /// A right/center/decimal-align tab typed into a running-head argument has its padding
-    /// BAKED to literal spaces at parse time, sized for whatever the `#` substitution was
-    /// assumed to be wide when the file was last saved — always one column, because
-    /// WordStar's own screen shows the literal `#` token, never the eventual number. Real
-    /// WS7 re-evaluates the tab at PRINT time instead: measured on -README.WS pages 9->10,
-    /// the header's "WordStar" moves 7.2pt LEFT the instant the page number grows a second
-    /// digit, while the number's own right edge — the tab's real target column — never moves.
-    ///
-    /// `absHMI` is where the BAKED padding ends, in 1/1800in units from the document's own
-    /// left reference, so it already encodes `targetCol - savedSuffixWidth` at the saved
-    /// (1-digit) width. Adding the stored suffix's own width back recovers `targetCol`;
-    /// subtracting THIS page's actual substituted suffix width gives the padding to use now.
-    ///
-    /// MECHANISM X is the `- 1` that is NOT here. That bias was fit against the 2-digit case
-    /// while -README's header was still 24pt too low (mechanism W's own bug), which masked
-    /// every horizontal residual behind a much larger vertical one. With W fixed, the
-    /// pristine capture showed both digit-width buckets uniformly one column left of the
-    /// biased formula: WS7's suffix-final print column is INCLUSIVE of the tab's target.
-    ///
-    /// Fixed-pitch only (`entry == nil`), exactly like the engine: a proportional header face
-    /// has no single column width to divide the HMI target by, and no oracle in the corpus
-    /// combines the two, so that case keeps its baked padding untouched.
-    static func nativeHFRetab(_ text: String, tabRec: HFTabMark?,
-                                       substituting render: (String) -> String) -> String {
-        guard let tabRec else { return text }
-        let chars = Array(text)
-        let charIdx = tabRec.charIdx
-        let cols = tabRec.cols
-        guard charIdx >= 0, charIdx + cols <= chars.count else { return text }
-        let suffix = String(chars[(charIdx + cols)...])
-        let strippedSuffix = String(String.UnicodeScalarView(
-            suffix.unicodeScalars.filter { $0.value >= 0x20 }))
-        // `tabHMIPerCol` is 180 (`SymmetricBlocks.swift`) — a WordStar file-format constant,
-        // vendored like this function's other spec literals. Banker's rounding matches the
-        // engine's own `roundHalfToEven` at the exact .5 cases this division produces.
-        let savedTargetCol = nativeRoundHalfToEven(Double(tabRec.absHMI) / 180.0)
-            + strippedSuffix.count
-        let newCols = max(0, savedTargetCol - render(strippedSuffix).count)
-        return String(chars[0..<charIdx]) + String(repeating: " ", count: newCols) + suffix
-    }
-
     /// `leftAnchor` is the x `PagedDocumentView.drawRunningLines` will actually start from —
     /// `RenderedDocument.textFrame.origin.x`, which is the document's LEFTMOST line, not
     /// necessarily its default `.po` (see `printedLeftAnchor` in `renderNative`). Every
@@ -233,7 +188,10 @@ extension DocumentRenderer {
         // Batch 41: `lineStyle` is the engine's own resolved style for the whole line
         // (`HeadFootLine.styleAttrs` — a `.h#`/`.f#` style sheet's bold, say), ORed with each
         // run's toggles exactly as `hfLineOps` does.
-        func styledLine(_ rawText: String, entry: FontChange, lineStyle: Style) -> (text: NSAttributedString, leadingOffset: Double, drawOriginOffset: Double)? {
+        // Planning #549: `font`/`size` are the line's own (`HeadFootLine.size`, a WS4 head in the `.CW` it was read
+        // under), the page's otherwise: the face a fontless run and a size-less record print in.
+        func styledLine(_ rawText: String, entry: FontChange, lineStyle: Style, font: NSFont, size: Int)
+            -> (text: NSAttributedString, leadingOffset: Double, drawOriginOffset: Double)? {
             let runs = nativeHeadFootRuns(rawText)
             guard !runs.isEmpty else { return nil }
             let result = NSMutableAttributedString()
@@ -248,7 +206,7 @@ extension DocumentRenderer {
                 }
                 stillLeading = false
                 let runFont = resolvedFont(for: entry, styles: run.styles.union(lineStyle), fallback: font,
-                                           defaultSize: metrics.size, useCourierPrime: true)
+                                           defaultSize: size, useCourierPrime: true)
                 result.append(NSAttributedString(string: text, attributes: [
                     .font: runFont, .foregroundColor: NSColor.black,
                     .kern: nativeCourierPitchKern(runFont),
@@ -257,11 +215,93 @@ extension DocumentRenderer {
             }
             guard result.length > 0 else { return nil }
             let resolvedBase = resolvedFont(for: entry, styles: [], fallback: font,
-                                            defaultSize: metrics.size, useCourierPrime: true)
+                                            defaultSize: size, useCourierPrime: true)
             let originOffset = Double(firstBaselineOffset(
                 font: resolvedBase, paragraph: NSParagraphStyle(),
                 width: max(1, metrics.pageWidth - metrics.left)))
             return (result, leadingOffset, originOffset)
+        }
+
+        // Planning #549 (WS7 teardown 3.15): a line that changes face after its opening, in its pieces
+        // (`HeadFootLine.pieces`), drawn as Printed's `hfPiecesOps` draws it: each piece in its own face (a fontless one
+        // in Courier at the line's size), WordStar's toggle bytes running on from piece to piece, the first run's blanks
+        // under a proportional face skipped on the column grid, and a piece with an `x` (a tab's text: a tab is
+        // absolute) starting at that x. A following piece follows on in the Mac face, as a one-face line's runs do. The
+        // x is reached by kerning the character before it to there, so the line stays one string.
+        func piecedLine(_ pieces: [HeadFootPiece], lineX: Double, lineStyle: Style, font: NSFont, size: Int)
+            -> (text: NSAttributedString, leadingOffset: Double)? {
+            // `hfPieceRuns`: the runs of all the pieces, with one toggle state across them
+            var runs: [(text: String, styles: Style, font: Int?, x: Double?)] = []
+            var active: Style = []
+            var buffer = ""
+            var face: Int?
+            var x: Double?
+            func flush() {
+                guard !buffer.isEmpty else { return }
+                runs.append((buffer, active, face, x))
+                buffer = ""
+                x = nil
+            }
+            for piece in pieces {
+                flush()
+                face = piece.font
+                x = piece.x
+                for scalar in piece.text.unicodeScalars {
+                    if scalar.value == 0x2219 {
+                        buffer.unicodeScalars.append(Unicode.Scalar(0x00B7)!)
+                        continue
+                    }
+                    if let toggle = nativeHFToggles[scalar.value] {
+                        flush()
+                        active.formSymmetricDifference(toggle)
+                        continue
+                    }
+                    if scalar.value < 0x20 { continue }
+                    buffer.unicodeScalars.append(scalar)
+                }
+            }
+            flush()
+            guard runs.contains(where: { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }) else { return nil }
+            let result = NSMutableAttributedString()
+            var leadingOffset: Double = 0
+            for (i, run) in runs.enumerated() {
+                if let target = run.x {
+                    // The blanks before a tab's text print nothing, and the text system does not move the pen by a
+                    // kern on a blank: they go, and the last character drawn carries the move.
+                    while let last = result.string.last, last == " " || last == "\u{00A0}" {
+                        result.deleteCharacters(in: NSRange(location: result.length - 1, length: 1))
+                    }
+                    if result.length == 0 {
+                        leadingOffset = target - lineX
+                    } else {
+                        // the pen to `target`: the last character's own advance, kern included, carries the gap
+                        let width = Double(CTLineGetTypographicBounds(
+                            CTLineCreateWithAttributedString(result as CFAttributedString), nil, nil, nil))
+                        let last = result.length - 1
+                        let kern = (result.attribute(.kern, at: last, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
+                        result.addAttribute(.kern, value: kern + (target - lineX - leadingOffset) - width,
+                                            range: NSRange(location: last, length: 1))
+                    }
+                }
+                let text = nativeStripControlChars(run.text)
+                guard !text.isEmpty else { continue }
+                let entry = run.font.flatMap { doc.fonts.indices.contains($0) ? doc.fonts[$0] : nil }
+                if i == 0, let entry, entry.proportional, text.trimmingCharacters(in: .whitespaces).isEmpty {
+                    // a column each, 10 CPI whatever the size (the engine's `pdfPtPerCol`)
+                    leadingOffset += Double(text.count) * 7.2
+                    continue
+                }
+                let styles = run.styles.union(lineStyle)
+                let runFont = entry.map {
+                    resolvedFont(for: $0, styles: styles, fallback: font, defaultSize: size, useCourierPrime: true)
+                } ?? Self.styled(font, with: styles)
+                result.append(NSAttributedString(string: text, attributes: [
+                    .font: runFont, .foregroundColor: NSColor.black,
+                    .kern: nativeCourierPitchKern(runFont),
+                    .ligature: nativeNoLigatures,
+                ]))
+            }
+            return result.length > 0 ? (result, leadingOffset) : nil
         }
 
         // Job 489/490 tried a matching `baseline <= metrics.pageHeight` guard here (mirroring
@@ -297,20 +337,33 @@ extension DocumentRenderer {
             // own attrs, parity applied). Printed draws no underline on a running line, so only
             // bold and italic are taken.
             let lineStyle = resolved.styleAttrs.intersection([.bold, .italic])
-            if let entry, let styled = styledLine(text, entry: entry, lineStyle: lineStyle) {
+            // Planning #549 (WS4 teardown 4 §15.3): a line printed at a size of its own (`HeadFootLine.size`, a WS4
+            // head in the `.CW` it was read under) is drawn at it, as Printed's `hfLineOps` draws it.
+            let lineSize = resolved.size ?? metrics.size
+            let lineFont = resolved.size.map { courierPrime(size: CGFloat($0)) } ?? font
+            let lineOriginOffset = resolved.size == nil ? drawOriginOffset : Double(firstBaselineOffset(
+                font: lineFont, paragraph: NSParagraphStyle(), width: max(1, metrics.pageWidth - metrics.left)))
+            if let pieces = resolved.pieces, !pieces.isEmpty {
+                guard let pieced = piecedLine(pieces, lineX: resolved.x, lineStyle: lineStyle,
+                                              font: lineFont, size: lineSize) else { return nil }
+                // Measured on the line itself, as a toggled line is: its faces and sizes are mixed.
+                return RunningLine(text: pieced.text, baselineFromTop: baseline,
+                                   drawOriginOffset: Self.isolatedFragmentK(
+                                       pieced.text, width: max(1, metrics.pageWidth - metrics.left)),
+                                   kind: kind, leadingOffset: pieced.leadingOffset,
+                                   pageLeftOffset: pageLeftOffset)
+            }
+            if let entry, let styled = styledLine(text, entry: entry, lineStyle: lineStyle,
+                                                  font: lineFont, size: lineSize) {
                 return RunningLine(text: styled.text, baselineFromTop: baseline,
                                    drawOriginOffset: styled.drawOriginOffset, kind: kind,
                                    leadingOffset: styled.leadingOffset,
                                    pageLeftOffset: pageLeftOffset)
             }
-            // Mechanisms Q/X — see `nativeHFRetab`. Gated on `entry == nil` to mirror the
-            // engine exactly: a line that HAS a font block keeps its baked padding even when
-            // its styled path declined to build (the engine never reaches its retab branch
-            // for such a line either).
-            // Mechanisms Q/X — `nativeHFRetab`'s own realignment is BAKED INTO
-            // `HeadFootLine.text` by `resolveHeadFootLines`, so there is nothing left to do
-            // here and no second copy of the rule to keep in step.
-            let retabbed = text
+            // A head's tabs are already placed: `resolveHeadFootLines` re-tabs `HeadFootLine.text`
+            // for this page before the model carries it, so the text is drawn as it stands, with
+            // no second copy of the engine's tab rule here to fall out of step.
+            //
             // MECHANISM M (engine commit f79ff29, mirroring ctrl-kd 74acc60): a FONTLESS
             // `.h#`/`.f#` line whose own text carries an inline style toggle (a `^Y` italic,
             // say) must have that toggle INTERPRETED, not dropped. The engine's `hfLineOps`
@@ -327,14 +380,14 @@ extension DocumentRenderer {
             // Plain Courier with the run's own bold/italic, matching the engine's own
             // fallback face for a line with no `.h#`/`.f#` font block of its own. A line with
             // no control byte at all stays on the exact prior single-run path, byte for byte.
-            if entry == nil, retabbed.unicodeScalars.contains(where: { $0.value < 0x20 }) {
-                let substituted = retabbed.replacingOccurrences(of: "#", with: String(pageNo))
+            if entry == nil, text.unicodeScalars.contains(where: { $0.value < 0x20 }) {
+                let substituted = text.replacingOccurrences(of: "#", with: String(pageNo))
                 let runs = nativeHeadFootRuns(substituted)
                 let result = NSMutableAttributedString()
                 for run in runs {
                     let runText = nativeStripControlChars(run.text)
                     guard !runText.isEmpty else { continue }
-                    let runFont = Self.styled(font, with: run.styles.union(lineStyle))
+                    let runFont = Self.styled(lineFont, with: run.styles.union(lineStyle))
                     result.append(NSAttributedString(string: runText, attributes: [
                         .font: runFont,
                         .foregroundColor: NSColor.black,
@@ -356,7 +409,7 @@ extension DocumentRenderer {
                 // with nothing to show is exactly one that should not exist.
                 return nil
             }
-            let degraded = rendered(retabbed)
+            let degraded = rendered(text)
             guard !degraded.isEmpty else { return nil }
             // No `.paragraphStyle` attribute — matches `drawOriginOffset`'s own measurement,
             // which uses the same absence (`NSParagraphStyle()`, unconstrained) rather than
@@ -365,13 +418,13 @@ extension DocumentRenderer {
             // Batch 41: a styled line leaves the engine's fast path for its run path, in the same
             // Courier with the line's own bold/italic — the face `Self.styled` gives here.
             let attributed = NSAttributedString(string: degraded, attributes: [
-                .font: lineStyle.isEmpty ? font : Self.styled(font, with: lineStyle),
+                .font: lineStyle.isEmpty ? lineFont : Self.styled(lineFont, with: lineStyle),
                 .foregroundColor: NSColor.black,
-                .kern: nativeCourierPitchKern(lineStyle.isEmpty ? font : Self.styled(font, with: lineStyle)),
+                .kern: nativeCourierPitchKern(lineStyle.isEmpty ? lineFont : Self.styled(lineFont, with: lineStyle)),
                 .ligature: nativeNoLigatures,
             ])
             return RunningLine(text: attributed, baselineFromTop: baseline,
-                               drawOriginOffset: lineStyle.isEmpty ? drawOriginOffset : Self.isolatedFragmentK(
+                               drawOriginOffset: lineStyle.isEmpty ? lineOriginOffset : Self.isolatedFragmentK(
                                    attributed, width: max(1, metrics.pageWidth - metrics.left)),
                                kind: kind, pageLeftOffset: pageLeftOffset)
         }
@@ -392,15 +445,21 @@ extension DocumentRenderer {
             let baseline = pageHeight - auto.y
             // E11: never a flagged row.
             if !auto.offSheet {
+                // Planning #549 (WS4 teardown 4 §15.3): WS4's plain number prints in the install's normal width
+                // whatever `.CW` says (`AutoPageNumber.size`), as Printed draws it.
+                let autoFont = auto.size.map { courierPrime(size: CGFloat($0)) } ?? font
                 let attributed = NSAttributedString(string: auto.text, attributes: [
-                    .font: font,
+                    .font: autoFont,
                     .foregroundColor: NSColor.black,
-                    .kern: nativeCourierPitchKern(font),
+                    .kern: nativeCourierPitchKern(autoFont),
                     .ligature: nativeNoLigatures,
                 ])
                 out.append(RunningLine(
                     text: attributed, baselineFromTop: baseline,
-                    drawOriginOffset: drawOriginOffset, kind: .footer,
+                    drawOriginOffset: auto.size == nil ? drawOriginOffset : Double(firstBaselineOffset(
+                        font: autoFont, paragraph: NSParagraphStyle(),
+                        width: max(1, metrics.pageWidth - metrics.left))),
+                    kind: .footer,
                     pageLeftOffset: auto.x - leftAnchor))
             }
         }

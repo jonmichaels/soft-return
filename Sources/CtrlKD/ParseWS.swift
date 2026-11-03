@@ -467,7 +467,7 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
     }
     // Behaviour comes from the era table, never from a `variant ==` test — see
     // `Era.swift`. An unknown variant resolves to the WS5+ entry, which does not
-    // strip high bits: the least destructive guess.
+    // read bit 7 as WS4's word-end flags.
     let era = eraFor(detection.variant)
     let printVariant: Variant = printedBy == .ws7 ? .ws5plus : detection.variant
     let printEra = eraFor(printVariant)
@@ -520,43 +520,14 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
         pclPrograms = stripped.pclPrograms
         rtSym = stripped.rtBlocks
         rtShift = stripped.rtShift
-        // A bare high-bit byte whose low 7 bits are a CONTROL CODE is that control with
-        // WordStar's soft/flag bit set, NOT a cp437 glyph. MEASURED on WordStar 7
-        // (2026-08-04, two independent traces): a real document's 0x8A performed a line
-        // advance in the printed PCL (zero glyphs — flagged ^J); an injected 0x94
-        // toggled superscript (flagged ^T, the font size and baseline visibly changed).
-        // Real extended characters travel as <1B xx 1C> triples — the corpus carries
-        // 10,000+ of them — never as bare bytes.
-        //
-        // Masked by ALLOWLIST, not by range: a blanket 0x80-0x9F mask CREATES structural
-        // bytes — 0x9A becomes 0x1A (EOF: `linesPass` truncated a whole novel at its
-        // first occurrence), 0x9D becomes 0x1D (block framing). The list is every value
-        // observed in real BODY text (pre-EOF, outside blocks and 1B..1C wrappers) plus
-        // the oracle-measured 0x94; extend it as evidence arrives. 0x8D/0x8A stay
-        // flagged: `linesPass` reads them as the soft-return pair. Translation is
-        // LENGTH-PRESERVING, so recorded offsets (marks, tabAt) stay valid.
-        //
-        // ... and applied OUTSIDE `<1B x 1C>` wrapped extended characters: the middle
-        // byte is a character to display (any value 00h-FFh), so masking it would corrupt
-        // a wrapped character that happens to share a flagged value. Triples are opaque
-        // three-byte units everywhere between the block walk and span decode.
-        var masked: [UInt8] = []
-        masked.reserveCapacity(body.count)
-        var m = 0
-        while m < body.count {
-            if body[m] == 0x1B && m + 2 < body.count && body[m + 2] == 0x1C {
-                masked.append(body[m]); masked.append(body[m + 1]); masked.append(body[m + 2])
-                m += 3
-                continue
-            }
-            let translated = flaggedControls[body[m]] ?? body[m]
-            if translated != body[m] {
-                // ledger: which bytes the translation rewrote (length-preserving, so
-                // the offsets stay valid either side) — tasks #20/#21
-                rtFlagged.append(RoundtripFlagged(offset: masked.count, original: body[m]))
-            }
-            masked.append(translated)
-            m += 1
+        // WS7 clears bit 7 when it reads a document, header or no header, and so does its
+        // print reader printing from disk: one rule, kept in `ws7DocumentBit7` (WS7
+        // teardown 3.6, 3.8, 14.2, 21.8). Length-preserving, so recorded offsets (marks,
+        // tabAt) stay valid either side.
+        let masked = ws7DocumentBit7(body, records: rtSym.map { ($0.offset, $0.expansion) })
+        for k in 0..<masked.count where masked[k] != body[k] {
+            // ledger: which bytes the translation rewrote — tasks #20/#21
+            rtFlagged.append(RoundtripFlagged(offset: k, original: body[k]))
         }
         body = masked
         // footnotes/endnotes/annotations are all rendered the same way (a numbered
@@ -572,7 +543,8 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
     // Every .he/.h1-.h5/.fo/.f1-.f5 IN DOCUMENT ORDER, always true for parseWS (a bare-CR
     // text file reaches parsePrintstream instead, which never enables it): WordStar
     // applies a running head/foot from the PAGE where it is defined -- see `Document.hfEvents`.
-    let pass = linesPass(body, tabAt: tabAt, marks: wsMarks, softIsWrap: ws5, overprintCr: true)
+    let pass = linesPass(body, tabAt: tabAt, marks: wsMarks, softIsWrap: ws5, overprintCr: true,
+                         firstEOF: ws5)
 
     var active: Style = []
     /// The FONT RUN in force, index into `fonts`. Persists across lines and blocks just
@@ -612,6 +584,8 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
     var endnoteNumberStart: Int? = nil
     var footnoteNumberFormat: NoteNumberStyle? = nil
     var endnoteNumberFormat: NoteNumberStyle? = nil
+    var footnoteNumberMode: NoteNumberMode? = nil
+    var endnoteNumberMode: NoteNumberMode? = nil
     var headers: [Int: String] = [:]
     var footers: [Int: String] = [:]
     // The `Document.fonts` index in force at each running head's/foot's own definition —
@@ -622,6 +596,10 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
     // carries one — see `Document.headerTabs`/`footerTabs`.
     var headerTabs: [Int: HFTabMark] = [:]
     var footerTabs: [Int: HFTabMark] = [:]
+    // WS7 teardown 3.15: a head's font changes after its opening — see
+    // `Document.headerFontRuns`.
+    var headerFontRuns: [Int: [String: [HFFontRun]]] = [:]
+    var footerFontRuns: [Int: [String: [HFFontRun]]] = [:]
     // planning #255: this line's own resolved style-sheet alignment/span attrs -- see
     // `Document.headerAlign`/`headerStyleAttrs`'s own doc comments.
     var headerAlign: [Int: Alignment] = [:]
@@ -633,6 +611,9 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
     var footerStyleRM: [Int: Double] = [:]
     var headerLeads: [Int: Double] = [:]
     var footerLeads: [Int: Double] = [:]
+    var headerCW: [Int: Double] = [:]
+    var strikeMarks: [Document.StrikeMark] = []
+    var footerCW: [Int: Double] = [:]
     // planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state -- see
     // `Document.headersParity`'s own doc comment.
     var headersParity: [Int: [HFParity: String]] = [:]
@@ -1031,7 +1012,7 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
         // to be ejected." Measured shape (all three documents, byte-identical at the
         // boundary): an End-of-page (0x0B) symmetrical sequence's transient
         // overprint-CR break lands right before a bare 0x0C (0x8C, the flagged/soft
-        // form of ^L, already de-flagged to 0x0C by `flaggedControls` above),
+        // form of ^L, already de-flagged to 0x0C by `ws7DocumentBit7` above),
         // immediately followed by `.pm1` with no space and no separate line break of
         // its own. Real WS7's own PCL capture (tools/pcl_text.py) prints no ".pm1"
         // text at all — only the page eject — so WordStar treats whatever follows a
@@ -1093,6 +1074,11 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
                                             lineIndex: cur.lines.count,
                                             text: decodeCP437(cmd)))
             let head2 = Array(cmd.dropFirst().prefix(2)).map(ASCII.upper)
+            if head2 == [0x58, 0x58] {                              // `.xx`
+                strikeMarks.append(Document.StrikeMark(blockIndex: blocks.count,
+                                                       lineIndex: cur.lines.count,
+                                                       char: xxStrikeChar(raw)))
+            }
             // #229: `.IF`/`.EL`/`.EI` themselves ALWAYS execute (push/flip/pop the
             // stacks above) regardless of the CURRENT suppression state —
             // round-trip bookkeeping for this dot line already happened,
@@ -1270,9 +1256,24 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
             // block (LJ6DTP's does -- Antique Olive, proportional), the same mark
             // `decodeSpans`'s `fontAt` reads for body text. It contributes no bytes of
             // its own, so this line's OWN marks are the only place left to find it.
+            //
+            // A font that OPENS the argument, with nothing but blanks or a tab's padding
+            // before it, is the running head's own font. One after the text (run
+            // h24-allow: `.he A<font>B...`) changes the face from there on in WS7 (3.15):
+            // those go to `parseHeadFoot` as the line's font changes
+            // (`Document.headerFontRuns`).
+            var hfInk = raw.count
+            if let argStart = headFootArgStart(raw) {
+                hfInk = argStart
+                while hfInk < raw.count, raw[hfInk] == 0x20 || raw[hfInk] == 0x09 { hfInk += 1 }
+            }
             var hfFontIdx: Int? = nil
-            for (_, mark) in physical.marks {
+            for (rel, mark) in physical.marks where rel <= hfInk {
                 if case .font(let index) = mark { hfFontIdx = index; break }
+            }
+            var hfFontMarks: [(offset: Int, font: Int)] = []
+            for (rel, mark) in physical.marks where rel > hfInk {
+                if case .font(let index) = mark { hfFontMarks.append((offset: rel, font: index)) }
             }
             // planning #202: a right/center/decimal-align tab typed into a `.h#`/`.f#`
             // argument (-README's own running head) is the SAME 'tab' mark a body span
@@ -1336,10 +1337,12 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
                          headers: &headers, footers: &footers,
                          headerFonts: &headerFonts, footerFonts: &footerFonts,
                          headerTabs: &headerTabs, footerTabs: &footerTabs,
+                         headerFontRuns: &headerFontRuns, footerFontRuns: &footerFontRuns,
                          headerAlign: &headerAlign, footerAlign: &footerAlign,
                          headerStyleAttrs: &headerStyleAttrs, footerStyleAttrs: &footerStyleAttrs,
                          headerStyleRM: &headerStyleRM, footerStyleRM: &footerStyleRM,
                          headerLeads: &headerLeads, footerLeads: &footerLeads,
+                         headerCW: &headerCW, footerCW: &footerCW,
                          headersParity: &headersParity, footersParity: &footersParity,
                          headerFontsParity: &headerFontsParity,
                          footerFontsParity: &footerFontsParity,
@@ -1356,7 +1359,10 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
                          // between running-head lines turns out to be — `hfLead48` and
                          // not `lead48`, because a `.lh 0` leaves the latter standing.
                          styleRMCols: hfStyleRM, lead48: fmt.hfLead48,
-                         pctlMarks: hfPctlMarks)
+                         // WS4: the `.CW` in force here, which the line prints in (WS4
+                         // teardown 4 §15.3)
+                         cw120: printEra.columnUnit == .font ? (fmt.cw120 ?? defaultCw120) : nil,
+                         pctlMarks: hfPctlMarks, fontMarks: hfFontMarks)
             // The index of the block this entry POINTS AT — the one that follows it,
             // which is the block still open (if it has content) or the next to open.
             // "This heading is in the table of contents" refers forward, not back.
@@ -1381,7 +1387,8 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
             // block cannot hold both.
             let beforeFmt = fmt.blockFormat
             applyFormatDot(cmd, &fmt, barePoZero: printEra.barePoZero,
-                           badPoZero: printEra.badPoZero)
+                           badPoZero: printEra.badPoZero,
+                           poInCells: printEra.columnUnit == .font)
             // `.lh` and a paragraph STYLE's own `lineHeightVMI` are the SAME WordStar
             // setting — a line height — reached two ways, so the one that comes LATER
             // in the file wins. `styleLeadPt` gives the style's value precedence over
@@ -1421,11 +1428,13 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
             // reach it; a BARE `.rr` (nothing after it at all) is handled
             // where its own swallowed next-line image is consumed, not
             // here. Port of ctrl-kd core.py's identical fix.
-            if head2 == [0x52, 0x52] {
+            if head2 == [0x52, 0x52], era.rulerTextIsMargins {
+                applyWS4Ruler(ASCII.rstrip(cmd, .whitespace), &fmt)     // WS4's own grammar
+            } else if head2 == [0x52, 0x52] {
                 let rulerBody = Array(cmd.dropFirst(3))
                 let trimmedBody = rulerBody.drop { $0 == 0x20 || $0 == 0x09 }
                 if let first = trimmedBody.first, !(first >= 0x30 && first <= 0x39) {
-                    applyRulerMargins(rulerBody, &fmt)
+                    applyRulerMargins(rulerBody, &fmt, first: 3)    // from the dot
                 } else if trimmedBody.isEmpty && !ws5 {
                     applyRulerMargins([], &fmt)      // WS4 rejects it: the start ruler
                 }
@@ -1443,8 +1452,11 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
                 endnoteNumberStart: &endnoteNumberStart,
                 footnoteNumberFormat: &footnoteNumberFormat,
                 endnoteNumberFormat: &endnoteNumberFormat,
+                footnoteNumberMode: &footnoteNumberMode,
+                endnoteNumberMode: &endnoteNumberMode,
                 hasText: bodySeen || !curLine.spans.isEmpty,
-                barePoZero: printEra.barePoZero, badPoZero: printEra.badPoZero
+                barePoZero: printEra.barePoZero, badPoZero: printEra.badPoZero,
+                poInCells: printEra.columnUnit == .font
             )
             // LJ6DTP parity C1: a dot-command line is CONSUMED here — it never reaches
             // `decodeSpans`, so any mark that landed on it dies with it. That silently
@@ -1463,7 +1475,14 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
             // forward; neither must one-shot positional marks. Carried marks re-enter at
             // offset 0 of the next content line, which is where the state change
             // actually takes effect.
-            for (_, mark) in physical.marks {
+            //
+            // A running head's own records are not: a font or colour INSIDE a `.h#`/`.f#`
+            // argument belongs to the head and never reaches the body (run h24-allow: the
+            // body after a `.he` holding a font record prints in the document's font,
+            // h24-body: the same bytes in the body change it). Only a mark at offset 0,
+            // which the previous line's last bytes put there, carries on.
+            let hfLine = headFootArgStart(raw) != nil
+            for (rel, mark) in physical.marks where !(hfLine && rel > 0) {
                 switch mark {
                 case .colour, .font: carriedMarks.append(mark)
                 default: break
@@ -1840,14 +1859,19 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
                 rtLastC = blankRef                 // a non-empty line
             }
         case .para, .eof:
-            if physical.separator == .para, !curLine.spans.isEmpty,
+            if physical.separator == .para || physical.separator == .eof,
+               !curLine.spans.isEmpty,
                let brk = rtBrk, let first = brk.first, first == 0x8D || first == 0x8A {
                 // The paragraph ends here for reflow, but the line was stored with a
                 // SOFT return and WordStar keeps it soft: Enter under `.ls n` stores
                 // `8D 0A`, n-2 empty soft lines and an empty hard line (WS7 report 15.10,
                 // runs w16-ls2, w16-ls3). The flag is the stored terminator's, whatever
-                // follows it.
+                // follows it -- the end of the file too: WS4's HPLJET justifies a file's
+                // last line when it is stored `8D 0A` (WS4 teardown 7.9, runs w20-thr9,
+                // w20-neg: one-line files). Nothing follows it to reflow into, so Modern
+                // keeps the break.
                 curLine.soft = true
+                if physical.separator == .eof { curLine.keepBreak = true }
             }
             closeBlock()
         }
@@ -2023,7 +2047,7 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
     // that offset — the ^Z itself, DOS padding, the style library the header points
     // into — comes back verbatim, which is also why blocks consumed BEYOND the cut are
     // excluded from `sym`: their bytes already live inside the tail.
-    let rtCut = bareEOF(body)
+    let rtCut = bareEOF(body, first: ws5)
     let rtSpliceable = rtSym.filter {
         rtCut == nil || $0.offset + max($0.expansion, 0) <= rtCut!
     }
@@ -2067,6 +2091,8 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
         endnoteNumberStart: endnoteNumberStart,
         footnoteNumberFormat: footnoteNumberFormat,
         endnoteNumberFormat: endnoteNumberFormat,
+        footnoteNumberMode: footnoteNumberMode,
+        endnoteNumberMode: endnoteNumberMode,
         era: era.name,
         headers: headers,
         footers: footers,
@@ -2089,6 +2115,8 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
     // planning #202: this line's own right/center/decimal-align tab, when it has one.
     doc.headerTabs = headerTabs
     doc.footerTabs = footerTabs
+    doc.headerFontRuns = headerFontRuns
+    doc.footerFontRuns = footerFontRuns
     // planning #255: this line's own resolved style-sheet alignment/span attrs.
     doc.headerAlign = headerAlign
     doc.footerAlign = footerAlign
@@ -2099,6 +2127,9 @@ public func parseWS(_ data: [UInt8], variant: Variant? = nil,
     doc.footerStyleRM = footerStyleRM
     doc.headerLeads = headerLeads
     doc.footerLeads = footerLeads
+    doc.headerCW = headerCW
+    doc.footerCW = footerCW
+    doc.strikeMarks = strikeMarks
     // planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state.
     doc.headersParity = headersParity
     doc.footersParity = footersParity
@@ -2321,7 +2352,7 @@ let defaultSr48 = 3.0       // WSFORMAT.TXT: "[.SR] ... Default is 3." (1/48in u
                              // so Line.roll48's per-line resolution (register b32-N10,
                              // mirrored from ctrl-kd b48148c) shares the one constant.
 private let defaultLs = 1.0         // single spacing (WS7 manual, "Line Spacing")
-private let defaultCw120 = 12.0     // spec: ".CW ... The default is 12 (12/120ths is 10
+let defaultCw120 = 12.0     // spec: ".CW ... The default is 12 (12/120ths is 10
                                     // characters per inch)."
 private let defaultRmCols = 65.0    // WSFORMAT.TXT: ".RM ... Default is 65." Matches
                                     // every other `.rm`-default reading already in this
@@ -2546,6 +2577,15 @@ func resolveColsArg(_ value: Double, _ unit: [UInt8]?) -> Double {
     return inches * 10.0
 }
 
+/// A WS4 `.PO` in this engine's columns of 1/10": WS4 fixes the page offset in cells of the
+/// `.CW` in force when it reads `.PO` (WS4 teardown 4 §15.3, run cw30-po: `.CW 20 .PO 8` puts
+/// the left edge at 8 x 120 = 960 dp; later `.CW` changes do not move it, run e5-hpl). With
+/// no `.CW` read yet that is the install's normal width, factory 12 (1/10"). Port of
+/// `_po_cells_to_cols`.
+func poCellsToCols(_ po: Double, _ cw120: Double?) -> Double {
+    po * (cw120 ?? defaultCw120) / defaultCw120
+}
+
 /// `.lh` argument -> line height in 1/48in units. Unit-less IS 48ths (WS7 manual: "You
 /// can also type the dot command in 48ths of an inch. For example, .lh 8 is 8/48 inch,
 /// or the standard 6 lines per inch"); an explicit unit suffix converts. `.lh a`
@@ -2571,7 +2611,7 @@ private func resolveLsArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
 /// (12/120ths is 10 characters per inch)"); an explicit unit suffix converts. A
 /// non-positive width is meaningless: rejected (`nil`), default stands. Direct port of
 /// `_resolve_cw_arg`.
-private func resolveCwArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
+func resolveCwArg(_ value: Double, _ unit: [UInt8]?) -> Double? {
     let resolved = dotArgInches(value, unit).map { $0 * 120.0 } ?? value
     return resolved > 0 ? resolved : nil
 }
@@ -2641,10 +2681,13 @@ func textLinesPerPage(pl: Double, mt: Double, mb: Double, lh48: Double) -> Int {
 func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout [Int: String],
                    headerFonts: inout [Int: Int], footerFonts: inout [Int: Int],
                    headerTabs: inout [Int: HFTabMark], footerTabs: inout [Int: HFTabMark],
+                   headerFontRuns: inout [Int: [String: [HFFontRun]]],
+                   footerFontRuns: inout [Int: [String: [HFFontRun]]],
                    headerAlign: inout [Int: Alignment], footerAlign: inout [Int: Alignment],
                    headerStyleAttrs: inout [Int: Style], footerStyleAttrs: inout [Int: Style],
                    headerStyleRM: inout [Int: Double], footerStyleRM: inout [Int: Double],
                    headerLeads: inout [Int: Double], footerLeads: inout [Int: Double],
+                   headerCW: inout [Int: Double], footerCW: inout [Int: Double],
                    headersParity: inout [Int: [HFParity: String]],
                    footersParity: inout [Int: [HFParity: String]],
                    headerFontsParity: inout [Int: [HFParity: Int]],
@@ -2661,8 +2704,9 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
                    anchor: Int, within: HFWithin? = nil, fontIdx: Int? = nil,
                    tabMark: (offset: Int, absHMI: Int, leader: UInt8, cols: Int)? = nil,
                    align: Alignment? = nil, styleAttrs: Style = [],
-                   styleRMCols: Double? = nil, lead48: Double? = nil,
-                   pctlMarks: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = []) {
+                   styleRMCols: Double? = nil, lead48: Double? = nil, cw120: Double? = nil,
+                   pctlMarks: [(offset: Int, hmi: Int, byteLen: Int, pcl: Int?)] = [],
+                   fontMarks: [(offset: Int, font: Int)] = []) {
     guard cmd.count >= 3 else { return }
     let first = ASCII.upper(cmd[1])
     let second = ASCII.upper(cmd[2])
@@ -2710,6 +2754,7 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     // words with a control (LSRBOX.WS's own later `.h1`: `Sawyer * LSRBOX * #`
     // followed by a `VrtLin` rule control) keeps its words exactly where they were.
     var pctlHere: [HFPrintControl] = []
+    var excised: [(offset: Int, length: Int)] = []      // cut out, in `cmd`'s argument bytes
     if !pctlMarks.isEmpty {
         for mark in pctlMarks.sorted(by: { $0.offset > $1.offset }) {
             let off = mark.offset - argStart
@@ -2717,6 +2762,7 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
                off + mark.byteLen <= rest.count {
                 rest.removeSubrange(off..<(off + mark.byteLen))
                 pctlHere.append(HFPrintControl(offset: off, hmi: mark.hmi, pcl: mark.pcl))
+                excised.append((offset: off, length: mark.byteLen))
             }
         }
         pctlHere.reverse()
@@ -2732,6 +2778,26 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
     let (decoded, tabCharIdx) = decodeHeadFootText(rest, tabByteIdx: tabByteIdx)
     let text = decoded.trimmedTrailing()
     let kind: HFKind = first == 0x48 ? .header : .footer
+    // A font record after the opening (WS7 teardown 3.15): where in `text` its face
+    // starts — the byte offset less any excised print control's display string before it,
+    // then counted the way the tab's is (a `1B x 1C` item is one character).
+    var runs: [HFFontRun] = []
+    for mark in fontMarks {
+        let orig = mark.offset - argStart
+        var off = orig
+        for cut in excised {
+            if orig >= cut.offset + cut.length { off -= cut.length }
+            else if orig > cut.offset { off -= orig - cut.offset }
+        }
+        if let charIdx = decodeHeadFootText(rest, tabByteIdx: max(off, 0)).tabCharIdx,
+           charIdx >= 0, charIdx < text.count {
+            runs.append(HFFontRun(charIdx: charIdx, font: mark.font))
+        }
+    }
+    if !runs.isEmpty {
+        if kind == .header { headerFontRuns[line, default: [:]][text] = runs }
+        else { footerFontRuns[line, default: [:]][text] = runs }
+    }
     if kind == .header {
         headers[line] = text
         // FINAL STATE, the same limitation `headers` itself has: a document that
@@ -2774,6 +2840,8 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
         else { headerStyleRM.removeValue(forKey: line) }
         if let lead48 { headerLeads[line] = lead48 }
         else { headerLeads.removeValue(forKey: line) }
+        // WS4: the `.CW` the line was read under (`Document.headerCW`).
+        if let cw120 { headerCW[line] = cw120 } else { headerCW.removeValue(forKey: line) }
     } else {
         if let align { footerAlign[line] = align } else { footerAlign.removeValue(forKey: line) }
         footerStyleAttrs[line] = styleAttrs
@@ -2781,6 +2849,7 @@ func parseHeadFoot(_ cmd: [UInt8], headers: inout [Int: String], footers: inout 
         else { footerStyleRM.removeValue(forKey: line) }
         if let lead48 { footerLeads[line] = lead48 }
         else { footerLeads.removeValue(forKey: line) }
+        if let cw120 { footerCW[line] = cw120 } else { footerCW.removeValue(forKey: line) }
     }
     // Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o` ALSO write their own parity-split
     // state, on top of the ordinary flat write above (kept for Modern/RTF/plain-text,
@@ -2846,8 +2915,7 @@ private func decodeHeadFootText(_ raw: [UInt8], tabByteIdx: Int? = nil)
                 parts.append(seg)
                 charsSoFar += seg.count
             }
-            let x = raw[i + 1]
-            let seg = cp437Graphics[x] ?? decodeCP437([x])
+            let seg = itemChar(raw[i + 1])
             parts.append(seg)
             charsSoFar += seg.count
             i += 3
@@ -2952,6 +3020,91 @@ func resolvePageSize(_ plLines: Double, orientation: String? = nil) -> (heightIn
     return (heightIn, "Custom", 8.5)
 }
 
+/// The character a `1B xx 1C` item stands for, as body text decodes one: a control-range
+/// middle (or 7Fh) is its CP437 chart glyph, anything else the byte's own CP437 character.
+/// Port of `_item_char`.
+func itemChar(_ x: UInt8) -> String {
+    cp437Graphics[x] ?? decodeCP437([x])
+}
+
+/// The strike-out character of a WS7 `.xx` line (WS7 teardown 9.5, 11.6): the first non-blank
+/// character after the command, or a blank when it gives none (`reference/dot-formatter-
+/// tables.txt`, XX: "20h when no character given"). Read from the line's own bytes, not the
+/// masked dot text: an extended character typed as a `1B xx 1C` item is that character
+/// (`itemChar`), as in body text -- `sawyer/PRINT.TST`'s `.xx 1B B0 1C` strikes with the shaded
+/// box, and WS7's own print of it sends B0h copies (capture
+/// `ws7-prints/v4/sawyer__PRINT_EXT_TST.pcl`). Port of `_xx_strike_char`.
+func xxStrikeChar(_ raw: [UInt8]) -> String {
+    var arg = Array(raw.dropFirst(3))
+    while let first = arg.first, first == 0x20 || first == 0x09 { arg.removeFirst() }
+    if arg.count >= 3, arg[0] == 0x1B || arg[0] == 0x9B, arg[2] == 0x1C {
+        return itemChar(arg[1])
+    }
+    let masked = ASCII.rstrip(arg.map { $0 & 0x7F }, .whitespace)
+    return masked.first.map { decodeCP437([$0]) } ?? " "
+}
+
+/// One `.f#` / `.e#` line as WS7's parser reads it (`footnote` false for `.e#`); the other
+/// fields `nil` where the line does not set them.
+struct NoteNumberCommand: Equatable {
+    var footnote: Bool
+    var mode: NoteNumberMode?
+    var start: Int?
+    var format: NoteNumberStyle?
+}
+
+/// `cmd` read as a `.f#` / `.e#` line, or `nil` for any other dot line. Port of Python's
+/// `core.note_number_command`.
+///
+/// WS7's `.f#` parser (WS7 teardown 15.1, 15.10; 0x27DC9, 22A1:EE0A): `d` / `p` set
+/// continuous / per-page numbering, a number sets the next note to n, and a bare `.f# n`
+/// also sets per page (runs fnnum5, fnnumd); ^ONN writes `.f# p 5` (run on27a). `.e#` sets
+/// the endnote counter, which never resets per page. A digit is the decimal format, an
+/// upper-case letter upper, a lower-case letter lower (`.f# a` prints a, b, ...; runs
+/// w16-fnlow, w16-fnup). The words `page` and `cont`/`consec` read as the modes too.
+func noteNumberCommand(_ cmd: [UInt8]) -> NoteNumberCommand? {
+    guard cmd.count >= 3 else { return nil }
+    let head = [ASCII.upper(cmd[1]), ASCII.upper(cmd[2])]
+    guard head == [0x46, 0x23] || head == [0x45, 0x23] else { return nil }
+    let footnote = head[0] == 0x46
+    func stripped(_ b: [UInt8]) -> [UInt8] {
+        let white: Set<UInt8> = [0x20, 0x09, 0x0A, 0x0D, 0x0B, 0x0C]
+        var lo = 0, hi = b.count
+        while lo < hi, white.contains(b[lo]) { lo += 1 }
+        while hi > lo, white.contains(b[hi - 1]) { hi -= 1 }
+        return Array(b[lo..<hi])
+    }
+    func isAlpha(_ c: UInt8) -> Bool { (0x41...0x5A).contains(c) || (0x61...0x7A).contains(c) }
+    func lowered(_ b: [UInt8]) -> [UInt8] { b.map { isAlpha($0) ? $0 | 0x20 : $0 } }
+    var rest = Array(cmd[3...])
+    var low = lowered(stripped(rest))
+    // `d` / `p` before the number: the mode (`.f# p 5`, `.f#d 1`)
+    var mode: NoteNumberMode?
+    if let c = low.first, c == UInt8(ascii: "d") || c == UInt8(ascii: "p"),
+       !(low.count > 1 && isAlpha(low[1])) {
+        mode = c == UInt8(ascii: "d") ? .continuous : .page
+        rest = Array(low.dropFirst())
+    }
+    var start: Int?
+    if let (value, _) = parseDotNumber(rest) {
+        start = Int(value)
+        // a bare `.f# n` also sets per page; `.e#`'s counter never resets
+        if mode == nil, footnote { mode = .page }
+    }
+    var format: NoteNumberStyle?
+    low = lowered(stripped(rest))
+    let word = String(decoding: low.prefix(6), as: UTF8.self)
+    if word.hasPrefix("page") {
+        mode = .page
+    } else if word.hasPrefix("cont") || word.hasPrefix("consec") {
+        mode = .continuous
+    } else if let first = stripped(rest).first, isAlpha(first),
+              first | 0x20 != UInt8(ascii: "d"), first | 0x20 != UInt8(ascii: "p") {
+        format = first <= 0x5A ? .upper : .lower
+    }
+    return NoteNumberCommand(footnote: footnote, mode: mode, start: start, format: format)
+}
+
 /// Try to interpret one dot-command line as page geometry (`.pl`/`.po`/`.mt`/`.mb`/
 /// `.hm`/`.fm`/`.lh`/`.ls`, ctrl-kd 1.3.0 added the last four) or a WordTsar-invented
 /// command (`.PT`/`.PSA`/`.PSB` -- "not a Wordstar command" per WordTsar's own source,
@@ -2966,15 +3119,15 @@ func resolvePageSize(_ plLines: Double, orientation: String? = nil) -> (heightIn
 /// `.fm`/`.lh`/`.ls`/`.cw`/`.pn`/`.pc`) is a no-op here once `hasText` is true — a
 /// mid-document repeat is the document's own stateful behaviour (per-page checkpoint
 /// machinery in `PDFLayout.swift`), never this accumulator's concern. `.F#`/`.E#`
-/// (footnote/endnote start numbers, into `footnoteNumberStart`/`endnoteNumberStart`)
+/// (footnote/endnote numbering, into `footnoteNumberStart`/`endnoteNumberStart` and the rest)
 /// and `.PT`/`.PSA`/`.PSB` (producer signal, spacing) keep their own pre-existing
 /// first-occurrence-wins behaviour, untouched by `hasText` — they are not part of
 /// `page` and outside this ruling's scope.
 ///
-/// `.F#`/`.E#` (same spec) set the footnote/endnote starting numbering value -- the
-/// two-character command NAME itself ends in the literal '#' (like `.L#`
-/// line-numbering), which the generic `[A-Za-z]{1,3}` matcher below can't match, so
-/// it's handled directly first.
+/// `.F#`/`.E#` (same spec) set footnote/endnote numbering -- the two-character command
+/// NAME itself ends in the literal '#' (like `.L#` line-numbering), which the generic
+/// `[A-Za-z]{1,3}` matcher below can't match, so it's handled directly first
+/// (`noteNumberCommand`).
 private func parsePageDot(
     _ cmd: [UInt8],
     page: inout PageAccumulator,
@@ -2985,40 +3138,26 @@ private func parsePageDot(
     endnoteNumberStart: inout Int?,
     footnoteNumberFormat: inout NoteNumberStyle?,
     endnoteNumberFormat: inout NoteNumberStyle?,
+    footnoteNumberMode: inout NoteNumberMode?,
+    endnoteNumberMode: inout NoteNumberMode?,
     hasText: Bool = false,
-    barePoZero: Bool = false, badPoZero: Bool = false
+    barePoZero: Bool = false, badPoZero: Bool = false,
+    poInCells: Bool = false
 ) {
-    if cmd.count >= 3 {
-        let head = String(decoding: [ASCII.upper(cmd[1]), ASCII.upper(cmd[2])], as: UTF8.self)
-        if head == "F#" || head == "E#" {
-            let isFootnote = head == "F#"
-            let alreadySet = isFootnote ? footnoteNumberStart != nil : endnoteNumberStart != nil
-            if !alreadySet, let (value, _) = parseDotNumber(Array(cmd[3...])) {
-                if isFootnote {
-                    footnoteNumberStart = Int(value)
-                } else {
-                    endnoteNumberStart = Int(value)
-                }
-            }
-            // The label FORMAT: WS7's `.f#` parser takes a digit (decimal), an upper-case
-            // letter (upper) or a lower-case letter (lower); `d` and `p` are the
-            // continuous / per-page modes, not formats (WS7 report 15.1, 15.10). The
-            // format in force at print time is what prints, whatever the note records
-            // store, so the first `.f#` / `.e#` that names one is kept.
-            let rest = Array(cmd[3...]).drop(while: { $0 == 0x20 || $0 == 0x09 })
-            let word = String(decoding: rest.prefix(6), as: UTF8.self).lowercased()
-            if !word.hasPrefix("page"), !word.hasPrefix("cont"), !word.hasPrefix("consec"),
-               let first = rest.first, (0x41...0x5A).contains(first) || (0x61...0x7A).contains(first),
-               first | 0x20 != UInt8(ascii: "d"), first | 0x20 != UInt8(ascii: "p") {
-                let style: NoteNumberStyle = first <= 0x5A ? .upper : .lower
-                if isFootnote {
-                    if footnoteNumberFormat == nil { footnoteNumberFormat = style }
-                } else if endnoteNumberFormat == nil {
-                    endnoteNumberFormat = style
-                }
-            }
-            return
+    if let command = noteNumberCommand(cmd) {
+        // The first start number and the first letter format are kept, the last mode
+        // (`note_number_command`'s caller in Python's `_parse_page_dot`). Printed reads the
+        // commands in flow instead (`printTimeNoteLabels`).
+        if command.footnote {
+            if footnoteNumberStart == nil { footnoteNumberStart = command.start }
+            if let mode = command.mode { footnoteNumberMode = mode }
+            if footnoteNumberFormat == nil { footnoteNumberFormat = command.format }
+        } else {
+            if endnoteNumberStart == nil { endnoteNumberStart = command.start }
+            if let mode = command.mode { endnoteNumberMode = mode }
+            if endnoteNumberFormat == nil { endnoteNumberFormat = command.format }
         }
+        return
     }
     guard let (name, arg) = dotCommandNameAndArg(cmd) else { return }
     let nameString = String(decoding: name.map(ASCII.upper), as: UTF8.self)
@@ -3058,7 +3197,8 @@ private func parsePageDot(
             if isBlankDotArg(arg) ? barePoZero : badPoZero { page.poCols = 0.0 }   // Era.barePoZero / badPoZero
             return
         }
-        page.poCols = resolveColsArg(value, unit)
+        let resolved = resolveColsArg(value, unit)
+        page.poCols = poInCells && unit == nil ? poCellsToCols(resolved, page.cw120) : resolved
     case "HM":
         if hasText { return }
         guard let (value, unit) = parseDotNumber(arg) else { return }
@@ -3146,14 +3286,58 @@ private func parsePageDot(
     }
 }
 
-/// Bare high-bit bytes that are a flagged CONTROL CODE, and the control they mask to.
-///
-///     0x82  flagged ^B bold toggle   (27x in 4 documents)
-///     0x8C  flagged ^L form feed     (20x in 5 documents)
-///     0x94  flagged ^T sup toggle    (oracle-measured)
-///
-/// See `parseWS` for why this is an allowlist and never a range.
-private let flaggedControls: [UInt8: UInt8] = [0x82: 0x02, 0x8C: 0x0C, 0x94: 0x14]
+/// What WS7 does to bit 7 when it reads a document from disk (WS7 teardown 3.6 and 3.8,
+/// observed in 14.2 and 21.8; runs hb59-raw-p, hb59c-raw-s, hb59c-cv-s). Port of
+/// `core._WS7_BIT7`. Opened as a document — with the 128-byte header or without one — and
+/// printed from disk without opening, every printable byte (A1h-FFh) loses bit 7:
+/// `Thi\u{F3}` is `This`, E1h-E3h `abc`, B0h-B2h `012`, C4h CDh `DM`. A high byte never
+/// carries a glyph in a document; extended characters travel as `1B x 1C` items, whose
+/// middle byte is data and is not touched (nor are records: `symmetricBlocks` has taken
+/// them out by now). A0h stays: the editor's soft space, read raw. 80h-9Fh stay raw in the
+/// file and act as their low-7 controls: 82h..82h prints bold and 93h..93h underline
+/// (`ESC(s3B`, `ESC&dD`, run hb59-raw-p), 94h superscript, 8Ch a form feed. So the reader
+/// translates them to that control here, except the ones read by their raw value: 8Ah and
+/// 8Dh (`linesPass` reads them as the soft-return pair, as WS7 tests the raw 8Dh, 3.8).
+/// 9Ah, 9Bh and 9Dh are their low-7 controls too: WS7's load sanitiser masks every control
+/// byte before it looks at it (3.6; the code at 0x3C1F3), so 9Ah ends the text as 1Ah does,
+/// 9Bh x 1Ch is an extended character with its lead rewritten to 1Bh, and 9Dh opens a
+/// record when the record checks out (the record scanners mask the lead too, 3.7) —
+/// `symmetricBlocks` reads those two leads masked, and a 9Dh that is no record stays a lone
+/// 1Dh, as a 1Dh does.
+private let ws7Bit7: [UInt8] = (0...255).map { (v: Int) -> UInt8 in
+    let b = UInt8(v)
+    if b < 0x80 || b == 0xA0 || b == 0x8A || b == 0x8D { return b }
+    return b & 0x7F
+}
+
+/// `data` (a WS5+ body as `symmetricBlocks` leaves it) with bit 7 cleared the way WS7 reads
+/// a document (`ws7Bit7`). Left alone: every `1B x 1C` item (a flagged `9B x 1C` lead
+/// becomes its 1Bh, WS7 teardown 3.6), and every `(offset, length)` in `records` — the
+/// bytes a record put into the stream (a 0Fh print control's display string, a tab's
+/// padding), which WS7's sanitiser steps over with the record. Port of
+/// `core._ws7_document_bit7`.
+func ws7DocumentBit7(_ data: [UInt8], records: [(Int, Int)] = []) -> [UInt8] {
+    var keep = [Bool](repeating: false, count: data.count)
+    var leads: [Int] = []
+    var m = 0
+    while m < data.count {
+        if (data[m] == 0x1B || data[m] == 0x9B) && m + 2 < data.count && data[m + 2] == 0x1C {
+            keep[m] = true; keep[m + 1] = true; keep[m + 2] = true
+            leads.append(m)
+            m += 3
+            continue
+        }
+        m += 1
+    }
+    var inRecord = [Bool](repeating: false, count: data.count)
+    for (off, n) in records where n > 0 && off < data.count {
+        for k in max(0, off)..<min(off + n, data.count) { keep[k] = true; inRecord[k] = true }
+    }
+    var out = data
+    for k in 0..<data.count where !keep[k] { out[k] = ws7Bit7[Int(data[k])] }
+    for k in leads where !inRecord[k] { out[k] = 0x1B }   // a flagged lead is the item's 1Bh
+    return out
+}
 
 /// Formatting the ACTIVE paragraph style contributes, if any. Every field is `nil`/empty
 /// when the style's record inherits it, which is exactly when the running dot-command

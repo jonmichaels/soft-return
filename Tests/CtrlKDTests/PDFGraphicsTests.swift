@@ -84,7 +84,9 @@ private func fontlessBoxLine(_ cp437Bytes: [UInt8]) -> [UInt8] {
     let line = "αßΓπΣσµτΦΘΩδφε"
     var data = ws7Block(0x00)
     data += bytes("Plain prose padding so the detector reads this as a document.") + HARD
-    data += greekCP437 + HARD
+    // wrapped `1B x 1C`, as -SCREEN.WS stores them: WS7 clears a bare high byte's bit 7
+    // (WS7 teardown 14.2, 21.8)
+    data += fontlessBoxLine(greekCP437) + HARD
     data += bytes("And a closing line of ordinary prose keeps the ratio honest.") + HARD
     let doc = parseWS(data)
     let txt = emitText(doc, mode: .printed)
@@ -188,7 +190,7 @@ private func fontlessBoxLine(_ cp437Bytes: [UInt8]) -> [UInt8] {
     // PDFWriter.swift that ever sets it, so the italic run used to silently inherit
     // the BOLD run's `2 Tr` stroke from earlier on the very same content stream
     // instead of getting the plain fill-only paint the real printer actually used).
-    let greek: [UInt8] = [0xE0, 0xE2, 0xE3]   // cp437 alpha/Gamma/pi -> Symbol "aGp"
+    let greek = fontlessBoxLine([0xE0, 0xE2, 0xE3])   // cp437 alpha/Gamma/pi -> Symbol "aGp"
     var data = ws7Block(0x00)
     data += bytes("Plain prose padding so the detector reads this as a document.") + HARD
     data += greek + HARD
@@ -266,7 +268,7 @@ private func fontlessBoxLine(_ cp437Bytes: [UInt8]) -> [UInt8] {
     // shared with Modern, which routes through its own token-font path instead) and
     // never fires for a Symbol run with no bold/italic styling (byte-identical
     // requirement).
-    let greek: [UInt8] = [0xE0, 0xE2, 0xE3]
+    let greek = fontlessBoxLine([0xE0, 0xE2, 0xE3])
     var data = ws7Block(0x00)
     data += bytes("Plain prose padding so the detector reads this as a document.") + HARD
     data += boldOn

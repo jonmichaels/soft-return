@@ -258,6 +258,13 @@ replaced it (a new self-recorded drift file, not a cross-engine truth check). Se
 section for the full account; `python-printed-manifest.json` and
 `macos/scripts/generate_printed_oracle_manifest.py` no longer exist in this repo.
 
+**The WordStar run fixtures are not in the key.** ctrl-kd's `teardowns` tier checks its engine
+against real WordStar's runs; the same documents' cross-engine check is ctrl-kd's
+`tools/fixture_parity.py --sr .build/debug/sr` (with `CTRLKD_TEARDOWNS`, and the corpus variables
+for the parts printed from corpus documents), which runs both command lines on every fixture
+input and compares the bytes per format. Run it for any change to how either engine lays out a
+document.
+
 ### `TestDocs/oracle/answer_key_sr.json` — sr's own self-recorded oracle (drift only, not truth)
 
 For a format sr registers that ctrl-kd does not (none as of this writing — DOCX is the named

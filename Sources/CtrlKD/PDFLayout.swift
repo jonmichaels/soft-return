@@ -346,24 +346,54 @@ public func docToPagelines(
     // `parityResolvedFallbackHeadFoot`'s own doc comment.
     let fallback = parityResolvedFallbackHeadFoot(doc)
     if printed {
-        var plainPages = applyColumns(doc,
-            finalizePages(layoutPrintedPages(doc, pixResults: pixResults,
-                                                  pictures: pictures,
-                                                  sentenceSpacing: sentenceSpacing,
-                                                  rawPageCap: rawPageCap),
-                         printed: true, isPrintStream: isPrintStream,
-                         fallbackHeaders: fallback.headers, fallbackFooters: fallback.footers,
-                         fallbackHeadOverride: fallback.headOverride,
-                         fallbackFootOverride: fallback.footOverride,
-                         fallbackPoCols: fallback.poCols, fallbackPoParity: fallback.poParity))
-        let attachSize = printedSize(doc)
-        substituteMergePageNumbersPrinted(doc, &plainPages)
-        attachJustifyWordXPrinted(doc, &plainPages, size: attachSize)
-        attachGraphicCellsPrinted(doc, &plainPages, size: attachSize)
-        attachDriverPiecesPrinted(doc, &plainPages, size: attachSize)
-        attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
-        attachHeadFootLinesPrinted(doc, &plainPages, size: attachSize)
-        return capped(plainPages)
+        // One layout pass (Python's `_doc_to_pagelines_pass`). `doc` carries the print-time
+        // note labels in `printedNoteLabels` on a relabelling pass, where Python passes them
+        // as `labels`.
+        func layOut(_ doc: Document) -> [Page] {
+            var plainPages = applyColumns(doc,
+                finalizePages(layoutPrintedPages(doc, pixResults: pixResults,
+                                                      pictures: pictures,
+                                                      sentenceSpacing: sentenceSpacing,
+                                                      rawPageCap: rawPageCap),
+                             printed: true, isPrintStream: isPrintStream,
+                             fallbackHeaders: fallback.headers, fallbackFooters: fallback.footers,
+                             fallbackHeadOverride: fallback.headOverride,
+                             fallbackFootOverride: fallback.footOverride,
+                             fallbackPoCols: fallback.poCols, fallbackPoParity: fallback.poParity))
+            let attachSize = printedSize(doc)
+            substituteMergePageNumbersPrinted(doc, &plainPages)
+            attachJustifyWordXPrinted(doc, &plainPages, size: attachSize)
+            attachGraphicCellsPrinted(doc, &plainPages, size: attachSize)
+            attachDriverPiecesPrinted(doc, &plainPages, size: attachSize)
+            attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
+            attachStrikeCharPrinted(doc, &plainPages)
+            attachPassesPrinted(doc, &plainPages, size: attachSize)
+            attachHeadFootLinesPrinted(doc, &plainPages, size: attachSize)
+            return plainPages
+        }
+        // Printed numbers footnotes and endnotes as WS7 prints them, from the page each
+        // reference lands on (`printTimeNoteLabels`), never from the number stored in the
+        // note record (WS7 teardown 21.10). The pages are first laid out with the stored
+        // labels; where the print-time labels differ, they are laid out again with those. A
+        // label of another width can move a note's wrap and so a page break, so this repeats
+        // until the labels hold, at most three passes in all. Port of `_doc_to_pagelines`.
+        var pages = layOut(doc)
+        guard doc.notes.contains(where: { $0.kind == .footnote || $0.kind == .endnote }) else {
+            return capped(pages)
+        }
+        var used: [Int: String] = [:]
+        for (i, note) in doc.notes.enumerated() {
+            used[i] = noteLabel(note, doc: doc, index: i, printed: true)
+        }
+        for _ in 0..<2 {
+            let labels = printTimeNoteLabels(doc, pages)
+            if labels.allSatisfy({ used[$0.key] == $0.value }) { break }
+            used.merge(labels) { _, new in new }
+            var relabelled = doc
+            relabelled.printedNoteLabels = used
+            pages = layOut(relabelled)
+        }
+        return capped(pages)
     }
     // Modern PDF's own real pipeline is `modernStreams` (PDFModernLayout.swift), which
     // embeds since round 22; this legacy Modern layout is not an emitter path for it,

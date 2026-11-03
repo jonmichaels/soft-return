@@ -101,11 +101,14 @@ public struct LinesPassResult: Hashable, Sendable {
 ///   `parsePrintstream`) never has every line overprint.
 public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
                       marks: [Int: [StructuralMark]] = [:],
-                      softIsWrap: Bool = false, overprintCr: Bool = false) -> LinesPassResult {
+                      softIsWrap: Bool = false, overprintCr: Bool = false,
+                      firstEOF: Bool = false) -> LinesPassResult {
     // core.py:108-110 — truncate at the first ^Z before anything else. The first BARE
     // one: a 0x1A wrapped in `<1B 1A 1C>` is a character to display, not end of file.
+    // `firstEOF` (WS5+): the text ends at the first bare 1Ah, as WS7's load sanitiser ends
+    // it (`bareEOF`'s `first`).
     var body = data
-    if let cut = bareEOF(data) {
+    if let cut = bareEOF(data, first: firstEOF) {
         body = Array(data[..<cut])
     }
 
@@ -298,10 +301,14 @@ public func linesPass(_ data: [UInt8], tabAt: Set<Int> = [],
 /// bare 0x1A, same as before this function grew run-detection — a document can
 /// be genuinely truncated right at a real, unpadded EOF marker.
 ///
+/// `first: true` is WS7 reading a WS5+ document: its load sanitiser ends the text at the
+/// first bare 1Ah, whatever follows (WS7 teardown 3.6, 0x3C224), and at a flagged 9Ah,
+/// which `ws7DocumentBit7` has made a 1Ah by now.
+///
 /// `nil` when there is no bare 0x1A at all. Direct port of `_bare_eof`. Internal,
 /// not private: `parseWS`'s round-trip ledger recomputes the same cut (#20/#21),
 /// and the writer appends a canonical 0x1A only when absent.
-func bareEOF(_ data: [UInt8], padMin: Int = 8) -> Int? {
+func bareEOF(_ data: [UInt8], padMin: Int = 8, first: Bool = false) -> Int? {
     var bare: [Int] = []
     var at = 0
     while at < data.count {
@@ -313,6 +320,7 @@ func bareEOF(_ data: [UInt8], padMin: Int = 8) -> Int? {
         at += 1
     }
     guard !bare.isEmpty else { return nil }
+    if first { return bare[0] }
     var runStart = bare[0]
     var runLen = 1
     for i in 1..<bare.count {

@@ -9,8 +9,10 @@
 // `tools/p_mj_model.py`, with the module's code addresses). This is that model, run on a
 // parsed line instead of raw bytes:
 //
-// - A line is measured only when `.UJ` is on (WS4's factory "dis" is on for HPLJET), it
-//   ends in a soft return, and it holds more than two letters (M1, M2, M8).
+// - A line is measured only when `.UJ` is on (WS4's factory "dis" is on for HPLJET) and,
+//   under `.PS`, `.OJ` is on too, it ends in a soft return, and it holds more than two
+//   letters (M1, M2, M8; WS4 teardown 7.9, runs w20-oj, w20-oj0: `.OJ OFF` under `.PS`
+//   prints as `.UJ OFF`).
 // - Its justified region starts at the first word holding a letter stored with bit 7,
 //   WS4's word-end flag (`Line.hibit`); text before it prints at its natural widths (M4).
 // - The slack is the line's nominal width, `.CW` per cell, less its device width, the
@@ -19,13 +21,17 @@
 //   as `-` (M6).
 // - Letter spacing takes whole 1/120" units when the slack per blank is over THR, at most
 //   MAXL of them; the rest goes to the blanks, each taking the pool left over the blanks
-//   left, quantised to 1/120" under `.PS` (M9, M11).
+//   left, quantised to 1/120" under `.PS` (M9, M11). THR is the driver's header byte, 8:
+//   S // blanks = 8 gets none, 9 does (WS4 teardown 7.9, runs w20-thr8, w20-thr9). An
+//   editor soft space (A0h) holds no word, so a line whose only blanks are A0h before its
+//   one flagged word has no blank in its region and prints at its cells (7.9, run w22-a0).
 // - Under `.PS` a character advances by its proportional table width (1/600"); at fixed
 //   pitch by the font's cell. An x is sent as `x * 720 // den` decipoints, truncated.
 //
-// A negative slack (M10) is the module's code, not run by any capture. Tabs, print
-// controls and `^P@` are not modelled: such a line gets nil and is drawn at its natural
-// widths.
+// A negative slack (M10) shrinks every gap, the pool capped at [1821] = 50h blank widths
+// over the line's denominator: 30 dp a gap at PS14B (WS4 teardown 7.9, runs w20-neg,
+// w20-neg0). Tabs, print controls and `^P@` are not modelled: such a line gets nil and is
+// drawn at its natural widths.
 
 enum HPLJET {
     /// `.CW` for `^PA`: the factory alternate pitch, 10/120" (WS4 teardown 4 §15.4,
@@ -89,9 +95,10 @@ enum HPLJET {
     ///
     /// `po` is the page offset in cells, `poCW` the `.CW` in force when `.PO` was read (x
     /// starts at `po * poCW` 1/120", WS4 teardown 4 §15.3), `ps` `.PS`, `uj` `.UJ` ("on",
-    /// "off", "dis"), `soft` whether the line ends in a soft return.
+    /// "off", "dis"), `soft` whether the line ends in a soft return, `oj` `.OJ` (M1: under
+    /// `.PS` the driver ANDs `.UJ` with it, WS4 teardown 7.9).
     static func placeLine(_ chars: [Char], po: Int, poCW: Int, ps: Bool, uj: String,
-                          soft: Bool) -> [(x: Int, advance: Double)]? {
+                          soft: Bool, oj: Bool = true) -> [(x: Int, advance: Double)]? {
         let n = chars.count
         if n == 0 { return [] }
         let fonts = chars.map { fontFor($0.cw, ps: ps, bold: $0.bold, italic: $0.italic) }
@@ -101,7 +108,7 @@ enum HPLJET {
         let wUnit = HPLJETTables.fonts[fonts[0].record].w
 
         // ---- measurement (0x054D-0x0697)
-        var on = (uj == "on" || uj == "dis") && soft
+        var on = (uj == "on" || uj == "dis") && soft && (oj || !ps)
         var prefix = 0, blanks = 0, blankish = 0, letters = 0, poolB = 0, poolL = 0
         var neg = false
         if on {

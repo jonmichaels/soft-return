@@ -27,9 +27,10 @@ public struct Era: Sendable, Equatable {
     public let name: String
 
     /// WS4 and earlier set bit 7 on the LAST character of each word (microjustify
-    /// flags). WS5+ dropped it, and a high byte there is an extended cp437 character
-    /// instead — so this decides whether stripping the high bit recovers text or
-    /// destroys it.
+    /// flags), and the reader keeps where they were for the print-time
+    /// microjustification. WS5+ dropped the flags; WS7 still clears bit 7 of a
+    /// document's printable bytes when it reads one (WS7 teardown 14.2, 21.8), which the
+    /// WS5+ path does in `ws7DocumentBit7`, keeping A0h and the flagged controls raw.
     public let highBitWordwrap: Bool
 
     /// `0x1D`-delimited symmetrical sequences: notes, fonts, colour, styles.
@@ -45,10 +46,14 @@ public struct Era: Sendable, Equatable {
     public let hasSB: Bool
 
     /// Equal at the default `.cw 12` (10 cpi), so this only bites a document that
-    /// changes `.cw` AND uses a margin dot command.
+    /// changes `.cw`.
     ///
     /// The WS7 half is read from WS7's code (ruler unit 180 HMI = 1/10 inch; WS7 teardown,
-    /// `wordstar-dos/7-configuration.md` 7.1); the WS4 half has not been run.
+    /// `wordstar-dos/7-configuration.md` 7.1). The WS4 half was run (WS4 teardown 4 §15.3,
+    /// runs cw30-*): margin columns are characters in the line, a cell of the `.cw` on it;
+    /// `.po` is fixed in the `.cw` in force when it is read (`poCellsToCols`); the plain
+    /// page number counts `.pc` in the install's normal width (12); a running head prints in
+    /// the `.cw` it was read under (`Document.headerCW`).
     public let columnUnit: ColumnUnit
 
     /// The column the automatic page number starts in when `.pc` is unset or 0 (1-based,
@@ -97,6 +102,13 @@ public struct Era: Sendable, Equatable {
     /// `core.Era.pk_even_keeps_blank`.
     public var pkEvenKeepsBlank: Bool = true
 
+    /// How a `.RR` line that is not a ruler image is read. WS4 abandons its ruler grammar at
+    /// the first ordinary character and takes the line's own first and last non-blank
+    /// columns as the margins (`ws4Ruler`; WS4 teardown 7.11, run w25-rr1). WS7 reads every
+    /// L, P and R in it as a pip (`rulerPips`; WS7 teardown 5.1). Port of
+    /// `core.Era.ruler_text_is_margins`.
+    public var rulerTextIsMargins: Bool = false
+
     /// WS7's paginator (WS7 report 14.3, 14.5, 15.1, 15.10), as five behaviours that WS4
     /// has not been shown to share (the next five properties read it). Port of
     /// `core.Era(ws7_paging=)`.
@@ -129,7 +141,8 @@ public let eras: [Variant: Era] = [
     .ws4: Era(name: "ws4", highBitWordwrap: true, symmetricBlocks: false,
               hasNotes: false, hasSB: false, columnUnit: .font, pcDefault: 28,
               barePoZero: true, badPoZero: true, hpljetDriver: true,
-              lineStartsInRoom: true, geometryActsAtOnce: true, pkEvenKeepsBlank: false),
+              lineStartsInRoom: true, geometryActsAtOnce: true, pkEvenKeepsBlank: false,
+              rulerTextIsMargins: true),
     .ws5plus: Era(name: "ws5+", highBitWordwrap: false, symmetricBlocks: true,
                   hasNotes: true, hasSB: true, columnUnit: .tenthInch, pcDefault: 33.5,
                   barePoZero: true, ws7Paging: true),

@@ -60,10 +60,20 @@ let tabModulusColumns = 8
 ///
 /// Spans come back untouched when the line carries no tab.
 func expandBareTabsForPrintedLayout(_ spans: [Span]) -> [Span] {
+    var marks: [(span: Int, start: Int, end: Int)] = []
+    return expandBareTabsForPrintedLayout(spans, marks: &marks)
+}
+
+/// The same, with each tab's spaces recorded in `marks` as (span index, start, end) in
+/// the returned text, in Characters, so a caller can tell them from typed blanks
+/// (`bareTabsUnderlined`). Port of `expand_bare_tabs_texts`'s `marks`.
+func expandBareTabsForPrintedLayout(_ spans: [Span],
+                                    marks: inout [(span: Int, start: Int, end: Int)]) -> [Span] {
     guard spans.contains(where: { $0.text.contains("\t") }) else { return spans }
     var col = 0
     var spaceRun = 0
-    return spans.map { span in
+    var found: [(span: Int, start: Int, end: Int)] = []
+    let out = spans.enumerated().map { index, span in
         guard span.text.contains("\t") else {
             col += span.text.count
             let trailing = span.text.reversed().prefix(while: { $0 == " " }).count
@@ -76,6 +86,7 @@ func expandBareTabsForPrintedLayout(_ spans: [Span]) -> [Span] {
             if ch == "\t" {
                 let base = col - spaceRun
                 let needed = tabModulusColumns - (base % tabModulusColumns)
+                found.append((index, out.count, out.count + needed))
                 out += String(repeating: " ", count: needed)
                 col = base + needed + spaceRun
                 spaceRun = 0
@@ -93,6 +104,46 @@ func expandBareTabsForPrintedLayout(_ spans: [Span]) -> [Span] {
         newSpan.text = out
         return newSpan
     }
+    marks += found
+    return out
+}
+
+/// `spans` (a Printed line, bare tabs already expanded) with the blanks each bare tab
+/// became, where it sits in an underlined span, split out as a span of their own marked
+/// `.bareTab`. `marks`: `expandBareTabsForPrintedLayout`'s record of them.
+///
+/// Under `.ul off` WS7's LASERJET closes the underline at each blank but keeps it on across
+/// a bare tab (WS7 teardown 11.6, runs ul24f-l: `ESC&dDtab ESC&a2880Hhere ESC&d@`): the
+/// driver clears the underline bit on space items only, and a tab is a move, not a space
+/// item. The mark is what lets `rules` (and a view drawing its own underline) tell the tab's
+/// blanks from typed ones. A type-9 tab record is not covered: no run has one inside an
+/// underline. Port of `_bare_tabs_underlined`.
+func bareTabsUnderlined(_ spans: [Span],
+                        marks: [(span: Int, start: Int, end: Int)]) -> [Span] {
+    var bySpan: [Int: [(start: Int, end: Int)]] = [:]
+    for m in marks { bySpan[m.span, default: []].append((m.start, m.end)) }
+    var out: [Span] = []
+    for (index, span) in spans.enumerated() {
+        guard let cuts = bySpan[index], span.styles.contains(.underline) else {
+            out.append(span)
+            continue
+        }
+        let chars = Array(span.text)
+        func piece(_ a: Int, _ b: Int, tab: Bool) -> Span {
+            var s = span
+            s.text = String(chars[a..<b])
+            if tab { s.styles.insert(.bareTab) }
+            return s
+        }
+        var at = 0
+        for cut in cuts {
+            if cut.start > at { out.append(piece(at, cut.start, tab: false)) }
+            out.append(piece(cut.start, cut.end, tab: true))
+            at = cut.end
+        }
+        if at < chars.count { out.append(piece(at, chars.count, tab: false)) }
+    }
+    return out
 }
 
 // MARK: - `.pm`'s own first-line indent (packet row B6)

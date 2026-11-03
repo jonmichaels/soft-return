@@ -73,6 +73,15 @@ public struct Note: Hashable, Sendable {
     public var tag: String?
     /// WordStar's own stored text height — cheap pagination hint.
     public var lineCount: Int
+    /// The whole 1D record in bytes (the 1D, the length word, the head, the text with its
+    /// line ends, the 3-byte trailer): WS7's printer queues a footnote by it, and one over
+    /// 1,024 bytes overflows the queue (WS7 teardown 21.5, 21.9). 0 for a note with no
+    /// block. Port of Python's `core.Note.record_size`.
+    public var recordSize: Int
+    /// Per entry of `textLines`: the byte offset in the record just past that line's own
+    /// line end, which is how far WS7's note reader has got once the line is printed (WS7
+    /// teardown 21.9). Port of Python's `core.Note.line_ends`.
+    public var lineEnds: [Int]
     /// Conversion-flag high nybble: 0 symbols, 1 upper, 2 lower, 3 numeric. Meaningless
     /// for annotations (spec: "not used"), left 0 there rather than reporting noise.
     /// PARSED but NOT honoured for display — `DISPLAY.WS` printed through real WordStar 7
@@ -102,6 +111,8 @@ public struct Note: Hashable, Sendable {
         number: Int? = nil,
         tag: String? = nil,
         lineCount: Int = 0,
+        recordSize: Int = 0,
+        lineEnds: [Int] = [],
         numberFormat: Int = 0,
         convertTo: Int = 0,
         dotCommands: [String] = [],
@@ -116,6 +127,8 @@ public struct Note: Hashable, Sendable {
         self.number = number
         self.tag = tag
         self.lineCount = lineCount
+        self.recordSize = recordSize
+        self.lineEnds = lineEnds
         self.numberFormat = numberFormat
         self.convertTo = convertTo
         self.dotCommands = dotCommands
@@ -440,6 +453,21 @@ public struct HFTabMark: Hashable, Sendable {
     }
 }
 
+/// A font record AFTER a running head's text: `.he A<font>B...` prints A in the head's own
+/// face and everything from B on in the new one (WS7 teardown 3.15, run h24-allow). `charIdx`
+/// is where in the definition's stored text (`headers[line]`) the new face starts; `font` the
+/// `fonts` index. See `Document.headerFontRuns`. Port of a `(char_idx, font_idx)` pair of
+/// Python's `Document.header_font_runs`.
+public struct HFFontRun: Hashable, Sendable {
+    public var charIdx: Int
+    public var font: Int
+
+    public init(charIdx: Int, font: Int) {
+        self.charIdx = charIdx
+        self.font = font
+    }
+}
+
 /// Planning #250: one line's own font/tab, resolved for the SPECIFIC `.h1e`/`.h1o`/
 /// `.f1e`/`.f1o` variant a page's own parity picked — `Page.headHfOverride`/
 /// `footHfOverride`'s value type. `nil` on either field has the same meaning it already
@@ -573,6 +601,12 @@ public enum NoteNumberStyle: String, Hashable, Sendable {
     case lower, upper
 }
 
+/// How `.f#` / `.e#` say notes are numbered: on through the document, or again from 1 on
+/// each page (WS7 teardown 15.1).
+public enum NoteNumberMode: String, Hashable, Sendable {
+    case continuous, page
+}
+
 public struct Document: Hashable, Sendable {
     public var blocks: [Block]
     /// Numbered 1..n; referenced from the text via `Style.fnref` spans.
@@ -637,6 +671,16 @@ public struct Document: Hashable, Sendable {
     /// (WS7 report 15.10); Modern keeps its own labels.
     public var footnoteNumberFormat: NoteNumberStyle?
     public var endnoteNumberFormat: NoteNumberStyle?
+    /// The mode the last `.F#` / `.E#` naming one set (`.f# d 1`, `.f# p 5`; a bare `.f# n`
+    /// is per page, WS7 teardown 15.1). Printed reads the commands in flow instead
+    /// (`printTimeNoteLabels`).
+    public var footnoteNumberMode: NoteNumberMode?
+    public var endnoteNumberMode: NoteNumberMode?
+    /// Printed only, and only on the copy `docToPagelines` lays out again: the print-time
+    /// label of each footnote/endnote, by its index in `notes` (`printTimeNoteLabels`), which
+    /// `noteLabel` returns for Printed in place of the stored number. Python threads the same
+    /// map through `_doc_to_pagelines_pass` as `labels`. Empty everywhere else.
+    var printedNoteLabels: [Int: String] = [:]
     /// WS7's "footnote run" setting (default 8, `footnoteRunFactory`): a note that does not
     /// fit under its reference moves to the next page with its line when fewer than this
     /// many note lines of room are left, and runs on otherwise. A WSCHANGE setting of the
@@ -746,6 +790,15 @@ public struct Document: Hashable, Sendable {
     /// limitation `headerFonts`/`footerFonts` have.
     public var headerTabs: [Int: HFTabMark] = [:]
     public var footerTabs: [Int: HFTabMark] = [:]
+    /// A running head's font changes AFTER its opening (WS7 teardown 3.15, run h24-allow:
+    /// `.he A<font>B...` prints `A` in Courier, then `BCD`, the tab and `EF` in the record's
+    /// 24pt Times). `headerFonts` keeps the face the line OPENS with; this keeps the changes
+    /// after it, per definition: `[line: [text: [HFFontRun]]]`, keyed by the definition's own
+    /// stored text so a page draws the changes only with the definition they came with (a
+    /// head redefined mid-document keeps its own). Absent for a line that never changes face
+    /// after its opening. Port of Python's `Document.header_font_runs`.
+    public var headerFontRuns: [Int: [String: [HFFontRun]]] = [:]
+    public var footerFontRuns: [Int: [String: [HFFontRun]]] = [:]
 
     /// A `.h#`/`.f#` argument's own 0x0F USER PRINT CONTROLS, per line — the same
     /// three numbers a body span's own `.pctl` mark carries, and empty/absent for
@@ -815,6 +868,28 @@ public struct Document: Hashable, Sendable {
     /// stacks every line onto that row.
     public var headerLeads: [Int: Double] = [:]
     public var footerLeads: [Int: Double] = [:]
+    /// WS4: the `.CW` in force where each `.he`/`.h#`/`.fo`/`.f#` line was read, which the
+    /// line prints in: one cell of it per character (WS4 teardown 4 §15.3, runs cw30b-fo,
+    /// cw30b-fo2: `.CW 20` then `.FO` prints the footer at 20; `.FO` then `.CW 20` keeps
+    /// 12). Empty in the eras whose columns are a fixed 1/10" (`Era.columnUnit`). Port of
+    /// ctrl-kd's `Document.header_cw`/`footer_cw`.
+    public var headerCW: [Int: Double] = [:]
+    public var footerCW: [Int: Double] = [:]
+    /// WS7's `.xx` lines: where each sits and its strike-out character, read from the line's
+    /// own bytes (`xxStrikeChar`), so an extended character typed as a `1B xx 1C` item is that
+    /// character, not the masked bytes `dotPositions` keeps. Port of ctrl-kd's
+    /// `Document.strike_marks`.
+    public var strikeMarks: [StrikeMark] = []
+    public struct StrikeMark: Hashable, Sendable {
+        public var blockIndex: Int
+        public var lineIndex: Int
+        public var char: String
+        public init(blockIndex: Int, lineIndex: Int, char: String) {
+            self.blockIndex = blockIndex
+            self.lineIndex = lineIndex
+            self.char = char
+        }
+    }
     /// Planning #250: `.h1e`/`.h1o`/`.f1e`/`.f1o`'s own parity-split state, alongside
     /// the flat `headers`/`footers` above (still last-in-source-order-wins, unchanged —
     /// Modern/RTF/plain-text export stay parity-unaware, reported not implemented this
@@ -879,6 +954,8 @@ public struct Document: Hashable, Sendable {
         endnoteNumberStart: Int? = nil,
         footnoteNumberFormat: NoteNumberStyle? = nil,
         endnoteNumberFormat: NoteNumberStyle? = nil,
+        footnoteNumberMode: NoteNumberMode? = nil,
+        endnoteNumberMode: NoteNumberMode? = nil,
         footnoteRunLines: Int? = nil,
         commentBug: CommentBug? = nil,
         era: String? = nil,
@@ -917,6 +994,8 @@ public struct Document: Hashable, Sendable {
         self.endnoteNumberStart = endnoteNumberStart
         self.footnoteNumberFormat = footnoteNumberFormat
         self.endnoteNumberFormat = endnoteNumberFormat
+        self.footnoteNumberMode = footnoteNumberMode
+        self.endnoteNumberMode = endnoteNumberMode
         self.footnoteRunLines = footnoteRunLines
         self.commentBug = commentBug
         self.era = era

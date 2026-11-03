@@ -517,7 +517,7 @@
         "styles": []
        },
        {
-        "text": "2",
+        "text": "1",
         "styles": [
          "fnref",
          "sup"
@@ -528,7 +528,7 @@
         "styles": []
        },
        {
-        "text": "2",
+        "text": "1",
         "styles": [
          "fnref",
          "sup"
@@ -668,7 +668,7 @@
      {
       "segments": [
        {
-        "text": "2.",
+        "text": "1.",
         "styles": []
        },
        {
@@ -839,7 +839,7 @@
      {
       "segments": [
        {
-        "text": "(2)",
+        "text": "(1)",
         "styles": []
        },
        {

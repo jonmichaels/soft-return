@@ -451,7 +451,7 @@ func layoutPrintedPages(
             let geometry = pageGeometryDocument(doc, for: pg) ?? doc
             let bodyY = Double(printedTop(geometry)) + colCut() + spent
             let bodyEmpty = pg.lines.isEmpty
-            for line in notes.anchoredArea(in: geometry, bodyY: bodyY, bodyEmpty: bodyEmpty) {
+            for line in notes.anchoredArea(in: geometry, bodyY: bodyY) {
                 pg.append(line)
             }
             if bodyEmpty, let pos = readPos {
@@ -501,8 +501,16 @@ func layoutPrintedPages(
         let whole = Int(lines)
         return Double(whole) > lines ? whole - 1 : whole
     }
+    /// The open page for a running note (`NotePage`): the geometry in force, its room, and
+    /// the text on it so far. nil on continuous paper, where WS7 has no page to fill.
+    func notePage() -> NotePage? {
+        guard curPl > 0 else { return nil }
+        return NotePage(plVMI: vmi(curPl), mtVMI: vmi(curMt), mbVMI: vmi(curMb),
+                        roomPt: budget - colCut(),
+                        textVMI: roundHalfToEven((colCut() + spent) * 20))
+    }
     func admitNotes() {
-        notes.admit(roomLines: roomLines())
+        notes.admit(roomLines: roomLines(), page: notePage())
     }
     /// Whether `line`, a body line that fits, goes to the next page together with its
     /// notes (WS7 report 14.8, 14.15): its notes do not fit whole under it and the room
@@ -876,8 +884,16 @@ func layoutPrintedPages(
     while !notes.queue.isEmpty {
         let linesBefore = notes.queuedLineCount
         var entries: [[PageLine]] = []
+        notes.clearOverflow()
+        let row = notes.queue[0].row
         admitFootnotes(&entries, &notes.queue, ceiling: capacity)
-        let area = renderArea(entries)
+        var area = renderArea(entries, extraBlank: row)
+        if !area.isEmpty, isContinuationChunk(entries[0]) {
+            // A carry with no text left to print above it goes where the block goes under
+            // the text, with no text: the separator 360 dp under the top margin (WS7 report
+            // 15.1; run nw59-mt30 p11: separator 3960 at `.mt 30`).
+            area[0].lead = 3 * defaultLead
+        }
         if notes.queuedLineCount >= linesBefore {
             // No progress. Emit the page we just built, then flush the rest verbatim so
             // nothing is lost, and leave the loop. No Python oracle covers this
@@ -896,7 +912,9 @@ func layoutPrintedPages(
             lastHasArea = true
             break
         }
-        closeTailPage(area)
+        // and prints its page number, from the state of the last block read (run nw59-mt30
+        // p11), as a note-only page does
+        closeTailPage(area, explicitBI: readPos?.bi ?? (doc.blocks.count - 1))
         lastRoomLines = capacity - areaSize(entries)
         lastHasArea = true
     }

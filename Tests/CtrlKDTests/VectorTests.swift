@@ -1089,7 +1089,7 @@ private func loadJob013Vectors() throws -> Job013VectorFile {
     #expect(vectors.count == 6)
     for v in vectors {
         let page = Page(v.pagelines.map { PageLine(spans($0)) })
-        let got = pageStream(page, top: v.top)
+        let got = pageStream(page, top: Double(v.top))
         #expect(hexFromBytes(got) == v.expectedHex, "page_stream \(v.name)")
         // On a mismatch the hex is unreadable; show the operators.
         if hexFromBytes(got) != v.expectedHex {

@@ -183,4 +183,157 @@ import Testing
         let last = hpljetCheckpoints(Self.ws4(body)).last!.settings
         #expect(last == HPLJETSettings(ps: false, uj: "dis", cw: 10, po: 0, poCW: 10))
     }
+
+    /// `{text: x in decipoints from the logical page's left edge}` of a WS4 file's first body
+    /// line, printed (57.6pt is the 576 dp left edge). Port of ctrl-kd's `_xs_dp`.
+    static func xsDP(_ body: [UInt8]) -> [String: Int] {
+        let shows = Self.shows(Self.ws4(body))
+        let top = shows.compactMap(\.y).max() ?? 0
+        var out: [String: Int] = [:]
+        for s in shows where s.y == top {
+            out[s.text.trimmed()] = Int(((s.x! - 57.6) * 10 + 576).rounded())
+        }
+        return out
+    }
+
+    /// WS4 teardown 7.9, run w20-thr9: a one-line file ending 8D 0A at .CW 9; S // blanks =
+    /// 9 > THR 8, so letter spacing (ESC&k10H): 'abd' at 576, 'ef' at 834. The file's own
+    /// last line keeps its soft return. Port of `test_a_files_last_line_stored_soft_is_justified`.
+    @Test func aFilesLastLineStoredSoftIsJustified() {
+        var body = bytes(".CW 9")
+        body += HARD
+        body += bytes(".UJ ON")
+        body += HARD
+        body += [0x61, 0x62, 0xE4, 0x20, 0xA0, 0x65, 0x66, 0xE7]
+        body += SOFT
+        #expect(Self.ws4(body).blocks.last?.lines.last?.soft == true)
+        #expect(Self.xsDP(body) == ["abd": 576, "efg": 834])
+    }
+
+    /// WS4 teardown 7.9, run w20-neg: a line over the right margin under .PS .UJ ON; each gap
+    /// shrinks 30 dp (M10, the pool capped by [1821] = 50h). Port of
+    /// `test_a_negative_slack_shrinks_every_gap`.
+    @Test func aNegativeSlackShrinksEveryGap() {
+        var body = bytes(".PS ON")
+        body += HARD
+        body += bytes(".UJ ON")
+        body += HARD
+        body += [0x57, 0x57, 0xD7, 0x20, 0x4D, 0x4D, 0xCD, 0x20]
+        body += [0x57, 0x57, 0xD7, 0x20, 0x4D, 0x4D, 0xCD, 0x20, 0x57, 0xD7]
+        body += SOFT
+        let xs = Self.shows(Self.ws4(body)).filter { ($0.y ?? 0) > 700 }
+            .map { Int(((($0.x ?? 0) - 57.6) * 10 + 576).rounded()) }
+        #expect(xs == [576, 1033, 1440, 1897, 2304])
+    }
+
+    /// WS4 teardown 7.9, runs w20-oj, w20-oj0: the two captures are the same bytes; every
+    /// stored blank, 20h and A0h, is one PS14B blank (48 dp). Port of
+    /// `test_oj_off_under_ps_prints_as_uj_off`.
+    @Test func ojOffUnderPSPrintsAsUJOff() {
+        var line: [UInt8] = [0x54, 0x68, 0xE5, 0x20, 0xA0]
+        line += bytes("quic")
+        line += [0xEB, 0x20, 0xA0]
+        line += bytes("brow")
+        line += [0xEE, 0x20, 0xA0, 0x66, 0x6F, 0xF8]
+        line += SOFT
+        for uj in [".UJ ON", ".UJ OFF"] {
+            var body = bytes(".PS ON")
+            body += HARD
+            body += bytes(".OJ OFF")
+            body += HARD
+            body += bytes(uj)
+            body += HARD
+            body += line
+            #expect(Self.xsDP(body) == ["The": 576, "quick": 926, "brown": 1368, "fox": 1874])
+        }
+        // .OJ off without .PS: the driver does not read it (M1)
+        let chars = [HPLJET.Char(code: 0x61), HPLJET.Char(code: 0x62, hib: true),
+                     HPLJET.Char(code: 0x20), HPLJET.Char(code: 0xA0),
+                     HPLJET.Char(code: 0x63), HPLJET.Char(code: 0x64, hib: true)]
+        #expect(HPLJET.placeLine(chars, po: 0, poCW: 12, ps: false, uj: "dis", soft: true,
+                                 oj: false)?.map(\.x) == [0, 78, 156, 282, 282, 360])
+    }
+
+    /// WS4 teardown 7.9, run w22-a0: `abc` A0 A0 A0 `def`, only f flagged, soft return: no
+    /// letter spacing (ESC&k12H), `def` at 1008 = 576 + 6 cells. Port of
+    /// `test_soft_spaces_before_the_one_flagged_word_print_as_cells`.
+    @Test func softSpacesBeforeTheOneFlaggedWordPrintAsCells() {
+        var body = bytes(".UJ ON")
+        body += HARD
+        body += [0x61, 0x62, 0x63, 0xA0, 0xA0, 0xA0, 0x64, 0x65, 0xE6]
+        body += SOFT
+        let shown = Self.shows(Self.ws4(body)).filter { ($0.y ?? 0) > 700 }
+        #expect(shown.map(\.text) == ["abc   def"])
+        #expect(shown.map(\.x) == [57.6])
+    }
+
+    // MARK: - `.CW`, `.PO` and the page number
+    // WS4 teardown 4 §15.3 (batch 33, runs cw30-*, cw30b-*): `.PO` is fixed in the `.CW` in
+    // force when it is read; each character, margin column included, is one cell of the `.CW`
+    // in force on its line; the plain page number sits at PO edge + (PC - 1) cells of the
+    // install's normal width (factory 12) and prints in it; a `.FO`/`.HE` line prints in the
+    // `.CW` it was read under.
+
+    static func dots(_ lines: [String]) -> [UInt8] {
+        var out: [UInt8] = []
+        for line in lines {
+            out += bytes(line)
+            out += HARD
+        }
+        return out
+    }
+
+    static func at(_ shows: [ShownSpan], _ text: String) -> (size: Double, x: Double)? {
+        shows.first { $0.text.trimmed() == text }.map { ($0.size, $0.x ?? -1) }
+    }
+
+    @Test func poIsFixedInTheCwInForceWhenRead() throws {
+        // run cw30-po: `.CW 20 .PO 8 .PC 30` puts the left edge at 8 x 120 = 960 dp and the
+        // number at 960 + 29 x 72 = 3048, ESC&k12H
+        var shows = Self.shows(Self.ws4(Self.dots([".CW 20", ".PO 8", ".PC 30", "line one"])))
+        let line = try #require(Self.at(shows, "line one"))
+        #expect(line.size == 20 && abs(line.x - 96.0) < 1e-9)
+        let number = try #require(Self.at(shows, "1"))
+        #expect(number.size == 12 && abs(number.x - 304.8) < 1e-9)
+        // run e5-hpl, cw-margins-typed: with `.PO` read at the factory width the edge stays
+        // at 576 whatever `.CW` follows
+        shows = Self.shows(Self.ws4(Self.dots([".PO 8", ".CW 20", "line one"])))
+        #expect(abs((Self.at(shows, "line one")?.x ?? 0) - 57.6) < 1e-9)
+    }
+
+    @Test func thePlainPageNumberKeepsTheInstallWidth() throws {
+        // runs cw30-pc, cw30-pc2: `.PC 30` then `.CW 20`, and a `.CW 10` before the page end:
+        // the number at 576 + 29 x 72 = 2664 in 12 either way
+        for tail in [[], [".CW 10", "line two"]] {
+            let shows = Self.shows(Self.ws4(Self.dots([".PC 30", ".CW 20", "line one"] + tail)))
+            let number = try #require(Self.at(shows, "1"))
+            #expect(number.size == 12 && abs(number.x - 266.4) < 1e-9)
+        }
+        let doc = Self.ws4(Self.dots([".PC 30", ".CW 20", "line one"]))
+        let auto = try #require(docToPagelines(doc, printed: true)[0].autoPageno)
+        #expect(auto.size == 12 && abs(auto.x - 266.4) < 1e-9)
+    }
+
+    @Test func aMidPageCwSetsItsOwnLinesCells() throws {
+        // run cw30-pc2: `.CW 10` before `line two` puts `two` at 576 + 5 x 60 = 876
+        let doc = Self.ws4(Self.dots([".PC 30", ".CW 20", "line one", ".CW 10", "line two"]))
+        let shows = Self.shows(doc)
+        let two = try #require(Self.at(shows, "two"))
+        #expect(two.size == 10 && abs(two.x - 87.6) < 1e-9)
+        #expect(Self.at(shows, "line one")?.size == 20)
+        let lineTwo = docToPagelines(doc, printed: true)[0][1]
+        #expect(lineTwo.face == PageLine.Face(family: .courier, size: 10, bold: false))
+    }
+
+    @Test func aFooterPrintsInTheCwItWasReadUnder() throws {
+        // run cw30b-fo: `.CW 20` then `.FO page #`: the footer at 20 (`1` at 576 + 5 x 120);
+        // cw30b-fo2: `.FO` then `.CW 20` keeps 12 (576 + 5 x 72)
+        for (lines, pt) in [([".CW 20", ".FO page #"], 20.0), ([".FO page #", ".CW 20"], 12.0)] {
+            let doc = Self.ws4(Self.dots(lines + ["line one"]))
+            let foot = try #require(Self.at(Self.shows(doc), "page 1"))
+            #expect(foot.size == pt && abs(foot.x - 57.6) < 1e-9, "\(lines)")
+            let model = try #require(docToPagelines(doc, printed: true)[0].footerLines?.first)
+            #expect(Double(model.size ?? 20) == pt, "\(lines)")
+        }
+    }
 }

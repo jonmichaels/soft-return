@@ -83,6 +83,12 @@ struct FormatState {
     /// `blockFormat` and therefore never closes a block.
     var poCols: Double? = nil
 
+    /// WS4: the `.CW` a later `.PO` and running-head line are read under (`poCellsToCols`,
+    /// `Document.headerCW`); set only in the eras whose columns are cells of the font
+    /// (`applyFormatDot`'s `poInCells`). The type size itself is the page geometry's
+    /// `cw120` and, per line, the HPLJET settings.
+    var cw120: Double? = nil
+
     /// `.poe`/`.poo` (planning #231, even/odd page offset) — independently STATEFUL,
     /// same family as `poCols` above (no corpus evidence a later plain `.po` clears
     /// them, so the conservative reading — every command in this struct is
@@ -230,8 +236,8 @@ private func trimmed(_ b: [UInt8]) -> [UInt8] {
 /// exact image of the ruler line... on the screen") means the embedded
 /// image is the COMPLETE current margin picture, not a patch applied on
 /// top of whatever was active before. `leftMargin`/`paraMargin`/
-/// `rightMargin` are each either the 0-based column of that pip's own
-/// `L`/`P`/`R` character in the ruler string, or nil (cleared, matching a
+/// `rightMargin` are each either set from the column of that pip's own
+/// `L`/`P`/`R` character (see below), or nil (cleared, matching a
 /// document that never set the command at all) when the pip is absent —
 /// never "leave the prior value in force". Measured: WSFORMAT.WS sets
 /// `.pm11` once for its first control-code table (`.rr L------R`, no `P`
@@ -256,27 +262,102 @@ private func trimmed(_ b: [UInt8]) -> [UInt8] {
 /// leading spaces (which position its first pip): the same-line form
 /// reads raw `cmd` past `.RR`, the bare form reads the swallowed next
 /// physical line, whichever call site actually has the real bytes.
-func rulerPips(_ ruler: [UInt8]) -> (left: Int?, para: Int?, right: Int?) {
-    let upper = ruler.map(ASCII.upper)
-    func find(_ b: UInt8) -> Int? {
-        upper.firstIndex(of: b)
+///
+/// WS7 reads every L, P and R as a pip, in either case, whatever the words around them
+/// (WS7 teardown 5.1, runs rr59-low, rr59-up: `.rrhello world` and `.rrHELLO WORLD` give
+/// the same ruler), left to right: an L sets the left margin, so the last one before the R
+/// wins (the second `l` of `hello`), and the R sets the right margin and ENDS the ruler, so
+/// nothing after it counts (the `l` of `world`).
+///
+/// WS7 counts a same-line ruler's columns from the dot as 0 (WS7 teardown 5.1, run
+/// rr59-ctl: `.rrL----!----!-----R` is LM 3, a stop at 8, RM 19; runs rr59-low/-up:
+/// `.rrhello world` is LM 6, RM 11), so the same-line form reads its image with `first`
+/// = 3, the columns `.rr` itself takes. `first` is the column of the image's first byte.
+/// The R pip is the last column text reaches (rr59-ctl's `dd ee ff gg hh ii` fills columns
+/// 3-19; the factory ruler's R sits in column 64 and is `.rm 65`), so the right margin,
+/// counted as `.rm` counts it, is the R's column + 1 (`applyRulerMargins`). L and P are
+/// offsets, as `.lm`/`.pm` are stored.
+func rulerPips(_ ruler: [UInt8], first: Int = 0) -> (left: Int?, para: Int?, right: Int?) {
+    var left: Int? = nil
+    var para: Int? = nil
+    for (i, c) in ruler.enumerated() {
+        let k = first + i
+        switch ASCII.upper(c) {
+        case 0x4C: left = k                                 // L
+        case 0x50: para = k                                 // P
+        case 0x52: return (left, para, k)                   // R
+        default: break
+        }
     }
-    return (find(0x4C), find(0x50), find(0x52))     // 'L', 'P', 'R'
+    return (left, para, nil)
+}
+
+/// WS4's reading of a `.RR` line (WS4 teardown, `evidence/pass3/exe-static.md`, the `.RR`
+/// grammar at 21C48; its text fallback corrected by 7.11, run w25-rr1): (LM, PM, RM) of the
+/// ruler it builds, in the line's own 1-based columns with `.RR` in 1-3 and PM 0 for none,
+/// or nil when WS4 rejects the line and the document-start ruler comes back. Port of
+/// `core._ws4_ruler`.
+///
+/// The dot sets LM = RM = 1. L clears what came before and sets LM, P sets PM, `-` (and a
+/// `!` or `#` stop) carries RM to its column, R sets RM and ends the ruler, and a blank or
+/// tab resets everything read so far. The line is accepted only with LM set and LM != RM.
+/// Any other character -- a letter, a digit, punctuation -- abandons the grammar and the
+/// line is read as TEXT, as `^OF` reads one: LM at its first non-blank column (the dot), RM
+/// at its last, the tab stops in force kept (`.RRabc defgh`: `L----!----!R`, Tab then X
+/// gives five blanks).
+func ws4Ruler(_ line: [UInt8]) -> (lm: Int, pm: Int, rm: Int)? {
+    var lm = 1, pm = 0, rm = 1
+    var col = 3
+    for c in line.dropFirst(3) {
+        col += 1
+        switch ASCII.upper(c) {
+        case 0x20, 0x09:
+            lm = 0; pm = 0; rm = 0
+        case 0x4C:                                          // L
+            lm = col; pm = 0; rm = col
+        case 0x50:                                          // P
+            pm = col
+        case 0x52:                                          // R
+            rm = col
+            return lm != 0 && lm != rm ? (lm, pm, rm) : nil
+        case 0x2D, 0x21, 0x23:                              // - ! #
+            rm = col
+            if lm == 0 { lm = col }
+        default:                                            // text: ^OF's reading
+            let ink = line.indices.filter { line[$0] != 0x20 && line[$0] != 0x09 }
+            let first = ink[0] + 1, last = ink[ink.count - 1] + 1
+            return first != last ? (first, 0, last) : nil
+        }
+    }
+    return lm != 0 && lm != rm ? (lm, pm, rm) : nil
+}
+
+/// `applyRulerMargins` for WS4 (`ws4Ruler`): LM and PM become offset columns like
+/// `.lm`/`.pm` (column 1 is offset 0), RM stays the column, and a rejected line clears all
+/// three to the document-start ruler. Port of `core._apply_ws4_ruler`.
+func applyWS4Ruler(_ line: [UInt8], _ state: inout FormatState) {
+    guard let (lm, pm, rm) = ws4Ruler(line) else {
+        applyRulerMargins([], &state)
+        return
+    }
+    state.leftMargin = Double(lm - 1)
+    state.paraMargin = pm != 0 ? Double(pm - 1) : nil
+    state.rightMargin = Double(rm)
 }
 
 /// Set/clear `state.leftMargin`/`.paraMargin`/`.rightMargin` from one
-/// `.RR` ruler-line IMAGE — see `rulerPips`'s own citation for the
-/// clear-when-absent rule.
-func applyRulerMargins(_ ruler: [UInt8], _ state: inout FormatState) {
-    let (l, p, r) = rulerPips(ruler)
+/// `.RR` ruler-line IMAGE starting in column `first` — see `rulerPips`'s own citation
+/// for the clear-when-absent rule.
+func applyRulerMargins(_ ruler: [UInt8], _ state: inout FormatState, first: Int = 0) {
+    let (l, p, r) = rulerPips(ruler, first: first)
     state.leftMargin = l.map(Double.init)
     state.paraMargin = p.map(Double.init)
-    state.rightMargin = r.map(Double.init)
+    state.rightMargin = r.map { Double($0 + 1) }
 }
 
 /// Update running formatting state from one dot-command line.
 func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState, barePoZero: Bool = false,
-                    badPoZero: Bool = false) {
+                    badPoZero: Bool = false, poInCells: Bool = false) {
     guard var (name, arg) = dotCommandNameAndArg(cmd) else { return }
     if name.map(ASCII.upper) == Array("P".utf8), arg.first == 0x23 {
         // `.p#` — '#' is not a letter, so the shared name scanner splits it into name
@@ -370,7 +451,13 @@ func applyFormatDot(_ cmd: [UInt8], _ state: inout FormatState, barePoZero: Bool
             if isBlankDotArg(arg) ? barePoZero : badPoZero { state.poCols = 0.0 }   // Era.barePoZero / badPoZero
             return
         }
-        state.poCols = resolveColsArg(value, unit)
+        let resolved = resolveColsArg(value, unit)
+        state.poCols = poInCells && unit == nil ? poCellsToCols(resolved, state.cw120) : resolved
+    case "CW" where poInCells:
+        // WS4: the `.CW` a later `.PO` and running-head line are read under.
+        guard let (value, unit) = parseDotNumber(arg),
+              let resolved = resolveCwArg(value, unit) else { return }
+        state.cw120 = resolved
     case "POE":
         // Planning #231: even-page offset — RUNNING state, same shape as `.po` just
         // above, but governs only the EVEN-page parity. See `FormatState.poeCols` for

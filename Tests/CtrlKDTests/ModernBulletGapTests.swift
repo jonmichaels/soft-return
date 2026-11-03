@@ -49,7 +49,7 @@ private let e8SquareByte: UInt8 = 0xFE
 private func e8BulletList(_ items: [String]) -> [UInt8] {
     var out = e8Seed
     for item in items {
-        out.append(e8SquareByte)
+        out += wsItems([e8SquareByte])
         out.append(0x20)
         out += Array(item.utf8)
         out += e8Hard
@@ -118,7 +118,7 @@ private func e8BulletRow(_ data: [UInt8]) -> (toks: [ModernToken], hang: Double)
     // SCOPE. A `■` that is not a list marker — no repeating column, so `classifyRows`
     // never calls it one — keeps the reading face's own space after it.
     var data = e8Seed + Array("A line about the ".utf8)
-    data.append(e8SquareByte)
+    data += wsItems([e8SquareByte])
     data += Array(" symbol in ordinary prose.".utf8)
     data += e8Hard
     let row = try #require(e8BulletRow(data))

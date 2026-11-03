@@ -131,7 +131,7 @@ import Testing
     #expect(t.contains("[1] First.") && t.contains("[6] Second."))
 }
 
-@Test func collisionRenumbersTxtMdHtmlButNotPrintedModernPDFRTF() {
+@Test func collisionRenumbersTxtMdHtmlButNotModernPDFRTF() {
     var data = ws7Block(0x00) + bytes("one") + ws7Note(bytes("First."), cmd: 0x03, number: 0)
     data += bytes(" two") + ws7Note(bytes("Second."), cmd: 0x03, number: 0)
     data += bytes(" end.") + HARD
@@ -151,7 +151,9 @@ import Testing
 
     let ptexts = contentSpans(emitPDF(doc, mode: .printed)).map(\.text).joined(separator: " ")
     #expect(ptexts.contains("First.") && ptexts.contains("Second."))
-    #expect(!ptexts.contains("2."))                     // WS7's own number: both "1."
+    // Printed numbers the notes as WS7's printer does, from the page, not from the stored
+    // numbers: 1, 2 (WS7 teardown 21.10, run tg61-stale)
+    #expect(ptexts.contains("1.First.") && ptexts.contains("2.Second."))
 
     let mtexts = contentSpans(emitPDF(doc, mode: .modern)).map(\.text).joined(separator: " ")
     #expect(mtexts.contains("First.") && mtexts.contains("Second."))

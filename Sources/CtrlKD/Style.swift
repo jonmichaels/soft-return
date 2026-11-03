@@ -28,4 +28,8 @@ public struct Style: OptionSet, Hashable, Sendable {
     /// file can say is *which of the two* is in force. `Span.font` is an index into
     /// `Document.fonts`, which only WS5+ font blocks populate.
     public static let altFont   = Style(rawValue: 1 << 7)
+    /// The blanks a bare 0x09 tab became, in an underlined span under `.ul off`: a move
+    /// the LaserJet underline stays on across (`bareTabsUnderlined`). Printed model only;
+    /// never parsed or written. Python's `baretab` tag.
+    public static let bareTab   = Style(rawValue: 1 << 8)
 }

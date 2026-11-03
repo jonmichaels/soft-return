@@ -108,14 +108,26 @@ func nativeLineGraphicCells(_ line: PageLine) -> (cells: [PageLine.GraphicCellPl
 /// face is the printer's face here.
 ///
 /// Otherwise the engine's justification pieces (`PageLine.justifyWordX`) for a line whose every
-/// inked span is fixed pitch, never scaled.
+/// inked span is fixed pitch, never scaled — except on a line WS4's HPLJET placed (`hpljet`): there
+/// every word is drawn to its piece's width (`stretch`), as Printed draws it.
+///
+/// WS4's HPLJET justifies by letter spacing as well as by the blanks (WS4 teardown 4 §15.5,
+/// `HPLJET.placeLine`): each letter of the justified region takes whole 1/120" units more, and a
+/// `.PS` letter advances at the driver's own table width. The engine keeps a word's start and the
+/// start of the blank after it (`attachHpljetPieces`), and Printed draws the word as one `Tj`
+/// scaled by `Tz` to that width (`lineOpsPrinted`'s justified branch, `tzScale`), so its letters
+/// spread evenly across it. Pinned without a scale, Native set each word at its Mac face's natural
+/// width and put the difference after its last letter: the word started where Printed's does and
+/// its letters drifted from Printed's up to the whole difference (`.PS ON` "WWW", 2.8 pt at the
+/// third W).
 func nativeLinePieces(
-    _ line: PageLine, fonts: [FontChange]
-) -> (pieces: [PageLine.JustifyWordPiece], scaleBeyond: Double?) {
+    _ line: PageLine, fonts: [FontChange], hpljet: Bool = false
+) -> (pieces: [PageLine.JustifyWordPiece], scaleBeyond: Double?, stretch: Bool) {
     if let driver = line.driverPieces, !driver.isEmpty {
-        return (driver, nativeDriverScaleTolerance)
+        return (driver, nativeDriverScaleTolerance, false)
     }
-    return (nativeJustifyPieces(line, fonts: fonts), nil)
+    let pieces = nativeJustifyPieces(line, fonts: fonts)
+    return (pieces, nil, hpljet && !pieces.isEmpty)
 }
 
 /// The `.kr` state Native's LJ6DTP substitution collapses doubled curly quotes under
@@ -163,10 +175,15 @@ func nativeJustifyPieces(_ line: PageLine, fonts: [FontChange]) -> [PageLine.Jus
 /// scaled to it (`.expansion`); a narrower one is scaled only when it is narrower by more than
 /// this fraction, and otherwise keeps its natural width with the gap after it taking up the
 /// difference.
+///
+/// `stretch`: every inked piece is drawn to its own width, its glyphs scaled (`.expansion`) by what
+/// is left of that width after the kerns already on it, as Printed's justified branch scales a word
+/// with `Tz`; outside the engine's `tzMin`...`tzMax` clamp it keeps its natural width, as Printed's
+/// does. A WS4 HPLJET line (`nativeLinePieces`).
 @MainActor
 func nativePinJustifiedWords(
     _ input: NSAttributedString, pieces inputPieces: [PageLine.JustifyWordPiece],
-    scaleBeyond: Double? = nil
+    scaleBeyond: Double? = nil, stretch: Bool = false
 ) -> NSAttributedString {
     guard !inputPieces.isEmpty, input.length > 0 else { return input }
     // A dot-leader tab on a driver-placed line: WS7 repeats the leader glyph at the driver's own
@@ -249,6 +266,15 @@ func nativePinJustifiedWords(
     // Each piece's advance on screen: its width on paper, except inside a word a kerning pair
     // split and that keeps its natural width (below).
     var targets = pieces.map(\.width)
+    if stretch {
+        for k in ranges.indices where naturals[k] > 0 && pieces[k].width > 0 {
+            guard text.substring(with: ranges[k]).contains(where: { !$0.isWhitespace }) else { continue }
+            let scale = (pieces[k].width - kernsOn[k]) / naturals[k]
+            guard (CtrlKD.tzMin...CtrlKD.tzMax).contains(scale * 100), abs(scale - 1) >= 0.00005 else { continue }
+            scales[k] = scale
+            pinned.addAttribute(.expansion, value: log(scale), range: ranges[k])
+        }
+    }
     if let limit = scaleBeyond {
         func inked(_ k: Int) -> Bool {
             text.substring(with: ranges[k]).contains(where: { !$0.isWhitespace })
@@ -753,11 +779,6 @@ struct NativeAdvanceKey: Hashable {
 /// PRINTED ONLY. Modern is a modern reading surface and its typography is deliberately not
 /// a facsimile, so this is applied where `nativeNoKerning` is and nowhere else.
 let nativeNoLigatures: Int = 0
-
-/// Banker's rounding, matching the engine's own `roundHalfToEven`. Swift's
-/// `.toNearestOrEven` is the same rule; spelled out here because the engine's helper is
-/// `internal`.
-func nativeRoundHalfToEven(_ x: Double) -> Int { Int(x.rounded(.toNearestOrEven)) }
 
 /// Whether this span's face is the engine's `PDFFamily.courier` — the only family with a
 /// measured mechanism-G ratio of its own.

@@ -117,18 +117,31 @@ private func ys(_ pg: Page) -> [(y: Double, text: String)] {
     return out
 }
 
-private func chainPages(_ wordCount: Int) -> [Page] {
-    docToPagelines(noteDoc(60, ref: 50, note: words(wordCount)), printed: true)
+/// A note as WS7 stores a typed one: `n` lines of 13 characters, each ended by its own
+/// return, so each stored line is a printed line and the note's record is 15 bytes a line
+/// (runs fnlong120, fnch250).
+private func typed(_ n: Int) -> String {
+    var out = ""
+    for i in 0..<n {
+        out += "w" + String(repeating: "0", count: i < 10 ? 2 : (i < 100 ? 1 : 0)) + "\(i)"
+        out += " note txt\r\n"
+    }
+    return out
+}
+
+private func chainPages(_ lines: Int) -> [Page] {
+    docToPagelines(noteDoc(60, ref: 50, note: typed(lines)), printed: true)
 }
 
 private func at(_ rows: [(y: Double, text: String)], _ prefix: String) -> [Double] {
     rows.filter { $0.text.hasPrefix(prefix) }.map(\.y)
 }
 
-@Test func aNoteOnlyPageSits16PtBelowTheGridAndPrintsItsNumber() {
-    // runs fnlong120, fnch175, fnch250: separator 616, Continued 736, first note 976, the
-    // 51st note line at BB + 16 decipoints
-    let pg = chainPages(1464)[2]
+@Test func aNoteOnlyPageHangsFromTheStaleWordAndPrintsItsNumber() {
+    // runs fnlong120, fnch175, fnch250 (WS7 teardown 15.1, 21.8): at the factory .mt 3 the
+    // separator is at 360 + 128 * (720 >> 8) = 616, Continued 736, first note 976, and the
+    // 51st note line at BB + 16 decipoints, the last whose top is above BB
+    let pg = chainPages(120)[2]
     let rows = ys(pg)
     #expect(rows[0].y == 61.6 && rows[0].text == sep)
     #expect(rows[1].y == 73.6 && rows[1].text == "...Continued...")
@@ -139,11 +152,13 @@ private func at(_ rows: [(y: Double, text: String)], _ prefix: String) -> [Doubl
     #expect(pg.explicitBreakBI != nil)
 }
 
-@Test func thePageWhereAChainOfNoteOnlyPagesEndsSitsAtBBLessRLH2H() {
-    // run fnlong120 p4: R = 19 note lines left; P = BB - R*LH - 2H puts the separator at 396
-    // pt, one blank row more under Continued, the first note line at P + 720 (444 pt) and
-    // the last three rows above BB
-    let rows = ys(chainPages(1464)[3])
+@Test func thePageWhereAChainOfNoteOnlyPagesEndsSitsAtTheReserve() {
+    // run fnlong120 p4 (WS7 teardown 15.1, 21.9): the paginator's carry (120 x 240 less page
+    // 2's credit, 13200 - 240 - 720) less one note-only page's room - H leaves [4FBA] =
+    // 5280 VMI; the pen PL - MB - [4FBA] - H puts the separator at 396 pt. Page 3's end
+    // passed the record's last 1,024-byte block, so one blank note line more under
+    // Continued: the first note line at 444 pt, the last three rows above BB
+    let rows = ys(chainPages(120)[3])
     #expect(at(rows, "line ").first == 48.0 && at(rows, "line ").last == 156.0)
     #expect(at(rows, "-----") == [396.0])
     #expect(at(rows, "...Continued") == [408.0])
@@ -154,9 +169,10 @@ private func at(_ rows: [(y: Double, text: String)], _ prefix: String) -> [Doubl
 @Test func aRemainderTooLongForTheTextPrintsUnderItAndRunsOn() {
     // run fnch250: 250 note lines, note-only pages 3-5; page 6 has 47 left, which with 2H
     // does not fit under the resumed text: lines 51-55, the separator three rows under the
-    // last of them, 45 note lines to BB, the other two on page 7, again under the text,
-    // with the extra blank row
-    let pages = chainPages(2898)
+    // last of them, 45 note lines to BB, the other two on page 7, again under the text.
+    // Page 5 ends 18 bytes short of the record's last 1,024-byte block and page 6 past it,
+    // so the blank note line comes on page 7 (WS7 teardown 21.9)
+    let pages = chainPages(250)
     #expect(pages.count == 7)
     var rows = ys(pages[5])
     #expect(at(rows, "line ").last == 96.0 && at(rows, "line ").count == 5)

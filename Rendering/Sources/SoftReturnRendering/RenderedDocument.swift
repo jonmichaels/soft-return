@@ -19,7 +19,9 @@ public struct ColumnPass {
     public let xPt: Double
     public let baselineY: Double
     /// A `.l#` row's two bars (`PDFMetrics.lineNoBarChars` at `lineNoBarXs`), as cells in the
-    /// engine's frame like `xPt`, drawn with the number. Empty for any other pass.
+    /// engine's frame like `xPt`, drawn with the number; or the rule under an underlined
+    /// dot-leader tab record (`PageLine.leaderRules`), with a blank for its text. Empty for any
+    /// other pass.
     public var bars: [GraphicCell] = []
 }
 
@@ -285,10 +287,14 @@ public struct RenderedDocument {
     /// rather than counting lines at render time.
     ///
     /// Painted rather than flowed for the plain reason that they are not in the flow: the
-    /// gutter sits in the margin `.po`已 reserved, LEFT of the text container's own edge, and
-    /// edge, and no line of body text has any relationship to it. One document in the corpus
-    /// uses them
+    /// gutter sits in the margin `.po` reserved, LEFT of the text container's own edge, and
+    /// no line of body text has any relationship to it. One document in the corpus uses them
     /// (PRINT.TST, 23 lines); the app drew none of them before this.
+    ///
+    /// Other marks the engine places at its own x ride here too, drawn the same way: WS4 HPLJET's
+    /// COMPOS overstrikes (`PageLine.overstrike`), the strike-out pass's copies of the strike character over a
+    /// struck run (`PageLine.strikeCopies`), and the rule under an underlined dot leader (`PageLine.leaderRules`)
+    /// (planning #549).
     public let lineNumberPasses: [[ColumnPass]]
     /// Planning #251(c): per page, per line fragment, the engine's own placement for every
     /// cp437 graphic character that fragment draws — `PageLine.graphicCells`, carried

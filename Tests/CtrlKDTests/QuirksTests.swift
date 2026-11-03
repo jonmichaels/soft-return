@@ -308,10 +308,24 @@ import Testing
         #expect(!emitHTML(quirked, mode: mode).contains("line-through"))
         #expect(!emitMarkdown(quirked, mode: .modern).contains("~~"))
 
-        // Strikeout in PDF is a stroked rule over the run (`... m ... l S`).
-        let on = Self.countStrokes(emitPDF(faithful, mode: mode))
-        let off = Self.countStrokes(emitPDF(quirked, mode: mode))
-        #expect(off < on, "\(mode): the PDF still strokes as many rules as the faithful render")
+        // Modern strokes a rule over the run (`... m ... l S`); Printed prints the driver's
+        // strike-out pass, a run of `-` over it (WS7 teardown 11.6, planning #549).
+        let count = mode == .modern ? Self.countStrokes : Self.countStrikePasses
+        let on = count(emitPDF(faithful, mode: mode))
+        let off = count(emitPDF(quirked, mode: mode))
+        #expect(off < on, "\(mode): the PDF still strikes as many runs as the faithful render")
+    }
+
+    /// Printed's strike-out passes: text ops of nothing but `-`.
+    static func countStrikePasses(_ pdf: [UInt8]) -> Int {
+        pdfContentStreams(pdf).reduce(0) { total, stream in
+            let text = String(decoding: stream, as: UTF8.self)
+            return total + text.components(separatedBy: " Td (").dropFirst().filter {
+                guard let end = $0.range(of: ") Tj") else { return false }
+                let shown = $0[..<end.lowerBound]
+                return !shown.isEmpty && shown.allSatisfy { $0 == "-" }
+            }.count
+        }
     }
 
     /// Strikeout in PDF is a stroked rule over the run. Both renders are produced with

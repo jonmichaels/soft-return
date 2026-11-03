@@ -73,9 +73,10 @@ let hmiPerPoint = 1800.0 / 72.0                 // = 25
 /// so outside the clamp the span keeps its natural advance and the grid loses that one
 /// argument. 40/250 is wide enough to cover every real substitution in the reference corpus
 /// (the worst honest case there is ~0.85) and narrow enough that a genuinely absurd ratio is
-/// caught.
-let tzMin = 40.0
-let tzMax = 250.0
+/// caught. Public so Native, which scales a word as Printed does with Tz, keeps the same clamp
+/// (`nativePinJustifiedWords`).
+public let tzMin = 40.0
+public let tzMax = 250.0
 /// PDF's own initial text state.
 let tzDefault = 100.0
 

@@ -15,7 +15,7 @@ import Testing
 
 @Test func aSharedSemanticFlowAttachesExactlyTheSameCells() {
     var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
-    src += [UInt8](repeating: 0xCD, count: 10)
+    src += wsItems([UInt8](repeating: 0xCD, count: 10))
     src += HARD
     src += bytes("Prose after the rule, so the flow has more than one item.")
     src += HARD
@@ -35,7 +35,7 @@ import Testing
 
 @Test func theSharedFlowLeavesTheLayoutJSONByteIdentical() {
     var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
-    src += [UInt8](repeating: 0xCD, count: 10)
+    src += wsItems([UInt8](repeating: 0xCD, count: 10))
     src += HARD
     src += bytes("Prose after the rule.")
     src += HARD
@@ -48,7 +48,7 @@ import Testing
 
 @Test func hasModernGraphicContentIsTheShortCircuitItClaimsToBe() {
     var graphicSrc: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
-    graphicSrc += [UInt8](repeating: 0xCD, count: 4)
+    graphicSrc += wsItems([UInt8](repeating: 0xCD, count: 4))
     graphicSrc += HARD
     var proseSrc: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
     proseSrc += bytes("Nothing graphic here at all.")
@@ -69,7 +69,7 @@ import Testing
 /// `attachGraphicCellsModern` drops the shared one on the floor there.
 @Test func anEmptyNoteSetNeverTakesTheSharedFlow() {
     var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
-    src += [UInt8](repeating: 0xCD, count: 10)
+    src += wsItems([UInt8](repeating: 0xCD, count: 10))
     src += HARD
     let doc = parseWS(src)
     let wrong = modernSemanticFlow(doc, notes: [], noteRefs: .word)

@@ -158,7 +158,6 @@ public struct Options: Equatable, Sendable {
     /// `--no-styles` turns it off; on by default, like ctrl-kd's `styles=`.
     public var styles = true
     /// Which importer the RTF font names target (`--fonts`, ctrl-kd's `--fonts`).
-    /// `.office` by default: Word and Google Docs both resolve the Microsoft names.
     /// D7 ruling (2026-08-05): sr defaults to MAC font names -- it is the
     /// Mac tool, and its bare RTF should open true in Pages/TextEdit.
     /// ctrl-kd defaults to office. A sanctioned platform difference under

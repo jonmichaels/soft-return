@@ -200,7 +200,10 @@ func pgnumForBodilessPage(_ timeline: Timeline<Bool>, fallbackBi: Int?,
 func autoPagenoRowY(pageHeight: Int, pl: Double, mb: Double, fm: Double,
                     size: Int) -> Double? {
     if mb <= 0 { return nil }
-    return Double(pageHeight) - (pl - mb + fm) * Double(PDFMetrics.lead) - Double(size)
+    // In VMI, each margin cut to whole VMI, sent as whole decipoints (`vmi`, `vmiPt`):
+    // `.pl 10.84"` puts the number at 7204 dp, 720.4pt (WS7 teardown 21.8, run nf59-pl).
+    // Whole lines are 12pt each, as before.
+    return Double(pageHeight) - vmiPt(vmi(pl) - vmi(mb) + vmi(fm)) - Double(size)
 }
 
 func resolvedPageHeight(_ doc: Document, printed: Bool) -> Int {
@@ -667,19 +670,41 @@ func autoPageNumberXPt(_ doc: Document, poCols: Double? = nil) -> Double {
 /// PREVIEW.WS (ws7-prints/v1) is unaffected by this change either way: it declares its OWN
 /// `.mt` explicitly (`mtSource == .file`, 4.98 lines — a WSFORMAT-style non-integer `.mt`,
 /// likely typed as a decimal inch value), and both its `ws7-prints/v1` and `v3` captures
-/// already match `.mt` ALONE (round(4.98*12)=60, +12+12 for this headerless document's own
-/// two leading blank lines at `AUTO_LEAD_FACTOR` 1.0 = 84pt vs the `v3` measured 83.7pt,
-/// 0.3pt residual — the same decipoint-rounding gap every other oracle here shows).
+/// already match `.mt` ALONE: 4.98 lines is 1195 VMI, 597 decipoints (`vmiPt`), +12+12 for
+/// this headerless document's own two leading blank lines at `AUTO_LEAD_FACTOR` 1.0 = 83.7pt,
+/// the `v3` capture exactly. (It was `round(4.98*12)` = 60 here until planning #549, 84pt, a
+/// 0.3pt residual this comment called decipoint rounding: it was this function's own
+/// rounding to whole points. `.mt 0.55"`, 792 VMI, prints body line 1 at 51.6pt, not 52: WS7
+/// teardown fixture note-only-mt-rounded.)
 ///
 /// WSCHANGE's factory-defaults table (Installing and Customizing, WS7 manual, p.2-46/2-45)
 /// independently confirms the `.mt` default used here: "Top margin ... 0.50"". Port of
 /// Python's `_printed_top` (pdf.py, ctrl-kd 2.0.0/round 26 wave 3, refined same day on
 /// PREVIEW.WS evidence, and again by mechanism U, commit 26169cd).
-func printedTop(_ doc: Document) -> Int {
-    guard let page = doc.page else { return PDFMetrics.topPrinted }
+func printedTop(_ doc: Document) -> Double {
+    guard let page = doc.page else { return Double(PDFMetrics.topPrinted) }
     let pageHeight = resolvedPrintedPageHeight(doc)
     let reserve = page.mtLines
-    return max(0, min(roundHalfToEven(reserve * 12), pageHeight - PDFMetrics.lead))
+    return max(0, min(vmiPt(vmi(reserve)), Double(pageHeight - PDFMetrics.lead)))
+}
+
+/// A `.mt`/`.mb`/`.pl`/`.hm`/`.fm` in page lines as WS7 holds it: a whole number of VMI
+/// (1/1440 inch, 240 a line; WS7 teardown 11.1), the fraction cut. An inch value is lines
+/// x 6 here (`resolveLinesArg`) and lands on whole VMI at every value the runs used (0.35",
+/// 0.55", 0.70": 504, 792, 1008); `.pl 10.84"` is 15609.6, and its footer at 7204
+/// decipoints (WS7 teardown 21.8, run nf59-pl) needs 15609, cut, not 15610. WSCHANGE also
+/// cuts a typed inch value (WS7 teardown 14.12). The 1e-6 keeps a value that is whole in
+/// decimal (3.3 lines) off the float edge below it. Port of `_vmi`.
+func vmi(_ lines: Double) -> Int {
+    Int((lines * 240 + 1e-6).rounded(.down))
+}
+
+/// A vertical position in VMI as the LaserJet driver sends it, `floor(y * 720 / 1440)`
+/// decipoints (WS7 teardown 11.6, DRIVERN +0x2410), in points. A whole page line is exactly
+/// 12pt. Port of `_vmi_pt`.
+func vmiPt(_ vmi: Int) -> Double {
+    let q = vmi / 2
+    return Double(vmi % 2 != 0 && vmi < 0 ? q - 1 : q) / 10.0
 }
 
 /// Bottom-of-page reserve for `layoutPrintedPages`'s FOOTNOTE area (never the endnote

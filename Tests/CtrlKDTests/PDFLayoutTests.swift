@@ -945,7 +945,8 @@ private let fakeBinary = Emitter(name: "fake", ext: ".fake") { doc, _, _ in
     // no separating space (planning #202 residuals round, ctrl-kd 1017391, LYING.pcl's
     // own "1.Did" -- see `footerEntryLines`'s own doc comment)
     #expect(flat.contains("1.Foot text."))
-    #expect(flat.contains("(1) End text."))
+    // no blank after the endnote's mark either (WS7 teardown 21.10, run tg61-en0)
+    #expect(flat.contains("(1)End text."))
     #expect(!flat.contains("[1] Foot text."))
     #expect(!flat.contains("[2] End text."))
 }

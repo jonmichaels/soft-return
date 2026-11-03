@@ -33,18 +33,16 @@
 /// graphic char with only graphic-chars-or-spaces in between, so it can never cross
 /// real letters.
 ///
-/// Synthetic fixtures only (CLAUDE.md): literal cp437 box-drawing bytes embedded
-/// directly in a WS7 block, same convention as `PDFGraphicsTests.swift`'s own box
-/// fixtures (whose escape-wrap is specific to reproducing BOX.WS's own authoring
-/// method; plain high bytes decode via cp437 through the ordinary text path just the
-/// same, matching ctrl-kd's own raw-cp437-bytes fixture convention here). Port of
-/// ctrl-kd's `tests/test_modern_box_regions.py`.
+/// Synthetic fixtures only (CLAUDE.md): cp437 box-drawing bytes in a WS7 block, each a
+/// `1B x 1C` item as `PDFGraphicsTests.swift`'s own box fixtures and BOX.WS store them (a
+/// bare high byte loses bit 7 on load, WS7 teardown 14.2, 21.8). Port of ctrl-kd's
+/// `tests/test_modern_box_regions.py`.
 import Testing
 @testable import CtrlKD
 
-private let boxTop: [UInt8] = [0xDA] + [UInt8](repeating: 0xC4, count: 21) + [0xBF]
-private let boxMid: [UInt8] = [0xB3] + [UInt8](repeating: 0x20, count: 21) + [0xB3]
-private let boxBot: [UInt8] = [0xC0] + [UInt8](repeating: 0xC4, count: 21) + [0xD9]
+private let boxTop: [UInt8] = wsItems([0xDA] + [UInt8](repeating: 0xC4, count: 21) + [0xBF])
+private let boxMid: [UInt8] = wsItems([0xB3] + [UInt8](repeating: 0x20, count: 21) + [0xB3])
+private let boxBot: [UInt8] = wsItems([0xC0] + [UInt8](repeating: 0xC4, count: 21) + [0xD9])
 
 private func boxFlow(_ doc: Document) -> [ModernFlowItem] {
     var discardedSemIndex: [Int]? = nil
@@ -103,8 +101,9 @@ private func paraItems(_ flow: [ModernFlowItem]) -> [[ModernToken]] {
     // -- `graphicRunRanges`'s shape requires closing on another graphic char with
     // nothing but graphic-chars-or-spaces in between, and real letters break that every
     // time.
-    let line = Array("UL: ".utf8) + [0xDA] + Array("    UR: ".utf8) + [0xBF]
-        + Array("   done".utf8)
+    var line = Array("UL: ".utf8) + wsItems([0xDA])
+    line += Array("    UR: ".utf8) + wsItems([0xBF])
+    line += Array("   done".utf8)
     let doc = parseWS(ws7Block(0x00) + line + HARD)
     let paras = paraItems(boxFlow(doc))
     let texts = paras[0].map(\.text)
@@ -116,7 +115,7 @@ private func paraItems(_ flow: [ModernFlowItem]) -> [[ModernToken]] {
     // unbroken visual line (the "non-reflowing... unwrapped monospace block" rule)
     // rather than breaking between its border and its interior gap -- before the fix,
     // `modernWrap` split the closing border onto its own line.
-    let row: [UInt8] = [0xB3] + [UInt8](repeating: 0x20, count: 88) + [0xB3]
+    let row: [UInt8] = wsItems([0xB3] + [UInt8](repeating: 0x20, count: 88) + [0xB3])
     var data = ws7Block(0x00)
     data += fontBlock(0, points: 12.0)
     data += row

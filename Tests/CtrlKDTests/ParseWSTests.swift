@@ -350,6 +350,9 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // pip) -- WS7's real capture prints that heading at the plain page margin (no
     // hanging indent at all); this engine, before this fix, kept carrying the
     // stale `.pm11` column across the ruler and indented both 72pt too far right.
+    // On the `.RR` line itself the columns count from the dot as 0, and the R is the
+    // last column text reaches, so the right margin is its column + 1 (WS7 teardown
+    // 5.1, run rr59-ctl).
     var data = bytes(".RR L---P---R") + HARD
     data += bytes("First line under the new ruler.") + HARD
     data += bytes(".RR--!----!--------R") + HARD
@@ -357,15 +360,15 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     let doc = parseWS(data)
     let paras = doc.blocks.filter { $0.kind == .para }
     #expect(paras.count == 2)
-    #expect(paras[0].leftMargin == 1.0)
-    #expect(paras[0].paraMargin == 5.0)
-    #expect(paras[0].rightMargin == 9.0)
+    #expect(paras[0].leftMargin == 4.0)
+    #expect(paras[0].paraMargin == 8.0)
+    #expect(paras[0].rightMargin == 13.0)
     // The second ruler shows neither `L` nor `P` -- both clear, matching a
     // document that never set `.lm`/`.pm` at all -- but DOES show `R`, so
     // rightMargin is set fresh from its own pip, not left stale either.
     #expect(paras[1].leftMargin == nil)
     #expect(paras[1].paraMargin == nil)
-    #expect(paras[1].rightMargin == 16.0)
+    #expect(paras[1].rightMargin == 20.0)
 }
 
 @Test func rrBareRulerNextLineAlsoClearsParaMargin() {
@@ -1106,19 +1109,25 @@ func trailingPaOpensPageOnlyWithSavedBlankParagraph() throws {
     // as any 0x8D return — not asserted here)
 }
 
-@Test func theFlaggedControlMaskIsAnAllowlistNeverARange() {
-    // A blanket 0x80-0x9F mask CREATES structural bytes: 0x9A becomes 0x1A and
-    // `linesPass` truncated a whole novel at its first occurrence; 0x9D would become
-    // 0x1D block framing. Both bytes must survive the mask untouched, and the text after
-    // them must survive with them.
+@Test func aFlagged9AhEndsTheTextButAnItemHoldingItDoesNot() {
+    // WS7 reads a bare 9Ah as 1Ah and ends the text there: its load sanitiser examines
+    // every control byte (00h-1Fh, 80h-9Fh) with bit 7 masked (WS7 teardown 3.6, the code
+    // at 0x3C1F3/0x3C224). A `1B 9A 1C` item is a character (cp437 9Ah, U-umlaut), whose
+    // middle byte the sanitiser steps over, so it truncates nothing: masking that middle
+    // byte is what once cut a whole novel short at its first occurrence.
     // staged: 6.2.4's type-checker times out on the one-expression form
-    var data = ws7Block(0x00) + bytes("Before the byte ")
+    var data = ws7Block(0x00) + bytes("Before the item ")
+    data += [0x1B, 0x9A, 0x1C]
+    data += bytes(" the document continues normally.") + HARD
+    data += bytes("Then a bare byte ")
     data += [0x9A]
-    data += bytes(" and after it the document continues normally.") + HARD
-    data += bytes("A second paragraph proves nothing was truncated.") + HARD
+    data += bytes(" and the rest is gone.") + HARD
+    data += bytes("A second paragraph that WS7 never reads.") + HARD
     let doc = parseWS(data)
     let txt = emitText(doc, mode: .printed)
-    #expect(txt.contains("A second paragraph proves nothing was truncated."))
+    #expect(txt.contains("the document continues normally."))
+    #expect(txt.contains("Then a bare byte"))
+    #expect(!txt.contains("the rest is gone") && !txt.contains("never reads"))
 }
 
 @Test func ws5SoftReturnsAlwaysWrapInModern() {

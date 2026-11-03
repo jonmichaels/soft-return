@@ -62,7 +62,7 @@ private struct GeometryCase: Decodable {
     let inputHex: String
     let page: GeometryPageVector
     let printedCap: Int
-    let printedTop: Int
+    let printedTop: Double
     let printedLead: Double
     /// Present only for the two pagination cases (`pagination_55`, `pagination_lh16_27`).
     let printedPageLineCounts: [Int]?
@@ -83,7 +83,7 @@ private struct GeometryCase: Decodable {
 
 private struct PrintstreamEntry: Decodable {
     let printedCap: Int
-    let printedTop: Int
+    let printedTop: Double
     let printedLead: Double
 
     enum CodingKeys: String, CodingKey {

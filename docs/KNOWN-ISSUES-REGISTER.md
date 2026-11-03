@@ -1,5 +1,131 @@
 # Known-Issues Register
 
+### 2026-11-02 — Planning #549: what the closed WordStar teardowns leave open
+
+Both engines now follow the teardowns' answers (note-only pages, the overflow row, print-time note
+numbers, margins in whole VMI, `.xx`, `.ul off`, bit 7 under a header, head records, `.rr`, WS4 `.CW`).
+What is softened or still open, by name:
+
+- **Softened test:** `UnderlineContinuityTests` skips documents with `.ul off`, whose per-word breaks are
+  now intended (Native follows Printed's rule under every `.ul` setting).
+- **Running heads:** a head that changes face part way is drawn piece by piece in Printed and Native,
+  but `_hf_align_x`, RTF and Modern still use the head's opening face. In Native, a piece that follows a
+  proportional piece without its own x sits at the Mac face's width, not the font-metric width Printed
+  uses (one-face proportional heads already drift the same way).
+- **Underline:** a type-09h tab record inside an underlined run has no run in the teardowns; Printed and
+  Native follow the bare-tab rule for it.
+- **Notes:** the teardowns don't say whether a tagged footnote takes a number in the print-time count
+  (the engines give it none). Under `.pf on`, a mid-document `.f#` is placed on the unwrapped line scale.
+- **Bit 7:** WS7's load-time handling of a bare 9Ah/9Bh/9Dh in a WS5+ body is from its code; that
+  printing from disk does the same is inferred (no run has one; no corpus document holds one).
+- **Not this work:** the `sr` and `ctrl-kd` command lines give 22 different RTF cells on LJ6DTP-family
+  documents (their default font tables differ); the same 22 differ at the branch base, and the shared
+  answer key, which calls both libraries with the same options, matches.
+
+### 2026-10-28 — The v5.0.0b1 release runs, every failure by name
+
+A Mac beta (5.0.0b1, build 29) and an iPhone archive (5.0.0, build 10; App Store Connect numbered the upload 11).
+
+- **ctrl-kd full suite (d748179, armed):** 7559 passed, 76 skipped (every one an exclusion by ruling), 1 xfailed:
+  `test_pcl_fidelity[LJ6DTP]`, held as a known issue by `tools/pcl_tolerance.py`'s `KNOWN_ISSUE_DOCS` (#210).
+- **Engine (`swift test`, armed, tree 210ac6d9):** 1544 passed; 54 known issues, all inside
+  `PCLFidelityTests.pclFidelity(doc:)`, enumerated below. No hard failure: LJ6DTP, 4.6.0's one hard failure, has been
+  a named known issue since e2223a33 (2026-10-27, #210), matching ctrl-kd. It still diverges.
+- **Mac Corpus units (the Corpus plan without the UI target, armed, through the isolation gate, tree 210ac6d9):**
+  967 tests; 951 passed, 13 failed, 3 expected failures (`CorpusDocumentFilterTests`' three).
+  - 9 failures were the tests not following this release's changes. They were fixed in 7386b99b, and each class
+    was rerun green:
+    - `AboutWindowControllerTests`: the version shape, now `X.Y.Z` or `X.Y.ZbN`;
+    - `GeometryOracleTests`' line comparison (`sameLine`): box rows are vector graphics now;
+    - `SettingsWindowOrderTests` and the Quick Look Margins order test: WS4 Files Print As now sits under Quick
+      Look Margins;
+    - `ModernViewerStyleTests.titleIsCenteredBoldOptima18pt` and `UIRound4ARulingTests`: Optima;
+    - `UIRound4ARulingTests`: BOX.WS's Courier Prime;
+    - `InvisiblesDesignPassTests`: Native draws graphic characters as vectors, so their glyph ink is skipped;
+    - `OverprintCompositingTests`: the Courier Prime fallback and an overprint's near-zero advance.
+  - OPEN, by name:
+    - `LivePrintedFramingTests` ×3: ScreenCaptureKit -3811, because the console was locked; they need the screen
+      unlocked.
+    - `HolymacTimingTests.openAndPageChangeTimings`: a 102 ms stretch, the single `setContent` call (#580).
+  - Not among the 13: `AboutWindowControllerTests.gapBetweenLabelsAndValuesIsOnTheWindowsCentreLine(dev-commit)`
+    fails when run alone and passes in the full run. It depends on test order and is untouched since 4.6.1.
+  - The LJ6DTP rows 4.6.0 parked on #210 (`AppNativeFidelityTests`, `NativeStructuralParityTests`, the knockout
+    classification, `everyLineStartsAtTheLibrarysLeftMargin`'s LJ6DTP and -LASERJE.FNT rows) did not fail this run.
+- **UI tests (`SoftReturnUITests`):** not run. Jon removed the visible-page, Margins-submenu and Command-I tests
+  (88d18765). He skipped the four accessibility tests for this release after an audit found they cannot show whether
+  VoiceOver reaches a control (#587).
+- **iPhone, whole target, armed, tree 287946c2:**
+  - iOS 16.0 (Xcode 26.6): 217 passed, 0 failed, 6 skipped, 2 expected.
+  - iOS 26.5 and 27.0 (Xcode 27.1): 203 passed, 0 failed, 13 skipped, 2 expected, each.
+  - The skips are conditions, as in 4.6.0:
+    - the App Store set (its own device only);
+    - the hand-built bars, iOS 16–18 only;
+    - the screen-watcher shots;
+    - the share menu.
+  - Expected failures: `CorpusDocumentFilterTests`' two.
+- **Public CI, found after publishing:**
+  - The tag's snapshot failed version-audit, which accepted only X.Y.Z.
+  - It also failed both engine legs, which could not compile `JustificationTests.swift:211` with their older Swift
+    (macos-15's Xcode; the swift:6.3.3 image).
+  - Both are fixed: version-audit now accepts X.Y.ZbN, and the test is typed. The rebuilt public `beta` is green.
+  - The release driver now refuses to publish over red CI on the tag.
+
+#### The PCL tier, rewritten from the run (194 documents)
+
+Rerun alone, armed, on 4d08c4d8, after the release; its `Sources/` are identical to 210ac6d9's. The release run's
+log was deleted before this was written. The rerun found the same 54 known issues. 140 documents are clean, 25 are excluded by ruling, and 29 diverge, with each
+divergence named. Check 2 (cross-engine identity) is never softened. It is green for all 194.
+
+**Excluded by ruling (25), as in the 2026-09-14 enumeration below.** One change: `RTF-RJS/NOVEL.WS` is no longer
+among the PostScript exclusions; it is measured and appears in the divergent list.
+- duplicate (13): `DEFAULT/BOX`, `DEFAULT/DEFAULT.WS`, `DEFAULT/INSET/GRAPHICS.DOC`, `DEFAULT/LIST.DOC`,
+  `DEFAULT/MAILING.DOC`, `DEFAULT/PLAYBILL.DOC`, `DEFAULT/PLAYS.DOC`, `DEFAULT/REVIEW.DOC`, `DEFAULT/SHAKE.DOC`,
+  `DEFAULT/SPELL.DOC`, `PRINTERS/FONTCRIB.PS`, `REF/BOOKLET.RJS`, `TAGS/OK`.
+- font-chart (4): `PRINTERS/fontcrib.ws`, `PRINTER.PS`, `REF/SYMBOL.CHT`, `REF/WINGDING.CHT`.
+- postscript (2): `PSPRINT.TST`, `REF/PS.TST`.
+- formfeed-off (2): `ARTICLES/FORMFEED.WS`, `REF/ROUNDED.BRD`.
+- parked-lj6dtp (1): `LSRBOX/LSRBOX.WS`. parked (1): `LSRBOX/CHECKER.BRD`. freeze (1): `OLDTIMES.WS`.
+- degenerate (1): `REF/-PATCHES.WS`.
+
+**Diverging (29), with this run's non-font-substitution divergence count.**
+- **LJ6DTP:** 380 (4.6.0: 431). It is a named known issue (#210): line-start-shift 7, word-unmatched 104,
+  extra-word-in-engine 269.
+- **The other 28 are v4-expansion documents** (#180 phase 2).
+
+| document | n | before (09-14) | dominant kind |
+|---|---:|---:|---|
+| `MICKEE/MICKEE.WS` | 793 | 793 | newspaper columns with an `.rm` change inside (triage cause 15) |
+| `REF/BOOKLET.WS` | 464 | 838 | fixed-pitch exact-drift |
+| `RTF-RJS/NOVEL.WS` | 370 | excluded | word-unmatched 272, baseline-shift 78 |
+| `RTF-RJS/LINKS.WS` | 151 | 151 | baseline shifts of one and two lines |
+| `REF/-HOW-TO.RJS` | 82 | 82 | baseline shifts |
+| `PRINT.TST` | 69 | 193 | word segmentation at a style change; baseline-shift 17 |
+| `DEFAULT/PRINT.TST` | 69 | 193 | the same document at a second path |
+| `RTF-RJS/1-SINGLE.WS` | 46 | 47 | words unmatched / extra in the engine |
+| `RTF-RJS/2-DOUBLE.WS` | 46 | 47 | the same shape |
+| `RTF-RJS/1-5LINES.WS` | 46 | 47 | the same shape |
+| `REF/FONTS.REF` | 42 | 42 | CG Times / Univers drift (font substitution) |
+| `REF/WIN7.ETC` | 35 | 35 | extra engine words past the printer's right ceiling |
+| `INTERVU.WS` | 32 | 32 | baseline a fraction of a line off (triage cause 12) |
+| `REVIEW.DOC` | 30 | 30 | words unmatched / extra |
+| `WORDSTAR.WS` | 18 | 18 | 4pt baseline shifts in a Univers running head |
+| `ARTICLES/POWERUSE.WS` | 14 | 14 | WS7's soft hyphenation, and its cascade |
+| `REF/PS-FONTS.REF` | 14 | 14 | mixed |
+| `RTF-RJS/MARKUP.WS` | 13 | 13 | words unmatched / extra |
+| `MACROS/HOLYMAC/1-3MAC` | 12 | 43 | words unmatched / extra |
+| `MACROS/HOLYMAC/-HOLYMAC.WS` | 8 | 8 | a box rule fused to a word |
+| `PRINTERS/PS/PSSAMPLE.WS` | 8 | 8 | words unmatched |
+| `REF/-LASERJE.FNT` | 5 | 6 | Univers residuals (font substitution) |
+| `REF/HIGHLIGH.WS` | 4 | 4 | a sub/superscript on its own vertical |
+| `FONTS/PS/ERROR.WS` | 3 | 3 | line-start shifts, a pristine-frame offset |
+| `WS-CON/SAMPLE.WS` | 3 | 3 | word-segmentation splits |
+| `REF/-TOC-TAG.WS` | 2 | 2 | word-segmentation splits |
+| `REF/SUB-SUPE.TST` | 2 | 120 | sub/superscript digits inside a word |
+| `RJS.WS` | 2 | 2 | word-segmentation splits |
+
+**Clean since the 09-14 enumeration (8):** `ARTICLES/YOURWAY.WS`, `REF/BOOKLET.HOW`, `REF/WSFORMAT.WS`,
+`REF/CTRL-K.H1`, `TAGS/-README.WS`, `RTF-RJS/-README.WS`, `TAGS/DW`, `TAGS/SHOW`.
+
 ### 2026-10-26 — The v4.6.0 release runs, every failure by name
 
 - **Engine (`swift test`, armed, tree 6d4cda0e):** 1436 tests in 16 suites. Every issue is inside

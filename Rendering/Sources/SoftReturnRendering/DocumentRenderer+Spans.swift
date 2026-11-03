@@ -390,6 +390,8 @@ extension DocumentRenderer {
         nativePMActive: Bool? = nil,
         nativeKerning: Bool = true,
         nativeFace: PageLine.Face? = nil,
+        nativeUnderline: NativeUnderlineRule? = nil,
+        nativeStrikeOver: Bool = false,
         modernPitchScale: Bool = false, modernPrintedPt: Int? = nil,
         modernFontlessFamily: CtrlKD.PDFFamily = .times
     ) -> NSAttributedString {
@@ -399,6 +401,7 @@ extension DocumentRenderer {
         // it gates.
         var leading = true
         for span in spans {
+            let start = line.length
             appendSpan(span, to: line, leading: &leading, font: font, paragraph: paragraph,
                       fonts: fonts, defaultSize: defaultSize, colourMap: colourMap,
                       disableKerning: disableKerning, useCourierPrime: useCourierPrime,
@@ -407,6 +410,10 @@ extension DocumentRenderer {
                       nativeKerning: nativeKerning, modernPitchScale: modernPitchScale,
                       modernPrintedPt: modernPrintedPt,
                       modernFontlessFamily: modernFontlessFamily)
+            if let nativeUnderline, span.styles.contains(.underline) {
+                nativeUnderlineBlanks(line, range: NSRange(location: start, length: line.length - start),
+                                      span: span, fonts: fonts, rule: nativeUnderline)
+            }
         }
         // A line with no spans at all (a blank PageLine) would otherwise be represented
         // on screen by nothing but its OWN terminator newline — a control character, which
@@ -439,6 +446,13 @@ extension DocumentRenderer {
         // (`PageLine.face`, the engine's `lineOpsPrinted(face:)`), its words then pinned to
         // the driver's positions by `nativePinJustifiedWords`: the run's own fixed-pitch
         // kerns go with the Courier they were set for.
+        // A line Printed strikes by printing its strike character over the run (`PageLine.strikeChar`, the engine's
+        // `strikeRuns`): Native draws the same copies at the same x (`PageLine.strikeCopies`, `renderNative`'s column
+        // passes), so the text system's own line-through would be a second strike. A blank strike character prints
+        // nothing, and nothing is drawn.
+        if nativeStrikeOver {
+            line.removeAttribute(.strikethroughStyle, range: NSRange(location: 0, length: line.length))
+        }
         if let nativeFace {
             let whole = NSRange(location: 0, length: line.length)
             line.enumerateAttribute(.font, in: whole) { value, range, _ in
@@ -452,6 +466,65 @@ extension DocumentRenderer {
             }
         }
         return line
+    }
+
+    /// Which blanks of an underlined span Native's rule covers: Printed's `rules` and the underline
+    /// `lineOpsPrinted` lifts out of a span's pieces, for the line `attributedLine` is building.
+    public enum NativeUnderlineRule: Sendable, Equatable {
+        /// No `.ul`, or `.ul on`: the rule is continuous across a span's blanks, first inked piece
+        /// to last (the `spanUL` lift). A span drawn at a fixed pitch on a line that is not
+        /// justified is ruled over its whole width when it has any ink, leading and trailing
+        /// blanks included (`rules` over the segment, `x` to `x + w`): a bare tab's blanks after an
+        /// underlined word are underlined on the paper.
+        case continuous(justified: Bool)
+        /// `.ul off` (`Formatting.underlineBlanks` false): each word underlined alone, the blanks
+        /// between them not, except the blanks a bare tab became (`Style.bareTab`).
+        case words
+    }
+
+    /// The underline of one span `attributedLine` just appended at `range`, as `rule` says
+    /// Printed draws it. `ScriptRiseLayoutManager.drawUnderline` rules each attribute run from its
+    /// first inked glyph to its last, so a blank that has to be ruled is marked
+    /// `.nativeRuleBlanks`, and one that must not be loses `.underlineStyle`.
+    ///
+    /// `.words`: every blank of the span loses its underline, so each word's rule stops at its
+    /// last letter. A `Style.bareTab` span (the engine's `bareTabsUnderlined`) is the exception:
+    /// WS7's LASERJET keeps the underline on across a tab, a move rather than a space item, so
+    /// that run is underlined whole and ruled.
+    ///
+    /// `.continuous`: the blanks between the span's first inked character and its last are ruled
+    /// (a driver-placed line sets each word gap as a run of its own, and a run of blanks on the
+    /// column grid, `appendProportionalRun`, is built without the span's underline); on a line
+    /// that is not justified, a fixed-pitch span's leading and trailing blanks are too.
+    ///
+    /// A print control or a tab record is left alone: Printed rules neither.
+    static func nativeUnderlineBlanks(_ line: NSMutableAttributedString, range: NSRange, span: Span,
+                                      fonts: [FontChange], rule: NativeUnderlineRule) {
+        guard range.length > 0, span.pctlHMI == nil, span.tabHMI == nil else { return }
+        let text = line.string as NSString
+        let blanks = (range.location..<NSMaxRange(range)).filter { text.character(at: $0) == 0x20 }
+        func ruleBlank(_ index: Int) {
+            let one = NSRange(location: index, length: 1)
+            line.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: one)
+            line.addAttribute(.nativeRuleBlanks, value: true, range: one)
+        }
+        switch rule {
+        case .words:
+            if span.styles.contains(.bareTab) {
+                blanks.forEach(ruleBlank)
+            } else {
+                for index in blanks { line.removeAttribute(.underlineStyle, range: NSRange(location: index, length: 1)) }
+            }
+        case .continuous(let justified):
+            let inked = (range.location..<NSMaxRange(range)).filter {
+                guard let scalar = Unicode.Scalar(text.character(at: $0)) else { return true }
+                return !ScriptRiseLayoutManager.carriesNoRule(scalar)
+            }
+            guard let first = inked.first, let last = inked.last else { return }
+            let entry = span.font.flatMap { fonts.indices.contains($0) ? fonts[$0] : nil }
+            let whole = !justified && !(entry?.proportional ?? false)
+            for index in blanks where whole || (first < index && index < last) { ruleBlank(index) }
+        }
     }
 
     /// A zero-drawing spacer the exact width of a suppressed 0x0F print control's declared

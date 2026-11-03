@@ -423,6 +423,56 @@ public struct PageLine: RandomAccessCollection, MutableCollection, RangeReplacea
     /// `PageLine.overstrike`, which carries `(offset, char)` until placed and
     /// `(char, x)` after.
     public var overstrike: [Overstrike] = []
+    /// A line with struck text: the character the strike-out pass prints over it
+    /// (`attachStrikeCharPrinted`), or nil. Port of ctrl-kd's `PageLine.strike_char`.
+    public var strikeChar: String? = nil
+    /// Printed only: the indices in `Document.notes` of the footnotes and endnotes referenced
+    /// on this line, in order -- where the print-time numbering finds each reference's page
+    /// (`printTimeNoteLabels`). Port of ctrl-kd's `PageLine.note_refs`.
+    public var noteRefs: [Int] = []
+
+    /// One text-showing op of the strike-out pass: `count` copies of `strikeChar` from `x`, each
+    /// advancing `width`, in the struck span's font at `size` points (`entry`, and the bold and
+    /// italic of `styles`). Recorded by `strikeRuns` itself.
+    public struct StrikeCopies: Hashable, Sendable {
+        public var x: Double
+        public var count: Int
+        public var width: Double
+        public var size: Double
+        public var entry: FontChange?
+        public var styles: Style
+        public init(x: Double, count: Int, width: Double, size: Double, entry: FontChange? = nil,
+                    styles: Style = []) {
+            self.x = x
+            self.count = count
+            self.width = width
+            self.size = size
+            self.entry = entry
+            self.styles = styles
+        }
+    }
+    /// A line with struck text: the copies of `strikeChar` Printed prints over it, where it prints
+    /// them (`attachPassesPrinted`), so a view that draws the line itself draws the same
+    /// characters at the same x. Empty for a blank strike character; nil on a line with no struck
+    /// text, and on every line but Printed's. Not in the layout JSON.
+    public var strikeCopies: [StrikeCopies]? = nil
+
+    /// The underline Printed draws under an underlined dot-leader tab record: from `x`, where the
+    /// pen stood, `width` points, to the end of the last leader character it printed (as many
+    /// as fit before the stop, at their own advance). Recorded by `lineOpsPrinted` itself.
+    public struct LeaderRule: Hashable, Sendable {
+        public var x: Double
+        public var width: Double
+        public init(x: Double, width: Double) {
+            self.x = x
+            self.width = width
+        }
+    }
+    /// A line with an underlined dot-leader tab record: the rules under its leaders
+    /// (`attachPassesPrinted`), so a view that sets the leader's dots its own way still rules
+    /// where Printed does. Nil on every other line, and on every line but Printed's. Not in the
+    /// layout JSON.
+    public var leaderRules: [LeaderRule]? = nil
 
     public init() {
         spans = []
@@ -537,15 +587,48 @@ public struct HeadFootLine: Hashable, Sendable {
     /// MODEL has no paper to clip with, and drew a `FORMFEED.WS` page-5 number the PDF
     /// shows nowhere. False for every ordinary row.
     public var offSheet: Bool
+    /// The type size the line prints in when it is not the page's: a WS4 running head
+    /// prints in the `.CW` it was read under (WS4 teardown 4 §15.3; `hfLineSize`). `nil`
+    /// otherwise. `layout` JSON's `size`.
+    public var size: Int?
+
+    /// A line that changes face after its opening (WS7 teardown 3.15, run h24-allow:
+    /// `.he A<font>B...` prints `A` in the head's face and the rest in the record's) is cut
+    /// into pieces here: `text` cut where the face changes and where a tab's text starts.
+    /// The pieces joined are `text`; each piece is drawn in its own `font` (a
+    /// `Document.fonts` index, nil for the default Courier), and a piece with an `x` starts
+    /// there (the text after a tab: a tab is absolute) while one without follows on from
+    /// the piece before. `font` above stays the face the line opens with. nil for every
+    /// other line, which draws as one string in `font`. `layout` JSON: `pieces`.
+    public var pieces: [HeadFootPiece]?
 
     public init(text: String, x: Double, y: Double, font: Int?,
-                styleAttrs: Style = [], offSheet: Bool = false) {
+                styleAttrs: Style = [], offSheet: Bool = false,
+                pieces: [HeadFootPiece]? = nil, size: Int? = nil) {
         self.text = text
         self.x = x
         self.y = y
         self.font = font
         self.styleAttrs = styleAttrs
         self.offSheet = offSheet
+        self.pieces = pieces
+        self.size = size
+    }
+}
+
+/// One piece of a running line that changes face after its opening — see
+/// `HeadFootLine.pieces`. `text` keeps WordStar's own toggle bytes, as `HeadFootLine.text`
+/// does; `x` (PDF points, the same frame as `HeadFootLine.x`) is set only on a piece that
+/// starts at an absolute position.
+public struct HeadFootPiece: Hashable, Sendable {
+    public var text: String
+    public var font: Int?
+    public var x: Double?
+
+    public init(text: String, font: Int?, x: Double? = nil) {
+        self.text = text
+        self.font = font
+        self.x = x
     }
 }
 
@@ -560,12 +643,17 @@ public struct AutoPageNumber: Hashable, Sendable {
     /// `HeadFootLine.offSheet`, `hfOffSheet`, and `layout` JSON version 12's
     /// `off_sheet`. `sawyer/ARTICLES/FORMFEED.WS` page 5 is the case.
     public var offSheet: Bool
+    /// The number's type size when it is not the page's: WS4 prints the plain number in the
+    /// install's normal width, 12 (WS4 teardown 4 §15.3; `autoPagenoSize`). `nil`
+    /// otherwise. `layout` JSON's `size`.
+    public var size: Int?
 
-    public init(text: String, x: Double, y: Double, offSheet: Bool = false) {
+    public init(text: String, x: Double, y: Double, offSheet: Bool = false, size: Int? = nil) {
         self.text = text
         self.x = x
         self.y = y
         self.offSheet = offSheet
+        self.size = size
     }
 }
 
@@ -685,8 +773,11 @@ public struct Page: RandomAccessCollection, MutableCollection, RangeReplaceableC
     public var explicitBreakBI: Int?
     /// The page ended at a bare form feed in the text: WS7 ejects the sheet without running
     /// its page-end routine, so no footer block prints -- neither a `.fo` nor the
-    /// automatic page number (WS7 report 14.3, run ff2; WS4 report 3.2). `false` for every
-    /// other page. Port of ctrl-kd's `Page.ended_by_form_feed`.
+    /// automatic page number. Observed (WS7 teardown 11.3, runs ff2, ff24-lj, ff24-draft):
+    /// the driver turns the 0Ch into a pending eject, and the page prints no number at its
+    /// foot and gets one FF, never a doubled eject. A `.fo` going too is WSFORMAT.TXT's "No
+    /// footer lines are printed" (WS4 report 3.2); no run has a `.fo` on such a page.
+    /// `false` for every other page. Port of ctrl-kd's `Page.ended_by_form_feed`.
     public var endedByFormFeed: Bool = false
     /// Pagination-time only: set on the last body page when its last line is one of the
     /// document's own trailing blank lines (`Document.eofBlankLines`), to the block index

@@ -125,13 +125,13 @@ import Testing
 
 @Test func graphicCellsLandOnThePagelinesModel() {
     // ┌──┐ / │ab│ / └──┘ (cp437 bytes: da c4 c4 bf / b3 'ab' b3 / c0 c4 c4 d9).
-    var body: [UInt8] = [0xda, 0xc4, 0xc4, 0xbf]
+    var body: [UInt8] = wsItems([0xda, 0xc4, 0xc4, 0xbf])
     body += HARD
-    body += [0xb3]
+    body += wsItems([0xb3])
     body += bytes("ab")
-    body += [0xb3]
+    body += wsItems([0xb3])
     body += HARD
-    body += [0xc0, 0xc4, 0xc4, 0xd9]
+    body += wsItems([0xc0, 0xc4, 0xc4, 0xd9])
     body += HARD
     var doc251c: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
     doc251c += body
@@ -173,7 +173,7 @@ import Testing
 @Test func modernGraphicCellsLandOnTheLayoutJSON() {
     // A single ═══ rule, long enough to prove it stays ONE non-wrapping run.
     var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
-    src += [UInt8](repeating: 0xCD, count: 10)     // ═ x 10
+    src += wsItems([UInt8](repeating: 0xCD, count: 10))     // ═ x 10
     src += HARD
     let doc = parseWS(src)
     let cells = attachGraphicCellsModern(doc, notes: EmitOptions.defaultNotes, noteRefs: .word)
@@ -205,7 +205,7 @@ import Testing
     var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
     src += bytes("Prose before the rule.")
     src += HARD
-    src += [UInt8](repeating: 0xCD, count: 6)      // ═ x 6, its own paragraph
+    src += wsItems([UInt8](repeating: 0xCD, count: 6))      // ═ x 6, its own paragraph
     src += HARD
     src += bytes("Prose after the rule.")
     src += HARD
@@ -239,7 +239,7 @@ import Testing
 /// default at its one real call site).
 @Test func modernGraphicCellsNeverChangePDFBytes() {
     var src: [UInt8] = ws7Block(0x00, payload: [0x70] + [UInt8](repeating: 0, count: 15))
-    src += [UInt8](repeating: 0xCD, count: 10)
+    src += wsItems([UInt8](repeating: 0xCD, count: 10))
     src += HARD
     let doc = parseWS(src)
     let pdf1 = emitPDF(doc, mode: .modern)

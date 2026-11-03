@@ -211,7 +211,11 @@ func countSymmetricBlocks(_ data: [UInt8]) -> Int {
     var n = 0
     var i = 0
     while i < data.count {
-        if data[i] == 0x1b && i + 1 < data.count {
+        // WS7 reads a lead byte with bit 7 masked: a flagged 9Bh is an item lead and a
+        // flagged 9Dh a record, the closing 1Dh unmasked (WS7 teardown 3.6, 3.7: the load
+        // sanitiser and the record scanners). `ws7DocumentBit7` turns the flagged lead into
+        // its 1Bh after.
+        if data[i] & 0x7f == 0x1b && i + 1 < data.count {
             i += 2
             continue
         }
@@ -250,7 +254,11 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
     var rtShift = false
     var i = 0
     while i < data.count {
-        if data[i] == 0x1b && i + 1 < data.count {
+        // WS7 reads a lead byte with bit 7 masked: a flagged 9Bh is an item lead and a
+        // flagged 9Dh a record, the closing 1Dh unmasked (WS7 teardown 3.6, 3.7: the load
+        // sanitiser and the record scanners). `ws7DocumentBit7` turns the flagged lead into
+        // its 1Bh after.
+        if data[i] & 0x7f == 0x1b && i + 1 < data.count {
             // `<1B x>` extended-character escape (usually `<1B x 1C>`): x is DATA, never
             // a block start. Without this, ASCIITAB.WS's wrapped `<1B 1D 1C>` chart cell
             // read as a block whose overrunning "jump" (the next two chart bytes)
@@ -262,7 +270,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
             continue
         }
         // core.py — need the marker plus both length bytes present.
-        if data[i] == 0x1d && i + 3 <= data.count {
+        if data[i] & 0x7f == 0x1d && i + 3 <= data.count {
             let start = i
             // A 0x1D whose framing does not close is NOT a block — the count must echo
             // and the closing bracket must be there (`symmetricBlockEnd`, the single
@@ -289,6 +297,7 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
             // shift-out rewrite is what `rtShift` flags.
             let rtPre = out.count
             let rtRaw = Array(data[i..<blockEnd])
+            let rtMarks = marks[rtPre]?.count ?? 0
             if let kind = noteKind(forCmd: cmd) {
                 let content = blockContent(block)
                 notes.append(parseNote(kind: kind, cmd: cmd, content: content, offset: start))
@@ -657,6 +666,23 @@ public func symmetricBlocks(_ data: [UInt8]) -> SymmetricBlocksResult {
             } else {
                 unknownBlocks.append(UnknownBlock(cmd: cmd, bytes: block, offset: start))
             }
+            if !headFootRecordTypes.contains(cmd), cmd != 0x17, out.count >= rtPre,
+               inHeadFootLine(out, at: rtPre) {
+                // Off the list in a `.h#`/`.f#` line: nothing of it reaches the running
+                // head (`headFootRecordTypes`). Its text and marks go. A note goes with
+                // them: WS7 prints neither the note nor its number (run h24-allow), and a
+                // note kept with no reference would pair every later reference with the
+                // note before its own. An unknown block is kept.
+                out.removeSubrange(rtPre..<out.count)
+                if rtMarks > 0 {
+                    marks[rtPre] = Array(marks[rtPre]!.prefix(rtMarks))
+                } else {
+                    marks[rtPre] = nil
+                }
+                if noteKind(forCmd: cmd) != nil {
+                    notes.removeLast()
+                }
+            }
             rtBlocks.append(RoundtripSym(offset: rtPre, expansion: out.count - rtPre,
                                          raw: rtRaw))
             if cmd == 0x17 {
@@ -753,6 +779,11 @@ private func parseNote(kind: NoteKind, cmd: Int, content: [UInt8], offset: Int) 
     let remainder = Array(content.dropFirst(5))
 
     var textBytes: [UInt8] = []
+    // Where each text byte sits in the whole record: the 1D, the length word, the type
+    // byte and the 5-byte head come first, so `remainder[i]` is record byte 9 + i (WS7
+    // teardown 21.9 counts a page's progress through the note in these bytes, nested
+    // sequences included).
+    var textPos: [Int] = []
     // The note's marker is stored INLINE, wherever its nested sequence sits in the text
     // stream -- so its LINE is however many breaks the text has already produced when
     // that sequence is reached (see `Note.tagLine`).
@@ -823,12 +854,14 @@ private func parseNote(kind: NoteKind, cmd: Int, content: [UInt8], offset: Int) 
             i += jump + 3                                          // skip the whole nested sequence
         } else {
             textBytes.append(remainder[i])
+            textPos.append(9 + i)
             i += 1
         }
     }
 
-    let (text, dots, textLines, tagLine, textIndents) =
-        stripDotCommands(textBytes, tagRawLine: tagRawLine, tabCols: tabCols)
+    let (text, dots, textLines, tagLine, textIndents, lineEnds) =
+        stripDotCommands(textBytes, tagRawLine: tagRawLine, tabCols: tabCols,
+                         rawEnds: lineBreakEnds(textBytes, positions: textPos))
     let numberFormat: Int
     let convertTo: Int
     if kind == .annotation || tag != nil {
@@ -847,8 +880,33 @@ private func parseNote(kind: NoteKind, cmd: Int, content: [UInt8], offset: Int) 
         kind: kind, text: text, textLines: textLines, tagLine: tagLine,
         textIndents: textIndents,
         number: number, tag: tag, lineCount: lineCount,
+        // the content is the record less its 1D, length word and type byte, and its
+        // 3-byte trailer
+        recordSize: content.count + 7, lineEnds: lineEnds,
         numberFormat: numberFormat, convertTo: convertTo, dotCommands: dots, offset: offset
     )
+}
+
+/// The record byte just past each RAW line of a note's text, as `splitOnLineBreaks`
+/// splits it: past each break token, and for the last line past the text. `positions`
+/// is each text byte's place in the record (`parseNote`). Python computes the same list
+/// in `_parse_note` from `_BREAK_RE`.
+private func lineBreakEnds(_ data: [UInt8], positions: [Int]) -> [Int] {
+    var ends: [Int] = []
+    var i = 0
+    while i < data.count {
+        let b = data[i]
+        let next: UInt8? = (i + 1 < data.count) ? data[i + 1] : nil
+        if (b == 0x8d || b == 0x0d) && next == 0x0a {
+            ends.append(positions[i + 1] + 1); i += 2
+        } else if b == 0x8d || b == 0x0d || b == 0x0a {
+            ends.append(positions[i] + 1); i += 1
+        } else {
+            i += 1
+        }
+    }
+    ends.append(positions.last.map { $0 + 1 } ?? 9)
+    return ends
 }
 
 /// Split note text into physical lines (the same hard-return bytes the body splits on)
@@ -866,14 +924,19 @@ private func parseNote(kind: NoteKind, cmd: Int, content: [UInt8], offset: Int) 
 /// left margin -- which is why it travels as a number rather than as whitespace: the
 /// text itself is still trimmed exactly as it always was, so no consumer reading
 /// `text`/`textLines` sees anything it did not see before.
+///
+/// `rawEnds` is the record byte offset just past each RAW line, which comes back out per
+/// physical line (`Note.lineEnds`).
 private func stripDotCommands(_ raw: [UInt8], tagRawLine: Int = 0,
-                              tabCols: [Int: Int] = [:])
-    -> (text: String, dots: [String], physical: [String], tagLine: Int, indents: [Int]) {
+                              tabCols: [Int: Int] = [:], rawEnds: [Int] = [])
+    -> (text: String, dots: [String], physical: [String], tagLine: Int, indents: [Int],
+        ends: [Int]) {
     let lines = splitOnLineBreaks(raw)
     var kept: [String] = []
     var dots: [String] = []
     var physical: [String] = []
     var indents: [Int] = []
+    var ends: [Int] = []
     var tagLine = 0
     for (idx, line) in lines.enumerated() {
         if idx == tagRawLine {
@@ -895,6 +958,7 @@ private func stripDotCommands(_ raw: [UInt8], tagRawLine: Int = 0,
         // form every other consumer reads.
         physical.append(piece)
         indents.append(piece.isEmpty ? 0 : (tabCols[idx] ?? 0))
+        if idx < rawEnds.count { ends.append(rawEnds[idx]) }
         if !piece.isEmpty {
             kept.append(piece)
         }
@@ -913,9 +977,12 @@ private func stripDotCommands(_ raw: [UInt8], tagRawLine: Int = 0,
     if indents.count > physical.count {
         indents.removeLast(indents.count - physical.count)
     }
+    if ends.count > physical.count {
+        ends.removeLast(ends.count - physical.count)
+    }
     return (kept.joined(separator: " "), dots, physical,
             Swift.min(tagLine, Swift.max(0, physical.count - 1)),
-            indents.contains(where: { $0 != 0 }) ? indents : [])
+            indents.contains(where: { $0 != 0 }) ? indents : [], ends)
 }
 
 /// Non-overlapping split on any of WordStar's line-break tokens, matching
@@ -1014,4 +1081,46 @@ private func tabColumns(_ content: [UInt8]) -> (cols: Int, leader: UInt8) {
         leader = 0x20
     }
     return (cols, leader)
+}
+
+/// The record types WS7 keeps in header and footer text (WS7 teardown 3.15: the list
+/// {01 02 09 0F 10 11 15} at 0x4670E, read only by the `.he`/`.fo` line rebuild at
+/// 0x46691, which copies a 1Dh record whole when its type is on the list and drops it
+/// otherwise): 01h colour, 02h font, 09h tab, 0Fh user print control, 10h graphics, 11h
+/// paragraph style, 15h alternate font. Everything else in a `.h#`/`.f#` line -- a note
+/// and its number, a soft page mark, a paragraph number, an index item, a truncation mark
+/// -- prints nothing there (runs h24-allow, h24-body: a footnote and an annotation in a
+/// `.he` line print neither note nor number; the same bytes in the body print both).
+/// Applied where the records are read (`symmetricBlocks`). Port of
+/// `core.HEAD_FOOT_RECORD_TYPES`.
+let headFootRecordTypes: Set<Int> = [0x01, 0x02, 0x09, 0x0F, 0x10, 0x11, 0x15]
+
+/// Where the argument of a running head or foot command (`.he`, `.h1`-`.h5`, `.fo`,
+/// `.f1`-`.f5`, `.h1e` ...) starts in `line`, or nil when `line` is not one. Port of
+/// `core._HEAD_FOOT_RE`'s match: the command, then at most one whitespace byte.
+func headFootArgStart(_ line: [UInt8]) -> Int? {
+    guard line.count >= 3, line[0] == 0x2E else { return nil }
+    let first = ASCII.upper(line[1])
+    let second = ASCII.upper(line[2])
+    guard first == 0x48 || first == 0x46 else { return nil }          // 'H' or 'F'
+    var start: Int
+    if second == 0x31, line.count >= 4,
+       ASCII.upper(line[3]) == 0x45 || ASCII.upper(line[3]) == 0x4F {
+        start = 4                                                     // .H1E/.H1O/.F1E/.F1O
+    } else if (second >= 0x31 && second <= 0x35)
+                || (first == 0x48 && second == 0x45) || (first == 0x46 && second == 0x4F) {
+        start = 3
+    } else {
+        return nil
+    }
+    if start < line.count, ASCII.Trim.whitespace.contains(line[start]) { start += 1 }
+    if line[start...].contains(0x0A) { return nil }
+    return start
+}
+
+/// Whether offset `at` of the cleaned stream `out` falls in a running head or foot line.
+/// Port of `core._in_head_foot_line`.
+func inHeadFootLine(_ out: [UInt8], at: Int) -> Bool {
+    let start = (out[..<at].lastIndex(of: 0x0A) ?? -1) + 1
+    return headFootArgStart(Array(out[start..<at])) != nil
 }

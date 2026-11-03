@@ -274,7 +274,7 @@ struct AppNativeFidelityTests {
         let pdf = try Self.appNativePDF(forDocumentNamed: doc)
         // Extracted on THIS side, by AppPDFWords, because ctrl-kd cannot read these bytes.
         // AppPDFWordsProofTests is what makes that trustworthy: it runs ctrl-kd's own
-        // --dump-engine-words and this extractor over the SAME engine PDF and requires them
+        // --dump-engine-chars and this extractor over the SAME engine PDF and requires them
         // to agree to 0.01pt. Without that proof standing, a divergence reported here would
         // be unattributable between the app's rendering and our reading of it.
         let scratch = FileManager.default.temporaryDirectory

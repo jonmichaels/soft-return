@@ -482,6 +482,45 @@ func hfRuns(_ txt: String) -> [(text: String, styles: Style)] {
     return runs
 }
 
+/// `hfRuns` over a running line cut into pieces (`resolveHeadFootLines`, WS7 teardown 3.15):
+/// `[(text, styles, font, tabCol)]`, the toggle bytes' styles running on across the pieces,
+/// each run in its piece's face, and a piece's `tabCol` on its first run only. [] for a line
+/// with no visible text, as `hfRuns`. Port of `pdf._hf_piece_runs`.
+func hfPieceRuns(_ pieces: [HFResolvedPiece])
+    -> [(text: String, styles: Style, font: Int?, tabCol: Double?)] {
+    var runs: [(text: String, styles: Style, font: Int?, tabCol: Double?)] = []
+    var buf = ""
+    var active: Style = []
+    var face: Int? = nil
+    var col: Double? = nil
+    func flush() {
+        if !buf.isEmpty {
+            runs.append((buf, active, face, col))
+            buf = ""
+            col = nil
+        }
+    }
+    for piece in pieces {
+        flush()
+        face = piece.font
+        col = piece.tabCol
+        for scalar in piece.text.replacingAll("\u{2219}", with: "\u{00B7}").unicodeScalars {
+            if let toggle = hfToggles[scalar.value] {
+                flush()
+                active.formSymmetricDifference(toggle)
+                continue
+            }
+            if scalar.value < 0x20 { continue }
+            buf.unicodeScalars.append(scalar)
+        }
+    }
+    flush()
+    if !runs.contains(where: { !$0.text.trimmed().isEmpty }) {
+        return []
+    }
+    return runs
+}
+
 /// `{slot: {parity: text}}` for one head/foot family — every `.he`/`.h1`-`.h5`/`.fo`/
 /// `.f1`-`.f5` the document declared, keyed by line slot and then by PAGE PARITY: `.odd`
 /// for `.h1o`/`.f1o` (the right-hand page), `.even` for `.h1e`/`.f1e`, `nil` for a plain

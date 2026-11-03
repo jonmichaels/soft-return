@@ -34,7 +34,7 @@ import Testing
 /// down.
 private func rowsByColumn(_ doc: Document, _ page: Page) -> [Double: [(Double, String)]] {
     var byX: [Double: [(Double, String)]] = [:]
-    let top = Double(printedTop(doc))
+    let top = printedTop(doc)
     let lead = printedLead(doc)
     let offset = page.columnTopOffsetPt ?? 0.0
     var y = 0.0
@@ -79,12 +79,11 @@ private func bodyLines(_ n: Int, prefix: String = "r") -> String {
     #expect(abs(printedBudgetPt(doc, capacity: cap, defaultLead: lead) - 655.2) < 1e-6)
     let pages = docToPagelines(doc, printed: true)
     #expect(pages[0].lines.count == 47)          // 2 twelve-point + 45 fourteen-point
-    // 127.0/769.0 rather than WS7's own 127.2/769.2: `printedTop` reports `.mt 1.6"` as
-    // a whole 115pt, the documented sub-point measurement floor, well inside the gate's
-    // own 1.0pt bar.
+    // WS7's own 127.2/769.2: `.mt 1.6"` is 2304 VMI, 115.2pt (`printedTop` rounded it to a
+    // whole 115pt until planning #549; WS7 teardown 11.6).
     let rows = rowsByColumn(doc, pages[0]).values.first!
-    #expect(rows.first!.0 == 127.0)
-    #expect(rows.last!.0 == 769.0)
+    #expect(rows.first!.0 == 127.2)
+    #expect(rows.last!.0 == 769.2)
 }
 
 @Test func aUniformLeadPageStillBreaksExactlyWhereTheLineCountSays() {
@@ -114,9 +113,9 @@ private func columnsFixture(rows: Int = 200) -> Document {
     let byX = rowsByColumn(doc, page)
     let xs = byX.keys.sorted()
     #expect(xs == [21.6, 139.0, 256.3, 373.7, 491.0])  // `.rm` + gutter = 63.36 + 54
-    #expect(byX[xs[0]]!.first!.0 == 127.0)             // the title is unmoved
+    #expect(byX[xs[0]]!.first!.0 == 127.2)             // the title is unmoved
     for x in xs.dropFirst() {
-        #expect(byX[x]!.first!.0 == 153.0)             // the region top, not the sheet top
+        #expect(byX[x]!.first!.0 == 153.2)             // the region top, not the sheet top
     }
 }
 
@@ -130,7 +129,7 @@ private func columnsFixture(rows: Int = 200) -> Document {
     #expect(byX[xs[0]]!.count == 46)             // the title plus 45 body lines
     for x in xs[1..<4] {
         #expect(byX[x]!.count == 45)
-        #expect(byX[x]!.last!.0 == 769.0)        // and the same bottom
+        #expect(byX[x]!.last!.0 == 769.2)        // and the same bottom
     }
 }
 

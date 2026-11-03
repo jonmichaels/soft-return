@@ -113,10 +113,13 @@ private func notePosition(_ note: Note, doc: Document, index: Int) -> Int {
 
 /// The 1-based, per-kind display label (task item 2). Footnotes and endnotes number
 /// independently (WordStar's separate `.f#`/`.e#`). The shown number is `Note.number` — the
-/// file's own 0-based index, left unmutated — plus one: WS7 folds the `.f#`/`.e#` start value
-/// and the per-page restart into the numbers it stores when it paginates and saves (WS7 report
-/// 15.1, run fnnum5: a bare `.f# 5` stores 4, 5 on page 1 and 0, 1 on page 2, which print
-/// 5., 6. / 1., 2.), so adding the start again numbered them 9., 10. / 5., 6. When the file
+/// file's own 0-based index, left unmutated — plus one: what WS7's editor numbered the note
+/// when it last paginated and saved, the `.f#`/`.e#` start value and the per-page restart
+/// included (WS7 report 15.1, run fnnum5: a bare `.f# 5` stores 4, 5 on page 1 and 0, 1 on
+/// page 2), so adding the start again numbered them 9., 10. / 5., 6. Printed PDF and its
+/// layout do not show the stored number: WS7's printer ignores it and counts the notes
+/// itself (WS7 teardown 21.10, run tg61-stale), which `printTimeNoteLabels` models from the
+/// pages and `Document.printedNoteLabels` carries here. When the file
 /// never resolved a real number for this specific note (`number == nil`; WordStar's tag-word
 /// high bit marks that case, `SymmetricBlocks.swift` leaves `number` `nil` rather than
 /// inventing one), it is this note's own 0-based rank among its kind plus the recorded start
@@ -144,6 +147,10 @@ private func notePosition(_ note: Note, doc: Document, index: Int) -> Int {
 /// the label a comment gets in its own trailing list (emit.py's uniform `else: str(counter)`).
 func noteLabel(_ note: Note, doc: Document, index: Int, printed: Bool = false,
                noteRefs: NoteRefs? = nil) -> String {
+    // Printed PDF and its layout number footnotes and endnotes again from the pages they
+    // print on, as WS7's printer does (`printTimeNoteLabels`): the copy `docToPagelines`
+    // lays out again carries those labels.
+    if printed, let label = doc.printedNoteLabels[index] { return label }
     switch note.kind {
     case .footnote:
         if let tag = note.tag { return tag }
@@ -234,7 +241,8 @@ func annotatedNoteLabels(_ doc: Document, printed: Bool = false,
 ///
 /// Printed, Modern PDF, and RTF must call `annotatedNoteLabels` directly and NEVER this
 /// function — they have real pages (or, for RTF, `\chftn` auto-numbering) and must keep
-/// WordStar's own numbers exactly as stored. Port of `_pageless_notes`.
+/// WordStar's own numbers exactly as stored; Printed PDF then numbers them again from its
+/// pages (`printTimeNoteLabels`). Port of `_pageless_notes`.
 func pagelessNoteLabels(_ doc: Document, printed: Bool = false,
                         noteRefs: NoteRefs? = nil) -> [String] {
     var labels = annotatedNoteLabels(doc, printed: printed, noteRefs: noteRefs)

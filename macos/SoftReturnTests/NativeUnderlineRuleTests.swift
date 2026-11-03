@@ -242,6 +242,129 @@ struct NativeUnderlineRuleTests {
         #expect(abs(nativeEnds.left - printedEnds.left) <= 0.25, "Native's rule starts at \(nativeEnds.left) pt, Printed's at \(printedEnds.left) pt")
     }
 
+    /// Planning #549: the engine's `.ul` fixture line ("two words", "a  double", "tab<TAB>here", each underlined) and a
+    /// second line ending an underlined word in two bare tabs. Built with sequential `+=` (planning #253).
+    static func ulLine() -> [UInt8] {
+        var body: [UInt8] = [0x13]
+        body += NativeVsPrinted.bytes("two words")
+        body += [0x13]
+        body += NativeVsPrinted.bytes(" and ")
+        body += [0x13]
+        body += NativeVsPrinted.bytes("a  double")
+        body += [0x13]
+        body += NativeVsPrinted.bytes(" and ")
+        body += [0x13]
+        body += NativeVsPrinted.bytes("tab")
+        body += [0x09]
+        body += NativeVsPrinted.bytes("here")
+        body += [0x13]
+        body += NativeVsPrinted.bytes(" end")
+        body += NativeVsPrinted.HARD
+        return body
+    }
+
+    static func ulTabLine() -> [UInt8] {
+        var body: [UInt8] = [0x13]
+        body += NativeVsPrinted.bytes("two words")
+        body += [0x13]
+        body += NativeVsPrinted.bytes(" and ")
+        body += [0x13]
+        body += NativeVsPrinted.bytes("tab")
+        body += [0x09]
+        body += NativeVsPrinted.bytes("here")
+        body += [0x13]
+        body += NativeVsPrinted.bytes(" then ")
+        body += [0x13]
+        body += NativeVsPrinted.bytes("last")
+        body += [0x09, 0x09]
+        body += [0x13]
+        body += NativeVsPrinted.bytes("plain")
+        body += NativeVsPrinted.HARD
+        return body
+    }
+
+    /// Planning #549 (engine 8e719f94, WS7 teardown 11.6): under `.ul off` Printed underlines each word alone and keeps
+    /// the rule across a bare tab's blanks; with no `.ul`, or `.ul on`, it rules each underlined run continuously, and a
+    /// fixed-pitch run over its whole width, so the bare tabs after "last" are underlined too. Native's rules under the
+    /// same line land where Printed's do, run for run within a quarter point, in the document's Courier and in a
+    /// proportional Tms Rmn. Before this, Native ignored `.ul off` (one rule per phrase) and left a tab's blanks at the
+    /// end of a word, and a driver-placed word gap, unruled.
+    @Test func underlineFollowsPrintedUnderEveryUlSetting() {
+        var cases: [(name: String, body: [UInt8])] = []
+        for (ul, name) in [(".ul off", "ul off"), ("", "no .ul"), (".ul on", "ul on")] {
+            for (line, lineName) in [(Self.ulLine(), "fixture line"), (Self.ulTabLine(), "tab line")] {
+                var body: [UInt8] = []
+                if !ul.isEmpty {
+                    body += NativeVsPrinted.bytes(ul)
+                    body += NativeVsPrinted.HARD
+                }
+                body += line
+                cases.append(("\(name), Courier, \(lineName)", body))
+                var times = NativeVsPrinted.header()
+                times += body.prefix(ul.isEmpty ? 0 : ul.utf8.count + 2)
+                times += NativeVsPrinted.fontBlock(typestyle: 5 | 0x8000, width: 150)
+                times += line
+                cases.append(("\(name), Tms Rmn, \(lineName)", times))
+            }
+        }
+        var brokenUnderUlOff = 0
+        for (name, body) in cases {
+            let state = NativeVsPrinted.state(parseWS(body, variant: .ws5plus))
+            let printed = NativeVsPrinted.joined(NativeVsPrinted.printedRules(NativeVsPrinted.printedContent(state))
+                .map { ($0.x0, $0.x1) })
+            let native = NativeVsPrinted.nativeRules(state)
+            print("UNDERLINE-VS-PRINTED \(name): Printed \(NativeVsPrinted.describe(printed)); Native \(NativeVsPrinted.describe(native))")
+            #expect(!printed.isEmpty, "\(name): Printed drew no underline")
+            #expect(NativeVsPrinted.agree(native, printed, within: 0.25),
+                    "\(name): Native's rules \(NativeVsPrinted.describe(native)) against Printed's \(NativeVsPrinted.describe(printed))")
+            if name.hasPrefix("ul off"), printed.count >= 4 { brokenUnderUlOff += 1 }
+        }
+        // The fixture still says what it is for: under `.ul off` Printed breaks the rule at blanks.
+        #expect(brokenUnderUlOff == 4, "Printed no longer breaks the underline at blanks under .ul off")
+    }
+
+    /// "Item", a dot-leader tab record (type 9: 12 columns of `.` to a stop at 2900 HMI, 116 pt from the margin) and
+    /// "page", all underlined, then " end". The stop is no whole number of dots away, so Printed's twelve dots end
+    /// 0.8 pt short of it.
+    static func leaderLine() -> [UInt8] {
+        var body: [UInt8] = [0x13]
+        body += NativeVsPrinted.bytes("Item")
+        body += NativeVsPrinted.ws7Block(0x09, payload: NativeVsPrinted.le16(2160) + NativeVsPrinted.le16(2900) + [0x2E, 0x00])
+        body += NativeVsPrinted.bytes("page")
+        body += [0x13]
+        body += NativeVsPrinted.bytes(" end")
+        body += NativeVsPrinted.HARD
+        return body
+    }
+
+    /// Planning #549: an underlined dot-leader tab record. Printed prints as many leader dots as fit before the stop, at
+    /// their own advance, and `rules` underlines them, x to the end of the last dot, under every `.ul` setting (the run
+    /// has no blank in it). Native set the document's dots across the stop with no underline at all; it now draws the
+    /// rule the writer recorded (`PageLine.leaderRules`). Run for run within a quarter point, in Courier and Tms Rmn.
+    @Test func underlinedDotLeaderIsRuledWherePrintedRulesIt() {
+        for (ul, name) in [(".ul off", "ul off"), ("", "no .ul"), (".ul on", "ul on")] {
+            for times in [false, true] {
+                var body = NativeVsPrinted.header()
+                if !ul.isEmpty {
+                    body += NativeVsPrinted.bytes(ul)
+                    body += NativeVsPrinted.HARD
+                }
+                if times { body += NativeVsPrinted.fontBlock(typestyle: 5 | 0x8000, width: 150) }
+                body += Self.leaderLine()
+                let label = "\(name), \(times ? "Tms Rmn" : "Courier")"
+                let state = NativeVsPrinted.state(parseWS(body, variant: .ws5plus))
+                let rules = NativeVsPrinted.printedRules(NativeVsPrinted.printedContent(state))
+                let printed = NativeVsPrinted.joined(rules.map { ($0.x0, $0.x1) })
+                let native = NativeVsPrinted.nativeRules(state)
+                print("LEADER-VS-PRINTED \(label): Printed \(NativeVsPrinted.describe(printed)); Native \(NativeVsPrinted.describe(native))")
+                // Printed rules the leader on its own: a rule ending short of the stop, where "page" starts.
+                #expect(rules.count >= 3, "\(label): Printed's leader rule is gone: \(NativeVsPrinted.describe(printed))")
+                #expect(NativeVsPrinted.agree(native, printed, within: 0.25),
+                        "\(label): Native's rules \(NativeVsPrinted.describe(native)) against Printed's \(NativeVsPrinted.describe(printed))")
+            }
+        }
+    }
+
     /// The row of `image` holding its longest horizontal run of dark pixels (gaps of one pixel bridged), and that run's
     /// first and one-past-last column — an underline rule, in a band cut around one.
     static func longestRule(_ image: CGImage) -> (row: Int, left: Int, right: Int)? {
