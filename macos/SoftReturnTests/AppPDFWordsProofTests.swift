@@ -203,7 +203,8 @@ import Testing
     @MainActor func ourExtractorAgreesWithPDFKitOnTheAppsOwnQuartzPDF(doc: String) throws {
         if CorpusDocumentFilter.recordIfUnmatched(doc) { return }
         let pdf = try AppNativeFidelityTests.appNativePDF(forDocumentNamed: doc)
-        let ours = try AppPDFWords.payload(from: pdf)
+        // Every glyph, the strike-out pass included: PDFKit reads the pass as text too, and this checks decoding.
+        let ours = try AppPDFWords.charsPayload(from: pdf)
         let document = try #require(PDFDocument(data: Data(pdf)),
                                     "\(doc): PDFKit could not open the app's own Printed PDF")
 
@@ -211,8 +212,7 @@ import Testing
         for number in 0..<document.pageCount {
             guard let page = document.page(at: number) else { continue }
             let pdfkitWords = Self.words(in: page)
-            let mine = ours.words.filter { $0.page == number + 1 }
-                .sorted { ($0.y_top_pt, $0.x_pt) < ($1.y_top_pt, $1.x_pt) }
+            let mine = ours.chars.filter { $0.page == number + 1 }
 
             // Compared as the page's whole DECODED TEXT, whitespace removed — not as
             // words, and not positionally.

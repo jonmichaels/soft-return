@@ -361,6 +361,41 @@ final class PageScan {
     /// baseline for a FAILURE message. Read-only from outside.
     private(set) var glyphs: [Glyph] = []
 
+    /// `glyphs` without the strike-out pass, which is not text: copies of one character, not
+    /// a letter or digit, printed back over what was already drawn on the line (planning
+    /// #549). ctrl-kd's rule (`fg._strike_pass_reader`), read in drawing order, with two
+    /// differences a Native PDF needs. Native draws the pass on the engine's baseline and its
+    /// text on AppKit's, up to a point apart, so a baseline within 1.5pt counts as the line's
+    /// own. And a pass starts with two copies in a row, so a lone full stop in an overprint
+    /// line is not one. `emittedChars` keeps every glyph: the proof compares those with
+    /// ctrl-kd's raw dump.
+    var glyphsWithoutStrikePasses: [Glyph] {
+        var far: [Double: Double] = [:], last: [Double: Character] = [:]
+        func line(_ baseline: Double) -> Double {
+            far.keys.min { abs($0 - baseline) < abs($1 - baseline) }
+                .flatMap { abs($0 - baseline) <= 1.5 ? $0 : nil } ?? baseline
+        }
+        func isOne(_ c: Character) -> Bool {
+            !c.isLetter && !c.isNumber && !c.isWhitespace && c != "\u{FFFC}"
+        }
+        var out: [Glyph] = []
+        for (i, glyph) in glyphs.enumerated() {
+            let y = line(glyph.baseline)
+            func startsAPass(_ reach: Double) -> Bool {
+                guard glyph.xStart <= reach + 0.2 else { return false }
+                return glyphs[(i + 1)...].first { abs($0.baseline - glyph.baseline) <= 1.5 }?.text == glyph.text
+            }
+            if isOne(glyph.text), let reach = far[y], last[y] == glyph.text || startsAPass(reach) {
+                last[y] = glyph.text
+                continue
+            }
+            last[y] = nil
+            far[y] = max(far[y] ?? glyph.xStart, glyph.xStart)
+            out.append(glyph)
+        }
+        return out
+    }
+
     /// ctrl-kd's `WORD_GAP_SLACK_PT`. Decipoint quantisation in WS7's own measurements.
     private static let wordGapSlackPt = 0.15
     /// ctrl-kd's `WORD_GAP_MAX_PT` and `SUBSTITUTED_PROPORTIONAL_GAP_MAX_PT`. A face's
@@ -500,7 +535,7 @@ final class PageScan {
     func firstInkByBaseline() -> [Double: Double] {
         var out: [Double: Double] = [:]
         // U+FFFC is a print control's or an empty tab's invisible spacer, no ink.
-        for glyph in glyphs
+        for glyph in glyphsWithoutStrikePasses
         where !glyph.text.isWhitespace && !CtrlKD.graphicChars.contains(glyph.text) && glyph.text != "\u{FFFC}" {
             let key = (glyph.baseline * 100).rounded() / 100
             out[key] = min(out[key] ?? .greatestFiniteMagnitude, glyph.xStart)
@@ -525,7 +560,7 @@ final class PageScan {
     /// the manifest and the WS7 side are both expressed in, so it is the one to match.
     func segmentedWords() -> [AppPDFWords.Word] {
         var byLine: [Double: [Glyph]] = [:]
-        for glyph in glyphs {
+        for glyph in glyphsWithoutStrikePasses {
             byLine[(glyph.baseline * 100).rounded() / 100, default: []].append(glyph)
         }
         var out: [AppPDFWords.Word] = []

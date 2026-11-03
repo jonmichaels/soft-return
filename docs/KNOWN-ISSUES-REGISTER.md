@@ -1,5 +1,32 @@
 # Known-Issues Register
 
+### 2026-11-03 — The v5.0.0b2 release runs, every failure by name
+
+A Mac beta (5.0.0b2, build 30) and an iPhone archive (5.0.0, build 12).
+
+- **ctrl-kd full suite (a5ecdca, armed, teardowns tier included):** 7683 passed, 76 skipped (every one an exclusion
+  by ruling), 1 xfailed: `test_pcl_fidelity[LJ6DTP]` (#210).
+- **Engine (`swift test`, armed):** 1593 passed; 54 known issues, all inside `PCLFidelityTests.pclFidelity(doc:)`.
+  The PCL tier is unchanged from 5.0.0b1: the same 25 documents excluded by ruling and the same 29 divergent, each with
+  the count the 2026-10-28 table below records (LJ6DTP 380, MICKEE 793, BOOKLET.WS 464, …). Check 2 is green for all 194.
+- **Mac, armed, through the isolation gate, no offenders.** The UI tests: 4 passed. CorpusUnits on 4be63940: 991
+  tests, 5550 runs passed, 2 failed, 4 expected (`NativeStructuralParityTests`' LJ6DTP font-identity class, by
+  design; `CorpusDocumentFilterTests`' three).
+  - A first run on 029a38d2 failed 3 more, all this round's: the strike-out pass read as text by the geometry oracle's
+    PDF reader (the app's Native drew it before an oversized line's text, the reverse of Printed's order), PREVIEW's
+    picture (283.40 with the whole-VMI top margin), and REF/BOOKLET.RJS's Modern step (16.8pt: its head's font record
+    stays in the head). Fixed in c44af64c; the 30 classes that read through the changed reader reran green.
+  - OPEN, by name:
+    - `HolymacTimingTests.openAndPageChangeTimings`: 103.5 ms against the 100 ms bar (#580), as at 5.0.0b1 (102 ms).
+    - `AboutWindowControllerTests.gapBetweenLabelsAndValuesIsOnTheWindowsCentreLine(dev-commit)`: the values' ink
+      starts at 175.0, 174.5, 175.0 and 173.5. It measures glyph ink, which moves with each row's first glyph; it fails
+      alone too and is untouched since 4.6.1. The release shape, the one a shipped build shows, passes.
+- **iPhone, whole target, armed, on 4be63940:** iOS 16.0 (Xcode 26.6) 217 passed, 2 expected, 6 skipped; 26.5 and
+  27.0 203 passed, 2 expected, 13 skipped each; 0 failed. The skips are the conditions 5.0.0b1 lists.
+- **Test leftovers (#595):** the runs found 10,546 UUID defaults files from Soft Return's own tests in the
+  Mac's `~/Library/Preferences` (moved to the Trash) and 672 in the iPhone app's containers (removed). The fix, a
+  scratch suite per test that the test removes, is on branch `595-tests-clean-up`, after this release.
+
 ### 2026-11-02 — Planning #549: what the closed WordStar teardowns leave open
 
 Both engines now follow the teardowns' answers (note-only pages, the overflow row, print-time note

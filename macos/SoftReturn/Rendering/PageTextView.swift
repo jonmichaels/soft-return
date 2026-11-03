@@ -51,8 +51,10 @@ final class OversizedPassOverlayView: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func draw(_ dirtyRect: NSRect) {
-        owner?.drawColumnPasses(dirtyRect)
+        // An oversized line's text first, then the column passes, as Printed prints a line before its strike-out pass
+        // (planning #549): a reader of the page (AppPDFWords, the gates) tells the pass from the text by that order.
         owner?.drawOversizedSelfPasses(dirtyRect)
+        owner?.drawColumnPasses(dirtyRect)
         owner?.drawPCLGraphicsOverlay(dirtyRect)
     }
 }

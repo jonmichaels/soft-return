@@ -14,8 +14,12 @@ import Testing
 /// walking its content stream and tracking the type size in force at each positioning operator:
 ///
 ///   REF/BOOKLET.WS  16.8pt steps on 14pt text   (1.2 x 14), one 13.2 step on 11pt (1.2 x 11)
-///   REF/BOOKLET.RJS 14.4pt steps on 12pt text   (1.2 x 12)
+///   REF/BOOKLET.RJS 16.8pt steps on 14pt text   (1.2 x 14)
 ///   PRINT.TST       14.4pt steps                (1.2 x 12)
+///
+/// REF/BOOKLET.RJS stepped 14.4pt on 12pt until planning #549 (ctrl-kd bb61725): a 12pt font record inside its
+/// running-head line ran on into the body. WS7 keeps a head's font in the head (teardown 3.15), so the body is its own
+/// 14pt, as in REF/BOOKLET.WS.
 ///
 /// So where the view's advance differs, the difference is in the BODY SIZE it chose, not in the leading rule. This
 /// holds the view's real baseline step to the engine's and prints the body size beside it, which is what says which
@@ -26,7 +30,7 @@ import Testing
 struct ModernLeadingFollowsTheEngineTests {
     /// The engine's own Modern baseline step, measured from its Modern PDF (see the suite's note).
     static let engineSteps: [String: Double] = [
-        "REF/BOOKLET.WS": 16.8, "REF/BOOKLET.RJS": 14.4, "PRINT.TST": 14.4,
+        "REF/BOOKLET.WS": 16.8, "REF/BOOKLET.RJS": 16.8, "PRINT.TST": 14.4,
     ]
 
     @Test(.enabled(if: NativeRunningLinesFollowTheEngineTests.sawyer != nil, NativeRunningLinesFollowTheEngineTests.skipReason),
