@@ -6,6 +6,15 @@
     <description>Soft Return updates</description>
     <language>en</language>
     <item>
+      <title>Soft Return 5.0.0b3</title>
+      <sparkle:channel>beta</sparkle:channel>
+      <link>https://github.com/jonmichaels/soft-return/releases/tag/v5.0.0b3</link>
+      <sparkle:version>31</sparkle:version>
+      <sparkle:shortVersionString>5.0.0b3</sparkle:shortVersionString>
+      <pubDate>Tue, 03 Nov 2026 22:50:34 -0500</pubDate>
+      <enclosure url="https://github.com/jonmichaels/soft-return/releases/download/v5.0.0b3/Soft-Return-5.0.0b3.dmg" sparkle:edSignature="nVwlViMphFeQG85oAtnwci6B7sSrwhzyE0ppD2V1C8Ih7PIOtuH3GD6eBb9EyIPkZhglV4wVSMA2tDEQtsN/CA==" length="18777015" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>Soft Return 5.0.0b2</title>
       <sparkle:channel>beta</sparkle:channel>
       <link>https://github.com/jonmichaels/soft-return/releases/tag/v5.0.0b2</link>
