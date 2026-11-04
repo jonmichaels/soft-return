@@ -60,10 +60,15 @@ let package = Package(
         // defensible fallback in principle (the Swift stdlib itself carries ~200
         // permanent fixed-C-symbol `@_silgen_name` uses) and why two other
         // alternatives were rejected outright.
+        //
+        // libm on Linux (planning #596): `rounded()`, `floor` and the rest compile to calls into the C maths
+        // library, which Linux links only when something asks for it. Foundation used to, through the one
+        // `import Foundation` the engine carried; with the engine importing nothing, the link names it itself.
         .target(name: "CtrlKD",
                swiftSettings: [.enableExperimentalFeature("Extern")],
                linkerSettings: [.linkedLibrary("z", .when(platforms: [.macOS, .iOS, .linux])),
-                                .linkedLibrary("zs", .when(platforms: [.windows]))]),
+                                .linkedLibrary("zs", .when(platforms: [.windows])),
+                                .linkedLibrary("m", .when(platforms: [.linux]))]),
         // Everything `sr` does: argument parsing, the diagnose report, the conversion
         // pipeline (`ConversionJob`), the conversion loop, and the live OS environment.
         // Split out from the executable so the tests can call it directly — an
