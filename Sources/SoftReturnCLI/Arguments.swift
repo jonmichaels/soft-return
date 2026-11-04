@@ -10,7 +10,8 @@ import CtrlKD
 /// `@main`-attached parser is not.
 
 /// `sr`'s own version. Independent of the library and of the Python reference: this is the
-/// CLI's user-visible contract. 5.0.0b2 is the second 5.0.0 beta (Mac only): strike-out, underlines,
+/// CLI's user-visible contract. 5.0.0b3 is the third 5.0.0 beta (Mac only): a document the LaserJet
+/// driver places opens faster. 5.0.0b2 was the second 5.0.0 beta: strike-out, underlines,
 /// running heads, note numbers and margins print as WS7 prints them. 5.0.0b1 was the first 5.0.0 beta:
 /// WS7 documents print through the LaserJet drivers' own widths, kerning and fixed pitch. 4.6.1 is the v4.6.1 patch: sr runs on macOS 10.15 again (built with Xcode 26.6) and
 /// Homebrew builds it on Swift 5.10. 4.6.0 is the v4.6.0 minor release: sr carries ctrl-kd 4.10.1's

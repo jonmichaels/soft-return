@@ -5,8 +5,6 @@
 // foot share to draw its pieces. Port of the `_laserjet_fonts`/`_lj_*` helpers in ctrl-kd's
 // `pdf.py`.
 
-import Foundation
-
 /// `fonts`, each proportional font that WS7's driver prints in one of its own proportional text
 /// fonts marked with that driver, `laserjet` or `lj6dtp` (Sawyer's LJ6DTP, for a document last
 /// printed through it): its words are placed with the driver's own widths and kerning
@@ -199,12 +197,22 @@ func ljX(_ x: Double) -> Double {
 /// nor digit, with a blank or nothing either side (a bullet, a © standing by itself). Port of
 /// `_lj_alone`.
 func ljAlone(_ pieces: [(text: String, x: Double, width: Double)], _ i: Int) -> Bool {
-    let blank = { (k: Int) in !pieces[k].text.contains(where: { !$0.isWhitespace }) }
+    let blank = { (k: Int) in pieces[k].text.trimmed().isEmpty }
     let scalars = pieces[i].text.unicodeScalars
-    guard scalars.count == 1, let s = scalars.first,
-          !CharacterSet.alphanumerics.contains(s), !CharacterSet.whitespacesAndNewlines.contains(s)
+    guard scalars.count == 1, let s = scalars.first, !isPythonAlnum(s), !String(s).isPythonSpaceOnly
     else { return false }
     return (i == 0 || blank(i - 1)) && (i == pieces.count - 1 || blank(i + 1))
+}
+
+/// Python's `str.isalnum()` for one code point: a letter (`isalpha`, general category L) or a
+/// number (`isnumeric`, any numeric type).
+private func isPythonAlnum(_ s: Unicode.Scalar) -> Bool {
+    switch s.properties.generalCategory {
+    case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter:
+        return true
+    default:
+        return s.properties.numericType != nil
+    }
 }
 
 /// The horizontal scale that draws `piece` in `baseFont` at `pt` to the width the driver gave

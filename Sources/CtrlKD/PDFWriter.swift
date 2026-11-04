@@ -4056,7 +4056,8 @@ public func emitPDF(_ doc: Document, mode: EmitMode = .modern,
     var pageBoxes: [(width: Int, height: Int)] = []
     if printed {
         let pages = docToPagelines(doc, printed: true, pixResults: options.pixResults,
-                                   pictures: options.pictures, sentenceSpacing: ssOn)
+                                   pictures: options.pictures, sentenceSpacing: ssOn,
+                                   driverPieces: false)
         // ctrl-kd 1.3.0/2.0.0: per-document in Printed mode — `printedTop`/`printedLead`/
         // `printedSize`/`printedLeft` (PDFLayout.swift) read the file's own `.mt`/`.lh`/
         // `.cw`/`.po`, falling back to the same fixed figures a print stream (no page

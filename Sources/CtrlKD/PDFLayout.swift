@@ -307,11 +307,15 @@ func substituteMergePageNumbersPrinted(_ doc: Document, _ pages: inout [Page]) {
 ///     interior double space never changes line/page counts and this parameter cannot
 ///     affect where anything lands; only the real render call (`emitPDF`) needs to pass
 ///     the resolved value through.
+///   - driverPieces: whether each line WS7's LASERJET driver places records its pieces
+///     (`PageLine.driverPieces`), which the layout JSON and Native read. A caller that reads
+///     neither (`emitPDF`, `tocPageNumbers`) passes `false` and is spared the writer's second
+///     run over every such line (planning #596); nothing else on the pages changes.
 /// - Returns: at least one page, possibly a single empty one.
 public func docToPagelines(
     _ doc: Document, printed: Bool, pixResults: [PixResult] = [],
     pictures: EmitOptions.PixMode = .off, sentenceSpacing: Bool = false,
-    maxPages: Int? = nil
+    maxPages: Int? = nil, driverPieces: Bool = true
 ) -> [Page] {
     let isPrintStream = doc.detection?.variant == .printstream
     // planning #271 M10. `maxPages: 1` must return EXACTLY the full call's `pages[0]`,
@@ -364,7 +368,7 @@ public func docToPagelines(
             substituteMergePageNumbersPrinted(doc, &plainPages)
             attachJustifyWordXPrinted(doc, &plainPages, size: attachSize)
             attachGraphicCellsPrinted(doc, &plainPages, size: attachSize)
-            attachDriverPiecesPrinted(doc, &plainPages, size: attachSize)
+            if driverPieces { attachDriverPiecesPrinted(doc, &plainPages, size: attachSize) }
             attachLineNumbersPrinted(doc, &plainPages, size: attachSize)
             attachStrikeCharPrinted(doc, &plainPages)
             attachPassesPrinted(doc, &plainPages, size: attachSize)
@@ -425,7 +429,8 @@ public func tocPageNumbers(
     // own vertical footprint shifts these page numbers exactly the way it shifts the
     // real render -- without this, TOC page numbers could disagree with where the real
     // PDF put things.
-    let pages = docToPagelines(doc, printed: true, pixResults: pixResults, pictures: pictures)
+    let pages = docToPagelines(doc, printed: true, pixResults: pixResults, pictures: pictures,
+                               driverPieces: false)
     let pageNumbers = resolvePageNumbers(doc.pnTimeline(), pages)
     var resolved: [Int: Int] = [:]
     for (pageIndex, page) in pages.enumerated() {

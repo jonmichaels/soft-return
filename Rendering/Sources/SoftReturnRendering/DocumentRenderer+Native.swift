@@ -818,8 +818,11 @@ extension DocumentRenderer {
                     // Job 413: probed from a DE-SUPERSCRIPTED copy of this same content —
                     // see `PinnedBaseline.k`'s own doc comment for why a raised/lowered run
                     // left in would perturb this line's own pinned baseline on its account.
+                    // A line with no raised or lowered run is its own copy, so `piece` is
+                    // probed rather than built a second time (planning #596).
+                    let scripted = content.contains { !$0.styles.isDisjoint(with: [.sup, .sub]) }
                     let k = Self.isolatedFragmentK(
-                        lineAndTerminator(desuperscripted(content), lead: fragmentLead),
+                        scripted ? lineAndTerminator(desuperscripted(content), lead: fragmentLead) : piece,
                         width: metrics.pageWidth - metrics.left)
                     // Job 413: see `firstGlyphRaiseCompensation`'s own doc comment — folded
                     // into `PinnedBaseline.y`, NEVER into `engineY`/`pageEngineY` (this

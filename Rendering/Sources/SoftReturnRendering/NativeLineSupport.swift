@@ -244,16 +244,21 @@ func nativePinJustifiedWords(
         var kerns = 0.0
         var last = NSRange(location: NSNotFound, length: 0)
         var at = range.location
-        while at < NSMaxRange(range) {
-            let composed = text.rangeOfComposedCharacterSequence(at: at)
-            let clamped = NSIntersectionRange(composed, range)
-            guard clamped.length > 0 else { break }
-            last = clamped
-            if let font = pinned.attribute(.font, at: clamped.location, effectiveRange: nil) as? NSFont {
-                natural += nativeResolvedAdvance(of: text.substring(with: clamped), in: font)
+        // Each character takes the attributes at its start, read once for the run it is in.
+        characters: while at < NSMaxRange(range) {
+            var run = NSRange()
+            let attributes = pinned.attributes(at: at, effectiveRange: &run)
+            let face = (attributes[.font] as? NSFont).map(nativeAdvanceFace)
+            let adjustment = ((attributes[.tracking] ?? attributes[.kern]) as? NSNumber)?.doubleValue ?? 0
+            while at < min(NSMaxRange(run), NSMaxRange(range)) {
+                let composed = text.rangeOfComposedCharacterSequence(at: at)
+                let clamped = NSIntersectionRange(composed, range)
+                guard clamped.length > 0 else { break characters }
+                last = clamped
+                natural += face?.advance(text, clamped) ?? 0
+                kerns += adjustment
+                at = NSMaxRange(composed)
             }
-            kerns += (pinned.attribute(.kern, at: clamped.location, effectiveRange: nil) as? Double) ?? 0
-            at = NSMaxRange(composed)
         }
         naturals.append(natural)
         kernsOn.append(kerns)
@@ -343,7 +348,7 @@ func nativePinJustifiedWords(
         guard last.location != NSNotFound else { continue }
         let advance = naturals[index] * scales[index] + kernsOn[index]
         let delta = targets[index] - advance
-        let existing = (pinned.attribute(.kern, at: last.location, effectiveRange: nil) as? Double) ?? 0
+        let existing = nativePinAdjustment(pinned, at: last.location)
         let lastAdvance = (pinned.attribute(.font, at: last.location, effectiveRange: nil) as? NSFont)
             .map { nativeResolvedAdvance(of: text.substring(with: last), in: $0) * scales[index] } ?? 0
         // AppKit never moves a glyph back: a character whose advance comes out negative advances
@@ -351,7 +356,7 @@ func nativePinJustifiedWords(
         // last character (a run of tab spaces before a symbol, LJ6DTP p3's chart) is shared
         // among the piece's characters.
         guard lastAdvance + existing + delta < 0 else {
-            pinned.addAttribute(.kern, value: existing + delta, range: last)
+            pinned.addAttribute(.tracking, value: existing + delta, range: last)
             continue
         }
         var characters: [NSRange] = []
@@ -364,15 +369,18 @@ func nativePinJustifiedWords(
         }
         let share = delta / Double(characters.count)
         for character in characters {
-            let own = (pinned.attribute(.kern, at: character.location, effectiveRange: nil) as? Double) ?? 0
-            pinned.addAttribute(.kern, value: own + share, range: character)
+            let own = nativePinAdjustment(pinned, at: character.location)
+            pinned.addAttribute(.tracking, value: own + share, range: character)
         }
     }
-    // The typesetter adds the face's kerning pair after some pinned characters and not others
-    // (Times' space before T, 0.2 pt, and ’ before a space, 0.9 pt; not W before o in a word
-    // scaled in two runs), so the line is set once as AppKit sets it and each piece's last
-    // character takes up the difference between where the next piece starts and its target.
-    let measured = nativeGlyphStarts(pinned, at: ranges.map(\.location))
+    // The typesetter adds the face's kerning pair after a character with a nonzero `.kern` (Times'
+    // space before T, 0.2 pt, and ’ before a space, 0.9 pt), so a line with one is set once as
+    // AppKit sets it and each piece's last character takes up the difference between where the
+    // next piece starts and its target. The pins are `.tracking`, which adds no pair, so a line
+    // with no nonzero `.kern` lands where its advances put it (`nativeComputedGlyphStarts`) and
+    // is not set twice (planning #596).
+    let measured = nativeComputedGlyphStarts(pinned, at: ranges.map(\.location))
+        ?? nativeGlyphStarts(pinned, at: ranges.map(\.location))
     // Each piece's place is the engine's x, moved by any slack a split word put after its last
     // piece instead (`targets`), and a print control's spacer between pieces keeps its gap.
     var moved = 0.0
@@ -383,8 +391,8 @@ func nativePinJustifiedWords(
         let after = measured[index + 1] - measured[0] - planned
         let last = lasts[index]
         if ranges[index].length > 0, last.location != NSNotFound, abs(after - error) > 0.01 {
-            let kern = (pinned.attribute(.kern, at: last.location, effectiveRange: nil) as? Double) ?? 0
-            pinned.addAttribute(.kern, value: kern - (after - error), range: last)
+            let kern = nativePinAdjustment(pinned, at: last.location)
+            pinned.addAttribute(.tracking, value: kern - (after - error), range: last)
             error = after
         }
     }
@@ -699,8 +707,56 @@ public func markModernSquareBullets(_ text: NSMutableAttributedString) {
 /// same decision AppKit's own layout makes.
 @MainActor
 func nativeResolvedAdvance(of character: String, in font: NSFont) -> Double {
-    let key = NativeAdvanceKey(font: font.fontName, size: Double(font.pointSize),
-                                character: character)
+    nativeResolvedAdvance(of: character, in: font, named: font.fontName)
+}
+
+/// `nativeResolvedAdvance` for one face, for a caller measuring a run of characters in it: a single
+/// UTF-16 character's advance is kept by its code, so it is found without building its string.
+@MainActor
+final class NativeAdvanceFace {
+    let font: NSFont
+    private let name: String
+    private var byCode: [UInt16: Double] = [:]
+
+    init(_ font: NSFont) {
+        self.font = font
+        name = font.fontName
+    }
+
+    /// The advance of the characters at `range` of `text`.
+    func advance(_ text: NSString, _ range: NSRange) -> Double {
+        guard range.length == 1 else {
+            return nativeResolvedAdvance(of: text.substring(with: range), in: font, named: name)
+        }
+        let code = text.character(at: range.location)
+        if let known = byCode[code] { return known }
+        let advance = nativeResolvedAdvance(of: text.substring(with: range), in: font, named: name)
+        byCode[code] = advance
+        return advance
+    }
+}
+
+/// The `NativeAdvanceFace` for `font`, one per face and size, like `nativeAdvanceCache`.
+@MainActor
+func nativeAdvanceFace(_ font: NSFont) -> NativeAdvanceFace {
+    let key = NativeAdvanceFaceKey(font: font.fontName, size: Double(font.pointSize))
+    if let face = nativeAdvanceFaces[key] { return face }
+    let face = NativeAdvanceFace(font)
+    nativeAdvanceFaces[key] = face
+    return face
+}
+
+struct NativeAdvanceFaceKey: Hashable {
+    let font: String
+    let size: Double
+}
+
+@MainActor private var nativeAdvanceFaces: [NativeAdvanceFaceKey: NativeAdvanceFace] = [:]
+
+/// The same, with `font`'s name already read.
+@MainActor
+func nativeResolvedAdvance(of character: String, in font: NSFont, named name: String) -> Double {
+    let key = NativeAdvanceKey(font: name, size: Double(font.pointSize), character: character)
     if let cached = nativeAdvanceCache[key] { return cached }
     let string = character as CFString
     let resolved = CTFontCreateForString(font as CTFont, string,
@@ -727,6 +783,64 @@ func nativeSkipAttachments(in text: NSString, from location: Int, before piece: 
     var at = location
     while at < text.length, text.character(at: at) == 0xFFFC { at += 1 }
     return at
+}
+
+/// The adjustment a pin left after the character at `location`: its `.tracking`, which supersedes
+/// `.kern` (CoreText, `kCTTrackingAttributeName`), else its `.kern`.
+func nativePinAdjustment(_ line: NSAttributedString, at location: Int) -> Double {
+    let attributes = line.attributes(at: location, effectiveRange: nil)
+    return ((attributes[.tracking] ?? attributes[.kern]) as? NSNumber)?.doubleValue ?? 0
+}
+
+/// Where AppKit sets the glyph of each given character, from the advances alone, or nil when
+/// AppKit's own layout must say (`nativeGlyphStarts`). Each character advances its own face's
+/// width, scaled by its `.expansion`, plus its `.tracking`: the typesetter adds a kerning pair
+/// only after a character without `.kern` or with a nonzero one, so a line in which every
+/// character carries `.kern` 0, no attachment and no tab is set exactly so. Planning #596: the
+/// same positions as `nativeGlyphStarts` on every driver-placed line of the corpus, without
+/// typesetting the line a second time.
+@MainActor
+func nativeComputedGlyphStarts(_ line: NSAttributedString, at locations: [Int]) -> [Double]? {
+    let text = line.string as NSString
+    var starts: [Int: Double] = [:]
+    var x = 0.0
+    var at = 0
+    var computable = true
+    // A character takes the attributes at its start; one that runs on into the next attribute run
+    // is measured whole in the run it starts in.
+    line.enumerateAttributes(in: NSRange(location: 0, length: text.length)) { attributes, run, stop in
+        guard at < NSMaxRange(run) else { return }
+        guard attributes[.attachment] == nil,
+              let kern = attributes[.kern] as? NSNumber, kern.doubleValue == 0,
+              let font = attributes[.font] as? NSFont else {
+            computable = false
+            stop.pointee = true
+            return
+        }
+        let face = nativeAdvanceFace(font)
+        let scale = exp((attributes[.expansion] as? NSNumber)?.doubleValue ?? 0)
+        let tracking = (attributes[.tracking] as? NSNumber)?.doubleValue ?? 0
+        while at < NSMaxRange(run) {
+            guard text.character(at: at) != 0x09 else {
+                computable = false
+                stop.pointee = true
+                return
+            }
+            let composed = text.rangeOfComposedCharacterSequence(at: at)
+            starts[at] = x
+            x += face.advance(text, composed) * scale + tracking
+            at = NSMaxRange(composed)
+        }
+    }
+    guard computable else { return nil }
+    var out: [Double] = []
+    for location in locations {
+        // Past the end, `nativeGlyphStarts`' answer.
+        guard location < text.length else { out.append(0); continue }
+        guard let start = starts[location] else { return nil }
+        out.append(start)
+    }
+    return out
 }
 
 /// Where AppKit sets the glyph of each given character, one line laid out alone.

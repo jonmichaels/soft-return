@@ -66,8 +66,17 @@ extension DocumentRenderer {
     /// own real text/paragraph style, used only by `RenderedDocument.pinnedPageBottoms` to
     /// size a page's real container correctly (see that field's own doc comment for why a
     /// page's last fragment needs its OWN measured `K`, not a shared/assumed one).
+    ///
+    /// Laid out without its horizontal spacing (`.tracking`, `.expansion`, `.kern` 0), which moves
+    /// no glyph up or down: a pinned line is otherwise typeset as one run per pin, the cost of
+    /// opening a driver-placed document (planning #596). The same `K` for every line of the corpus.
     static func isolatedFragmentK(_ content: NSAttributedString, width: CGFloat) -> Double {
-        let storage = NSTextStorage(attributedString: content)
+        let unspaced = NSMutableAttributedString(attributedString: content)
+        let all = NSRange(location: 0, length: unspaced.length)
+        unspaced.removeAttribute(.tracking, range: all)
+        unspaced.removeAttribute(.expansion, range: all)
+        unspaced.addAttribute(.kern, value: nativeNoKerning, range: all)
+        let storage = NSTextStorage(attributedString: unspaced)
         let manager = softReturnLayoutManager()
         manager.allowsNonContiguousLayout = false
         let container = NSTextContainer(
